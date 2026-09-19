@@ -11,9 +11,11 @@ package replaytest
 import (
 	"context"
 	"encoding"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -26,22 +28,64 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const summaryIsolationSessionSuffix = "-summary-isolation"
+const (
+	summaryIsolationSessionSuffix = "-summary-isolation"
+	truncatedErrorSuffix          = "... [truncated]"
+)
 
 // Defensive limits keep malformed or hostile adapters from exhausting the
 // replay process. They are intentionally conservative for a consistency test
 // harness; larger workloads should be split into multiple cases.
 const (
-	maxReplaySteps          = 10_000
-	maxReplayBranches       = 2_000
-	maxReplayEvents         = 100_000
-	maxReplayMemories       = 100_000
-	maxReplayJSONBytes      = 8 << 20
-	maxReplayJSONDepth      = 256
-	maxReplayStateValueSize = 1 << 20
-	maxReplayMemorySize     = 8 << 20
-	maxReplaySummarySize    = 8 << 20
-	maxReplayTrackPayload   = 8 << 20
+	// Consensus compares every backend pair, so bounding the matrix prevents
+	// hostile or accidental configuration from causing quadratic resource use.
+	maxReplayBackends                  = 64
+	maxReplayCases                     = 1_000
+	maxReplayAllowedDiffs              = 1_000
+	maxReplayDiffsPerCase              = 10_000
+	maxReplayReportDiffs               = 100_000
+	maxReplayReportSize                = 64 << 20
+	maxReplayIdentifierSize            = 4 << 10
+	maxReplayPathSize                  = 16 << 10
+	maxReplayExplanationSize           = 64 << 10
+	maxReplayErrorSize                 = 64 << 10
+	maxReplayCapabilityCount           = 15
+	maxReplaySteps                     = 10_000
+	maxReplayBranches                  = 2_000
+	maxReplayEvents                    = 100_000
+	maxReplayMemories                  = 100_000
+	maxReplayJSONBytes                 = 8 << 20
+	maxReplaySnapshotSize              = maxReplayJSONBytes
+	maxReplayJSONDepth                 = 256
+	maxReplayStateValueSize            = 1 << 20
+	maxReplayStateTotalSize            = 8 << 20
+	maxReplayStateKeySize              = 4 << 10
+	maxReplayStateKeyTotalSize         = 8 << 20
+	maxReplayStateKeyCount             = 100_000
+	maxReplayMemorySize                = 8 << 20
+	maxReplayMemoryTotalSize           = 64 << 20
+	maxReplayMemorySearchNameSize      = 4 << 10
+	maxReplayMemorySearchNameTotalSize = 8 << 20
+	maxReplayMemorySearchCount         = 100_000
+	maxReplayMemorySearchTotalSize     = 64 << 20
+	maxReplaySummarySize               = 8 << 20
+	maxReplaySummaryCount              = 100_000
+	maxReplaySummaryKeySize            = 4 << 10
+	maxReplaySummaryKeyTotalSize       = 8 << 20
+	maxReplaySummaryTotalSize          = 8 << 20
+	maxReplayTrackPayload              = 8 << 20
+	maxReplayTrackCount                = 100_000
+	maxReplayTrackNameSize             = 4 << 10
+	maxReplayTrackNameTotalSize        = 8 << 20
+	maxReplayTrackEvents               = 100_000
+	maxReplayTrackTotalSize            = 8 << 20
+	maxReplayEventSize                 = 8 << 20
+	maxReplayEventsTotalSize           = 64 << 20
+	maxReplayExpirationWait            = 5 * time.Second
+	// Probe cleanup must outlive the replay context so cancellation cannot leave
+	// persistent test data behind. Cooperative adapters can observe this bound;
+	// adapters that ignore context may still block their caller.
+	summaryProbeCleanupTimeout = 5 * time.Second
 )
 
 // Runner executes cases using either a named reference or oracle-free
@@ -60,6 +104,8 @@ type Runner struct {
 // Run executes the complete matrix and returns a validated report. It stops
 // without a partial report when ctx is canceled or comparison cannot continue;
 // individual backend execution failures are recorded as blocking differences.
+// Inputs and adapter outputs that exceed the fixed defensive limits documented
+// in README.md are rejected.
 func (r Runner) Run(
 	ctx context.Context,
 	cases []Case,
@@ -71,6 +117,9 @@ func (r Runner) Run(
 	if len(cases) == 0 {
 		return Report{}, errors.New("replaytest: no cases")
 	}
+	if len(cases) > maxReplayCases {
+		return Report{}, fmt.Errorf("replaytest: %d cases exceed limit %d", len(cases), maxReplayCases)
+	}
 	if err := validateBackends(backends); err != nil {
 		return Report{}, err
 	}
@@ -78,19 +127,35 @@ func (r Runner) Run(
 	if err != nil {
 		return Report{}, err
 	}
-	if err := validateCases(cases); err != nil {
+	backendNames := make(map[string]struct{}, len(backends))
+	for _, backend := range backends {
+		backendNames[backend.Name] = struct{}{}
+	}
+	if err := validateCases(cases, backendNames); err != nil {
 		return Report{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return Report{}, err
 	}
 	report := newReport(r, cases, backends, mode, reference)
+	reportBudget, err := newReportSizeBudget(report)
+	if err != nil {
+		return Report{}, err
+	}
+	totalDiffs := 0
 	for _, replayCase := range cases {
 		result, err := runCase(ctx, replayCase, backends, mode, reference)
 		if err != nil {
 			return Report{}, err
 		}
 		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
+		if len(result.Diffs) > maxReplayReportDiffs-totalDiffs {
+			return Report{}, fmt.Errorf("replaytest: report exceeds %d diffs", maxReplayReportDiffs)
+		}
+		totalDiffs += len(result.Diffs)
+		if err := reportBudget.consumeCase(result, len(report.Cases)); err != nil {
 			return Report{}, err
 		}
 		addCaseResult(&report, result)
@@ -109,10 +174,16 @@ func (r Runner) resolveComparison(backends []Backend) (ComparisonMode, string, e
 	if mode == "" {
 		mode = ComparisonReference
 	}
+	if err := validateBoundedUTF8String("comparison mode", string(mode), maxReplayIdentifierSize); err != nil {
+		return "", "", fmt.Errorf("replaytest: %w", err)
+	}
 	if mode != ComparisonReference && mode != ComparisonConsensus {
 		return "", "", fmt.Errorf("replaytest: unknown comparison mode %q", mode)
 	}
 	reference := r.Reference
+	if err := validateBoundedUTF8String("reference backend", reference, maxReplayIdentifierSize); err != nil {
+		return "", "", fmt.Errorf("replaytest: %w", err)
+	}
 	if mode == ComparisonConsensus {
 		if reference != "" {
 			return "", "", errors.New("replaytest: consensus mode does not use a reference backend")
@@ -128,7 +199,7 @@ func (r Runner) resolveComparison(backends []Backend) (ComparisonMode, string, e
 	return mode, reference, nil
 }
 
-func validateCases(cases []Case) error {
+func validateCases(cases []Case, backendNames map[string]struct{}) error {
 	caseNames := make(map[string]struct{}, len(cases))
 	for _, replayCase := range cases {
 		if err := validateCase(replayCase); err != nil {
@@ -138,7 +209,10 @@ func validateCases(cases []Case) error {
 			return fmt.Errorf("replaytest: duplicate case %q", replayCase.Name)
 		}
 		caseNames[replayCase.Name] = struct{}{}
-		if err := validateAllowedDiffs(replayCase.AllowedDiffs); err != nil {
+		if err := validateRunnerAllowedDiffs(replayCase.AllowedDiffs); err != nil {
+			return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+		}
+		if err := validateAllowedDiffBackends(replayCase.AllowedDiffs, backendNames); err != nil {
 			return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
 		}
 	}
@@ -188,20 +262,33 @@ func runCase(
 	if err != nil {
 		return CaseResult{}, err
 	}
-	diffs, consensus, err := compareSnapshots(replayCase, backends, mode, reference, outcome)
+	diffs, referenceResult, consensus, err := compareSnapshots(replayCase, backends, mode, reference, outcome)
 	if err != nil {
 		return CaseResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return CaseResult{}, err
 	}
+	locatorEvidence, err := buildLocatorEvidence(outcome.snapshots)
+	if err != nil {
+		return CaseResult{}, err
+	}
 	diffs = append(outcome.diffs, diffs...)
 	diffs = append(diffs, capabilityDiffs(replayCase.Name, backends, mode, reference, outcome.unsupported)...)
+	if len(diffs) > maxReplayDiffsPerCase {
+		return CaseResult{}, fmt.Errorf(
+			"replaytest: case %q exceeds %d diffs",
+			replayCase.Name,
+			maxReplayDiffsPerCase,
+		)
+	}
 	result := CaseResult{
-		Name:      replayCase.Name,
-		Duration:  time.Since(started).Milliseconds(),
-		Diffs:     diffs,
-		Consensus: consensus,
+		Name:            replayCase.Name,
+		Duration:        time.Since(started).Milliseconds(),
+		Diffs:           diffs,
+		LocatorEvidence: locatorEvidence,
+		Consensus:       consensus,
+		Reference:       referenceResult,
 	}
 	blocking, _ := countDiffs(result.Diffs)
 	result.Status = expectedCaseStatus(blocking, len(outcome.unsupported) > 0)
@@ -258,6 +345,7 @@ func executionFailureDiff(
 	if mode == ComparisonConsensus {
 		backendA = backendName
 	}
+	errorMessage := boundedErrorMessage(err)
 	return Diff{
 		Case:        caseName,
 		BackendA:    backendA,
@@ -265,9 +353,30 @@ func executionFailureDiff(
 		SessionID:   caseName,
 		Path:        "/execution",
 		Baseline:    "success",
-		Actual:      err.Error(),
+		Actual:      errorMessage,
 		Explanation: "backend replay failed",
+		Exclusion: &ExclusionEvidence{
+			Backend: backendName,
+			Kind:    ExclusionExecutionFailure,
+			Error:   errorMessage,
+		},
 	}
+}
+
+func boundedErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	truncated := len(message) > maxReplayErrorSize
+	if truncated {
+		message = message[:maxReplayErrorSize-len(truncatedErrorSuffix)]
+	}
+	message = strings.ToValidUTF8(message, "?")
+	if truncated {
+		message += truncatedErrorSuffix
+	}
+	return strings.Clone(message)
 }
 
 func compareSnapshots(
@@ -276,13 +385,13 @@ func compareSnapshots(
 	mode ComparisonMode,
 	reference string,
 	outcome replayOutcome,
-) ([]Diff, *ConsensusResult, error) {
+) ([]Diff, *ReferenceResult, *ConsensusResult, error) {
 	if mode == ComparisonConsensus {
 		diffs, consensus, err := compareByConsensus(replayCase.Name, outcome.snapshots, replayCase.AllowedDiffs)
-		return diffs, &consensus, err
+		return diffs, nil, &consensus, err
 	}
-	diffs, err := compareReferenceSnapshots(replayCase, backends, reference, outcome)
-	return diffs, nil, err
+	diffs, referenceResult, err := compareReferenceSnapshots(replayCase, backends, reference, outcome)
+	return diffs, &referenceResult, nil, err
 }
 
 func compareReferenceSnapshots(
@@ -290,17 +399,25 @@ func compareReferenceSnapshots(
 	backends []Backend,
 	reference string,
 	outcome replayOutcome,
-) ([]Diff, error) {
+) ([]Diff, ReferenceResult, error) {
+	result := ReferenceResult{ComparableBackends: sortedSnapshotNames(outcome.snapshots)}
+	if err := validateAllowedDiffs(replayCase.AllowedDiffs); err != nil {
+		return nil, ReferenceResult{}, err
+	}
 	baseline, baselineOK := outcome.snapshots[reference]
 	if !baselineOK {
 		_, referenceUnsupported := outcome.unsupported[reference]
 		if referenceUnsupported || hasSelfExecutionDiff(outcome.diffs, reference) {
-			return nil, nil
+			return nil, result, nil
 		}
-		return nil, fmt.Errorf(
+		return nil, ReferenceResult{}, fmt.Errorf(
 			"replaytest: reference backend %q produced neither a snapshot nor exclusion evidence",
 			reference,
 		)
+	}
+	baselineValue, err := snapshotValue(baseline)
+	if err != nil {
+		return nil, ReferenceResult{}, fmt.Errorf("encode baseline snapshot: %w", err)
 	}
 	var diffs []Diff
 	for _, backend := range backends {
@@ -311,13 +428,58 @@ func compareReferenceSnapshots(
 		if !ok {
 			continue
 		}
-		pairDiffs, err := Compare(replayCase.Name, baseline, actual, replayCase.AllowedDiffs)
+		if err := validateSnapshotMetadata(replayCase.Name, baseline, actual); err != nil {
+			return nil, ReferenceResult{}, err
+		}
+		actualValue, err := snapshotValue(actual)
 		if err != nil {
-			return nil, err
+			return nil, ReferenceResult{}, fmt.Errorf("encode actual snapshot: %w", err)
+		}
+		pairDiffs, err := compareSnapshotValues(
+			replayCase.Name,
+			baseline,
+			actual,
+			baselineValue,
+			actualValue,
+			replayCase.AllowedDiffs,
+		)
+		if err != nil {
+			return nil, ReferenceResult{}, err
+		}
+		blocking, allowed := countDiffs(pairDiffs)
+		backendA, backendB := reference, backend.Name
+		if backendA > backendB {
+			backendA, backendB = backendB, backendA
+		}
+		result.Pairs = append(result.Pairs, PairComparison{
+			BackendA: backendA, BackendB: backendB,
+			BlockingDiffs: blocking, AllowedDiffs: allowed,
+		})
+		if len(pairDiffs) > maxReplayDiffsPerCase-len(diffs) {
+			return nil, ReferenceResult{}, fmt.Errorf(
+				"replaytest: case %q exceeds %d diffs",
+				replayCase.Name,
+				maxReplayDiffsPerCase,
+			)
 		}
 		diffs = append(diffs, pairDiffs...)
 	}
-	return diffs, nil
+	sort.Slice(result.Pairs, func(i, j int) bool {
+		if result.Pairs[i].BackendA != result.Pairs[j].BackendA {
+			return result.Pairs[i].BackendA < result.Pairs[j].BackendA
+		}
+		return result.Pairs[i].BackendB < result.Pairs[j].BackendB
+	})
+	return diffs, result, nil
+}
+
+func sortedSnapshotNames(snapshots map[string]Snapshot) []string {
+	names := make([]string, 0, len(snapshots))
+	for name := range snapshots {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 func capabilityDiffs(
 	caseName string,
@@ -347,6 +509,11 @@ func capabilityDiffs(
 				Actual:      false,
 				Allowed:     true,
 				Explanation: "backend reports this capability as unsupported",
+				Exclusion: &ExclusionEvidence{
+					Backend:    backend.Name,
+					Kind:       ExclusionUnsupportedCapability,
+					Capability: capability,
+				},
 			})
 		}
 	}
@@ -366,6 +533,74 @@ func addCaseResult(report *Report, result CaseResult) {
 		report.UnsupportedCases++
 	}
 	report.Cases = append(report.Cases, result)
+}
+
+func buildLocatorEvidence(snapshots map[string]Snapshot) (*LocatorEvidence, error) {
+	if len(snapshots) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(snapshots))
+	for name := range snapshots {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	evidence := &LocatorEvidence{
+		MemoryIDs:       make(map[string][]string, len(names)),
+		MemorySearchIDs: make(map[string]map[string][]string, len(names)),
+	}
+	for _, name := range names {
+		snapshot := snapshots[name]
+		ids := make([]string, len(snapshot.Memories))
+		idSet := make(map[string]struct{}, len(snapshot.Memories))
+		for index, memoryValue := range snapshot.Memories {
+			id, ok := memoryValue["id"].(string)
+			if !ok || id == "" {
+				return nil, fmt.Errorf("replaytest: backend %q memory %d has no normalized id", name, index)
+			}
+			if err := validateUTF8String("locator memory id", id); err != nil {
+				return nil, err
+			}
+			if _, exists := idSet[id]; exists {
+				return nil, fmt.Errorf("replaytest: backend %q repeats normalized memory id %q", name, id)
+			}
+			ids[index] = id
+			idSet[id] = struct{}{}
+		}
+		evidence.MemoryIDs[name] = ids
+		searches := make(map[string][]string, len(snapshot.MemorySearches))
+		totalResults := 0
+		for query, results := range snapshot.MemorySearches {
+			if query == "" {
+				return nil, fmt.Errorf("replaytest: backend %q has an empty memory search name", name)
+			}
+			if err := validateUTF8String("locator memory search name", query); err != nil {
+				return nil, err
+			}
+			if len(results) > maxReplayMemories || totalResults > maxReplayMemories-len(results) {
+				return nil, fmt.Errorf("replaytest: backend %q memory search evidence exceeds %d results", name, maxReplayMemories)
+			}
+			totalResults += len(results)
+			searchIDs := make([]string, len(results))
+			seen := make(map[string]struct{}, len(results))
+			for index, result := range results {
+				id, ok := result["id"].(string)
+				if !ok || id == "" {
+					return nil, fmt.Errorf("replaytest: backend %q search %q result %d has no normalized id", name, query, index)
+				}
+				if _, exists := idSet[id]; !exists {
+					return nil, fmt.Errorf("replaytest: backend %q search %q result %q is absent from memory catalog", name, query, id)
+				}
+				if _, exists := seen[id]; exists {
+					return nil, fmt.Errorf("replaytest: backend %q search %q repeats memory id %q", name, query, id)
+				}
+				seen[id] = struct{}{}
+				searchIDs[index] = id
+			}
+			searches[query] = searchIDs
+		}
+		evidence.MemorySearchIDs[name] = searches
+	}
+	return evidence, nil
 }
 
 // Replay executes one case on one isolated backend and captures only the
@@ -455,17 +690,18 @@ func finishReplay(
 	return errors.Join(runErr, closeErr, ctx.Err())
 }
 
+//nolint:gocyclo // Replay lifecycle and probe cleanup ordering are kept together to make every exit path visible.
 func replayWithServices(
 	ctx context.Context,
 	replayCase Case,
 	backendName string,
 	services *Services,
-) (Snapshot, error) {
-	if services.Session == nil {
+) (snapshot Snapshot, err error) {
+	if isNilInterface(services.Session) {
 		return Snapshot{}, fmt.Errorf("open backend %s: incomplete services", backendName)
 	}
 	required := capabilitySet(replayCase.Requires)
-	if (required[CapabilityMemory] || required[CapabilityMemorySearch]) && services.Memory == nil {
+	if (required[CapabilityMemory] || required[CapabilityMemorySearch]) && isNilInterface(services.Memory) {
 		return Snapshot{}, fmt.Errorf("open backend %s: memory capability has no service", backendName)
 	}
 
@@ -491,6 +727,23 @@ func replayWithServices(
 		eventStateKeys:         collectEventStateKeys(replayCase.Steps),
 		memorySearches:         make(map[string][]*memory.Entry),
 		memorySearchReferences: make(map[string]map[string]string),
+		eventPages:             make(map[string][]event.Event),
+		expirationChecks:       make(map[string]bool),
+	}
+	probeNeedsCleanup := false
+	if required[CapabilitySummary] {
+		probeNeedsCleanup = true
+		defer func() {
+			if !probeNeedsCleanup {
+				return
+			}
+			if cleanupErr := exec.cleanupSummaryIsolation(ctx); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("verify summary isolation: %w", cleanupErr))
+			}
+		}()
+		if err := exec.createSummaryIsolationProbe(ctx); err != nil {
+			return Snapshot{}, fmt.Errorf("verify summary isolation: %w", err)
+		}
 	}
 	for _, step := range replayCase.Steps {
 		if err := exec.runStep(ctx, step); err != nil {
@@ -504,11 +757,16 @@ func replayWithServices(
 		if err := exec.verifySummaryIsolation(ctx); err != nil {
 			return Snapshot{}, fmt.Errorf("verify summary isolation: %w", err)
 		}
+		cleanupErr := exec.cleanupSummaryIsolation(ctx)
+		if cleanupErr != nil {
+			return Snapshot{}, fmt.Errorf("verify summary isolation: %w", cleanupErr)
+		}
+		probeNeedsCleanup = false
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Snapshot{}, contextErr
 		}
 	}
-	snapshot, err := exec.snapshot(
+	snapshot, err = exec.snapshot(
 		ctx,
 		backendName,
 		replayCase.Name,
@@ -517,6 +775,9 @@ func replayWithServices(
 	)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if _, err := snapshotValue(snapshot); err != nil {
+		return Snapshot{}, fmt.Errorf("encode snapshot: %w", err)
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return Snapshot{}, contextErr
@@ -532,6 +793,8 @@ type execution struct {
 	eventStateKeys         map[string]struct{}
 	memorySearches         map[string][]*memory.Entry
 	memorySearchReferences map[string]map[string]string
+	eventPages             map[string][]event.Event
+	expirationChecks       map[string]bool
 }
 
 func (e *execution) runStep(ctx context.Context, step Step) error {
@@ -611,11 +874,93 @@ func (e *execution) runStepOnce(ctx context.Context, step Step) error {
 		return e.appendTrack(ctx, step.Track)
 	case StepReloadSession:
 		return e.reload(ctx)
+	case StepGetEventPage:
+		return e.getEventPage(ctx, step.Name, step.EventPage)
+	case StepObserveSessionExpiration:
+		return e.observeSessionExpiration(ctx, step.Name, step.Expiration)
 	case StepConcurrent:
 		return e.runConcurrent(ctx, step.Concurrent)
 	default:
 		return fmt.Errorf("unknown step kind %q", step.Kind)
 	}
+}
+
+func (e *execution) getEventPage(ctx context.Context, name string, input *EventPageInput) error {
+	page, err := e.services.Session.GetSession(
+		ctx,
+		e.key,
+		session.WithGetSessionEventPage(input.Offset, input.Limit),
+	)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if page == nil {
+		return errors.New("event page: backend returned nil session")
+	}
+	if err := validateSessionIdentity(page, e.key); err != nil {
+		return fmt.Errorf("event page: %w", err)
+	}
+	if len(page.Events) > input.Limit {
+		return fmt.Errorf("event page returned %d events, limit is %d", len(page.Events), input.Limit)
+	}
+	events, err := snapshotSessionEvents(page)
+	if err != nil {
+		return fmt.Errorf("event page: %w", err)
+	}
+	e.eventPages[name] = events
+	return nil
+}
+
+func (e *execution) observeSessionExpiration(
+	ctx context.Context,
+	name string,
+	input *ExpirationInput,
+) error {
+	if e.services.SessionTTL <= 0 {
+		return errors.New("session expiration: backend did not report a positive session TTL")
+	}
+	if input.Wait <= e.services.SessionTTL {
+		return fmt.Errorf(
+			"session expiration wait %v must exceed backend TTL %v",
+			input.Wait,
+			e.services.SessionTTL,
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	visible, err := e.services.Session.GetSession(ctx, e.key)
+	if err != nil {
+		return fmt.Errorf("get session before expiration: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if visible == nil {
+		return errors.New("session was not visible before its reported TTL")
+	}
+	if err := validateSessionIdentity(visible, e.key); err != nil {
+		return fmt.Errorf("get session before expiration: %w", err)
+	}
+	timer := time.NewTimer(input.Wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	got, err := e.services.Session.GetSession(ctx, e.key)
+	if err != nil {
+		return fmt.Errorf("get expired session: %w", err)
+	}
+	if got != nil {
+		return errors.New("session remained visible after its reported TTL")
+	}
+	e.expirationChecks[name] = true
+	return nil
 }
 
 func (e *execution) appendEvent(ctx context.Context, input *EventInput) error {
@@ -641,14 +986,30 @@ func (e *execution) prepareEvent(input *EventInput) (*event.Event, error) {
 	if err := event.SetExtension(evt, logicalEventIDExtension, input.LogicalID); err != nil {
 		return nil, fmt.Errorf("set logical event id: %w", err)
 	}
+	if err := validatePreparedEventSize(evt); err != nil {
+		return nil, err
+	}
 	return evt, nil
 }
 
 func cloneReplayEvent(input *event.Event) (*event.Event, error) {
+	if input == nil {
+		return nil, errors.New("event is nil")
+	}
 	cloned := input.Clone()
 	cloned.Version = input.Version
 	cloned.FilterKey = input.FilterKey
 	cloned.StateDelta = cloneByteMap(input.StateDelta)
+	if input.StructuredOutput != nil {
+		if err := validateJSONValue("event structured output", input.StructuredOutput); err != nil {
+			return nil, err
+		}
+		value := cloneJSONValue(reflect.ValueOf(input.StructuredOutput))
+		if !value.IsValid() || !value.CanInterface() {
+			return nil, errors.New("event structured output cannot be cloned safely")
+		}
+		cloned.StructuredOutput = value.Interface()
+	}
 	if input.ParentMetadata != nil {
 		metadata := *input.ParentMetadata
 		cloned.ParentMetadata = &metadata
@@ -717,6 +1078,11 @@ func cloneContentPart(input model.ContentPart) model.ContentPart {
 		audio.Data = cloneBytes(input.Audio.Data)
 		cloned.Audio = &audio
 	}
+	if input.Video != nil {
+		video := *input.Video
+		video.Data = cloneBytes(input.Video.Data)
+		cloned.Video = &video
+	}
 	if input.File != nil {
 		file := *input.File
 		file.Data = cloneBytes(input.File.Data)
@@ -756,17 +1122,6 @@ func cloneToolCallExtraFields(input map[string]any) (map[string]any, error) {
 			cloned[key] = nil
 			continue
 		}
-		// A custom encoder may read state that cannot be cloned through its
-		// concrete Go type. Rebuild that top-level field from the validated JSON
-		// representation; ordinary fields keep their concrete types below.
-		if containsCustomJSONState(reflected, make(map[jsonReference]struct{})) {
-			rebuilt, err := rebuildJSONValue(value)
-			if err != nil {
-				return nil, fmt.Errorf("tool call extra field %q: %w", key, err)
-			}
-			cloned[key] = rebuilt
-			continue
-		}
 		copy := cloneJSONValue(reflected)
 		if copy.IsValid() {
 			cloned[key] = copy.Interface()
@@ -779,11 +1134,20 @@ var (
 	jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 	textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
 	timeValueType     = reflect.TypeOf(time.Time{})
+	rawMessageType    = reflect.TypeOf(json.RawMessage(nil))
 )
 
 // cloneJSONValue preserves concrete JSON value types and nil containers. The
 // caller validates the graph first, so recursive JSON-visible values are acyclic.
 func cloneJSONValue(input reflect.Value) reflect.Value {
+	return cloneJSONValueRecursively(input, make(map[jsonReference]reflect.Value))
+}
+
+//nolint:gocyclo // Reflection kinds and alias preservation form one closed deep-copy dispatch.
+func cloneJSONValueRecursively(
+	input reflect.Value,
+	seen map[jsonReference]reflect.Value,
+) reflect.Value {
 	if !input.IsValid() {
 		return input
 	}
@@ -792,7 +1156,7 @@ func cloneJSONValue(input reflect.Value) reflect.Value {
 		if input.IsNil() {
 			return reflect.Zero(input.Type())
 		}
-		value := cloneJSONValue(input.Elem())
+		value := cloneJSONValueRecursively(input.Elem(), seen)
 		cloned := reflect.New(input.Type()).Elem()
 		cloned.Set(value)
 		return cloned
@@ -800,19 +1164,28 @@ func cloneJSONValue(input reflect.Value) reflect.Value {
 		if input.IsNil() {
 			return reflect.Zero(input.Type())
 		}
-		value := cloneJSONValue(input.Elem())
+		reference, _ := jsonValueReference(input)
+		if cloned, ok := seen[reference]; ok {
+			return cloned
+		}
 		cloned := reflect.New(input.Type().Elem())
-		cloned.Elem().Set(value)
+		seen[reference] = cloned
+		cloned.Elem().Set(cloneJSONValueRecursively(input.Elem(), seen))
 		return cloned
 	case reflect.Map:
 		if input.IsNil() {
 			return reflect.Zero(input.Type())
 		}
+		reference, _ := jsonValueReference(input)
+		if cloned, ok := seen[reference]; ok {
+			return cloned
+		}
 		cloned := reflect.MakeMapWithSize(input.Type(), input.Len())
+		seen[reference] = cloned
 		iterator := input.MapRange()
 		for iterator.Next() {
-			key := cloneJSONValue(iterator.Key())
-			value := cloneJSONValue(iterator.Value())
+			key := cloneJSONValueRecursively(iterator.Key(), seen)
+			value := cloneJSONValueRecursively(iterator.Value(), seen)
 			cloned.SetMapIndex(key, value)
 		}
 		return cloned
@@ -820,16 +1193,21 @@ func cloneJSONValue(input reflect.Value) reflect.Value {
 		if input.IsNil() {
 			return reflect.Zero(input.Type())
 		}
+		reference, _ := jsonValueReference(input)
+		if cloned, ok := seen[reference]; ok {
+			return cloned
+		}
 		cloned := reflect.MakeSlice(input.Type(), input.Len(), input.Len())
+		seen[reference] = cloned
 		for index := 0; index < input.Len(); index++ {
-			value := cloneJSONValue(input.Index(index))
+			value := cloneJSONValueRecursively(input.Index(index), seen)
 			cloned.Index(index).Set(value)
 		}
 		return cloned
 	case reflect.Array:
 		cloned := reflect.New(input.Type()).Elem()
 		for index := 0; index < input.Len(); index++ {
-			value := cloneJSONValue(input.Index(index))
+			value := cloneJSONValueRecursively(input.Index(index), seen)
 			cloned.Index(index).Set(value)
 		}
 		return cloned
@@ -841,7 +1219,7 @@ func cloneJSONValue(input reflect.Value) reflect.Value {
 			if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
 				continue
 			}
-			value := cloneJSONValue(input.Field(index))
+			value := cloneJSONValueRecursively(input.Field(index), seen)
 			cloned.Field(index).Set(value)
 		}
 		return cloned
@@ -865,133 +1243,25 @@ func implementsMarshaler(value reflect.Value, marshalerType reflect.Type) bool {
 }
 
 func isCustomJSONState(value reflect.Value, mapKey bool) bool {
+	if isKnownSafeMarshaler(value) {
+		return false
+	}
 	if mapKey {
-		return implementsMarshaler(value, textMarshalerType) &&
-			hasOpaqueJSONState(value, make(map[jsonReference]struct{}))
+		return implementsMarshaler(value, textMarshalerType)
 	}
-	return (implementsMarshaler(value, jsonMarshalerType) ||
-		implementsMarshaler(value, textMarshalerType)) &&
-		hasOpaqueJSONState(value, make(map[jsonReference]struct{}))
+	return implementsMarshaler(value, jsonMarshalerType) ||
+		implementsMarshaler(value, textMarshalerType)
 }
 
-func hasOpaqueJSONState(
-	value reflect.Value,
-	visiting map[jsonReference]struct{},
-) bool {
-	if !value.IsValid() || value.Type() == timeValueType {
+func isKnownSafeMarshaler(value reflect.Value) bool {
+	if !value.IsValid() {
 		return false
 	}
-	if reference, ok := jsonValueReference(value); ok {
-		if _, exists := visiting[reference]; exists {
-			return false
-		}
-		visiting[reference] = struct{}{}
-		defer delete(visiting, reference)
+	typeOf := value.Type()
+	if typeOf.Kind() == reflect.Pointer {
+		typeOf = typeOf.Elem()
 	}
-	switch value.Kind() {
-	case reflect.Interface, reflect.Pointer:
-		return !value.IsNil() && hasOpaqueJSONState(value.Elem(), visiting)
-	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		return !value.IsZero()
-	case reflect.Map:
-		return mapHasOpaqueJSONState(value, visiting)
-	case reflect.Slice, reflect.Array:
-		if value.Kind() == reflect.Slice && value.IsNil() {
-			return false
-		}
-		for index := 0; index < value.Len(); index++ {
-			if hasOpaqueJSONState(value.Index(index), visiting) {
-				return true
-			}
-		}
-	case reflect.Struct:
-		return structHasOpaqueJSONState(value, visiting)
-	}
-	return false
-}
-
-func mapHasOpaqueJSONState(
-	value reflect.Value,
-	visiting map[jsonReference]struct{},
-) bool {
-	if value.IsNil() {
-		return false
-	}
-	iterator := value.MapRange()
-	for iterator.Next() {
-		if hasOpaqueJSONState(iterator.Key(), visiting) ||
-			hasOpaqueJSONState(iterator.Value(), visiting) {
-			return true
-		}
-	}
-	return false
-}
-
-func structHasOpaqueJSONState(
-	value reflect.Value,
-	visiting map[jsonReference]struct{},
-) bool {
-	for index := 0; index < value.NumField(); index++ {
-		field := value.Type().Field(index)
-		if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
-			if hasSharedMutableState(value.Field(index), make(map[jsonReference]struct{})) {
-				return true
-			}
-			continue
-		}
-		if hasOpaqueJSONState(value.Field(index), visiting) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasSharedMutableState(
-	value reflect.Value,
-	visiting map[jsonReference]struct{},
-) bool {
-	if !value.IsValid() || value.Type() == timeValueType {
-		return false
-	}
-	if reference, ok := jsonValueReference(value); ok {
-		if _, exists := visiting[reference]; exists {
-			return false
-		}
-		visiting[reference] = struct{}{}
-		defer delete(visiting, reference)
-	}
-	switch value.Kind() {
-	case reflect.Interface:
-		return !value.IsNil() && hasSharedMutableState(value.Elem(), visiting)
-	case reflect.Pointer, reflect.Map, reflect.Slice:
-		return !value.IsNil()
-	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		return !value.IsZero()
-	case reflect.Array:
-		for index := 0; index < value.Len(); index++ {
-			if hasSharedMutableState(value.Index(index), visiting) {
-				return true
-			}
-		}
-	case reflect.Struct:
-		for index := 0; index < value.NumField(); index++ {
-			if hasSharedMutableState(value.Field(index), visiting) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isUnexportedAnonymousStruct(field reflect.StructField) bool {
-	if field.PkgPath == "" || !field.Anonymous {
-		return false
-	}
-	fieldType := field.Type
-	if fieldType.Kind() == reflect.Pointer {
-		fieldType = fieldType.Elem()
-	}
-	return fieldType.Kind() == reflect.Struct
+	return typeOf == timeValueType || typeOf == rawMessageType
 }
 
 func containsCustomJSONState(
@@ -1058,10 +1328,7 @@ func structContainsCustomJSONState(
 			continue
 		}
 		if field.PkgPath != "" {
-			if isUnexportedAnonymousStruct(field) && hasSharedMutableState(
-				value.Field(index),
-				make(map[jsonReference]struct{}),
-			) {
+			if field.Anonymous && !value.Field(index).IsZero() {
 				return true
 			}
 			continue
@@ -1071,18 +1338,6 @@ func structContainsCustomJSONState(
 		}
 	}
 	return false
-}
-
-func rebuildJSONValue(input any) (any, error) {
-	raw, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("marshal custom JSON value: %w", err)
-	}
-	var decoded any
-	if err := decodeJSON(raw, &decoded); err != nil {
-		return nil, fmt.Errorf("decode custom JSON value: %w", err)
-	}
-	return decoded, nil
 }
 
 func (e *execution) updateState(ctx context.Context, input *StateInput) error {
@@ -1119,6 +1374,7 @@ func (e *execution) updateAppState(ctx context.Context, input *StateInput) error
 			return err
 		}
 	}
+	deleteKeys := input.DeleteKeys
 	if input.Clear {
 		current, err := e.services.Session.ListAppStates(ctx, e.key.AppName)
 		if err != nil {
@@ -1127,10 +1383,12 @@ func (e *execution) updateAppState(ctx context.Context, input *StateInput) error
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		input = cloneStateInput(input)
-		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
+		deleteKeys, err = stateKeysForClear("app state before clear", current)
+		if err != nil {
+			return err
+		}
 	}
-	for _, key := range input.DeleteKeys {
+	for _, key := range deleteKeys {
 		if err := e.services.Session.DeleteAppState(ctx, e.key.AppName, key); err != nil {
 			return err
 		}
@@ -1151,6 +1409,7 @@ func (e *execution) updateUserState(ctx context.Context, input *StateInput) erro
 			return err
 		}
 	}
+	deleteKeys := input.DeleteKeys
 	if input.Clear {
 		current, err := e.services.Session.ListUserStates(ctx, userKey)
 		if err != nil {
@@ -1159,10 +1418,12 @@ func (e *execution) updateUserState(ctx context.Context, input *StateInput) erro
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		input = cloneStateInput(input)
-		input.DeleteKeys = append(input.DeleteKeys, stateKeys(current)...)
+		deleteKeys, err = stateKeysForClear("user state before clear", current)
+		if err != nil {
+			return err
+		}
 	}
-	for _, key := range input.DeleteKeys {
+	for _, key := range deleteKeys {
 		if err := e.services.Session.DeleteUserState(ctx, userKey, key); err != nil {
 			return err
 		}
@@ -1173,13 +1434,6 @@ func (e *execution) updateUserState(ctx context.Context, input *StateInput) erro
 	return nil
 }
 
-func cloneStateInput(input *StateInput) *StateInput {
-	clone := *input
-	clone.Values = cloneState(input.Values)
-	clone.DeleteKeys = append([]string(nil), input.DeleteKeys...)
-	return &clone
-}
-
 func stateKeys(state session.StateMap) []string {
 	keys := make([]string, 0, len(state))
 	for key := range state {
@@ -1187,6 +1441,13 @@ func stateKeys(state session.StateMap) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func stateKeysForClear(owner string, state session.StateMap) ([]string, error) {
+	if err := validateStateMapKeys(owner, state); err != nil {
+		return nil, err
+	}
+	return stateKeys(state), nil
 }
 
 func (e *execution) addMemory(ctx context.Context, input *MemoryInput) error {
@@ -1207,6 +1468,7 @@ func (e *execution) addMemory(ctx context.Context, input *MemoryInput) error {
 	)
 }
 
+//nolint:gocyclo // Search execution validates one point-in-time identity, ranking, and resource contract.
 func (e *execution) searchMemory(
 	ctx context.Context,
 	name string,
@@ -1240,6 +1502,17 @@ func (e *execution) searchMemory(
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if len(results) > maxReplayMemories {
+		return fmt.Errorf("memory search %q returned %d results, limit is %d", name, len(results), maxReplayMemories)
+	}
+	if options.MaxResults > 0 && len(results) > options.MaxResults {
+		return fmt.Errorf(
+			"memory search %q returned %d results, requested limit is %d",
+			name,
+			len(results),
+			options.MaxResults,
+		)
 	}
 	if err := validateMemoryOwnership(results, userKey, fmt.Sprintf("memory search %q", name)); err != nil {
 		return err
@@ -1345,25 +1618,18 @@ func (e *execution) reload(ctx context.Context) error {
 	return nil
 }
 
-func (e *execution) verifySummaryIsolation(ctx context.Context) (err error) {
+func (e *execution) summaryIsolationKey() session.Key {
 	probeKey := e.key
 	probeKey.SessionID += summaryIsolationSessionSuffix
+	return probeKey
+}
+
+func (e *execution) createSummaryIsolationProbe(ctx context.Context) error {
+	probeKey := e.summaryIsolationKey()
 	probe, err := e.services.Session.CreateSession(ctx, probeKey, nil)
 	if err != nil {
 		return fmt.Errorf("create probe session: %w", err)
 	}
-	// Probe creation can succeed while a later read or validation fails. Always
-	// remove the probe for ordinary failures. Cancellation remains the caller's
-	// explicit stop signal and must not trigger an extra backend operation.
-	defer func() {
-		if ctx.Err() != nil {
-			return
-		}
-		cleanupErr := e.services.Session.DeleteSession(context.WithoutCancel(ctx), probeKey)
-		if cleanupErr != nil {
-			err = errors.Join(err, fmt.Errorf("delete probe session: %w", cleanupErr))
-		}
-	}()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1373,7 +1639,12 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) (err error) {
 	if err := validateSessionIdentity(probe, probeKey); err != nil {
 		return fmt.Errorf("create probe session: %w", err)
 	}
-	probe, err = e.services.Session.GetSession(ctx, probeKey)
+	return nil
+}
+
+func (e *execution) verifySummaryIsolation(ctx context.Context) error {
+	probeKey := e.summaryIsolationKey()
+	probe, err := e.services.Session.GetSession(ctx, probeKey)
 	if err != nil {
 		return fmt.Errorf("get probe session: %w", err)
 	}
@@ -1398,6 +1669,15 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) (err error) {
 	return nil
 }
 
+func (e *execution) cleanupSummaryIsolation(ctx context.Context) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), summaryProbeCleanupTimeout)
+	defer cancel()
+	if err := e.services.Session.DeleteSession(cleanupCtx, e.summaryIsolationKey()); err != nil {
+		return fmt.Errorf("delete probe session: %w", err)
+	}
+	return nil
+}
+
 func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error {
 	if len(branches) == 0 {
 		return errors.New("concurrent step has no branches")
@@ -1405,6 +1685,8 @@ func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error 
 	if err := validateConcurrentSession(e.session); err != nil {
 		return err
 	}
+	branchCtx, cancelBranches := context.WithCancel(ctx)
+	defer cancelBranches()
 	start := make(chan struct{})
 	errs := make([]error, len(branches))
 	var wg sync.WaitGroup
@@ -1419,18 +1701,27 @@ func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error 
 		go func() {
 			defer wg.Done()
 			select {
-			case <-ctx.Done():
-				errs[i] = ctx.Err()
+			case <-branchCtx.Done():
+				if ctx.Err() != nil {
+					errs[i] = branchCtx.Err()
+				}
 				return
 			case <-start:
 			}
 			for _, nested := range branch {
-				if err := branchExecution.runStep(ctx, nested); err != nil {
-					errs[i] = fmt.Errorf("nested step %q: %w", nested.Name, err)
+				if err := branchExecution.runStep(branchCtx, nested); err != nil {
+					err = stripSiblingBranchCancellation(ctx, branchCtx, err)
+					if err != nil {
+						errs[i] = fmt.Errorf("nested step %q: %w", nested.Name, err)
+					}
+					cancelBranches()
 					return
 				}
-				if err := ctx.Err(); err != nil {
-					errs[i] = err
+				if err := branchCtx.Err(); err != nil {
+					if ctx.Err() != nil {
+						errs[i] = err
+					}
+					cancelBranches()
 					return
 				}
 			}
@@ -1445,6 +1736,50 @@ func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error 
 		return err
 	}
 	return e.reload(ctx)
+}
+
+func stripSiblingBranchCancellation(parentCtx, branchCtx context.Context, err error) error {
+	if err == nil || parentCtx.Err() != nil || !errors.Is(branchCtx.Err(), context.Canceled) {
+		return err
+	}
+	stripped, _ := stripCancellationLeaves(err, 0)
+	return stripped
+}
+
+func stripCancellationLeaves(err error, depth int) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	if err == context.Canceled {
+		return nil, true
+	}
+	if depth >= 100 {
+		return err, false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		kept := make([]error, 0, len(children))
+		changed := false
+		for _, child := range children {
+			stripped, childChanged := stripCancellationLeaves(child, depth+1)
+			changed = changed || childChanged
+			if stripped != nil {
+				kept = append(kept, stripped)
+			}
+		}
+		if !changed {
+			return err, false
+		}
+		return errors.Join(kept...), true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		stripped, changed := stripCancellationLeaves(wrapped.Unwrap(), depth+1)
+		if !changed {
+			return err, false
+		}
+		return stripped, true
+	}
+	return err, false
 }
 
 func validateConcurrentSession(sess *session.Session) error {
@@ -1468,15 +1803,24 @@ func (e *execution) snapshot(
 	eventOrder EventOrderMode,
 	eventOrderPlan *causalOrderPlan,
 ) (Snapshot, error) {
-	sess, err := e.services.Session.GetSession(ctx, e.key)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("get session: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return Snapshot{}, err
-	}
-	if sess == nil {
-		return Snapshot{}, errors.New("get session: backend returned nil session")
+	var sess *session.Session
+	var err error
+	if len(e.expirationChecks) > 0 {
+		// Expiration cases intentionally end with an absent persisted session.
+		// Validation restricts them to this sole observation, so the initially
+		// created empty session supplies only common snapshot metadata.
+		sess = e.session
+	} else {
+		sess, err = e.services.Session.GetSession(ctx, e.key)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("get session: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
+		if sess == nil {
+			return Snapshot{}, errors.New("get session: backend returned nil session")
+		}
 	}
 	if err := validateSessionIdentity(sess, e.key); err != nil {
 		return Snapshot{}, fmt.Errorf("get session: %w", err)
@@ -1534,7 +1878,11 @@ func (e *execution) snapshot(
 		userState,
 		memories,
 		e.memorySearches,
-		e.memorySearchReferences,
+		snapshotObservations{
+			memorySearchReferences: e.memorySearchReferences,
+			eventPages:             e.eventPages,
+			expirationChecks:       e.expirationChecks,
+		},
 	)
 }
 
@@ -1689,6 +2037,9 @@ func validateBackends(backends []Backend) error {
 	if len(backends) < 2 {
 		return errors.New("replaytest: at least two backends are required")
 	}
+	if len(backends) > maxReplayBackends {
+		return fmt.Errorf("replaytest: %d backends exceed limit %d", len(backends), maxReplayBackends)
+	}
 	seen := make(map[string]struct{}, len(backends))
 	for _, backend := range backends {
 		if err := validateBackend(backend); err != nil {
@@ -1709,8 +2060,11 @@ func validateBackend(backend Backend) error {
 	if backend.Name == "*" {
 		return errors.New("replaytest: backend name \"*\" is reserved")
 	}
-	if err := validateUTF8String("backend name", backend.Name); err != nil {
+	if err := validateBoundedUTF8String("backend name", backend.Name, maxReplayIdentifierSize); err != nil {
 		return fmt.Errorf("replaytest: %w", err)
+	}
+	if len(backend.Capabilities) > maxReplayCapabilityCount {
+		return fmt.Errorf("replaytest: backend %q has %d capabilities, limit is %d", backend.Name, len(backend.Capabilities), maxReplayCapabilityCount)
 	}
 	capabilities := make([]Capability, 0, len(backend.Capabilities))
 	for capability := range backend.Capabilities {
@@ -1718,6 +2072,9 @@ func validateBackend(backend Backend) error {
 	}
 	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i] < capabilities[j] })
 	for _, capability := range capabilities {
+		if err := validateBoundedUTF8String("backend capability", string(capability), maxReplayIdentifierSize); err != nil {
+			return fmt.Errorf("replaytest: backend %q: %w", backend.Name, err)
+		}
 		if !isKnownCapability(capability) {
 			return fmt.Errorf(
 				"replaytest: backend %q declares unknown capability %q",
@@ -1729,12 +2086,22 @@ func validateBackend(backend Backend) error {
 	return nil
 }
 
+//nolint:gocyclo // Cross-step case invariants must be evaluated together before any backend is opened.
 func validateCase(replayCase Case) error {
 	if replayCase.Name == "" {
 		return errors.New("replaytest: case name is required")
 	}
-	if err := validateUTF8String("case name", replayCase.Name); err != nil {
+	if err := validateBoundedUTF8String("case name", replayCase.Name, maxReplayIdentifierSize); err != nil {
 		return fmt.Errorf("replaytest: %w", err)
+	}
+	if err := validateBoundedUTF8String("case description", replayCase.Description, maxReplayExplanationSize); err != nil {
+		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+	}
+	if err := validateBoundedUTF8String("event order", string(replayCase.EventOrder), maxReplayIdentifierSize); err != nil {
+		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+	}
+	if len(replayCase.Requires) > maxReplayCapabilityCount {
+		return fmt.Errorf("replaytest: case %q has %d required capabilities, limit is %d", replayCase.Name, len(replayCase.Requires), maxReplayCapabilityCount)
 	}
 	if len(replayCase.Steps) == 0 {
 		return fmt.Errorf("replaytest: case %q has no steps", replayCase.Name)
@@ -1765,10 +2132,28 @@ func validateCase(replayCase Case) error {
 	if err := validateMemorySearchNames(replayCase.Steps, make(map[string]struct{})); err != nil {
 		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
 	}
+	if err := validateEventPageNames(replayCase.Steps, make(map[string]struct{})); err != nil {
+		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+	}
+	if containsStepKind(replayCase.Steps, StepObserveSessionExpiration) &&
+		(len(replayCase.Steps) != 1 || replayCase.Steps[0].Kind != StepObserveSessionExpiration ||
+			len(replayCase.InitialState) != 0) {
+		return fmt.Errorf(
+			"replaytest: case %q: session expiration must be the sole step with empty initial state",
+			replayCase.Name,
+		)
+	}
 	if containsConcurrentStep(replayCase.Steps) {
 		if containsConcurrentStepKind(replayCase.Steps, StepAppendEvent) &&
 			replayCase.EventOrder != EventOrderCausal {
 			return fmt.Errorf("replaytest: case %q: concurrent event steps require causal event ordering", replayCase.Name)
+		}
+		if containsConcurrentStepKind(replayCase.Steps, StepAppendEvent) &&
+			containsStepKind(replayCase.Steps, StepGetEventPage) {
+			return fmt.Errorf(
+				"replaytest: case %q: event pagination cannot follow concurrent event writes",
+				replayCase.Name,
+			)
 		}
 		if containsConcurrentStepKind(replayCase.Steps, StepAppendEvent) &&
 			containsStepKind(replayCase.Steps, StepCreateSummary) {
@@ -1914,9 +2299,29 @@ func validateMemorySearchNames(steps []Step, names map[string]struct{}) error {
 	return nil
 }
 
+func validateEventPageNames(steps []Step, names map[string]struct{}) error {
+	for _, step := range steps {
+		if step.Kind == StepGetEventPage {
+			if _, exists := names[step.Name]; exists {
+				return fmt.Errorf("event page name %q is repeated", step.Name)
+			}
+			names[step.Name] = struct{}{}
+		}
+		for _, branch := range step.Concurrent {
+			if err := validateEventPageNames(branch, names); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func validateCaseCapabilities(replayCase Case) error {
 	declared := make(Capabilities, len(replayCase.Requires))
 	for _, capability := range replayCase.Requires {
+		if err := validateBoundedUTF8String("required capability", string(capability), maxReplayIdentifierSize); err != nil {
+			return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+		}
 		if !isKnownCapability(capability) {
 			return fmt.Errorf("replaytest: case %q requires unknown capability %q", replayCase.Name, capability)
 		}
@@ -1979,6 +2384,10 @@ func collectStepCapabilities(step Step, capabilities Capabilities) {
 		capabilities[CapabilitySummary] = true
 	case StepAppendTrack:
 		capabilities[CapabilityTrack] = true
+	case StepGetEventPage:
+		capabilities[CapabilityEventPage] = true
+	case StepObserveSessionExpiration:
+		capabilities[CapabilitySessionTTL] = true
 	case StepConcurrent:
 		collectConcurrentCapabilities(step.Concurrent, capabilities)
 	}
@@ -2032,7 +2441,13 @@ func validateStep(step Step) error {
 	if step.Name == "" {
 		return errors.New("unnamed step")
 	}
-	if err := validateUTF8String("step name", step.Name); err != nil {
+	if err := validateBoundedUTF8String("step name", step.Name, maxReplayIdentifierSize); err != nil {
+		return err
+	}
+	if err := validateBoundedUTF8String("step kind", string(step.Kind), maxReplayIdentifierSize); err != nil {
+		return err
+	}
+	if err := validateBoundedUTF8String("recovery mode", string(step.Recovery), maxReplayIdentifierSize); err != nil {
 		return err
 	}
 	if err := validateRecoveryMode(step); err != nil {
@@ -2069,8 +2484,14 @@ func validateRecoveryMode(step Step) error {
 				)
 			}
 			return nil
-		case StepUpdateState, StepAddMemory, StepCreateSummary, StepAppendTrack:
+		case StepUpdateState, StepAddMemory, StepAppendTrack:
 			return nil
+		case StepCreateSummary:
+			// Summary text is generated by a backend-owned summarizer. The
+			// replay runner cannot reconstruct its expected bytes, so observing
+			// a changed summary is not proof that this request committed the
+			// requested content. Reject the ambiguous recovery mode explicitly.
+			return fmt.Errorf("step %q cannot verify summary recovery without an expected summary", step.Name)
 		default:
 			return fmt.Errorf("step %q cannot verify recovery for kind %q", step.Name, step.Kind)
 		}
@@ -2093,6 +2514,8 @@ func stepPayloadCount(step Step) int {
 		step.MemorySearch != nil,
 		step.Summary != nil,
 		step.Track != nil,
+		step.EventPage != nil,
+		step.Expiration != nil,
 		len(step.Concurrent) > 0,
 	} {
 		if populated {
@@ -2102,6 +2525,7 @@ func stepPayloadCount(step Step) int {
 	return count
 }
 
+//nolint:gocyclo // Step kind dispatch is the authoritative payload schema for the closed operation set.
 func validateStepKind(step Step) error {
 	switch step.Kind {
 	case StepAppendEvent:
@@ -2128,15 +2552,15 @@ func validateStepKind(step Step) error {
 		if step.MemorySearch == nil {
 			return fmt.Errorf("step %q kind %q requires memory search payload", step.Name, step.Kind)
 		}
-		if strings.TrimSpace(step.MemorySearch.Query) == "" {
-			return fmt.Errorf("step %q has invalid memory search input", step.Name)
-		}
-		if err := validateUTF8String("memory search query", step.MemorySearch.Query); err != nil {
+		if err := validateMemorySearchInput(step.MemorySearch); err != nil {
 			return fmt.Errorf("step %q: %w", step.Name, err)
 		}
 	case StepCreateSummary:
 		if step.Summary == nil {
 			return fmt.Errorf("step %q kind %q requires summary payload", step.Name, step.Kind)
+		}
+		if len(step.Summary.FilterKey) > maxReplaySummaryKeySize {
+			return fmt.Errorf("step %q summary filter key exceeds %d bytes", step.Name, maxReplaySummaryKeySize)
 		}
 		if err := validateUTF8String("summary filter key", step.Summary.FilterKey); err != nil {
 			return fmt.Errorf("step %q: %w", step.Name, err)
@@ -2144,6 +2568,32 @@ func validateStepKind(step Step) error {
 	case StepAppendTrack:
 		return validateTrackStep(step)
 	case StepReloadSession:
+		return nil
+	case StepGetEventPage:
+		if step.EventPage == nil {
+			return fmt.Errorf("step %q kind %q requires event page payload", step.Name, step.Kind)
+		}
+		if step.EventPage.Offset < 0 || step.EventPage.Offset > maxReplayEvents ||
+			step.EventPage.Limit <= 0 || step.EventPage.Limit > maxReplayEvents {
+			return fmt.Errorf(
+				"step %q event page requires offset within [0, %d] and limit within [1, %d]",
+				step.Name,
+				maxReplayEvents,
+				maxReplayEvents,
+			)
+		}
+		return nil
+	case StepObserveSessionExpiration:
+		if step.Expiration == nil {
+			return fmt.Errorf("step %q kind %q requires expiration payload", step.Name, step.Kind)
+		}
+		if step.Expiration.Wait <= 0 || step.Expiration.Wait > maxReplayExpirationWait {
+			return fmt.Errorf(
+				"step %q expiration wait must be within (0, %v]",
+				step.Name,
+				maxReplayExpirationWait,
+			)
+		}
 		return nil
 	case StepConcurrent:
 		if len(step.Concurrent) == 0 {
@@ -2160,10 +2610,21 @@ func validateMemoryInputStrings(input *MemoryInput) error {
 	if len(input.Memory) > maxReplayMemorySize {
 		return fmt.Errorf("memory content exceeds %d bytes", maxReplayMemorySize)
 	}
+	totalBytes := len(input.Memory)
 	if err := validateUTF8String("memory content", input.Memory); err != nil {
 		return err
 	}
+	if len(input.Topics) > maxReplayMemories {
+		return fmt.Errorf("memory topics contain more than %d entries", maxReplayMemories)
+	}
 	for index, topic := range input.Topics {
+		if len(topic) > maxReplayMemorySize {
+			return fmt.Errorf("memory topic %d exceeds %d bytes", index, maxReplayMemorySize)
+		}
+		if totalBytes > maxReplayMemorySize-len(topic) {
+			return fmt.Errorf("memory input metadata exceeds %d bytes", maxReplayMemorySize)
+		}
+		totalBytes += len(topic)
 		if err := validateUTF8String(fmt.Sprintf("memory topic %d", index), topic); err != nil {
 			return err
 		}
@@ -2171,10 +2632,31 @@ func validateMemoryInputStrings(input *MemoryInput) error {
 	if input.Metadata == nil {
 		return nil
 	}
+	if len(input.Metadata.Participants) > maxReplayMemories {
+		return fmt.Errorf("memory participants contain more than %d entries", maxReplayMemories)
+	}
+	if len(string(input.Metadata.Kind)) > maxReplayMemorySize || len(input.Metadata.Location) > maxReplayMemorySize {
+		return fmt.Errorf("memory metadata field exceeds %d bytes", maxReplayMemorySize)
+	}
+	if totalBytes > maxReplayMemorySize-len(input.Metadata.Kind) {
+		return fmt.Errorf("memory input metadata exceeds %d bytes", maxReplayMemorySize)
+	}
+	totalBytes += len(input.Metadata.Kind)
+	if totalBytes > maxReplayMemorySize-len(input.Metadata.Location) {
+		return fmt.Errorf("memory input metadata exceeds %d bytes", maxReplayMemorySize)
+	}
+	totalBytes += len(input.Metadata.Location)
 	if err := validateUTF8String("memory kind", string(input.Metadata.Kind)); err != nil {
 		return err
 	}
 	for index, participant := range input.Metadata.Participants {
+		if len(participant) > maxReplayMemorySize {
+			return fmt.Errorf("memory participant %d exceeds %d bytes", index, maxReplayMemorySize)
+		}
+		if totalBytes > maxReplayMemorySize-len(participant) {
+			return fmt.Errorf("memory input metadata exceeds %d bytes", maxReplayMemorySize)
+		}
+		totalBytes += len(participant)
 		if err := validateUTF8String(
 			fmt.Sprintf("memory participant %d", index),
 			participant,
@@ -2183,6 +2665,38 @@ func validateMemoryInputStrings(input *MemoryInput) error {
 		}
 	}
 	return validateUTF8String("memory location", input.Metadata.Location)
+}
+
+func validateMemorySearchInput(input *MemorySearchInput) error {
+	if strings.TrimSpace(input.Query) == "" {
+		return errors.New("invalid memory search input")
+	}
+	if len(input.Query) > maxReplayMemorySize {
+		return fmt.Errorf("memory search query exceeds %d bytes", maxReplayMemorySize)
+	}
+	if err := validateUTF8String("memory search query", input.Query); err != nil {
+		return err
+	}
+	options := input.Options
+	switch options.Kind {
+	case "", memory.KindFact, memory.KindEpisode:
+	default:
+		return fmt.Errorf("memory search has unknown kind %q", options.Kind)
+	}
+	if options.MaxResults < 0 || options.MaxResults > maxReplayMemories {
+		return fmt.Errorf("memory search max results must be between 0 and %d", maxReplayMemories)
+	}
+	if math.IsNaN(options.SimilarityThreshold) || math.IsInf(options.SimilarityThreshold, 0) ||
+		options.SimilarityThreshold < 0 || options.SimilarityThreshold > 1 {
+		return errors.New("memory search similarity threshold must be finite and within [0,1]")
+	}
+	if options.TimeAfter != nil && options.TimeBefore != nil && options.TimeAfter.After(*options.TimeBefore) {
+		return errors.New("memory search time range is reversed")
+	}
+	if options.HybridRRFK < 0 {
+		return errors.New("memory search hybrid RRF k must be non-negative")
+	}
+	return nil
 }
 
 func validateTrackStep(step Step) error {
@@ -2194,6 +2708,9 @@ func validateTrackStep(step Step) error {
 	}
 	if err := validateUTF8String("track name", string(step.Track.Event.Track)); err != nil {
 		return fmt.Errorf("step %q: %w", step.Name, err)
+	}
+	if len(step.Track.Event.Track) > maxReplayTrackNameSize {
+		return fmt.Errorf("step %q track name exceeds %d bytes", step.Name, maxReplayTrackNameSize)
 	}
 	if payload := step.Track.Event.Payload; payload != nil {
 		if len(payload) > maxReplayTrackPayload {
@@ -2248,6 +2765,27 @@ func validateEventStep(step Step) error {
 	}
 	if err := validateEventStateDelta(step.Name, step.Event.Event.StateDelta); err != nil {
 		return err
+	}
+	clonedEvent, err := cloneReplayEvent(step.Event.Event)
+	if err != nil {
+		return fmt.Errorf("step %q event cannot be cloned: %w", step.Name, err)
+	}
+	if err := event.SetExtension(clonedEvent, logicalEventIDExtension, step.Event.LogicalID); err != nil {
+		return fmt.Errorf("step %q cannot set logical event id: %w", step.Name, err)
+	}
+	if err := validatePreparedEventSize(clonedEvent); err != nil {
+		return fmt.Errorf("step %q: %w", step.Name, err)
+	}
+	return nil
+}
+
+func validatePreparedEventSize(evt *event.Event) error {
+	encoded, err := json.Marshal(evt)
+	if err != nil {
+		return fmt.Errorf("event cannot be encoded: %w", err)
+	}
+	if len(encoded) > maxReplayEventSize {
+		return fmt.Errorf("event exceeds %d bytes", maxReplayEventSize)
 	}
 	return nil
 }
@@ -2503,6 +3041,19 @@ func validateContentPartStrings(part *model.ContentPart, owner string, index int
 			return err
 		}
 	}
+	if part.Video != nil {
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "video URL", value: part.Video.URL},
+			{name: "video format", value: part.Video.Format},
+		} {
+			if err := check(field.name, field.value); err != nil {
+				return err
+			}
+		}
+	}
 	if part.File != nil {
 		for _, field := range []struct {
 			name  string
@@ -2609,23 +3160,156 @@ func validateEventToolCallArguments(evt *event.Event) error {
 }
 
 func validateJSONValue(owner string, value any) error {
-	// Walk the original object graph before invoking custom MarshalJSON methods.
-	// A custom marshaler is user-controlled and may recurse through a cycle
-	// itself; validating after json.Marshal would give it a chance to overflow
-	// the stack before our cycle guard runs.
-	if err := validateJSONStrings(owner, reflect.ValueOf(value)); err != nil {
-		return err
-	}
-	raw, err := json.Marshal(value)
+	raw, err := marshalJSONValue(owner, value, maxReplayJSONBytes)
 	if err != nil {
-		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
-	}
-	if len(raw) > maxReplayJSONBytes {
-		return fmt.Errorf("%s exceeds %d JSON bytes", owner, maxReplayJSONBytes)
+		return err
 	}
 	var decoded any
 	if err := decodeJSON(raw, &decoded); err != nil {
 		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
+	}
+	return nil
+}
+
+func marshalJSONValue(owner string, value any, limit int) ([]byte, error) {
+	// Walk the original object graph before invoking custom MarshalJSON methods.
+	// A custom marshaler is user-controlled and may recurse through a cycle
+	// itself; validating after json.Marshal would give it a chance to overflow
+	// the stack before our cycle guard runs.
+	reflected := reflect.ValueOf(value)
+	if err := validateJSONGraphBudget(owner, reflected, limit); err != nil {
+		return nil, err
+	}
+	if err := validateJSONStrings(owner, reflected); err != nil {
+		return nil, err
+	}
+	if containsCustomJSONState(reflected, make(map[jsonReference]struct{})) {
+		return nil, fmt.Errorf("%s contains custom marshaler state that cannot be cloned safely", owner)
+	}
+	marshalValue := value
+	if reflected.IsValid() {
+		cloned := cloneJSONValue(reflected)
+		if !cloned.IsValid() || !cloned.CanInterface() {
+			return nil, fmt.Errorf("%s cannot be cloned safely", owner)
+		}
+		marshalValue = cloned.Interface()
+	}
+	raw, err := json.Marshal(marshalValue)
+	if err != nil {
+		return nil, fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
+	}
+	if len(raw) > limit {
+		return nil, fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+	}
+	return raw, nil
+}
+
+func validateJSONGraphBudget(owner string, value reflect.Value, limit int) error {
+	// Every additional JSON node needs at least two compact bytes once its
+	// delimiter is included. Bounding nodes therefore rejects graphs that
+	// cannot fit before any full slice, array, or map traversal takes place.
+	remaining := (limit + 1) / 2
+	return consumeJSONGraphBudget(owner, value, &remaining, make(map[jsonReference]struct{}), 0, limit)
+}
+
+//nolint:gocyclo // Reflection-kind accounting and cycle detection share one pre-marshaling resource boundary.
+func consumeJSONGraphBudget(
+	owner string,
+	value reflect.Value,
+	remaining *int,
+	visiting map[jsonReference]struct{},
+	depth int,
+	limit int,
+) error {
+	if !value.IsValid() {
+		return nil
+	}
+	if depth > maxReplayJSONDepth {
+		return fmt.Errorf("%s exceeds JSON nesting depth limit %d", owner, maxReplayJSONDepth)
+	}
+	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if !value.IsNil() {
+			if reference, ok := jsonValueReference(value); ok {
+				if _, exists := visiting[reference]; exists {
+					return fmt.Errorf("%s contains cyclic JSON data", owner)
+				}
+				visiting[reference] = struct{}{}
+				defer delete(visiting, reference)
+			}
+			return consumeJSONGraphBudget(owner, value.Elem(), remaining, visiting, depth+1, limit)
+		}
+	}
+	if *remaining <= 0 {
+		return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+	}
+	*remaining--
+	if reference, ok := jsonValueReference(value); ok {
+		if _, exists := visiting[reference]; exists {
+			return fmt.Errorf("%s contains cyclic JSON data", owner)
+		}
+		visiting[reference] = struct{}{}
+		defer delete(visiting, reference)
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		return nil
+	case reflect.Map:
+		if value.Len() > *remaining/2 {
+			return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+		}
+		iterator := value.MapRange()
+		for iterator.Next() {
+			if err := consumeJSONGraphBudget(owner, iterator.Key(), remaining, visiting, depth+1, limit); err != nil {
+				return err
+			}
+			if err := consumeJSONGraphBudget(owner, iterator.Value(), remaining, visiting, depth+1, limit); err != nil {
+				return err
+			}
+		}
+	case reflect.String:
+		if limit < 2 || value.Len() > limit-2 {
+			return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+		}
+	case reflect.Slice:
+		if value.Type() == rawMessageType {
+			if value.Len() > limit {
+				return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+			}
+			return nil
+		}
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			if limit < 2 || base64.StdEncoding.EncodedLen(value.Len()) > limit-2 {
+				return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+			}
+			return nil
+		}
+		if value.Len() > *remaining {
+			return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+		}
+		for index := 0; index < value.Len(); index++ {
+			if err := consumeJSONGraphBudget(owner, value.Index(index), remaining, visiting, depth+1, limit); err != nil {
+				return err
+			}
+		}
+	case reflect.Array:
+		if value.Len() > *remaining {
+			return fmt.Errorf("%s exceeds %d JSON bytes", owner, limit)
+		}
+		for index := 0; index < value.Len(); index++ {
+			if err := consumeJSONGraphBudget(owner, value.Index(index), remaining, visiting, depth+1, limit); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
+				continue
+			}
+			if err := consumeJSONGraphBudget(owner, value.Field(index), remaining, visiting, depth+1, limit); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2640,8 +3324,10 @@ func validateJSONStrings(owner string, value reflect.Value) error {
 }
 
 type jsonReference struct {
-	typeOf  reflect.Type
-	pointer uintptr
+	typeOf   reflect.Type
+	pointer  uintptr
+	length   int
+	capacity int
 }
 
 func validateJSONStringsRecursively(
@@ -2846,18 +3532,28 @@ func jsonValueReference(value reflect.Value) (jsonReference, bool) {
 		if value.IsNil() {
 			return jsonReference{}, false
 		}
-		return jsonReference{typeOf: value.Type(), pointer: value.Pointer()}, true
+		reference := jsonReference{typeOf: value.Type(), pointer: value.Pointer()}
+		if value.Kind() == reflect.Slice {
+			reference.length = value.Len()
+			reference.capacity = value.Cap()
+		}
+		return reference, true
 	default:
 		return jsonReference{}, false
 	}
 }
 
 func validateEventStateDelta(stepName string, stateDelta session.StateMap) error {
+	if len(stateDelta) > maxReplayStateKeyCount {
+		return fmt.Errorf("step %q event state delta contains %d keys, limit is %d", stepName, len(stateDelta), maxReplayStateKeyCount)
+	}
 	keys := make([]string, 0, len(stateDelta))
 	for key := range stateDelta {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	totalKeyBytes := 0
+	totalValueBytes := 0
 	for _, key := range keys {
 		if err := validateUTF8String("event state delta key", key); err != nil {
 			return fmt.Errorf("step %q: %w", stepName, err)
@@ -2872,9 +3568,20 @@ func validateEventStateDelta(stepName string, stateDelta session.StateMap) error
 				key,
 			)
 		}
+		if len(key) > maxReplayStateKeySize {
+			return fmt.Errorf("step %q event state delta key %q exceeds %d bytes", stepName, key, maxReplayStateKeySize)
+		}
+		if totalKeyBytes > maxReplayStateKeyTotalSize-len(key) {
+			return fmt.Errorf("step %q event state delta keys exceed %d total bytes", stepName, maxReplayStateKeyTotalSize)
+		}
+		totalKeyBytes += len(key)
 		if len(stateDelta[key]) > maxReplayStateValueSize {
 			return fmt.Errorf("step %q event state delta key %q exceeds %d bytes", stepName, key, maxReplayStateValueSize)
 		}
+		if totalValueBytes > maxReplayStateTotalSize-len(stateDelta[key]) {
+			return fmt.Errorf("step %q event state delta values exceed %d total bytes", stepName, maxReplayStateTotalSize)
+		}
+		totalValueBytes += len(stateDelta[key])
 		for _, prefix := range []string{
 			session.StateAppPrefix,
 			session.StateUserPrefix,
@@ -2928,23 +3635,51 @@ func validateStateKeys(
 	values session.StateMap,
 	deleteKeys []string,
 ) error {
+	if len(values) > maxReplayStateKeyCount || len(deleteKeys) > maxReplayStateKeyCount-len(values) {
+		return fmt.Errorf(
+			"%s contains %d state key operations, limit is %d",
+			owner,
+			len(values)+len(deleteKeys),
+			maxReplayStateKeyCount,
+		)
+	}
 	valueKeys := make([]string, 0, len(values))
 	for key := range values {
 		valueKeys = append(valueKeys, key)
 	}
 	sort.Strings(valueKeys)
+	totalKeyBytes := 0
+	totalValueBytes := 0
 	for _, key := range valueKeys {
 		if err := validateStateKey(scope, key); err != nil {
 			return fmt.Errorf("%s: %w", owner, err)
 		}
+		if len(key) > maxReplayStateKeySize {
+			return fmt.Errorf("%s state key %q exceeds %d bytes", owner, key, maxReplayStateKeySize)
+		}
+		if totalKeyBytes > maxReplayStateKeyTotalSize-len(key) {
+			return fmt.Errorf("%s state keys exceed %d total bytes", owner, maxReplayStateKeyTotalSize)
+		}
+		totalKeyBytes += len(key)
 		if len(values[key]) > maxReplayStateValueSize {
 			return fmt.Errorf("%s state key %q exceeds %d bytes", owner, key, maxReplayStateValueSize)
 		}
+		if totalValueBytes > maxReplayStateTotalSize-len(values[key]) {
+			return fmt.Errorf("%s state values exceed %d total bytes", owner, maxReplayStateTotalSize)
+		}
+		totalValueBytes += len(values[key])
 	}
 	for _, key := range deleteKeys {
 		if err := validateStateKey(scope, key); err != nil {
 			return fmt.Errorf("%s: %w", owner, err)
 		}
+		if len(key) > maxReplayStateKeySize {
+			return fmt.Errorf("%s state key %q exceeds %d bytes", owner, key, maxReplayStateKeySize)
+		}
+		if totalKeyBytes > maxReplayStateKeyTotalSize-len(key) {
+			return fmt.Errorf("%s state keys exceed %d total bytes", owner, maxReplayStateKeyTotalSize)
+		}
+		totalKeyBytes += len(key)
 	}
 	return nil
 }

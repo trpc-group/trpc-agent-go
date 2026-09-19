@@ -62,31 +62,6 @@ func TestRecoveryVerifiesCommittedWrites(t *testing.T) {
 			},
 		},
 		{
-			name: "summary",
-			build: func() Case {
-				step := Step{
-					Name:     "summary",
-					Kind:     StepCreateSummary,
-					Recovery: RecoveryVerify,
-					Summary:  &SummaryInput{Force: true},
-				}
-				return Case{
-					Name:     "recover-summary",
-					Requires: []Capability{CapabilitySession, CapabilitySummary},
-					Steps: []Step{
-						messageStep("user", "user", 1, "user", model.RoleUser, "hello", ""),
-						step,
-					},
-				}
-			},
-			setup: func(service *committedErrorSessionService) { service.failAfterCreateSummary = true },
-			assert: func(t *testing.T, snapshot Snapshot) {
-				if _, ok := snapshot.Summaries[""]; !ok {
-					t.Fatalf("full-session summary missing: %#v", snapshot.Summaries)
-				}
-			},
-		},
-		{
 			name: "track",
 			build: func() Case {
 				step := trackStep("track", "tools", 1, map[string]any{"status": "ok"})
@@ -114,6 +89,26 @@ func TestRecoveryVerifiesCommittedWrites(t *testing.T) {
 			}
 			test.assert(t, snapshot)
 		})
+	}
+}
+
+func TestRecoveryRejectsUnverifiableSummary(t *testing.T) {
+	step := Step{
+		Name:     "summary",
+		Kind:     StepCreateSummary,
+		Recovery: RecoveryVerify,
+		Summary:  &SummaryInput{Force: true},
+	}
+	_, err := Replay(context.Background(), Case{
+		Name:     "unverifiable-summary",
+		Requires: []Capability{CapabilitySession, CapabilitySummary},
+		Steps: []Step{
+			messageStep("user", "user", 1, "user", model.RoleUser, "hello", ""),
+			step,
+		},
+	}, InMemoryBackend())
+	if err == nil || !strings.Contains(err.Error(), "cannot verify summary recovery") {
+		t.Fatalf("Replay() error = %v, want unverifiable summary recovery rejection", err)
 	}
 }
 
@@ -387,8 +382,8 @@ func TestRecoveryRejectsNilCommittedSummary(t *testing.T) {
 			},
 		},
 	}, backend)
-	if !errors.Is(err, ErrUncertainCommit) {
-		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	if err == nil || !strings.Contains(err.Error(), "cannot verify summary recovery") {
+		t.Fatalf("Replay() error = %v, want unverifiable summary recovery rejection", err)
 	}
 }
 
@@ -715,6 +710,14 @@ func TestRecoveryValidationRejectsInvalidModes(t *testing.T) {
 				MemorySearch: &MemorySearchInput{Query: "query"},
 			},
 			want: "cannot verify recovery",
+		},
+		{
+			name: "verify summary",
+			step: Step{
+				Name: "summary", Kind: StepCreateSummary, Recovery: RecoveryVerify,
+				Summary: &SummaryInput{Force: true},
+			},
+			want: "cannot verify summary recovery",
 		},
 		{name: "retry append", step: retryEvent, want: "cannot idempotently retry"},
 		{name: "non-persisted event", step: nonPersistedEvent, want: "persisted events without state delta"},

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -158,6 +159,46 @@ func TestReplayPropagatesBackendOperationFailures(t *testing.T) {
 				t.Fatalf("Replay() error = %v, want %v", err, injected)
 			}
 		})
+	}
+}
+
+func TestConcurrentFailureCancelsBlockingSibling(t *testing.T) {
+	injected := errors.New("injected branch failure")
+	cleanupFailure := errors.New("injected sibling cleanup failure")
+	backend := InMemoryBackend()
+	open := backend.Open
+	var wrapped *siblingCancellationSessionService
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return services, err
+		}
+		wrapped = &siblingCancellationSessionService{
+			Service:             services.Session,
+			failure:             injected,
+			cancellationFailure: cleanupFailure,
+			blockedStarted:      make(chan struct{}),
+		}
+		services.Session = wrapped
+		return services, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := Replay(ctx, concurrentCase(), backend)
+	if !errors.Is(err, injected) {
+		t.Fatalf("Replay() error = %v, want injected failure", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("parent context expired before sibling cancellation: %v", ctx.Err())
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("Replay() error = %v, must not expose sibling cancellation", err)
+	}
+	if !errors.Is(err, cleanupFailure) {
+		t.Fatalf("Replay() error = %v, want sibling cleanup failure", err)
+	}
+	if wrapped == nil || !wrapped.siblingCanceled.Load() {
+		t.Fatal("blocking sibling did not observe branch cancellation")
 	}
 }
 
@@ -316,7 +357,7 @@ func TestReplayStopsImmediatelyAfterBackendCancellation(t *testing.T) {
 			},
 			verify: func(t *testing.T, sessionFaults *replaySessionFaults, _ *replayMemoryFaults, _ error) {
 				assertCalls(t, "probe GetSession", sessionFaults.probeGetCalls.Load(), 0)
-				assertCalls(t, "DeleteSession", sessionFaults.deleteSessionCalls.Load(), 0)
+				assertCalls(t, "DeleteSession", sessionFaults.deleteSessionCalls.Load(), 1)
 			},
 		},
 		{
@@ -327,7 +368,7 @@ func TestReplayStopsImmediatelyAfterBackendCancellation(t *testing.T) {
 			},
 			verify: func(t *testing.T, sessionFaults *replaySessionFaults, _ *replayMemoryFaults, _ error) {
 				assertCalls(t, "probe GetSession", sessionFaults.probeGetCalls.Load(), 1)
-				assertCalls(t, "DeleteSession", sessionFaults.deleteSessionCalls.Load(), 0)
+				assertCalls(t, "DeleteSession", sessionFaults.deleteSessionCalls.Load(), 1)
 			},
 		},
 		{
@@ -551,6 +592,42 @@ type replaySessionFaults struct {
 	wrongCreateProbeIdentity bool
 	wrongGetMainIdentity     bool
 	wrongGetProbeIdentity    bool
+}
+
+type siblingCancellationSessionService struct {
+	session.Service
+	failure             error
+	cancellationFailure error
+	blockedStarted      chan struct{}
+	siblingCanceled     atomic.Bool
+}
+
+func (s *siblingCancellationSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	logicalID, ok, err := event.GetExtension[string](evt, logicalEventIDExtension)
+	if err != nil || !ok {
+		return s.Service.AppendEvent(ctx, sess, evt, options...)
+	}
+	switch logicalID {
+	case "branch-a-1":
+		select {
+		case <-s.blockedStarted:
+			return s.failure
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	case "branch-b-1":
+		close(s.blockedStarted)
+		<-ctx.Done()
+		s.siblingCanceled.Store(true)
+		return errors.Join(s.cancellationFailure, ctx.Err())
+	default:
+		return s.Service.AppendEvent(ctx, sess, evt, options...)
+	}
 }
 
 func (s *replaySessionFaults) CreateSession(

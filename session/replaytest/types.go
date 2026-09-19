@@ -11,6 +11,7 @@ package replaytest
 import (
 	"context"
 	"errors"
+	"reflect"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -38,6 +39,12 @@ const (
 	CapabilitySummary Capability = "summary"
 	// CapabilityTrack indicates support for track-event persistence.
 	CapabilityTrack Capability = "track"
+	// CapabilityEventPage indicates support for offset-based event pagination
+	// through session.WithGetSessionEventPage.
+	CapabilityEventPage Capability = "event_page"
+	// CapabilitySessionTTL indicates that the backend can expose a configured,
+	// positive session TTL for an observable expiration check.
+	CapabilitySessionTTL Capability = "session_ttl"
 	// CapabilityConcurrent indicates support for concurrent replay steps.
 	CapabilityConcurrent Capability = "concurrent_write"
 	// CapabilityConcurrentState indicates that disjoint state keys may be
@@ -69,6 +76,8 @@ func isKnownCapability(capability Capability) bool {
 		CapabilityMemorySearch,
 		CapabilitySummary,
 		CapabilityTrack,
+		CapabilityEventPage,
+		CapabilitySessionTTL,
 		CapabilityConcurrent,
 		CapabilityConcurrentState,
 		CapabilityConcurrentMemory,
@@ -83,9 +92,10 @@ func isKnownCapability(capability Capability) bool {
 // Capabilities declares backend support. Missing entries are unsupported.
 type Capabilities map[Capability]bool
 
-// FullCapabilities returns the capabilities required by the lightweight
-// InMemory and SQLite replay matrix.
-func FullCapabilities() Capabilities {
+// PortableCapabilities returns the capabilities shared by the lightweight
+// InMemory and SQLite adapters. Backend-specific event pagination and session
+// TTL observation must be declared separately when an adapter supports them.
+func PortableCapabilities() Capabilities {
 	return Capabilities{
 		CapabilitySession:           true,
 		CapabilityAppState:          true,
@@ -103,6 +113,16 @@ func FullCapabilities() Capabilities {
 	}
 }
 
+// FullCapabilities is retained as a compatibility alias for callers of the
+// earlier replay matrix API. It returns the portable capability set; optional
+// event-page and TTL capabilities remain backend-specific and must be added by
+// the adapter that actually implements them.
+//
+// Deprecated: use PortableCapabilities.
+func FullCapabilities() Capabilities {
+	return PortableCapabilities()
+}
+
 // Services owns one isolated pair of session and memory services.
 type Services struct {
 	// Session is the isolated session service under test.
@@ -113,24 +133,43 @@ type Services struct {
 	// Cleanup removes backend resources after both services are closed.
 	// It may be nil when the services own all of their resources.
 	Cleanup func() error
+	// SessionTTL is the positive expiration configured on Session when the
+	// backend declares CapabilitySessionTTL. Zero means no portable TTL contract.
+	SessionTTL time.Duration
 }
 
-// Close releases all resources owned by the service pair.
+// Close calls Memory.Close, Session.Close, and Cleanup in that order, skipping
+// nil entries and joining every returned error. A nil receiver is valid. Close
+// is not safe for concurrent or repeated use; the owner must call it exactly
+// once after all replay operations have stopped.
 func (s *Services) Close() error {
 	if s == nil {
 		return nil
 	}
 	var errs []error
-	if s.Memory != nil {
+	if !isNilInterface(s.Memory) {
 		errs = append(errs, s.Memory.Close())
 	}
-	if s.Session != nil {
+	if !isNilInterface(s.Session) {
 		errs = append(errs, s.Session.Close())
 	}
 	if s.Cleanup != nil {
 		errs = append(errs, s.Cleanup())
 	}
 	return errors.Join(errs...)
+}
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 // Backend creates isolated services for one case.
@@ -140,7 +179,8 @@ type Backend struct {
 	// Capabilities declares supported operations; omitted values are unsupported.
 	Capabilities Capabilities
 	// Open creates services isolated to the supplied case name. The runner calls
-	// Services.Close for every non-nil result, including results returned with an error.
+	// Services.Close for every non-nil result, including results returned with an
+	// error. Implementations must honor context cancellation during setup.
 	Open func(context.Context, string) (*Services, error)
 }
 
@@ -162,8 +202,6 @@ type Case struct {
 	AllowedDiffs []AllowedDiff
 	// EventOrder selects global ordering by default or branch-local causal ordering.
 	EventOrder EventOrderMode
-	// Fault identifies the acceptance mutation expected to make this case fail.
-	Fault FaultKind
 }
 
 // EventOrderMode controls whether global ordering or branch-local causal
@@ -195,6 +233,10 @@ const (
 	StepAppendTrack StepKind = "append_track"
 	// StepReloadSession reloads the active session from the backend.
 	StepReloadSession StepKind = "reload_session"
+	// StepGetEventPage reads and records one offset-based page of session events.
+	StepGetEventPage StepKind = "get_event_page"
+	// StepObserveSessionExpiration waits for and records session TTL expiration.
+	StepObserveSessionExpiration StepKind = "observe_session_expiration"
 	// StepConcurrent runs multiple ordered branches concurrently. Event branches
 	// use causal lanes; non-event branches are restricted to disjoint state,
 	// memory, summary, or track writes by case validation. One concurrent step
@@ -212,7 +254,9 @@ const (
 	RecoveryNone RecoveryMode = ""
 	// RecoveryVerify accepts a failed write only when a read-after-write check
 	// proves that the requested durable effect is present. Event verification is
-	// limited to persisted appends without state deltas.
+	// limited to persisted appends without state deltas. Summary recovery is
+	// intentionally unsupported because a backend-owned summarizer does not
+	// expose a portable expected value for proof.
 	RecoveryVerify RecoveryMode = "verify_commit"
 	// RecoveryRetryIdempotent first verifies the failed write, then retries once
 	// when no commit is observed. It is valid only for state and memory writes.
@@ -250,6 +294,10 @@ type Step struct {
 	Summary *SummaryInput
 	// Track is populated only for track append steps.
 	Track *TrackInput
+	// EventPage is populated only for event-page read steps.
+	EventPage *EventPageInput
+	// Expiration is populated only for session-expiration observation steps.
+	Expiration *ExpirationInput
 	// Concurrent contains two or more ordered branches populated only for
 	// concurrent steps. Event branches use their stable execution paths for
 	// causal comparison, independently of event filter keys. Other write kinds
@@ -268,10 +316,12 @@ type EventInput struct {
 	// string must contain valid UTF-8.
 	// Extension keys must also be non-empty and must not use the runner-owned
 	// logical identity key; every non-nil extension value and tool-call extra
-	// field must contain valid JSON data. Non-partial tool-call arguments must
-	// contain valid UTF-8 JSON with paired surrogate escapes and unique object
-	// keys. Partial argument fragments must contain valid UTF-8 but otherwise
-	// remain opaque until a final response is available.
+	// field must contain valid JSON data. Except for time.Time and
+	// json.RawMessage, values implementing json.Marshaler or
+	// encoding.TextMarshaler are rejected before their methods are invoked.
+	// Non-partial tool-call arguments must contain valid UTF-8 JSON with paired
+	// surrogate escapes and unique object keys. Partial argument fragments must
+	// contain valid UTF-8 but otherwise remain opaque until a final response is available.
 	// StateDelta is applied to session state even when the event itself is not
 	// persisted. Keys beginning with app: or user: additionally declare scoped-state
 	// intent; unprefixed and temp: keys are session-only. The runner preserves every
@@ -334,7 +384,10 @@ type MemorySearchInput struct {
 	// Query is the non-empty query passed to memory.Service.SearchMemories.
 	Query string
 	// Options is copied before use. Its Query field is ignored; Query above is
-	// authoritative so the two inputs cannot disagree.
+	// authoritative so the two inputs cannot disagree. Kind must be empty,
+	// fact, or episode; MaxResults and HybridRRFK cannot be negative;
+	// SimilarityThreshold must be finite and within [0,1]; and TimeAfter cannot
+	// follow TimeBefore.
 	Options memory.SearchOptions
 }
 
@@ -356,6 +409,23 @@ type TrackInput struct {
 	Event *session.TrackEvent
 	// Offset is added to the created session time for deterministic ordering.
 	Offset time.Duration
+}
+
+// EventPageInput reads one strict offset-based page of session events.
+type EventPageInput struct {
+	// Offset is the number of most-recent events to skip and must be within the
+	// harness event limit.
+	Offset int
+	// Limit is the maximum number of events to return and must be positive and
+	// within the harness event limit.
+	Limit int
+}
+
+// ExpirationInput observes whether a configured session TTL hides the session.
+type ExpirationInput struct {
+	// Wait is the bounded duration before reading the session and must be greater
+	// than the adapter-reported Services.SessionTTL.
+	Wait time.Duration
 }
 
 // CanonicalMap is a JSON-compatible normalized object.
@@ -385,6 +455,11 @@ type Snapshot struct {
 	Summaries map[string]CanonicalMap `json:"summaries"`
 	// Tracks contains normalized track events keyed by track name.
 	Tracks map[string][]CanonicalMap `json:"tracks"`
+	// EventPages contains normalized event-page observations keyed by step name.
+	// Each result preserves the backend-defined chronological page order.
+	EventPages map[string][]CanonicalMap `json:"event_pages"`
+	// ExpirationChecks records successful TTL observations keyed by step name.
+	ExpirationChecks map[string]bool `json:"expiration_checks"`
 }
 
 // AllowedRule controls how one known backend difference is evaluated.
@@ -457,6 +532,44 @@ type Diff struct {
 	Allowed bool `json:"allowed_diff"`
 	// Explanation describes either the allowance or the blocking mismatch.
 	Explanation string `json:"explanation,omitempty"`
+	// Exclusion contains structured evidence when one backend was excluded from
+	// comparison because it failed execution or lacks a required capability.
+	// Ordinary semantic differences must leave this field nil.
+	Exclusion *ExclusionEvidence `json:"exclusion,omitempty"`
+}
+
+// ExclusionKind identifies why a backend was excluded from a comparison.
+type ExclusionKind string
+
+const (
+	// ExclusionExecutionFailure identifies a backend replay that returned an error.
+	ExclusionExecutionFailure ExclusionKind = "execution_failure"
+	// ExclusionUnsupportedCapability identifies a backend that lacks a required capability.
+	ExclusionUnsupportedCapability ExclusionKind = "unsupported_capability"
+)
+
+// ExclusionEvidence binds a non-comparable backend to the structured reason
+// recorded in a Diff. It is integrity evidence for report validation, not a
+// cryptographic signature over the report.
+type ExclusionEvidence struct {
+	// Backend is the backend removed from the comparable set.
+	Backend string `json:"backend"`
+	// Kind identifies an execution failure or unsupported capability.
+	Kind ExclusionKind `json:"kind"`
+	// Capability is required for unsupported-capability evidence.
+	Capability Capability `json:"capability,omitempty"`
+	// Error is the non-empty backend error for execution-failure evidence.
+	Error string `json:"error,omitempty"`
+}
+
+// LocatorEvidence records the normalized memory identities available to each
+// backend. Runner-generated reports use it to make indexed memory locators
+// verifiable without embedding the full memory contents in report metadata.
+type LocatorEvidence struct {
+	// MemoryIDs lists normalized catalog IDs in Snapshot.Memories order.
+	MemoryIDs map[string][]string `json:"memory_ids,omitempty"`
+	// MemorySearchIDs lists normalized result IDs by backend and search name.
+	MemorySearchIDs map[string]map[string][]string `json:"memory_search_ids,omitempty"`
 }
 
 // ConsensusVerdict describes what an oracle-free comparison can conclude.
@@ -485,6 +598,17 @@ type PairComparison struct {
 	AllowedDiffs int `json:"allowed_diffs"`
 }
 
+// ReferenceResult records the complete reference-mode comparison matrix.
+// ComparableBackends lists every backend that produced a snapshot. Pairs
+// contains one canonical pair between the reference and each other comparable
+// backend when the reference itself produced a snapshot.
+type ReferenceResult struct {
+	// ComparableBackends is sorted and excludes unsupported or failed backends.
+	ComparableBackends []string `json:"comparable_backends"`
+	// Pairs contains every completed reference-to-backend comparison.
+	Pairs []PairComparison `json:"pairs"`
+}
+
 // ConsensusResult records pairwise agreement without assuming one backend is
 // correct. Outliers is populated only for a conclusive single-outlier result.
 type ConsensusResult struct {
@@ -498,28 +622,35 @@ type ConsensusResult struct {
 	Outliers []string `json:"outliers,omitempty"`
 }
 
+// CaseStatus identifies the outcome of one replay case.
+type CaseStatus string
+
 // CaseResult is one case in a report.
 type CaseResult struct {
 	// Name identifies the replay case.
 	Name string `json:"case"`
 	// Status is derived from blocking and capability evidence.
-	Status string `json:"status"`
+	Status CaseStatus `json:"status"`
 	// Duration is the wall-clock execution time in milliseconds.
 	Duration int64 `json:"duration_ms"`
 	// Diffs contains blocking, allowed, and backend exclusion evidence.
 	Diffs []Diff `json:"diffs,omitempty"`
+	// LocatorEvidence makes indexed memory locators in Diffs auditable.
+	LocatorEvidence *LocatorEvidence `json:"locator_evidence,omitempty"`
 	// Consensus is populated only in ComparisonConsensus mode.
 	Consensus *ConsensusResult `json:"consensus,omitempty"`
+	// Reference is populated only in ComparisonReference mode.
+	Reference *ReferenceResult `json:"reference,omitempty"`
 }
 
 const (
 	// StatusPassed indicates that a case has neither blocking differences nor
 	// unsupported capability evidence.
-	StatusPassed = "passed"
+	StatusPassed CaseStatus = "passed"
 	// StatusFailed indicates that a case has at least one blocking difference.
-	StatusFailed = "failed"
+	StatusFailed CaseStatus = "failed"
 	// StatusUnsupported indicates that at least one backend lacks a required capability.
-	StatusUnsupported = "unsupported"
+	StatusUnsupported CaseStatus = "unsupported"
 )
 
 // Report is the machine-readable replay result.
@@ -547,36 +678,3 @@ type Report struct {
 	// Cases contains results in input case order.
 	Cases []CaseResult `json:"cases"`
 }
-
-// FaultKind identifies a deterministic snapshot mutation used to prove that
-// each public case detects a regression.
-type FaultKind string
-
-const (
-	// FaultEventContent changes one event message.
-	FaultEventContent FaultKind = "event_content"
-	// FaultEventOrder swaps two events.
-	FaultEventOrder FaultKind = "event_order"
-	// FaultToolArguments changes one persisted tool argument payload.
-	FaultToolArguments FaultKind = "tool_arguments"
-	// FaultStateValue changes one state value.
-	FaultStateValue FaultKind = "state_value"
-	// FaultMemoryContent changes one memory entry.
-	FaultMemoryContent FaultKind = "memory_content"
-	// FaultDuplicateMemory duplicates one memory entry.
-	FaultDuplicateMemory FaultKind = "duplicate_memory"
-	// FaultMemorySearchOrder swaps two ranked memory search results.
-	FaultMemorySearchOrder FaultKind = "memory_search_order"
-	// FaultSummaryText changes one summary text.
-	FaultSummaryText FaultKind = "summary_text"
-	// FaultSummaryMissing removes one summary.
-	FaultSummaryMissing FaultKind = "summary_missing"
-	// FaultSummaryFilterKey moves one summary to the wrong filter key.
-	FaultSummaryFilterKey FaultKind = "summary_filter_key"
-	// FaultSummaryStale replaces an updated summary with stale content and boundary.
-	FaultSummaryStale FaultKind = "summary_stale"
-	// FaultTrackPayload changes one track payload.
-	FaultTrackPayload FaultKind = "track_payload"
-	// FaultDuplicateEvent duplicates one event.
-	FaultDuplicateEvent FaultKind = "duplicate_event"
-)

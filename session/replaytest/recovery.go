@@ -23,13 +23,11 @@ import (
 )
 
 type recoveryWitness struct {
-	eventCount         int
-	eventMatchCount    int
-	eventFingerprint   string
-	summaryPresent     bool
-	summaryFingerprint string
-	trackEvent         *session.TrackEvent
-	trackCount         int
+	eventCount       int
+	eventMatchCount  int
+	eventFingerprint string
+	trackEvent       *session.TrackEvent
+	trackCount       int
 }
 
 func (e *execution) loadRecoverySession(ctx context.Context) (*session.Session, error) {
@@ -83,11 +81,6 @@ func (e *execution) captureRecoveryWitness(
 			if err != nil {
 				return witness, err
 			}
-		case StepCreateSummary:
-			witness.summaryPresent, witness.summaryFingerprint = summaryFingerprint(
-				sess,
-				step.Summary.FilterKey,
-			)
 		case StepAppendTrack:
 			witness.trackEvent = prepareTrackEvent(e.session, step.Track)
 			witness.trackCount, err = countMatchingTrackEvents(sess, witness.trackEvent)
@@ -124,13 +117,7 @@ func (e *execution) verifyRecoveredCommit(
 	case StepAddMemory:
 		return e.memoryWriteMatches(ctx, step.Memory)
 	case StepCreateSummary:
-		sess, err := e.loadRecoverySession(ctx)
-		if err != nil {
-			return false, err
-		}
-		e.session = sess
-		present, fingerprint := summaryFingerprint(sess, step.Summary.FilterKey)
-		return present && (!witness.summaryPresent || fingerprint != witness.summaryFingerprint), nil
+		return false, errors.New("summary recovery has no portable expected value")
 	case StepAppendTrack:
 		sess, err := e.loadRecoverySession(ctx)
 		if err != nil {
@@ -190,17 +177,6 @@ func recoveryEventFingerprint(
 		return "", err
 	}
 	return string(raw), nil
-}
-
-func summaryFingerprint(sess *session.Session, filterKey string) (bool, string) {
-	sess.SummariesMu.RLock()
-	defer sess.SummariesMu.RUnlock()
-	summary, ok := sess.Summaries[filterKey]
-	if !ok || summary == nil {
-		return false, ""
-	}
-	raw, _ := json.Marshal(summary)
-	return true, string(raw)
 }
 
 func countMatchingTrackEvents(

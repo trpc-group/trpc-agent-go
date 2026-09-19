@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -25,16 +26,23 @@ const logicalEventIDExtension = "trpc_agent.replay.logical_event_id"
 func InMemoryBackend() Backend {
 	return Backend{
 		Name:         "inmemory",
-		Capabilities: FullCapabilities(),
-		Open: func(_ context.Context, _ string) (*Services, error) {
+		Capabilities: PortableCapabilities(),
+		Open: func(ctx context.Context, _ string) (*Services, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			summarizer := &DeterministicSummarizer{}
-			return &Services{
+			services := &Services{
 				Session: sessioninmemory.NewSessionService(
 					sessioninmemory.WithSummarizer(summarizer),
 					sessioninmemory.WithCascadeFullSessionSummary(false),
 				),
 				Memory: memoryinmemory.NewMemoryService(),
-			}, nil
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, errors.Join(err, services.Close())
+			}
+			return services, nil
 		},
 	}
 }

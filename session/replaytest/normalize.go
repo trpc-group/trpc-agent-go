@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +43,7 @@ type normalizedEvent struct {
 	sequence int
 }
 
+//nolint:gocyclo // Snapshot assembly keeps all capability-gated domains in one deterministic normalization boundary.
 func normalizeSnapshot(
 	backendName string,
 	caseName string,
@@ -54,7 +56,7 @@ func normalizeSnapshot(
 	userState session.StateMap,
 	memories []*memory.Entry,
 	memorySearches map[string][]*memory.Entry,
-	searchReferences ...map[string]map[string]string,
+	observations ...snapshotObservations,
 ) (Snapshot, error) {
 	if sess == nil {
 		return Snapshot{}, session.ErrNilSession
@@ -63,9 +65,15 @@ func normalizeSnapshot(
 		if err := validateStateMapKeys("app state", appState); err != nil {
 			return Snapshot{}, err
 		}
+		if err := validateStateMapOutput("app state", appState); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	if required[CapabilityUserState] {
 		if err := validateStateMapKeys("user state", userState); err != nil {
+			return Snapshot{}, err
+		}
+		if err := validateStateMapOutput("user state", userState); err != nil {
 			return Snapshot{}, err
 		}
 	}
@@ -75,8 +83,14 @@ func normalizeSnapshot(
 		if err := validateStateMapKeys("session state", sessionState); err != nil {
 			return Snapshot{}, err
 		}
+		if err := validateStateMapOutput("session state", sessionState); err != nil {
+			return Snapshot{}, err
+		}
 	}
-	eventSnapshot := sess.GetEvents()
+	eventSnapshot, err := snapshotSessionEvents(sess)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	events, order, physicalToLogical, err := normalizeEvents(
 		eventSnapshot,
 		eventOrder,
@@ -96,10 +110,14 @@ func normalizeSnapshot(
 	}
 	normalizedMemorySearches := make(map[string][]CanonicalMap)
 	if required[CapabilityMemorySearch] {
+		var searchReferences map[string]map[string]string
+		if len(observations) > 0 {
+			searchReferences = observations[0].memorySearchReferences
+		}
 		normalizedMemorySearches, err = normalizeMemorySearches(
 			memorySearches,
 			memoryIdentities,
-			searchReferences...,
+			searchReferences,
 		)
 		if err != nil {
 			return Snapshot{}, err
@@ -119,16 +137,49 @@ func normalizeSnapshot(
 			return Snapshot{}, err
 		}
 	}
+	normalizedEventPages := make(map[string][]CanonicalMap)
+	if required[CapabilityEventPage] {
+		var pages map[string][]event.Event
+		if len(observations) > 0 {
+			pages = observations[0].eventPages
+		}
+		normalizedEventPages, err = normalizeEventPages(pages, sess.CreatedAt)
+		if err != nil {
+			return Snapshot{}, err
+		}
+	}
+	expirationChecks := make(map[string]bool)
+	if required[CapabilitySessionTTL] && len(observations) > 0 {
+		for name, expired := range observations[0].expirationChecks {
+			if name == "" {
+				return Snapshot{}, errors.New("expiration check has an empty name")
+			}
+			if err := validateUTF8String("expiration check name", name); err != nil {
+				return Snapshot{}, err
+			}
+			expirationChecks[name] = expired
+		}
+	}
 	state := map[string]CanonicalMap{"app": {}, "user": {}, "session": {}}
 	if required[CapabilityAppState] {
 		state["app"] = normalizeState(appState, "")
+		if err := validateNormalizedStateOutput("app state", state["app"]); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	if required[CapabilityUserState] {
 		state["user"] = normalizeState(userState, "")
+		if err := validateNormalizedStateOutput("user state", state["user"]); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	if required[CapabilitySessionState] {
 		state["session"] = normalizeSessionState(sessionState, eventStateKeys)
+		if err := validateNormalizedStateOutput("session state", state["session"]); err != nil {
+			return Snapshot{}, err
+		}
 	}
+	updatedAt := snapshotSessionUpdatedAt(sess)
 	return Snapshot{
 		Backend: backendName,
 		Case:    caseName,
@@ -137,16 +188,94 @@ func normalizeSnapshot(
 			"app_name":   sess.AppName,
 			"user_id":    sess.UserID,
 			"created_at": normalizeTime(sess.CreatedAt),
-			"updated_at": normalizeTime(sess.UpdatedAt),
+			"updated_at": normalizeTime(updatedAt),
 		},
-		Events:         events,
-		EventOrder:     order,
-		State:          state,
-		Memories:       normalizedMemories,
-		MemorySearches: normalizedMemorySearches,
-		Summaries:      summaries,
-		Tracks:         tracks,
+		Events:           events,
+		EventOrder:       order,
+		State:            state,
+		Memories:         normalizedMemories,
+		MemorySearches:   normalizedMemorySearches,
+		Summaries:        summaries,
+		Tracks:           tracks,
+		EventPages:       normalizedEventPages,
+		ExpirationChecks: expirationChecks,
 	}, nil
+}
+
+func snapshotSessionUpdatedAt(sess *session.Session) time.Time {
+	// Session event and track append paths protect UpdatedAt with different
+	// mutexes. Holding both read locks synchronizes with either writer.
+	sess.EventMu.RLock()
+	sess.TracksMu.RLock()
+	updatedAt := sess.UpdatedAt
+	sess.TracksMu.RUnlock()
+	sess.EventMu.RUnlock()
+	return updatedAt
+}
+
+type snapshotObservations struct {
+	memorySearchReferences map[string]map[string]string
+	eventPages             map[string][]event.Event
+	expirationChecks       map[string]bool
+}
+
+func normalizeEventPages(
+	pages map[string][]event.Event,
+	baseTime time.Time,
+) (map[string][]CanonicalMap, error) {
+	return normalizeEventPagesWithByteLimit(pages, baseTime, maxReplayEventsTotalSize)
+}
+
+func normalizeEventPagesWithByteLimit(
+	pages map[string][]event.Event,
+	baseTime time.Time,
+	byteLimit int,
+) (map[string][]CanonicalMap, error) {
+	output := make(map[string][]CanonicalMap, len(pages))
+	totalEvents := 0
+	budget := eventNormalizationBudget{
+		limit: byteLimit,
+		label: "normalized event pages",
+	}
+	for name, page := range pages {
+		if name == "" {
+			return nil, errors.New("event page has an empty name")
+		}
+		if err := validateUTF8String("event page name", name); err != nil {
+			return nil, err
+		}
+		if len(page) > maxReplayEvents || totalEvents > maxReplayEvents-len(page) {
+			return nil, fmt.Errorf("event pages contain more than %d total events", maxReplayEvents)
+		}
+		totalEvents += len(page)
+		// Pagination observes the backend's global storage order even when the
+		// surrounding case compares the complete event set causally. A page is
+		// only a subset, so applying the complete causal plan here would both
+		// reorder the result and falsely report its omitted events as missing.
+		events, _, _, err := normalizeEventsWithBudget(
+			page,
+			EventOrderGlobal,
+			nil,
+			baseTime,
+			&budget,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("normalize event page %q: %w", name, err)
+		}
+		output[name] = events
+	}
+	return output, nil
+}
+
+func snapshotSessionEvents(sess *session.Session) ([]event.Event, error) {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) > maxReplayEvents {
+		return nil, fmt.Errorf("session contains %d events, limit is %d", len(sess.Events), maxReplayEvents)
+	}
+	events := make([]event.Event, len(sess.Events))
+	copy(events, sess.Events)
+	return events, nil
 }
 
 func normalizeEvents(
@@ -154,6 +283,34 @@ func normalizeEvents(
 	mode EventOrderMode,
 	plan *causalOrderPlan,
 	baseTime time.Time,
+) ([]CanonicalMap, map[string][]string, map[string]string, error) {
+	budget := eventNormalizationBudget{
+		limit: maxReplayEventsTotalSize,
+		label: "normalized events",
+	}
+	return normalizeEventsWithBudget(events, mode, plan, baseTime, &budget)
+}
+
+type eventNormalizationBudget struct {
+	used  int
+	limit int
+	label string
+}
+
+func (b *eventNormalizationBudget) consume(size int) error {
+	if b.limit < 0 || size > b.limit || b.used > b.limit-size {
+		return fmt.Errorf("%s exceed %d bytes", b.label, b.limit)
+	}
+	b.used += size
+	return nil
+}
+
+func normalizeEventsWithBudget(
+	events []event.Event,
+	mode EventOrderMode,
+	plan *causalOrderPlan,
+	baseTime time.Time,
+	budget *eventNormalizationBudget,
 ) ([]CanonicalMap, map[string][]string, map[string]string, error) {
 	if len(events) > maxReplayEvents {
 		return nil, nil, nil, fmt.Errorf("session contains %d events, limit is %d", len(events), maxReplayEvents)
@@ -175,6 +332,16 @@ func normalizeEvents(
 		order[orderKey] = append(order[orderKey], logicalID)
 		value, err := normalizeEventValue(evt, index, logicalID, baseTime)
 		if err != nil {
+			return nil, nil, nil, err
+		}
+		normalizedRaw, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			return nil, nil, nil, fmt.Errorf("marshal normalized event %d: %w", index, marshalErr)
+		}
+		if len(normalizedRaw) > maxReplayEventSize {
+			return nil, nil, nil, fmt.Errorf("normalized event %d exceeds %d bytes", index, maxReplayEventSize)
+		}
+		if err := budget.consume(len(normalizedRaw)); err != nil {
 			return nil, nil, nil, err
 		}
 		records = append(records, normalizedEvent{
@@ -265,9 +432,15 @@ func normalizeEventValue(
 	if err := validateStateMapKeys(fmt.Sprintf("event %d state delta", index), evt.StateDelta); err != nil {
 		return nil, err
 	}
+	if err := validateStateMapOutput(fmt.Sprintf("event %d state delta", index), evt.StateDelta); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(evt)
 	if err != nil {
 		return nil, fmt.Errorf("marshal event %d: %w", index, err)
+	}
+	if len(raw) > maxReplayEventSize {
+		return nil, fmt.Errorf("event %d exceeds %d bytes", index, maxReplayEventSize)
 	}
 	var value CanonicalMap
 	if err := decodeJSON(raw, &value); err != nil {
@@ -429,6 +602,41 @@ func normalizeStatePreserving(
 	return output
 }
 
+func validateStateMapOutput(owner string, state session.StateMap) error {
+	total := 0
+	for key, value := range state {
+		if len(value) > maxReplayStateValueSize {
+			return fmt.Errorf("%s key %q exceeds %d bytes", owner, key, maxReplayStateValueSize)
+		}
+		if total > maxReplayStateTotalSize-len(value) {
+			return fmt.Errorf("%s exceeds %d total bytes", owner, maxReplayStateTotalSize)
+		}
+		total += len(value)
+	}
+	return nil
+}
+
+func validateNormalizedStateOutput(owner string, state CanonicalMap) error {
+	if len(state) > maxReplayStateKeyCount {
+		return fmt.Errorf("%s contains %d keys, limit is %d", owner, len(state), maxReplayStateKeyCount)
+	}
+	total := 0
+	for key, value := range state {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("%s key %q cannot be encoded: %w", owner, key, err)
+		}
+		if len(raw) > maxReplayStateValueSize {
+			return fmt.Errorf("%s key %q normalized output exceeds %d bytes", owner, key, maxReplayStateValueSize)
+		}
+		if total > maxReplayStateTotalSize-len(raw) {
+			return fmt.Errorf("%s normalized output exceeds %d total bytes", owner, maxReplayStateTotalSize)
+		}
+		total += len(raw)
+	}
+	return nil
+}
+
 func decodeLosslessJSON(raw []byte, output any) bool {
 	return decodeJSON(raw, output) == nil
 }
@@ -488,6 +696,7 @@ func normalizeMemoryCatalog(
 	}
 	records := make([]normalizedMemoryRecord, 0, len(entries))
 	ids := make(map[string]struct{}, len(entries))
+	totalMemoryBytes := 0
 	for index, entry := range entries {
 		value, err := normalizeMemoryEntry(entry, fmt.Sprintf("memory %d", index))
 		if err != nil {
@@ -506,6 +715,13 @@ func normalizeMemoryCatalog(
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshal normalized memory %d: %w", index, err)
 		}
+		if len(raw) > maxReplayMemorySize {
+			return nil, nil, fmt.Errorf("normalized memory %d exceeds %d bytes", index, maxReplayMemorySize)
+		}
+		if totalMemoryBytes > maxReplayMemoryTotalSize-len(raw) {
+			return nil, nil, fmt.Errorf("normalized memories exceed %d bytes", maxReplayMemoryTotalSize)
+		}
+		totalMemoryBytes += len(raw)
 		records = append(records, normalizedMemoryRecord{
 			physicalID:  entry.ID,
 			value:       value,
@@ -533,6 +749,7 @@ func normalizeMemoryCatalog(
 	return output, identities, nil
 }
 
+//nolint:gocyclo // Search normalization jointly enforces ranking, identity, score, and aggregate resource contracts.
 func normalizeMemorySearches(
 	searches map[string][]*memory.Entry,
 	identities map[string]normalizedMemoryIdentity,
@@ -543,10 +760,27 @@ func normalizeMemorySearches(
 		references = searchReferences[0]
 	}
 	output := make(map[string][]CanonicalMap, len(searches))
+	if len(searches) > maxReplayMemorySearchCount {
+		return nil, fmt.Errorf("memory search catalog contains %d names, limit is %d", len(searches), maxReplayMemorySearchCount)
+	}
+	totalResults := 0
+	totalSearchNameBytes := 0
+	totalSearchBytes := 0
 	for name, entries := range searches {
 		if name == "" {
 			return nil, errors.New("memory search has no name")
 		}
+		if len(name) > maxReplayMemorySearchNameSize {
+			return nil, fmt.Errorf("memory search name %q exceeds %d bytes", name, maxReplayMemorySearchNameSize)
+		}
+		if totalSearchNameBytes > maxReplayMemorySearchNameTotalSize-len(name) {
+			return nil, fmt.Errorf("memory search names exceed %d total bytes", maxReplayMemorySearchNameTotalSize)
+		}
+		totalSearchNameBytes += len(name)
+		if len(entries) > maxReplayMemories || totalResults > maxReplayMemories-len(entries) {
+			return nil, fmt.Errorf("memory searches contain more than %d total results", maxReplayMemories)
+		}
+		totalResults += len(entries)
 		seen := make(map[string]struct{}, len(entries))
 		results := make([]CanonicalMap, 0, len(entries))
 		for index, entry := range entries {
@@ -591,6 +825,17 @@ func normalizeMemorySearches(
 			}
 			value["id"] = identity.logicalID
 			value["score"] = entry.Score
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return nil, fmt.Errorf("marshal memory search %q result %d: %w", name, index, err)
+			}
+			if len(raw) > maxReplayMemorySize {
+				return nil, fmt.Errorf("memory search %q result %d exceeds %d bytes", name, index, maxReplayMemorySize)
+			}
+			if totalSearchBytes > maxReplayMemorySearchTotalSize-len(raw) {
+				return nil, fmt.Errorf("memory searches exceed %d bytes", maxReplayMemorySearchTotalSize)
+			}
+			totalSearchBytes += len(raw)
 			results = append(results, value)
 		}
 		output[name] = results
@@ -626,9 +871,18 @@ func normalizeMemoryEntry(entry *memory.Entry, owner string) (CanonicalMap, erro
 	if err := validateMemoryEntryStrings(entry, owner); err != nil {
 		return nil, err
 	}
+	if len(entry.Memory.Memory) > maxReplayMemorySize {
+		return nil, fmt.Errorf("%s content exceeds %d bytes", owner, maxReplayMemorySize)
+	}
+	if memoryMetadataBytes(entry) > maxReplayMemorySize {
+		return nil, fmt.Errorf("%s metadata exceeds %d bytes", owner, maxReplayMemorySize)
+	}
 	raw, err := json.Marshal(entry)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s: %w", owner, err)
+	}
+	if len(raw) > maxReplayMemorySize {
+		return nil, fmt.Errorf("%s exceeds %d bytes", owner, maxReplayMemorySize)
 	}
 	var value CanonicalMap
 	if err := decodeJSON(raw, &value); err != nil {
@@ -640,7 +894,25 @@ func normalizeMemoryEntry(entry *memory.Entry, owner string) (CanonicalMap, erro
 	if entry.Memory.EventTime != nil && memoryValue != nil {
 		memoryValue["event_time"] = entry.Memory.EventTime.UTC().Format(time.RFC3339Nano)
 	}
+	normalizedRaw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal normalized %s: %w", owner, err)
+	}
+	if len(normalizedRaw) > maxReplayMemorySize {
+		return nil, fmt.Errorf("normalized %s exceeds %d bytes", owner, maxReplayMemorySize)
+	}
 	return value, nil
+}
+
+func memoryMetadataBytes(entry *memory.Entry) int {
+	total := len(entry.ID) + len(entry.AppName) + len(entry.UserID) + len(entry.Memory.Kind) + len(entry.Memory.Location)
+	for _, topic := range entry.Memory.Topics {
+		total += len(topic)
+	}
+	for _, participant := range entry.Memory.Participants {
+		total += len(participant)
+	}
+	return total
 }
 
 func validateMemoryEntryStrings(entry *memory.Entry, owner string) error {
@@ -683,20 +955,39 @@ func validateUTF8String(owner, value string) error {
 	return nil
 }
 
+func validateBoundedUTF8String(owner, value string, limit int) error {
+	if len(value) > limit {
+		return fmt.Errorf("%s exceeds %d bytes", owner, limit)
+	}
+	return validateUTF8String(owner, value)
+}
+
 func validateStateMapKeys(owner string, state session.StateMap) error {
+	if len(state) > maxReplayStateKeyCount {
+		return fmt.Errorf("%s contains %d keys, limit is %d", owner, len(state), maxReplayStateKeyCount)
+	}
 	keys := make([]string, 0, len(state))
 	for key := range state {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	totalKeyBytes := 0
 	for _, key := range keys {
 		if err := validateUTF8String(owner+" key", key); err != nil {
 			return err
 		}
+		if len(key) > maxReplayStateKeySize {
+			return fmt.Errorf("%s key %q exceeds %d bytes", owner, key, maxReplayStateKeySize)
+		}
+		if totalKeyBytes > maxReplayStateKeyTotalSize-len(key) {
+			return fmt.Errorf("%s keys exceed %d total bytes", owner, maxReplayStateKeyTotalSize)
+		}
+		totalKeyBytes += len(key)
 	}
 	return nil
 }
 
+//nolint:gocyclo // Summary text, ownership, boundary, and retained-tail validation are one consistency invariant.
 func normalizeSummaries(
 	sess *session.Session,
 	events []event.Event,
@@ -705,10 +996,22 @@ func normalizeSummaries(
 	output := make(map[string]CanonicalMap)
 	sess.SummariesMu.RLock()
 	defer sess.SummariesMu.RUnlock()
+	if len(sess.Summaries) > maxReplaySummaryCount {
+		return nil, fmt.Errorf("summary catalog contains %d entries, limit is %d", len(sess.Summaries), maxReplaySummaryCount)
+	}
+	totalSummaryBytes := 0
+	totalSummaryKeyBytes := 0
 	for filterKey, summary := range sess.Summaries {
 		if err := validateUTF8String("summary filter key", filterKey); err != nil {
 			return nil, err
 		}
+		if len(filterKey) > maxReplaySummaryKeySize {
+			return nil, fmt.Errorf("summary filter key %q exceeds %d bytes", filterKey, maxReplaySummaryKeySize)
+		}
+		if totalSummaryKeyBytes > maxReplaySummaryKeyTotalSize-len(filterKey) {
+			return nil, fmt.Errorf("summary filter keys exceed %d total bytes", maxReplaySummaryKeyTotalSize)
+		}
+		totalSummaryKeyBytes += len(filterKey)
 		if summary == nil {
 			output[filterKey] = nil
 			continue
@@ -722,10 +1025,17 @@ func normalizeSummaries(
 		value := CanonicalMap{
 			"text":               summary.Summary,
 			"topics":             append([]string(nil), summary.Topics...),
-			"updated_at":         normalizeTime(summary.UpdatedAt),
+			"updated_at":         normalizeTimeOffset(summary.UpdatedAt, sess.CreatedAt),
 			"retained_event_ids": retainedEventIDs(events, summary, filterKey, physicalToLogical),
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
+			if boundary.Version != session.SummaryBoundaryVersion {
+				return nil, fmt.Errorf(
+					"summary %q has unsupported boundary version %d",
+					filterKey,
+					boundary.Version,
+				)
+			}
 			if summary.Boundary != nil && boundary.FilterKey != filterKey {
 				return nil, fmt.Errorf(
 					"summary %q boundary belongs to filter key %q",
@@ -748,6 +1058,13 @@ func normalizeSummaries(
 						lastEventID,
 					)
 				}
+				if !anchor.Filter(filterKey) {
+					return nil, fmt.Errorf(
+						"summary %q boundary event %q does not match its filter key",
+						filterKey,
+						lastEventID,
+					)
+				}
 				lastEventID = logicalID
 			}
 			value["boundary"] = CanonicalMap{
@@ -757,6 +1074,17 @@ func normalizeSummaries(
 				"last_event_id": lastEventID,
 			}
 		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("marshal summary %q: %w", filterKey, err)
+		}
+		if len(raw) > maxReplaySummarySize {
+			return nil, fmt.Errorf("normalized summary %q exceeds %d bytes", filterKey, maxReplaySummarySize)
+		}
+		if totalSummaryBytes > maxReplaySummaryTotalSize-len(raw) {
+			return nil, fmt.Errorf("summaries exceed %d bytes", maxReplaySummaryTotalSize)
+		}
+		totalSummaryBytes += len(raw)
 		output[filterKey] = value
 	}
 	return output, nil
@@ -839,10 +1167,23 @@ func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]Ca
 	output := make(map[string][]CanonicalMap)
 	sess.TracksMu.RLock()
 	defer sess.TracksMu.RUnlock()
+	if len(sess.Tracks) > maxReplayTrackCount {
+		return nil, fmt.Errorf("track catalog contains %d tracks, limit is %d", len(sess.Tracks), maxReplayTrackCount)
+	}
+	totalTrackEvents := 0
+	totalTrackBytes := 0
+	totalTrackNameBytes := 0
 	for trackName, history := range sess.Tracks {
 		if err := validateUTF8String("track name", string(trackName)); err != nil {
 			return nil, err
 		}
+		if len(trackName) > maxReplayTrackNameSize {
+			return nil, fmt.Errorf("track name %q exceeds %d bytes", trackName, maxReplayTrackNameSize)
+		}
+		if totalTrackNameBytes > maxReplayTrackNameTotalSize-len(trackName) {
+			return nil, fmt.Errorf("track names exceed %d total bytes", maxReplayTrackNameTotalSize)
+		}
+		totalTrackNameBytes += len(trackName)
 		if history == nil {
 			output[string(trackName)] = nil
 			continue
@@ -854,6 +1195,11 @@ func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]Ca
 				history.Track,
 			)
 		}
+		if len(history.Events) > maxReplayTrackEvents ||
+			totalTrackEvents > maxReplayTrackEvents-len(history.Events) {
+			return nil, fmt.Errorf("tracks contain more than %d total events", maxReplayTrackEvents)
+		}
+		totalTrackEvents += len(history.Events)
 		events := make([]CanonicalMap, 0, len(history.Events))
 		for index, trackEvent := range history.Events {
 			if len(trackEvent.Payload) > maxReplayTrackPayload {
@@ -885,11 +1231,20 @@ func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]Ca
 					return nil, fmt.Errorf("decode track %s event %d: %w", trackName, index, err)
 				}
 			}
-			events = append(events, CanonicalMap{
+			value := CanonicalMap{
 				"track":     string(trackEvent.Track),
 				"payload":   payload,
 				"timestamp": normalizeTimeOffset(trackEvent.Timestamp, baseTime),
-			})
+			}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return nil, fmt.Errorf("marshal track %s event %d: %w", trackName, index, err)
+			}
+			if len(raw) > maxReplayTrackTotalSize || totalTrackBytes > maxReplayTrackTotalSize-len(raw) {
+				return nil, fmt.Errorf("normalized tracks exceed %d bytes", maxReplayTrackTotalSize)
+			}
+			totalTrackBytes += len(raw)
+			events = append(events, value)
 		}
 		output[string(trackName)] = events
 	}
@@ -907,7 +1262,16 @@ func normalizeTimeOffset(value, base time.Time) any {
 	if value.IsZero() {
 		return nil
 	}
-	return value.Sub(base).Nanoseconds()
+	offset := big.NewInt(value.Unix())
+	offset.Sub(offset, big.NewInt(base.Unix()))
+	offset.Mul(offset, big.NewInt(int64(time.Second)))
+	offset.Add(offset, big.NewInt(int64(value.Nanosecond()-base.Nanosecond())))
+	if offset.IsInt64() {
+		// Preserve the existing representation and monotonic-clock behavior for
+		// ordinary offsets. time.Time.Sub saturates outside this range.
+		return value.Sub(base).Nanoseconds()
+	}
+	return json.Number(offset.String())
 }
 
 func normalizeTimestamps(value map[string]any, keys ...string) {

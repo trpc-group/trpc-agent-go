@@ -32,19 +32,64 @@ func PublicCases() []Case {
 		multiTurnCase(),
 		toolCallCase(),
 		stateCRUDCase(),
+		stateClearCase(),
 		sessionReloadCase(),
 		memoryCase(),
 		memorySearchCase(),
 		memoryRetryRecoveryCase(),
+		summaryGenerationCase(),
 		summaryUpdateCase(),
 		summaryTruncationCase(),
 		summaryFilterKeyCase(),
 		trackCase(),
+		eventPageCase(),
+		sessionTTLCase(),
 		concurrentCase(),
 		concurrentStateCase(),
 		concurrentMemoryCase(),
 		concurrentSummaryCase(),
 		concurrentTrackCase(),
+	}
+}
+
+func sessionTTLCase() Case {
+	return Case{
+		Name:        "session_ttl",
+		Description: "a backend-configured session TTL makes the session unobservable after its deadline",
+		Requires:    []Capability{CapabilitySession, CapabilitySessionTTL},
+		Steps: []Step{{
+			Name: "session-expired", Kind: StepObserveSessionExpiration,
+			Expiration: &ExpirationInput{Wait: 50 * time.Millisecond},
+		}},
+	}
+}
+
+func eventPageCase() Case {
+	return Case{
+		Name:        "event_page",
+		Description: "offset pagination returns the requested chronological slice of recent events",
+		Requires:    []Capability{CapabilitySession, CapabilityEventPage},
+		Steps: []Step{
+			messageStep("page-event-1", "page-event-1", 1, "user", model.RoleUser, "one", ""),
+			messageStep("page-event-2", "page-event-2", 2, "assistant", model.RoleAssistant, "two", ""),
+			messageStep("page-event-3", "page-event-3", 3, "user", model.RoleUser, "three", ""),
+			messageStep("page-event-4", "page-event-4", 4, "assistant", model.RoleAssistant, "four", ""),
+			messageStep("page-event-5", "page-event-5", 5, "user", model.RoleUser, "five", ""),
+			{Name: "middle-page", Kind: StepGetEventPage, EventPage: &EventPageInput{Offset: 1, Limit: 2}},
+		},
+	}
+}
+
+func summaryGenerationCase() Case {
+	return Case{
+		Name:        "summary_generation",
+		Description: "a newly generated full-session summary is persisted after the source events",
+		Requires:    []Capability{CapabilitySession, CapabilitySummary},
+		Steps: []Step{
+			messageStep("summary-generation-user", "summary-generation-user", 1, "user", model.RoleUser, "alpha", ""),
+			messageStep("summary-generation-assistant", "summary-generation-assistant", 2, "assistant", model.RoleAssistant, "beta", ""),
+			{Name: "summary-generate", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
+		},
 	}
 }
 
@@ -61,7 +106,6 @@ func sessionReloadCase() Case {
 			stateStep("reload-state-advanced", StateScopeSession, session.StateMap{"phase": []byte(`2`)}, nil),
 			{Name: "reload-after-second-turn", Kind: StepReloadSession},
 		},
-		Fault: FaultEventContent,
 	}
 }
 
@@ -74,7 +118,6 @@ func singleTurnCase() Case {
 			messageStep("append-user", "single-user", 1, "user", model.RoleUser, "hello", ""),
 			messageStep("append-assistant", "single-assistant", 2, "assistant", model.RoleAssistant, "hello back", ""),
 		},
-		Fault: FaultEventContent,
 	}
 }
 
@@ -91,7 +134,6 @@ func multiTurnCase() Case {
 			messageStep("turn-3-user", "turn-3-user", 5, "user", model.RoleUser, "third", ""),
 			messageStep("turn-3-assistant", "turn-3-assistant", 6, "assistant", model.RoleAssistant, "three", ""),
 		},
-		Fault: FaultEventOrder,
 	}
 }
 
@@ -144,7 +186,6 @@ func toolCallCase() Case {
 			toolResult,
 			messageStep("tool-assistant", "tool-assistant", 4, "assistant", model.RoleAssistant, "31 C", ""),
 		},
-		Fault: FaultToolArguments,
 	}
 }
 
@@ -169,15 +210,32 @@ func stateCRUDCase() Case {
 			messageStep("state-user", "state-user", 1, "user", model.RoleUser, "update state", ""),
 			stateStep("app-initial", StateScopeApp, session.StateMap{"theme": []byte(`"light"`), "obsolete": []byte(`true`)}, nil),
 			stateStep("app-overwrite-delete", StateScopeApp, session.StateMap{"theme": []byte(`"dark"`)}, []string{"obsolete"}),
-			{Name: "app-clear", Kind: StepUpdateState, State: &StateInput{Scope: StateScopeApp, Clear: true}},
 			stateStep("user-initial", StateScopeUser, session.StateMap{"locale": []byte(`"zh-CN"`), "temporary": []byte(`1`)}, nil),
 			stateStep("user-overwrite-delete", StateScopeUser, session.StateMap{"locale": []byte(`"en-US"`)}, []string{"temporary"}),
-			{Name: "user-clear", Kind: StepUpdateState, State: &StateInput{Scope: StateScopeUser, Clear: true}},
 			stateStep("session-initial", StateScopeSession, session.StateMap{"draft": []byte(`{"step":1}`)}, nil),
 			stateStep("session-overwrite", StateScopeSession, session.StateMap{"draft": []byte(`{"step":2}`)}, nil),
 			stateEvent,
 		},
-		Fault: FaultStateValue,
+	}
+}
+
+func stateClearCase() Case {
+	return Case{
+		Name:        "state_clear",
+		Description: "app and user clear operations remove prior keys while preserving later writes",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityAppState,
+			CapabilityUserState,
+		},
+		Steps: []Step{
+			stateStep("app-before-clear", StateScopeApp, session.StateMap{"obsolete": []byte(`true`)}, nil),
+			{Name: "app-clear", Kind: StepUpdateState, State: &StateInput{Scope: StateScopeApp, Clear: true}},
+			stateStep("app-after-clear", StateScopeApp, session.StateMap{"after_clear": []byte(`"app"`)}, nil),
+			stateStep("user-before-clear", StateScopeUser, session.StateMap{"obsolete": []byte(`true`)}, nil),
+			{Name: "user-clear", Kind: StepUpdateState, State: &StateInput{Scope: StateScopeUser, Clear: true}},
+			stateStep("user-after-clear", StateScopeUser, session.StateMap{"after_clear": []byte(`"user"`)}, nil),
+		},
 	}
 }
 
@@ -211,7 +269,6 @@ func memoryCase() Case {
 				},
 			},
 		},
-		Fault: FaultMemoryContent,
 	}
 }
 
@@ -234,7 +291,6 @@ func memoryRetryRecoveryCase() Case {
 			},
 			{Name: "retry-memory-write", Kind: StepAddMemory, Memory: retryable},
 		},
-		Fault: FaultDuplicateMemory,
 	}
 }
 
@@ -283,7 +339,6 @@ func memorySearchCase() Case {
 			Delta:    1e-9,
 			Reason:   "memory similarity implementations may differ by floating-point rounding",
 		}},
-		Fault: FaultMemorySearchOrder,
 	}
 }
 
@@ -299,7 +354,6 @@ func summaryUpdateCase() Case {
 			messageStep("summary-user-2", "summary-user-2", 3, "user", model.RoleUser, "gamma", ""),
 			{Name: "summary-update", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
 		},
-		Fault: FaultSummaryStale,
 	}
 }
 
@@ -315,7 +369,6 @@ func summaryTruncationCase() Case {
 			messageStep("tail-user", "tail-user", 3, "user", model.RoleUser, "new question", ""),
 			messageStep("tail-assistant", "tail-assistant", 4, "assistant", model.RoleAssistant, "new answer", ""),
 		},
-		Fault: FaultSummaryMissing,
 	}
 }
 
@@ -330,7 +383,6 @@ func summaryFilterKeyCase() Case {
 			messageStep("unrelated-assistant", "unrelated-assistant", 3, "assistant", model.RoleAssistant, "unrelated", unrelatedSummaryFilterKey),
 			{Name: "custom-summary", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: customSummaryFilterKey, Force: true}},
 		},
-		Fault: FaultSummaryFilterKey,
 	}
 }
 
@@ -344,14 +396,15 @@ func trackCase() Case {
 			trackStep("tool-finish", "tool/weather", 2, map[string]any{"type": "finish", "invocation_id": "inv-tool", "status": "ok", "duration_ms": 12.4}),
 			trackStep("subtask-error", "subtask/research", 3, map[string]any{"type": "error", "invocation_id": "inv-subtask", "status": "failed", "error": "timeout", "latency_ms": 99}),
 		},
-		Fault: FaultTrackPayload,
 	}
 }
 
 func concurrentCase() Case {
+	branchA := concurrentToolSteps("branch-a", 2, 4, "branch/a")
+	branchB := concurrentToolSteps("branch-b", 3, 5, "branch/b")
 	return Case{
 		Name:        "concurrent_interleaving",
-		Description: "parallel branches may interleave globally but preserve branch-local causal order",
+		Description: "parallel tool calls and responses may interleave globally but preserve branch-local causal order",
 		Requires:    []Capability{CapabilitySession, CapabilityConcurrent},
 		EventOrder:  EventOrderCausal,
 		Steps: []Step{
@@ -360,19 +413,66 @@ func concurrentCase() Case {
 				Name: "parallel-tools",
 				Kind: StepConcurrent,
 				Concurrent: [][]Step{
-					{
-						messageStep("branch-a-1", "branch-a-1", 2, "assistant", model.RoleAssistant, "a-start", "branch/a"),
-						messageStep("branch-a-2", "branch-a-2", 4, "assistant", model.RoleAssistant, "a-end", "branch/a"),
-					},
-					{
-						messageStep("branch-b-1", "branch-b-1", 3, "assistant", model.RoleAssistant, "b-start", "branch/b"),
-						messageStep("branch-b-2", "branch-b-2", 5, "assistant", model.RoleAssistant, "b-end", "branch/b"),
-					},
+					branchA,
+					branchB,
 				},
 			},
 		},
-		Fault: FaultDuplicateEvent,
 	}
+}
+
+func concurrentToolSteps(prefix string, callOrdinal, resultOrdinal int, filterKey string) []Step {
+	callID := "call-" + prefix
+	toolName := "tool-" + prefix
+	arguments := []byte(`{"branch":"` + prefix + `"}`)
+	call := model.ToolCall{
+		Type: "function",
+		ID:   callID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: arguments,
+		},
+	}
+	callStep := responseEvent(prefix+"-1", callOrdinal, "assistant", model.Response{
+		ID:        "response-" + prefix + "-call",
+		Object:    model.ObjectTypeChatCompletion,
+		Created:   caseEpoch.Add(time.Duration(callOrdinal) * time.Second).Unix(),
+		Model:     "replay-model",
+		Timestamp: caseEpoch.Add(time.Duration(callOrdinal) * time.Second),
+		Done:      true,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{call}},
+		}},
+	})
+	event.WithBranch(filterKey)(callStep.Event.Event)
+	callStep.Event.Event.FilterKey = filterKey
+	callStep.Event.Event.Tag = "tool"
+
+	resultStep := responseEvent(prefix+"-2", resultOrdinal, "tool", model.Response{
+		ID:        "response-" + prefix + "-result",
+		Object:    model.ObjectTypeToolResponse,
+		Created:   caseEpoch.Add(time.Duration(resultOrdinal) * time.Second).Unix(),
+		Timestamp: caseEpoch.Add(time.Duration(resultOrdinal) * time.Second),
+		Done:      true,
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role:     model.RoleTool,
+				Content:  `{"branch":"` + prefix + `","status":"ok"}`,
+				ToolID:   callID,
+				ToolName: toolName,
+			},
+		}},
+	})
+	event.WithBranch(filterKey)(resultStep.Event.Event)
+	resultStep.Event.Event.FilterKey = filterKey
+	if err := event.SetExtension(resultStep.Event.Event, event.ToolCallArgsExtensionKey, map[string]json.RawMessage{
+		callID: json.RawMessage(arguments),
+	}); err != nil {
+		panic(err)
+	}
+	return []Step{callStep, resultStep}
 }
 
 func concurrentStateCase() Case {
@@ -393,7 +493,6 @@ func concurrentStateCase() Case {
 				{stateStep("right-state", StateScopeSession, session.StateMap{"right": []byte("1")}, nil)},
 			},
 		}},
-		Fault: FaultStateValue,
 	}
 }
 
@@ -415,7 +514,6 @@ func concurrentMemoryCase() Case {
 				{{Name: "right-memory", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "right memory"}}},
 			},
 		}},
-		Fault: FaultDuplicateMemory,
 	}
 }
 
@@ -442,7 +540,6 @@ func concurrentSummaryCase() Case {
 				},
 			},
 		},
-		Fault: FaultSummaryText,
 	}
 }
 
@@ -464,7 +561,6 @@ func concurrentTrackCase() Case {
 				{trackStep("right-track", "track/right", 2, map[string]any{"side": "right"})},
 			},
 		}},
-		Fault: FaultTrackPayload,
 	}
 }
 

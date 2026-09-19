@@ -21,10 +21,10 @@ import (
 )
 
 func TestLightweightReplayMatrix(t *testing.T) {
-	started := time.Now()
 	root := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	started := time.Now()
 	report, err := (replaytest.Runner{Reference: "inmemory"}).Run(
 		ctx,
 		replaytest.PublicCases(),
@@ -36,6 +36,9 @@ func TestLightweightReplayMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	if elapsed := time.Since(started); elapsed >= 30*time.Second {
+		t.Fatalf("Run() elapsed = %v, want < 30s", elapsed)
+	}
 	if !report.IsClean() {
 		raw, _ := json.MarshalIndent(report, "", "  ")
 		t.Fatalf("lightweight matrix has blocking differences:\n%s", raw)
@@ -43,11 +46,43 @@ func TestLightweightReplayMatrix(t *testing.T) {
 	if err := report.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if report.PassedCases != len(replaytest.PublicCases()) {
-		t.Fatalf("PassedCases = %d, want %d", report.PassedCases, len(replaytest.PublicCases()))
+	if report.PassedCases != len(replaytest.PublicCases())-2 || report.UnsupportedCases != 2 {
+		t.Fatalf("case totals = passed %d, unsupported %d; want passed %d, unsupported 2",
+			report.PassedCases, report.UnsupportedCases, len(replaytest.PublicCases())-2)
 	}
-	if elapsed := time.Since(started); elapsed >= 30*time.Second {
-		t.Fatalf("lightweight matrix took %v, want < 30s", elapsed)
+	wantUnsupported := map[string]replaytest.Capability{
+		"event_page":  replaytest.CapabilityEventPage,
+		"session_ttl": replaytest.CapabilitySessionTTL,
+	}
+	for _, result := range report.Cases {
+		wantCapability, unsupported := wantUnsupported[result.Name]
+		if !unsupported {
+			if result.Status != replaytest.StatusPassed {
+				t.Fatalf("case %q status = %q, want passed", result.Name, result.Status)
+			}
+			continue
+		}
+		if result.Status != replaytest.StatusUnsupported {
+			t.Fatalf("case %q status = %q, want unsupported", result.Name, result.Status)
+		}
+		if len(result.Diffs) != 2 {
+			t.Fatalf("case %q has %d diffs, want one capability exclusion per backend", result.Name, len(result.Diffs))
+		}
+		seen := make(map[string]bool, len(result.Diffs))
+		for _, diff := range result.Diffs {
+			if diff.Path != "/capabilities/"+string(wantCapability) || !diff.Allowed ||
+				diff.Exclusion == nil || diff.Exclusion.Capability != wantCapability ||
+				(diff.Exclusion.Backend != "inmemory" && diff.Exclusion.Backend != "sqlite") {
+				t.Fatalf("case %q has malformed unsupported evidence: %+v", result.Name, diff)
+			}
+			if seen[diff.Exclusion.Backend] {
+				t.Fatalf("case %q repeats unsupported backend evidence: %+v", result.Name, diff)
+			}
+			seen[diff.Exclusion.Backend] = true
+		}
+		if !seen["inmemory"] || !seen["sqlite"] {
+			t.Fatalf("case %q missing per-backend unsupported evidence: %+v", result.Name, result.Diffs)
+		}
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {

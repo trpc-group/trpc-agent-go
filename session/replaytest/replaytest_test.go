@@ -13,10 +13,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,13 +44,88 @@ func TestPublicCases(t *testing.T) {
 			t.Fatalf("duplicate case %q", replayCase.Name)
 		}
 		names[replayCase.Name] = struct{}{}
-		if replayCase.Fault == "" {
+		fault := publicCaseFaults[replayCase.Name]
+		if fault == "" {
 			t.Fatalf("case %q has no acceptance fault", replayCase.Name)
 		}
-		faults[replayCase.Fault] = struct{}{}
+		faults[fault] = struct{}{}
 	}
 	if len(faults) < 10 {
 		t.Fatalf("PublicCases() exercise %d distinct faults, want at least 10", len(faults))
+	}
+}
+
+func TestStateCasesExposeWriteAndClearNoOps(t *testing.T) {
+	tests := []struct {
+		name       string
+		replayCase Case
+		wrap       func(session.Service) session.Service
+	}{
+		{
+			name:       "all scoped writes are no-ops",
+			replayCase: stateCRUDCase(),
+			wrap: func(service session.Service) session.Service {
+				return &stateDriftService{Service: service, ignoreWrites: true, ignoreDeletes: true}
+			},
+		},
+		{
+			name:       "clear deletes are no-ops",
+			replayCase: stateClearCase(),
+			wrap: func(service session.Service) session.Service {
+				return &stateDriftService{Service: service, ignoreDeletes: true}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := InMemoryBackend()
+			baseline.Name = "baseline"
+			broken := InMemoryBackend()
+			broken.Name = "broken"
+			open := broken.Open
+			broken.Open = func(ctx context.Context, caseName string) (*Services, error) {
+				services, err := open(ctx, caseName)
+				if err != nil {
+					return nil, err
+				}
+				services.Session = test.wrap(services.Session)
+				return services, nil
+			}
+
+			report, err := (Runner{Reference: baseline.Name}).Run(
+				context.Background(),
+				[]Case{test.replayCase},
+				[]Backend{baseline, broken},
+			)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if report.FailedCases != 1 || report.BlockingDiffs == 0 {
+				t.Fatalf("state drift report = %+v, want one failed case", report)
+			}
+		})
+	}
+}
+
+func TestConcurrentPublicCaseUsesInterleavedToolEvents(t *testing.T) {
+	replayCase := concurrentCase()
+	concurrent := replayCase.Steps[1].Concurrent
+	if len(concurrent) != 2 {
+		t.Fatalf("concurrent branches = %d, want 2", len(concurrent))
+	}
+	for branchIndex, branch := range concurrent {
+		if len(branch) != 2 {
+			t.Fatalf("branch %d has %d steps, want tool call and response", branchIndex, len(branch))
+		}
+		call := branch[0].Event.Event.Response.Choices[0].Message.ToolCalls
+		result := branch[1].Event.Event.Response.Choices[0].Message
+		if len(call) != 1 || result.Role != model.RoleTool || result.ToolID != call[0].ID {
+			t.Fatalf("branch %d is not a matching tool call/response pair", branchIndex)
+		}
+		if branch[0].Event.Event.FilterKey == "" ||
+			branch[0].Event.Event.FilterKey != branch[1].Event.Event.FilterKey {
+			t.Fatalf("branch %d does not preserve one non-empty filter key", branchIndex)
+		}
 	}
 }
 
@@ -445,6 +523,18 @@ func TestEventStringsRequireValidUTF8(t *testing.T) {
 				Audio: &model.Audio{Format: invalid},
 			}}
 		}},
+		{name: "content part video URL", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: invalid},
+			}}
+		}},
+		{name: "content part video format", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{Format: invalid},
+			}}
+		}},
 		{name: "content part file", mutate: func(evt *event.Event) {
 			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
 				Type: model.ContentTypeFile,
@@ -523,7 +613,7 @@ func TestEventRejectsNonJSONToolCallExtraFields(t *testing.T) {
 		value any
 	}{
 		{name: "unsupported value", value: func() {}},
-		{name: "duplicate custom object key", value: customJSON(`{"key":1,"key":2}`)},
+		{name: "duplicate object key", value: json.RawMessage(`{"key":1,"key":2}`)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -541,12 +631,6 @@ func TestEventRejectsNonJSONToolCallExtraFields(t *testing.T) {
 			}
 		})
 	}
-}
-
-type customJSON string
-
-func (value customJSON) MarshalJSON() ([]byte, error) {
-	return []byte(value), nil
 }
 
 func TestPartialToolCallArgumentsRequireValidUTF8(t *testing.T) {
@@ -1286,11 +1370,32 @@ func TestStateCasePersistsScopedEventDelta(t *testing.T) {
 	if _, exists := snapshot.State["session"]["event_counter"]; !exists {
 		t.Fatalf("session state omitted event delta: %#v", snapshot.State["session"])
 	}
-	if len(snapshot.State["app"]) != 0 {
-		t.Fatalf("app state was not cleared: %#v", snapshot.State["app"])
+	if got := snapshot.State["app"]["theme"]; !reflect.DeepEqual(got, CanonicalMap{"kind": "json", "json": `"dark"`}) {
+		t.Fatalf("app state theme = %#v, want overwritten value", got)
 	}
-	if len(snapshot.State["user"]) != 0 {
-		t.Fatalf("user state was not cleared: %#v", snapshot.State["user"])
+	if _, exists := snapshot.State["app"]["obsolete"]; exists {
+		t.Fatalf("app state retained deleted key: %#v", snapshot.State["app"])
+	}
+	if got := snapshot.State["user"]["locale"]; !reflect.DeepEqual(got, CanonicalMap{"kind": "json", "json": `"en-US"`}) {
+		t.Fatalf("user state locale = %#v, want overwritten value", got)
+	}
+	if _, exists := snapshot.State["user"]["temporary"]; exists {
+		t.Fatalf("user state retained deleted key: %#v", snapshot.State["user"])
+	}
+}
+
+func TestStateClearCasePersistsPostClearWrites(t *testing.T) {
+	snapshot, err := Replay(context.Background(), stateClearCase(), InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	for _, scope := range []string{"app", "user"} {
+		if _, exists := snapshot.State[scope]["obsolete"]; exists {
+			t.Fatalf("%s state retained cleared key: %#v", scope, snapshot.State[scope])
+		}
+		if _, exists := snapshot.State[scope]["after_clear"]; !exists {
+			t.Fatalf("%s state omitted post-clear write: %#v", scope, snapshot.State[scope])
+		}
 	}
 }
 
@@ -1316,14 +1421,19 @@ func TestRunnerInMemoryMatrix(t *testing.T) {
 	comparison := InMemoryBackend()
 	comparison.Name = "inmemory-comparison"
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	started := time.Now()
 	report, err := (Runner{Reference: reference.Name}).Run(
-		context.Background(),
+		ctx,
 		PublicCases(),
 		[]Backend{reference, comparison},
 	)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 30*time.Second {
+		t.Fatalf("Run() elapsed = %v, want < 30s", elapsed)
 	}
 	if !report.IsClean() {
 		t.Fatalf("Run() produced blocking differences: %+v", report)
@@ -1331,11 +1441,13 @@ func TestRunnerInMemoryMatrix(t *testing.T) {
 	if err := report.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if report.PassedCases != len(PublicCases()) {
-		t.Fatalf("PassedCases = %d, want %d", report.PassedCases, len(PublicCases()))
-	}
-	if elapsed := time.Since(started); elapsed >= 30*time.Second {
-		t.Fatalf("lightweight in-memory matrix took %v, want < 30s", elapsed)
+	if report.PassedCases != len(PublicCases())-2 || report.UnsupportedCases != 2 {
+		t.Fatalf(
+			"case totals = passed %d, unsupported %d; want passed %d, unsupported 2",
+			report.PassedCases,
+			report.UnsupportedCases,
+			len(PublicCases())-2,
+		)
 	}
 }
 
@@ -1354,7 +1466,11 @@ func TestPublicMatrixFalsePositiveRate(t *testing.T) {
 	}
 	// A false positive is a normal case reported as failed. Blocking diff
 	// counts are path-level evidence and are not comparable with case count.
-	falsePositiveRate := float64(report.FailedCases) / float64(report.TotalCases)
+	comparedCases := report.PassedCases + report.FailedCases
+	if comparedCases == 0 {
+		t.Fatal("normal matrix compared no cases")
+	}
+	falsePositiveRate := float64(report.FailedCases) / float64(comparedCases)
 	if falsePositiveRate > 0.05 {
 		t.Fatalf("normal matrix false-positive rate = %.2f%%, want <= 5%%", falsePositiveRate*100)
 	}
@@ -1551,6 +1667,9 @@ func TestRunnerConsensusRecordsExcludedBackendEvidence(t *testing.T) {
 		if countEvidence(report.Cases[0].Diffs, "failed", "/execution") != 1 {
 			t.Fatalf("execution evidence = %+v", report.Cases[0].Diffs)
 		}
+		if err := report.Validate(); err != nil {
+			t.Fatalf("execution exclusion report Validate() error = %v", err)
+		}
 	})
 
 	t.Run("unsupported capability", func(t *testing.T) {
@@ -1568,6 +1687,9 @@ func TestRunnerConsensusRecordsExcludedBackendEvidence(t *testing.T) {
 		}
 		if countEvidence(report.Cases[0].Diffs, "unsupported", "/capabilities/session") != 1 {
 			t.Fatalf("capability evidence = %+v", report.Cases[0].Diffs)
+		}
+		if err := report.Validate(); err != nil {
+			t.Fatalf("capability exclusion report Validate() error = %v", err)
 		}
 		report.PassedCases = 1
 		report.UnsupportedCases = 0
@@ -1628,6 +1750,58 @@ func TestRunnerReferenceDoesNotDuplicateMissingBaselineEvidence(t *testing.T) {
 		if report.Cases[0].Status != StatusUnsupported || report.BlockingDiffs != 0 {
 			t.Fatalf("reference unsupported report = %+v", report)
 		}
+	})
+}
+
+func TestRunnerAllowsMultipleMissingCapabilityExclusions(t *testing.T) {
+	replayCase := stateCRUDCase()
+	unsupported := missingCapabilityBackend("unsupported", CapabilityAppState)
+	unsupported.Capabilities[CapabilityUserState] = false
+
+	assertCapabilityExclusions := func(t *testing.T, report Report) {
+		t.Helper()
+		if err := report.Validate(); err != nil {
+			t.Fatalf("report.Validate() error = %v", err)
+		}
+		seen := make(map[string]int)
+		for _, diff := range report.Cases[0].Diffs {
+			if diff.BackendA == "unsupported" && diff.BackendB == "unsupported" {
+				seen[diff.Path]++
+			}
+		}
+		if seen["/capabilities/app_state"] != 1 || seen["/capabilities/user_state"] != 1 {
+			t.Fatalf("capability exclusions = %v, want one app_state and one user_state exclusion", seen)
+		}
+	}
+
+	t.Run("consensus", func(t *testing.T) {
+		goodA := InMemoryBackend()
+		goodA.Name = "good-a"
+		goodB := InMemoryBackend()
+		goodB.Name = "good-b"
+		report, err := (Runner{Mode: ComparisonConsensus}).Run(
+			context.Background(),
+			[]Case{replayCase},
+			[]Backend{unsupported, goodA, goodB},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		assertCapabilityExclusions(t, report)
+	})
+
+	t.Run("reference", func(t *testing.T) {
+		good := InMemoryBackend()
+		good.Name = "good"
+		report, err := (Runner{Reference: unsupported.Name}).Run(
+			context.Background(),
+			[]Case{replayCase},
+			[]Backend{unsupported, good},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		assertCapabilityExclusions(t, report)
 	})
 }
 
@@ -1943,20 +2117,377 @@ func TestReplayRejectsMemoryOwnershipDrift(t *testing.T) {
 	}
 }
 
+func TestReplayRecordsEventPage(t *testing.T) {
+	var replayCase Case
+	for _, candidate := range PublicCases() {
+		if candidate.Name == "event_page" {
+			replayCase = candidate
+			break
+		}
+	}
+	if replayCase.Name == "" {
+		t.Fatal("PublicCases() has no event_page case")
+	}
+	snapshot, err := Replay(context.Background(), replayCase, eventPageTestBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	page := snapshot.EventPages["middle-page"]
+	if len(page) != 2 || stringValue(page[0]["id"]) != "page-event-3" ||
+		stringValue(page[1]["id"]) != "page-event-4" {
+		t.Fatalf("event page = %#v, want logical events 3 and 4", page)
+	}
+	faulted, err := InjectFault(snapshot, FaultEventPageContent)
+	if err != nil {
+		t.Fatalf("InjectFault() error = %v", err)
+	}
+	diffs, err := Compare(replayCase.Name, snapshot, faulted, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if len(diffs) == 0 || diffs[0].EventIndex == nil || *diffs[0].EventIndex != 0 {
+		t.Fatalf("event page diffs = %+v, want event index 0", diffs)
+	}
+}
+
+func TestReplayPreservesEventPageStorageOrderInCausalCase(t *testing.T) {
+	replayCase := Case{
+		Name:       "causal-event-page-order",
+		Requires:   []Capability{CapabilitySession, CapabilityEventPage},
+		EventOrder: EventOrderCausal,
+		Steps: []Step{
+			messageStep("z-branch", "z-branch", 1, "user", model.RoleUser, "first", "z"),
+			messageStep("a-branch", "a-branch", 2, "assistant", model.RoleAssistant, "second", "a"),
+			{Name: "page", Kind: StepGetEventPage, EventPage: &EventPageInput{Limit: 2}},
+		},
+	}
+	snapshot, err := Replay(context.Background(), replayCase, eventPageTestBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	page := snapshot.EventPages["page"]
+	if len(page) != 2 || stringValue(page[0]["id"]) != "z-branch" ||
+		stringValue(page[1]["id"]) != "a-branch" {
+		t.Fatalf("event page = %#v, want backend storage order z-branch, a-branch", page)
+	}
+}
+
+func TestRunnerDetectsEventPageAdapterDrift(t *testing.T) {
+	reference := eventPageTestBackend()
+	reference.Name = "reference-page"
+	broken := eventPageTestBackend()
+	broken.Name = "reversed-page"
+	open := broken.Open
+	broken.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if services != nil && !isNilInterface(services.Session) {
+			services.Session = &reversedEventPageSessionService{Service: services.Session}
+		}
+		return services, err
+	}
+	report, err := (Runner{Reference: reference.Name}).Run(
+		context.Background(),
+		[]Case{eventPageCase()},
+		[]Backend{reference, broken},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.FailedCases != 1 || report.BlockingDiffs == 0 {
+		t.Fatalf("page drift report = %+v, want one failed case with blocking diffs", report)
+	}
+	found := false
+	for _, diff := range report.Cases[0].Diffs {
+		if strings.HasPrefix(diff.Path, "/event_pages/middle-page/") && diff.EventIndex != nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("page drift diffs = %+v, want an indexed event-page difference", report.Cases[0].Diffs)
+	}
+}
+
+func TestValidateCaseRejectsEventPaginationAfterConcurrentEvents(t *testing.T) {
+	replayCase := concurrentCase()
+	replayCase.Requires = append(replayCase.Requires, CapabilityEventPage)
+	replayCase.Steps = append(replayCase.Steps, Step{
+		Name: "page", Kind: StepGetEventPage, EventPage: &EventPageInput{Limit: 1},
+	})
+	if err := validateCase(replayCase); err == nil ||
+		!strings.Contains(err.Error(), "event pagination cannot follow concurrent event writes") {
+		t.Fatalf("validateCase() error = %v, want concurrent pagination rejection", err)
+	}
+}
+
+func TestValidateCaseRejectsUnboundedEventPageInput(t *testing.T) {
+	tests := []EventPageInput{
+		{Offset: maxReplayEvents + 1, Limit: 1},
+		{Offset: 0, Limit: maxReplayEvents + 1},
+	}
+	for _, input := range tests {
+		replayCase := eventPageCase()
+		replayCase.Steps[len(replayCase.Steps)-1].EventPage = &input
+		if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "event page requires") {
+			t.Fatalf("validateCase(%+v) error = %v, want page bound rejection", input, err)
+		}
+	}
+}
+
+type eventPageSessionService struct {
+	session.Service
+}
+
+type reversedEventPageSessionService struct {
+	session.Service
+}
+
+func (s *reversedEventPageSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.GetSession(ctx, key, options...)
+	if err != nil || got == nil {
+		return got, err
+	}
+	var opts session.Options
+	for _, option := range options {
+		option(&opts)
+	}
+	if opts.EventPage == nil {
+		return got, nil
+	}
+	page := got.Clone()
+	for left, right := 0, len(page.Events)-1; left < right; left, right = left+1, right-1 {
+		page.Events[left], page.Events[right] = page.Events[right], page.Events[left]
+	}
+	return page, nil
+}
+
+func (s *eventPageSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	var opts session.Options
+	for _, option := range options {
+		option(&opts)
+	}
+	if err := session.ValidateGetSessionOptions(&opts, true); err != nil {
+		return nil, err
+	}
+	if opts.EventPage == nil {
+		return s.Service.GetSession(ctx, key, options...)
+	}
+	got, err := s.Service.GetSession(ctx, key)
+	if err != nil || got == nil {
+		return got, err
+	}
+	page := got.Clone()
+	end := len(page.Events) - opts.EventPage.Offset
+	if end < 0 {
+		end = 0
+	}
+	start := end - opts.EventPage.Limit
+	if start < 0 {
+		start = 0
+	}
+	page.Events = append([]event.Event(nil), page.Events[start:end]...)
+	return page, nil
+}
+
+func eventPageTestBackend() Backend {
+	backend := InMemoryBackend()
+	backend.Name = "event-page-test"
+	backend.Capabilities[CapabilityEventPage] = true
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if services != nil && !isNilInterface(services.Session) {
+			services.Session = &eventPageSessionService{Service: services.Session}
+		}
+		return services, err
+	}
+	return backend
+}
+
+type expiringSessionService struct {
+	session.Service
+	ttl     time.Duration
+	mu      sync.Mutex
+	created map[session.Key]time.Time
+}
+
+type alwaysMissingSessionService struct {
+	session.Service
+}
+
+func (s *alwaysMissingSessionService) GetSession(
+	context.Context,
+	session.Key,
+	...session.Option,
+) (*session.Session, error) {
+	return nil, nil
+}
+
+func (s *expiringSessionService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.CreateSession(ctx, key, state, options...)
+	if err == nil && got != nil {
+		s.mu.Lock()
+		s.created[key] = time.Now()
+		s.mu.Unlock()
+	}
+	return got, err
+}
+
+func (s *expiringSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	s.mu.Lock()
+	created, ok := s.created[key]
+	s.mu.Unlock()
+	if ok && time.Since(created) >= s.ttl {
+		return nil, nil
+	}
+	return s.Service.GetSession(ctx, key, options...)
+}
+
+func sessionTTLTestBackend() Backend {
+	const ttl = 10 * time.Millisecond
+	backend := InMemoryBackend()
+	backend.Name = "session-ttl-test"
+	backend.Capabilities[CapabilitySessionTTL] = true
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if services != nil && !isNilInterface(services.Session) {
+			services.Session = &expiringSessionService{
+				Service: services.Session,
+				ttl:     ttl,
+				created: make(map[session.Key]time.Time),
+			}
+			services.SessionTTL = ttl
+		}
+		return services, err
+	}
+	return backend
+}
+
+func TestRunnerDetectsSessionThatOutlivesReportedTTL(t *testing.T) {
+	reference := sessionTTLTestBackend()
+	reference.Name = "expires"
+	broken := InMemoryBackend()
+	broken.Name = "does-not-expire"
+	broken.Capabilities[CapabilitySessionTTL] = true
+	open := broken.Open
+	broken.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if services != nil {
+			services.SessionTTL = 10 * time.Millisecond
+		}
+		return services, err
+	}
+	report, err := (Runner{Reference: reference.Name}).Run(
+		context.Background(),
+		[]Case{sessionTTLCase()},
+		[]Backend{reference, broken},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.FailedCases != 1 || report.BlockingDiffs != 1 {
+		t.Fatalf("TTL failure report = %+v, want one blocking failure", report)
+	}
+	if diff := report.Cases[0].Diffs[0]; diff.Path != "/execution" ||
+		diff.Exclusion == nil || diff.Exclusion.Backend != broken.Name {
+		t.Fatalf("TTL failure evidence = %+v", diff)
+	}
+}
+
+func TestReplayRejectsTTLWithoutPreExpirationVisibility(t *testing.T) {
+	backend := sessionTTLTestBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if services != nil && !isNilInterface(services.Session) {
+			services.Session = &alwaysMissingSessionService{Service: services.Session}
+		}
+		return services, err
+	}
+	_, err := Replay(context.Background(), sessionTTLCase(), backend)
+	if err == nil || !strings.Contains(err.Error(), "not visible before its reported TTL") {
+		t.Fatalf("Replay() error = %v, want missing pre-expiration visibility rejection", err)
+	}
+}
+
+func TestObserveSessionExpirationValidatesTTLAndCancellation(t *testing.T) {
+	t.Run("missing ttl", func(t *testing.T) {
+		exec := execution{services: &Services{}}
+		err := exec.observeSessionExpiration(
+			context.Background(),
+			"expired",
+			&ExpirationInput{Wait: time.Second},
+		)
+		if err == nil || !strings.Contains(err.Error(), "positive session TTL") {
+			t.Fatalf("observeSessionExpiration() error = %v, want missing TTL rejection", err)
+		}
+	})
+
+	t.Run("wait does not exceed ttl", func(t *testing.T) {
+		exec := execution{services: &Services{SessionTTL: time.Second}}
+		err := exec.observeSessionExpiration(
+			context.Background(),
+			"expired",
+			&ExpirationInput{Wait: time.Second},
+		)
+		if err == nil || !strings.Contains(err.Error(), "must exceed backend TTL") {
+			t.Fatalf("observeSessionExpiration() error = %v, want wait/TTL rejection", err)
+		}
+	})
+
+	t.Run("canceled wait", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		exec := execution{services: &Services{SessionTTL: time.Nanosecond}}
+		err := exec.observeSessionExpiration(
+			ctx,
+			"expired",
+			&ExpirationInput{Wait: time.Second},
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("observeSessionExpiration() error = %v, want context.Canceled", err)
+		}
+	})
+}
+
 func TestReplayRejectsCrossSessionSummaryLeak(t *testing.T) {
 	base := InMemoryBackend()
 	backend := base
 	backend.Name = "summary-leak"
+	var wrapped *summaryLeakService
 	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
 		services, err := base.Open(ctx, caseName)
 		if err != nil {
 			return nil, err
 		}
-		services.Session = &summaryLeakService{Service: services.Session}
+		wrapped = &summaryLeakService{Service: services.Session}
+		services.Session = wrapped
 		return services, nil
 	}
-	if _, err := Replay(context.Background(), summaryUpdateCase(), backend); err == nil {
-		t.Fatal("Replay() unexpectedly accepted a cross-session summary leak")
+	if _, err := Replay(context.Background(), summaryUpdateCase(), backend); err == nil ||
+		!strings.Contains(err.Error(), "fresh probe session contains") {
+		t.Fatalf("Replay() error = %v, want persisted cross-session summary evidence", err)
+	}
+	if wrapped == nil || wrapped.writes == 0 {
+		t.Fatal("fault adapter did not persist a summary to the wrong session")
 	}
 }
 
@@ -1982,6 +2513,70 @@ func TestSummaryIsolationCleansProbeAfterReadFailure(t *testing.T) {
 			calls = wrapped.deleteCalls
 		}
 		t.Fatalf("probe DeleteSession() calls = %d, want 1", calls)
+	}
+}
+
+func TestSummaryIsolationCleansProbeWhenCreateReturnsNil(t *testing.T) {
+	backend := InMemoryBackend()
+	open := backend.Open
+	var wrapped *nilProbeCreateService
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return services, err
+		}
+		wrapped = &nilProbeCreateService{Service: services.Session}
+		services.Session = wrapped
+		return services, nil
+	}
+	if _, err := Replay(context.Background(), summaryUpdateCase(), backend); err == nil ||
+		!strings.Contains(err.Error(), "backend returned nil session") {
+		t.Fatalf("Replay() error = %v, want nil probe session error", err)
+	}
+	if wrapped == nil || wrapped.deleteCalls != 1 {
+		calls := 0
+		if wrapped != nil {
+			calls = wrapped.deleteCalls
+		}
+		t.Fatalf("probe DeleteSession() calls = %d, want 1", calls)
+	}
+}
+
+func TestSummaryIsolationRetriesProbeCleanupAfterTransientFailure(t *testing.T) {
+	backend := InMemoryBackend()
+	open := backend.Open
+	var wrapped *transientProbeDeleteFailureService
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return services, err
+		}
+		wrapped = &transientProbeDeleteFailureService{Service: services.Session}
+		services.Session = wrapped
+		return services, nil
+	}
+
+	_, err := Replay(context.Background(), summaryUpdateCase(), backend)
+	if err == nil || !strings.Contains(err.Error(), "injected transient probe cleanup failure") {
+		t.Fatalf("Replay() error = %v, want transient cleanup failure", err)
+	}
+	if wrapped == nil || wrapped.deleteCalls != 2 {
+		calls := 0
+		if wrapped != nil {
+			calls = wrapped.deleteCalls
+		}
+		t.Fatalf("probe DeleteSession() calls = %d, want explicit cleanup plus deferred retry", calls)
+	}
+	probe, getErr := wrapped.Service.GetSession(context.Background(), session.Key{
+		AppName:   "replaytest",
+		UserID:    "user-1",
+		SessionID: summaryUpdateCase().Name + summaryIsolationSessionSuffix,
+	})
+	if getErr != nil {
+		t.Fatalf("GetSession(probe) error = %v", getErr)
+	}
+	if probe != nil {
+		t.Fatal("summary isolation probe still exists after deferred cleanup retry")
 	}
 }
 
@@ -2018,6 +2613,34 @@ func TestRunnerDetectsIgnoredSummaryUpdate(t *testing.T) {
 	t.Fatalf("ignored summary update lacks a summary locator: %+v", report.Cases[0].Diffs)
 }
 
+func TestRunnerDetectsIgnoredInitialSummaryGeneration(t *testing.T) {
+	baseline := InMemoryBackend()
+	baseline.Name = "baseline"
+	missing := InMemoryBackend()
+	missing.Name = "missing-summary"
+	open := missing.Open
+	missing.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Session = &ignoredSummaryService{Service: services.Session}
+		return services, nil
+	}
+
+	report, err := (Runner{Reference: baseline.Name}).Run(
+		context.Background(),
+		[]Case{summaryGenerationCase()},
+		[]Backend{baseline, missing},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.FailedCases != 1 || report.BlockingDiffs == 0 {
+		t.Fatalf("ignored summary generation report = %+v", report)
+	}
+}
+
 func TestSummaryTextFaultProducesTextDiff(t *testing.T) {
 	replayCase := summaryUpdateCase()
 	baseline, err := Replay(context.Background(), replayCase, InMemoryBackend())
@@ -2041,6 +2664,50 @@ func TestSummaryTextFaultProducesTextDiff(t *testing.T) {
 		}
 	}
 	t.Fatalf("summary text fault lacks a blocking text diff: %+v", diffs)
+}
+
+func TestGeneratedFullSessionSummaryReportValidates(t *testing.T) {
+	replayCase := summaryUpdateCase()
+	baseline, err := Replay(context.Background(), replayCase, InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	faulted, err := InjectFault(baseline, FaultSummaryText)
+	if err != nil {
+		t.Fatalf("InjectFault() error = %v", err)
+	}
+	diffs, err := Compare(replayCase.Name, baseline, faulted, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	blocking, allowed := countDiffs(diffs)
+	comparable := []string{baseline.Backend, faulted.Backend}
+	sort.Strings(comparable)
+	report := Report{
+		GeneratedAt:    caseEpoch,
+		ComparisonMode: ComparisonReference,
+		Reference:      baseline.Backend,
+		Backends:       []string{baseline.Backend, faulted.Backend},
+		TotalCases:     1,
+		FailedCases:    1,
+		BlockingDiffs:  blocking,
+		AllowedDiffs:   allowed,
+		Cases: []CaseResult{{
+			Name:   replayCase.Name,
+			Status: StatusFailed,
+			Diffs:  diffs,
+			Reference: &ReferenceResult{
+				ComparableBackends: comparable,
+				Pairs: []PairComparison{{
+					BackendA: comparable[0], BackendB: comparable[1],
+					BlockingDiffs: blocking, AllowedDiffs: allowed,
+				}},
+			},
+		}},
+	}
+	if err := report.Validate(); err != nil {
+		t.Fatalf("generated full-session summary report Validate() error = %v", err)
+	}
 }
 
 func TestRunnerDetectsMemorySearchOrderDrift(t *testing.T) {
@@ -2109,14 +2776,20 @@ func TestEveryPublicCaseDetectsInjectedFault(t *testing.T) {
 		t.Run(replayCase.Name, func(t *testing.T) {
 			t.Parallel()
 			backend := InMemoryBackend()
+			if capabilitySet(replayCase.Requires)[CapabilityEventPage] {
+				backend = eventPageTestBackend()
+			} else if capabilitySet(replayCase.Requires)[CapabilitySessionTTL] {
+				backend = sessionTTLTestBackend()
+			}
 			backend.Name = "baseline"
 			baseline, err := Replay(context.Background(), replayCase, backend)
 			if err != nil {
 				t.Fatalf("Replay() error = %v", err)
 			}
-			faulted, err := InjectFault(baseline, replayCase.Fault)
+			fault := publicCaseFaults[replayCase.Name]
+			faulted, err := InjectFault(baseline, fault)
 			if err != nil {
-				t.Fatalf("InjectFault(%q) error = %v", replayCase.Fault, err)
+				t.Fatalf("InjectFault(%q) error = %v", fault, err)
 			}
 			diffs, err := Compare(replayCase.Name, baseline, faulted, nil)
 			if err != nil {
@@ -2124,7 +2797,7 @@ func TestEveryPublicCaseDetectsInjectedFault(t *testing.T) {
 			}
 			blocking, _ := countDiffs(diffs)
 			if blocking == 0 {
-				t.Fatalf("fault %q was not detected", replayCase.Fault)
+				t.Fatalf("fault %q was not detected", fault)
 			}
 			for _, diff := range diffs {
 				if diff.Case != replayCase.Name || diff.SessionID == "" || diff.Path == "" {
@@ -2513,7 +3186,7 @@ func TestAllowedDiffValidation(t *testing.T) {
 	valid := AllowedDiff{
 		BackendA: "a",
 		BackendB: "b",
-		Path:     "/summaries/a~1b/~0key",
+		Path:     "/state/app/~0key/json",
 		Rule:     AllowedIgnore,
 		Reason:   "valid escapes",
 	}
@@ -2548,6 +3221,173 @@ func TestTrackPayloadValuesRemainSemantic(t *testing.T) {
 	}
 }
 
+func TestTrackPayloadEmptyObjectKeyProducesValidReport(t *testing.T) {
+	const caseName = "track-empty-object-key"
+	baseline := minimalSnapshot("baseline", "same")
+	actual := minimalSnapshot("actual", "same")
+	baseline.Case = caseName
+	actual.Case = caseName
+	baseline.Tracks = map[string][]CanonicalMap{
+		"tools": {{"track": "tools", "payload": map[string]any{"": float64(1)}}},
+	}
+	actual.Tracks = map[string][]CanonicalMap{
+		"tools": {{"track": "tools", "payload": map[string]any{"": float64(2)}}},
+	}
+
+	diffs, err := Compare(caseName, baseline, actual, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if len(diffs) != 1 || diffs[0].Path != "/tracks/tools/0/payload/" || diffs[0].TrackName != "tools" {
+		t.Fatalf("empty-key diffs = %+v, want one track payload diff", diffs)
+	}
+
+	report := validReferenceReport()
+	report.PassedCases = 0
+	report.FailedCases = 1
+	report.BlockingDiffs = 1
+	report.Cases[0].Name = caseName
+	report.Cases[0].Status = StatusFailed
+	report.Cases[0].Diffs = diffs
+	report.Cases[0].Reference.Pairs[0].BlockingDiffs = 1
+	if err := report.Validate(); err != nil {
+		t.Fatalf("Validate() rejected empty JSON object key diff: %v", err)
+	}
+}
+
+func TestEventArbitraryJSONEmptyObjectKeyProducesValidReport(t *testing.T) {
+	tests := []struct {
+		name     string
+		setValue func(*Snapshot, float64)
+		wantPath string
+	}{
+		{
+			name: "event extension",
+			setValue: func(snapshot *Snapshot, value float64) {
+				snapshot.Events = []CanonicalMap{{
+					"extensions": map[string]any{
+						"custom.example/v1": map[string]any{"": value},
+					},
+				}}
+			},
+			wantPath: "/events/0/extensions/custom.example~1v1/",
+		},
+		{
+			name: "event-page extension",
+			setValue: func(snapshot *Snapshot, value float64) {
+				snapshot.EventPages = map[string][]CanonicalMap{
+					"page": {{
+						"extensions": map[string]any{
+							"custom.example/v1": map[string]any{"": value},
+						},
+					}},
+				}
+			},
+			wantPath: "/event_pages/page/0/extensions/custom.example~1v1/",
+		},
+		{
+			name: "event state delta",
+			setValue: func(snapshot *Snapshot, value float64) {
+				snapshot.Events = []CanonicalMap{{
+					"stateDelta": map[string]any{
+						"key": CanonicalMap{"kind": "json", "json": map[string]any{"": value}},
+					},
+				}}
+			},
+			wantPath: "/events/0/stateDelta/key/json/",
+		},
+		{
+			name: "tool-call extra field",
+			setValue: func(snapshot *Snapshot, value float64) {
+				snapshot.Events = []CanonicalMap{{
+					"choices": []any{map[string]any{
+						"message": map[string]any{
+							"tool_calls": []any{map[string]any{
+								"extra_fields": map[string]any{"": value},
+							}},
+						},
+					}},
+				}}
+			},
+			wantPath: "/events/0/choices/0/message/tool_calls/0/extra_fields/",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const caseName = "event-empty-object-key"
+			baseline := minimalSnapshot("baseline", "same")
+			actual := minimalSnapshot("actual", "same")
+			baseline.Case = caseName
+			actual.Case = caseName
+			test.setValue(&baseline, 1)
+			test.setValue(&actual, 2)
+
+			diffs, err := Compare(caseName, baseline, actual, nil)
+			if err != nil {
+				t.Fatalf("Compare() error = %v", err)
+			}
+			if len(diffs) != 1 || diffs[0].Path != test.wantPath || diffs[0].EventIndex == nil || *diffs[0].EventIndex != 0 {
+				t.Fatalf("empty-key diffs = %+v, want one event diff at %q", diffs, test.wantPath)
+			}
+
+			report := validReferenceReport()
+			report.Cases[0].Name = caseName
+			setBlockingReportDiff(&report, diffs[0])
+			if err := report.Validate(); err != nil {
+				t.Fatalf("Validate() rejected empty JSON object key diff: %v", err)
+			}
+		})
+	}
+}
+
+func TestStateArbitraryJSONPathProducesValidReport(t *testing.T) {
+	tests := []struct {
+		name     string
+		left     any
+		right    any
+		wantPath string
+	}{
+		{
+			name:     "nested field",
+			left:     map[string]any{"nested": map[string]any{"value": float64(1)}},
+			right:    map[string]any{"nested": map[string]any{"value": float64(2)}},
+			wantPath: "/state/session/config/json/nested/value",
+		},
+		{
+			name:     "empty object key",
+			left:     map[string]any{"": float64(1)},
+			right:    map[string]any{"": float64(2)},
+			wantPath: "/state/session/config/json/",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const caseName = "state-arbitrary-json"
+			baseline := minimalSnapshot("baseline", "same")
+			actual := minimalSnapshot("actual", "same")
+			baseline.Case = caseName
+			actual.Case = caseName
+			baseline.State["session"]["config"] = CanonicalMap{"kind": "json", "json": test.left}
+			actual.State["session"]["config"] = CanonicalMap{"kind": "json", "json": test.right}
+
+			diffs, err := Compare(caseName, baseline, actual, nil)
+			if err != nil {
+				t.Fatalf("Compare() error = %v", err)
+			}
+			if len(diffs) != 1 || diffs[0].Path != test.wantPath {
+				t.Fatalf("state JSON diffs = %+v, want one diff at %q", diffs, test.wantPath)
+			}
+
+			report := validReferenceReport()
+			report.Cases[0].Name = caseName
+			setBlockingReportDiff(&report, diffs[0])
+			if err := report.Validate(); err != nil {
+				t.Fatalf("Validate() rejected State JSON diff: %v", err)
+			}
+		})
+	}
+}
+
 func TestZeroTimestampIsNotMarkedPresent(t *testing.T) {
 	value := map[string]any{
 		"created_at": time.Time{}.Format(time.RFC3339Nano),
@@ -2559,6 +3399,23 @@ func TestZeroTimestampIsNotMarkedPresent(t *testing.T) {
 	}
 	if value["updated_at"] != presentMarker {
 		t.Fatalf("updated_at = %v, want %q", value["updated_at"], presentMarker)
+	}
+}
+
+func TestNormalizeTimeOffsetDoesNotSaturate(t *testing.T) {
+	base := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	first := time.Date(3000, time.July, 1, 0, 0, 0, 0, time.UTC)
+	second := time.Date(4000, time.July, 1, 0, 0, 0, 0, time.UTC)
+
+	firstOffset := normalizeTimeOffset(first, base)
+	secondOffset := normalizeTimeOffset(second, base)
+	if reflect.DeepEqual(firstOffset, secondOffset) {
+		t.Fatalf("distinct timestamps normalized to the same saturated offset %v", firstOffset)
+	}
+	for _, offset := range []any{firstOffset, secondOffset} {
+		if _, err := json.Marshal(offset); err != nil {
+			t.Fatalf("normalized offset %T(%v) is not valid JSON: %v", offset, offset, err)
+		}
 	}
 }
 
@@ -2789,6 +3646,38 @@ func TestAnchoredSummaryCutoffRemainsSemantic(t *testing.T) {
 	}
 }
 
+func TestSummaryUpdatedAtOffsetRemainsSemantic(t *testing.T) {
+	normalize := func(backend string, updatedAt time.Time) Snapshot {
+		sess := &session.Session{
+			CreatedAt: caseEpoch,
+			Summaries: map[string]*session.Summary{
+				customSummaryFilterKey: {
+					Summary:   "summary",
+					UpdatedAt: updatedAt,
+					Boundary: session.NewSummaryBoundary(
+						customSummaryFilterKey,
+						caseEpoch.Add(2*time.Second),
+					),
+				},
+			},
+		}
+		summaries, err := normalizeSummaries(sess, nil, nil)
+		if err != nil {
+			t.Fatalf("normalizeSummaries() error = %v", err)
+		}
+		return Snapshot{Backend: backend, Case: "summary-updated-at", Summaries: summaries}
+	}
+	baseline := normalize("baseline", caseEpoch.Add(2*time.Second))
+	actual := normalize("actual", caseEpoch.Add(time.Second))
+	diffs, err := Compare("summary-updated-at", baseline, actual, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if len(diffs) != 1 || diffs[0].Path != "/summaries/agent~1custom/updated_at" {
+		t.Fatalf("Compare() diffs = %+v, want one updated_at diff", diffs)
+	}
+}
+
 func TestNormalizeSummariesRejectsMismatchedBoundaryFilterKey(t *testing.T) {
 	sess := &session.Session{
 		CreatedAt: caseEpoch,
@@ -2802,6 +3691,56 @@ func TestNormalizeSummariesRejectsMismatchedBoundaryFilterKey(t *testing.T) {
 	if _, err := normalizeSummaries(sess, nil, nil); err == nil ||
 		!strings.Contains(err.Error(), "belongs to filter key") {
 		t.Fatalf("normalizeSummaries() error = %v, want filter-key mismatch", err)
+	}
+}
+
+func TestNormalizeSummariesRejectsUnknownBoundaryVersion(t *testing.T) {
+	sess := &session.Session{
+		CreatedAt: caseEpoch,
+		Summaries: map[string]*session.Summary{
+			"branch/a": {
+				Summary: "summary",
+				Boundary: &session.SummaryBoundary{
+					Version:   session.SummaryBoundaryVersion + 1,
+					FilterKey: "branch/a",
+					CutoffAt:  caseEpoch.Add(time.Second),
+				},
+			},
+		},
+	}
+	if _, err := normalizeSummaries(sess, nil, nil); err == nil ||
+		!strings.Contains(err.Error(), "unsupported boundary version") {
+		t.Fatalf("normalizeSummaries() error = %v, want boundary version rejection", err)
+	}
+}
+
+func TestNormalizeSummariesRejectsBoundaryForDifferentBranch(t *testing.T) {
+	step := messageStep("other-branch", "other-branch", 1, "assistant", model.RoleAssistant, "other", "branch/b")
+	evt := step.Event.Event.Clone()
+	evt.ID = "physical-other-branch"
+	if err := event.SetExtension(evt, logicalEventIDExtension, "other-branch"); err != nil {
+		t.Fatalf("SetExtension() error = %v", err)
+	}
+	sess := &session.Session{
+		CreatedAt: caseEpoch,
+		Events:    []event.Event{*evt},
+		Summaries: map[string]*session.Summary{
+			"branch/a": {
+				Summary: "summary",
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"branch/a",
+					evt.Timestamp,
+					evt.ID,
+				),
+			},
+		},
+	}
+	if _, err := normalizeSummaries(
+		sess,
+		sess.GetEvents(),
+		map[string]string{evt.ID: "other-branch"},
+	); err == nil || !strings.Contains(err.Error(), "does not match its filter key") {
+		t.Fatalf("normalizeSummaries() error = %v, want cross-branch anchor rejection", err)
 	}
 }
 
@@ -3093,6 +4032,10 @@ func TestReportJSONRoundTrip(t *testing.T) {
 		Cases: []CaseResult{{
 			Name:   "summary_filter_key",
 			Status: StatusFailed,
+			Reference: &ReferenceResult{
+				ComparableBackends: []string{"inmemory", "sqlite"},
+				Pairs:              []PairComparison{{BackendA: "inmemory", BackendB: "sqlite", BlockingDiffs: 1}},
+			},
 			Diffs: []Diff{{
 				Case:             "summary_filter_key",
 				BackendA:         "inmemory",
@@ -3121,12 +4064,51 @@ func TestReportJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReportJSONRoundTripPreservesLargeIntegers(t *testing.T) {
+	report := validReferenceReport()
+	diff := validReportDiff()
+	diff.Baseline = int64(9007199254740993)
+	diff.Actual = int64(9007199254740994)
+	setBlockingReportDiff(&report, diff)
+
+	var first bytes.Buffer
+	if err := WriteReport(&first, report); err != nil {
+		t.Fatalf("first WriteReport() error = %v", err)
+	}
+	var decoded Report
+	if err := json.Unmarshal(first.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	baseline, ok := decoded.Cases[0].Diffs[0].Baseline.(json.Number)
+	if !ok || baseline.String() != "9007199254740993" {
+		t.Fatalf("decoded baseline = %#v, want lossless json.Number", decoded.Cases[0].Diffs[0].Baseline)
+	}
+	var second bytes.Buffer
+	if err := WriteReport(&second, decoded); err != nil {
+		t.Fatalf("second WriteReport() error = %v", err)
+	}
+	if !bytes.Equal(first.Bytes(), second.Bytes()) {
+		t.Fatalf("report changed after JSON round trip\nfirst:  %s\nsecond: %s", first.Bytes(), second.Bytes())
+	}
+
+	var decodedDiff Diff
+	if err := json.Unmarshal(
+		[]byte(`{"baseline":9007199254740993,"actual":9007199254740994}`),
+		&decodedDiff,
+	); err != nil {
+		t.Fatalf("direct Diff Unmarshal() error = %v", err)
+	}
+	if got, ok := decodedDiff.Baseline.(json.Number); !ok || got.String() != "9007199254740993" {
+		t.Fatalf("directly decoded Diff baseline = %#v, want lossless json.Number", decodedDiff.Baseline)
+	}
+}
+
 func TestFullSessionSummaryLocatorRoundTrip(t *testing.T) {
 	fullSessionFilterKey := session.SummaryFilterKeyAllContents
 	diff := Diff{
 		Case:             "summary_update",
-		BackendA:         "inmemory",
-		BackendB:         "sqlite",
+		BackendA:         "baseline",
+		BackendB:         "actual",
 		SessionID:        "summary_update",
 		SummaryFilterKey: &fullSessionFilterKey,
 		Path:             "/summaries//text",
@@ -3147,6 +4129,12 @@ func TestFullSessionSummaryLocatorRoundTrip(t *testing.T) {
 	if decoded.SummaryFilterKey == nil || *decoded.SummaryFilterKey != "" {
 		t.Fatalf("decoded full-session summary locator = %#v", decoded.SummaryFilterKey)
 	}
+	report := validReferenceReport()
+	diff.Case = report.Cases[0].Name
+	setBlockingReportDiff(&report, diff)
+	if err := report.Validate(); err != nil {
+		t.Fatalf("Report.Validate() rejected full-session summary locator: %v", err)
+	}
 }
 
 func TestWriteReportAndSample(t *testing.T) {
@@ -3161,6 +4149,26 @@ func TestWriteReportAndSample(t *testing.T) {
 	if err := report.Validate(); err != nil {
 		t.Fatalf("sample report Validate() error = %v", err)
 	}
+	domains := map[string]bool{
+		"memory_search": false,
+		"summary":       false,
+		"track":         false,
+	}
+	for _, diff := range report.Cases[0].Diffs {
+		switch {
+		case strings.HasPrefix(diff.Path, "/memory_searches/") && diff.MemoryID != "":
+			domains["memory_search"] = true
+		case strings.HasPrefix(diff.Path, "/summaries/") && diff.SummaryFilterKey != nil:
+			domains["summary"] = true
+		case strings.HasPrefix(diff.Path, "/tracks/") && diff.TrackName != "":
+			domains["track"] = true
+		}
+	}
+	for domain, present := range domains {
+		if !present {
+			t.Fatalf("sample report has no verifiable %s locator", domain)
+		}
+	}
 	var output bytes.Buffer
 	if err := WriteReport(&output, report); err != nil {
 		t.Fatalf("WriteReport() error = %v", err)
@@ -3174,24 +4182,26 @@ func TestWriteReportAndSample(t *testing.T) {
 }
 
 func TestReportValidationRejectsIncorrectCounters(t *testing.T) {
-	report := Report{
-		GeneratedAt:    caseEpoch,
-		ComparisonMode: ComparisonReference,
-		Reference:      "baseline",
-		Backends:       []string{"baseline", "actual"},
-		TotalCases:     1,
-		PassedCases:    1,
-		Cases: []CaseResult{{
-			Name:   "clean",
-			Status: StatusPassed,
-		}},
-	}
+	report := validReferenceReport()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("valid report rejected: %v", err)
 	}
 	report.PassedCases = 0
 	if err := report.Validate(); err == nil {
 		t.Fatal("report with incorrect status counters unexpectedly validated")
+	}
+}
+
+func TestReportIsCleanDoesNotTrustStaleCounters(t *testing.T) {
+	report := validReferenceReport()
+	report.Cases[0].Diffs = []Diff{validReportDiff()}
+	if report.IsClean() {
+		t.Fatal("IsClean() accepted a blocking diff hidden by stale counters")
+	}
+	report = validReferenceReport()
+	report.Cases[0].Reference.Pairs = nil
+	if report.IsClean() {
+		t.Fatal("IsClean() accepted a structurally incomplete comparison report")
 	}
 }
 
@@ -3221,6 +4231,7 @@ type unexpectedStateReadService struct {
 
 type summaryLeakService struct {
 	session.Service
+	writes int
 }
 
 type probeReadFailureService struct {
@@ -3228,9 +4239,70 @@ type probeReadFailureService struct {
 	deleteCalls int
 }
 
+type nilProbeCreateService struct {
+	session.Service
+	deleteCalls int
+}
+
+type transientProbeDeleteFailureService struct {
+	session.Service
+	deleteCalls int
+}
+
 type ignoredSummaryUpdateService struct {
 	session.Service
 	calls int
+}
+
+type ignoredSummaryService struct {
+	session.Service
+}
+
+func (s *ignoredSummaryService) CreateSessionSummary(
+	context.Context,
+	*session.Session,
+	string,
+	bool,
+) error {
+	return nil
+}
+
+type stateDriftService struct {
+	session.Service
+	ignoreWrites  bool
+	ignoreDeletes bool
+}
+
+func (s *stateDriftService) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
+	if s.ignoreWrites {
+		return nil
+	}
+	return s.Service.UpdateAppState(ctx, appName, state)
+}
+
+func (s *stateDriftService) DeleteAppState(ctx context.Context, appName string, key string) error {
+	if s.ignoreDeletes {
+		return nil
+	}
+	return s.Service.DeleteAppState(ctx, appName, key)
+}
+
+func (s *stateDriftService) UpdateUserState(
+	ctx context.Context,
+	key session.UserKey,
+	state session.StateMap,
+) error {
+	if s.ignoreWrites {
+		return nil
+	}
+	return s.Service.UpdateUserState(ctx, key, state)
+}
+
+func (s *stateDriftService) DeleteUserState(ctx context.Context, key session.UserKey, stateKey string) error {
+	if s.ignoreDeletes {
+		return nil
+	}
+	return s.Service.DeleteUserState(ctx, key, stateKey)
 }
 
 func (s *ignoredSummaryUpdateService) CreateSessionSummary(
@@ -3336,20 +4408,48 @@ func memoriesWithWrongOwner(entries []*memory.Entry) []*memory.Entry {
 	return output
 }
 
-func (s *summaryLeakService) GetSession(
+func (s *summaryLeakService) CreateSessionSummary(
 	ctx context.Context,
-	key session.Key,
-	options ...session.Option,
-) (*session.Session, error) {
-	sess, err := s.Service.GetSession(ctx, key, options...)
-	if err != nil || sess == nil || !strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
-		return sess, err
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	if err := s.Service.CreateSessionSummary(ctx, sess, filterKey, force); err != nil {
+		return err
 	}
-	sess = sess.Clone()
-	sess.Summaries = map[string]*session.Summary{
-		session.SummaryFilterKeyAllContents: {Summary: "leaked summary"},
+	probeKey := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID + summaryIsolationSessionSuffix,
 	}
-	return sess, nil
+	probe, err := s.Service.GetSession(ctx, probeKey)
+	if err != nil {
+		return fmt.Errorf("get wrong-session summary target: %w", err)
+	}
+	if probe == nil {
+		return errors.New("wrong-session summary target does not exist")
+	}
+	events := sess.GetEvents()
+	if len(events) == 0 {
+		return errors.New("wrong-session summary fault requires an event")
+	}
+	leaked := events[len(events)-1].Clone()
+	leaked.ID = ""
+	if err := s.Service.AppendEvent(ctx, probe, leaked); err != nil {
+		return fmt.Errorf("seed wrong-session summary target: %w", err)
+	}
+	probe, err = s.Service.GetSession(ctx, probeKey)
+	if err != nil {
+		return fmt.Errorf("reload wrong-session summary target: %w", err)
+	}
+	if probe == nil {
+		return errors.New("wrong-session summary target disappeared")
+	}
+	if err := s.Service.CreateSessionSummary(ctx, probe, filterKey, true); err != nil {
+		return fmt.Errorf("persist wrong-session summary: %w", err)
+	}
+	s.writes++
+	return nil
 }
 
 func (s *probeReadFailureService) GetSession(
@@ -3364,6 +4464,44 @@ func (s *probeReadFailureService) GetSession(
 }
 
 func (s *probeReadFailureService) DeleteSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) error {
+	if strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
+		s.deleteCalls++
+	}
+	return s.Service.DeleteSession(ctx, key, options...)
+}
+
+func (s *transientProbeDeleteFailureService) DeleteSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) error {
+	if strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
+		s.deleteCalls++
+		if s.deleteCalls == 1 {
+			return errors.New("injected transient probe cleanup failure")
+		}
+	}
+	return s.Service.DeleteSession(ctx, key, options...)
+}
+
+func (s *nilProbeCreateService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	sess, err := s.Service.CreateSession(ctx, key, state, options...)
+	if err == nil && strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
+		return nil, nil
+	}
+	return sess, err
+}
+
+func (s *nilProbeCreateService) DeleteSession(
 	ctx context.Context,
 	key session.Key,
 	options ...session.Option,
@@ -3442,7 +4580,7 @@ func droppedNonPersistedStateDeltaBackend(name string) Backend {
 func openFailureBackend(name string) Backend {
 	return Backend{
 		Name:         name,
-		Capabilities: FullCapabilities(),
+		Capabilities: PortableCapabilities(),
 		Open: func(context.Context, string) (*Services, error) {
 			return nil, errors.New("injected open failure")
 		},

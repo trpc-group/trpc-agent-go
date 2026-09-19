@@ -9,13 +9,59 @@
 package replaytest
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 )
 
-// InjectFault returns a deep-copied snapshot with one deterministic regression.
+type FaultKind string
+
+const (
+	FaultEventContent      FaultKind = "event_content"
+	FaultEventOrder        FaultKind = "event_order"
+	FaultToolArguments     FaultKind = "tool_arguments"
+	FaultStateValue        FaultKind = "state_value"
+	FaultMemoryContent     FaultKind = "memory_content"
+	FaultDuplicateMemory   FaultKind = "duplicate_memory"
+	FaultMemorySearchOrder FaultKind = "memory_search_order"
+	FaultSummaryText       FaultKind = "summary_text"
+	FaultSummaryMissing    FaultKind = "summary_missing"
+	FaultSummaryFilterKey  FaultKind = "summary_filter_key"
+	FaultSummaryStale      FaultKind = "summary_stale"
+	FaultTrackPayload      FaultKind = "track_payload"
+	FaultDuplicateEvent    FaultKind = "duplicate_event"
+	FaultEventPageContent  FaultKind = "event_page_content"
+	FaultSessionTTL        FaultKind = "session_ttl"
+)
+
+var publicCaseFaults = map[string]FaultKind{
+	"single_turn_text":          FaultEventContent,
+	"multi_turn_order":          FaultEventOrder,
+	"tool_call_roundtrip":       FaultToolArguments,
+	"state_crud":                FaultStateValue,
+	"state_clear":               FaultStateValue,
+	"session_reload_continuity": FaultEventContent,
+	"memory_write_read":         FaultMemoryContent,
+	"memory_search_ranking":     FaultMemorySearchOrder,
+	"memory_retry_recovery":     FaultDuplicateMemory,
+	"summary_generation":        FaultSummaryMissing,
+	"summary_update":            FaultSummaryStale,
+	"summary_retained_tail":     FaultSummaryMissing,
+	"summary_filter_key":        FaultSummaryFilterKey,
+	"track_events":              FaultTrackPayload,
+	"event_page":                FaultEventPageContent,
+	"session_ttl":               FaultSessionTTL,
+	"concurrent_interleaving":   FaultDuplicateEvent,
+	"concurrent_state_writes":   FaultStateValue,
+	"concurrent_memory_writes":  FaultDuplicateMemory,
+	"concurrent_summary_writes": FaultSummaryText,
+	"concurrent_track_writes":   FaultTrackPayload,
+}
+
+// InjectFault returns a deep-copied snapshot with one deterministic regression
+// and does not mutate input. It returns an error when kind is unknown, the
+// snapshot cannot be cloned and encoded safely, or the selected regression has
+// no well-formed target in the snapshot.
 func InjectFault(input Snapshot, kind FaultKind) (Snapshot, error) {
 	output, err := cloneSnapshot(input)
 	if err != nil {
@@ -49,6 +95,10 @@ func InjectFault(input Snapshot, kind FaultKind) (Snapshot, error) {
 		inject = injectTrackPayload
 	case FaultDuplicateEvent:
 		inject = injectDuplicateEvent
+	case FaultEventPageContent:
+		inject = injectEventPageContent
+	case FaultSessionTTL:
+		inject = injectSessionTTL
 	default:
 		return Snapshot{}, fmt.Errorf("unknown fault %q", kind)
 	}
@@ -57,6 +107,38 @@ func InjectFault(input Snapshot, kind FaultKind) (Snapshot, error) {
 	}
 	output.Backend += "-faulted"
 	return output, nil
+}
+
+func injectSessionTTL(output *Snapshot) error {
+	keys := make([]string, 0, len(output.ExpirationChecks))
+	for key := range output.ExpirationChecks {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return errors.New("session TTL fault requires an expiration observation")
+	}
+	output.ExpirationChecks[keys[0]] = false
+	return nil
+}
+
+func injectEventPageContent(output *Snapshot) error {
+	keys := make([]string, 0, len(output.EventPages))
+	for key, events := range output.EventPages {
+		if len(events) > 0 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return errors.New("event page fault requires an event")
+	}
+	message, err := firstEventMessage(output.EventPages[keys[0]])
+	if err != nil {
+		return err
+	}
+	message["content"] = "injected-page-content-drift"
+	return nil
 }
 
 func injectEventContent(output *Snapshot) error {
@@ -187,7 +269,6 @@ func injectSummaryStale(output *Snapshot) error {
 		}
 		retained = append(retained, logicalID)
 	}
-	summary["text"] = "injected-stale-summary"
 	summary["retained_event_ids"] = retained
 	return nil
 }
@@ -214,7 +295,7 @@ func injectDuplicateEvent(output *Snapshot) error {
 }
 
 func cloneSnapshot(input Snapshot) (Snapshot, error) {
-	raw, err := json.Marshal(input)
+	raw, err := marshalJSONValue("snapshot", input, maxReplaySnapshotSize)
 	if err != nil {
 		return Snapshot{}, err
 	}

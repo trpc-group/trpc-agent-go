@@ -9,10 +9,12 @@
 package replaytest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -38,9 +40,41 @@ func TestRunnerRejectsInvalidConfiguration(t *testing.T) {
 		Rule:     AllowedIgnore,
 		Reason:   "invalid path",
 	}}
+	unknownAllowedDiffPathCase := validCase
+	unknownAllowedDiffPathCase.AllowedDiffs = []AllowedDiff{{
+		BackendA: "left",
+		BackendB: "right",
+		Path:     "/session/not_a_field",
+		Rule:     AllowedIgnore,
+		Reason:   "unknown path",
+	}}
+	unknownNestedAllowedDiffPathCases := make([]Case, 0, 3)
+	for _, path := range []string{
+		"/state/app/*/not_a_field",
+		"/summaries/*/not_a_field",
+		"/memory_searches/*/*/memory/not_a_field",
+	} {
+		invalid := validCase
+		invalid.AllowedDiffs = []AllowedDiff{{
+			BackendA: "left",
+			BackendB: "right",
+			Path:     path,
+			Rule:     AllowedIgnore,
+			Reason:   "unknown nested path",
+		}}
+		unknownNestedAllowedDiffPathCases = append(unknownNestedAllowedDiffPathCases, invalid)
+	}
+	unknownAllowedDiffBackendCase := validCase
+	unknownAllowedDiffBackendCase.AllowedDiffs = []AllowedDiff{{
+		BackendA: "typo",
+		BackendB: "right",
+		Path:     "/events",
+		Rule:     AllowedIgnore,
+		Reason:   "unknown backend",
+	}}
 	unknownCapabilityBackend := right
 	unknownCapabilityBackend.Name = "unknown-capability"
-	unknownCapabilityBackend.Capabilities = FullCapabilities()
+	unknownCapabilityBackend.Capabilities = PortableCapabilities()
 	unknownCapabilityBackend.Capabilities["not-a-capability"] = true
 	tests := []struct {
 		name     string
@@ -57,6 +91,11 @@ func TestRunnerRejectsInvalidConfiguration(t *testing.T) {
 		{name: "missing reference", runner: Runner{Reference: "missing"}, cases: []Case{validCase}, backends: []Backend{left, right}},
 		{name: "empty case", cases: []Case{{Name: "empty"}}, backends: []Backend{left, right}},
 		{name: "invalid allowed diff", cases: []Case{invalidAllowedDiffCase}, backends: []Backend{left, right}},
+		{name: "unknown allowed diff path", cases: []Case{unknownAllowedDiffPathCase}, backends: []Backend{left, right}},
+		{name: "unknown state glob suffix", cases: []Case{unknownNestedAllowedDiffPathCases[0]}, backends: []Backend{left, right}},
+		{name: "unknown summary glob suffix", cases: []Case{unknownNestedAllowedDiffPathCases[1]}, backends: []Backend{left, right}},
+		{name: "unknown memory search glob suffix", cases: []Case{unknownNestedAllowedDiffPathCases[2]}, backends: []Backend{left, right}},
+		{name: "unknown allowed diff backend", cases: []Case{unknownAllowedDiffBackendCase}, backends: []Backend{left, right}},
 		{name: "unknown backend capability", cases: []Case{validCase}, backends: []Backend{left, unknownCapabilityBackend}},
 	}
 	for _, test := range tests {
@@ -65,6 +104,192 @@ func TestRunnerRejectsInvalidConfiguration(t *testing.T) {
 				t.Fatal("Run() unexpectedly accepted invalid configuration")
 			}
 		})
+	}
+}
+
+func TestRunnerRejectsTooManyBackends(t *testing.T) {
+	backends := make([]Backend, 0, maxReplayBackends+1)
+	for index := 0; index < maxReplayBackends+1; index++ {
+		backend := InMemoryBackend()
+		backend.Name = fmt.Sprintf("backend-%03d", index)
+		backends = append(backends, backend)
+	}
+	_, err := (Runner{}).Run(context.Background(), []Case{PublicCases()[0]}, backends)
+	if err == nil || !strings.Contains(err.Error(), "exceed limit") {
+		t.Fatalf("Run() error = %v, want backend limit error", err)
+	}
+}
+
+func TestRunnerRejectsTooManyCasesBeforeOpeningBackends(t *testing.T) {
+	cases := make([]Case, maxReplayCases+1)
+	openCalls := 0
+	left := InMemoryBackend()
+	left.Name = "left"
+	left.Open = func(context.Context, string) (*Services, error) {
+		openCalls++
+		return nil, errors.New("must not open")
+	}
+	right := left
+	right.Name = "right"
+	_, err := (Runner{}).Run(context.Background(), cases, []Backend{left, right})
+	if err == nil || !strings.Contains(err.Error(), "cases exceed limit") {
+		t.Fatalf("Run() error = %v, want case limit error", err)
+	}
+	if openCalls != 0 {
+		t.Fatalf("Run() opened backends %d times, want 0", openCalls)
+	}
+}
+
+func TestAllowedDiffValidationRejectsTooManyRules(t *testing.T) {
+	err := validateAllowedDiffs(make([]AllowedDiff, maxReplayAllowedDiffs+1))
+	if err == nil || !strings.Contains(err.Error(), "allowed_diff rules exceed limit") {
+		t.Fatalf("validateAllowedDiffs() error = %v, want rule limit error", err)
+	}
+}
+
+func TestCompareRejectsTooManyDiffs(t *testing.T) {
+	baselineState := make(CanonicalMap, maxReplayDiffsPerCase+1)
+	actualState := make(CanonicalMap, maxReplayDiffsPerCase+1)
+	for index := 0; index < maxReplayDiffsPerCase+1; index++ {
+		key := fmt.Sprintf("key-%05d", index)
+		baselineState[key] = 0
+		actualState[key] = 1
+	}
+	_, err := Compare("diff-limit", Snapshot{
+		Backend: "left",
+		Case:    "diff-limit",
+		State:   map[string]CanonicalMap{"session": baselineState},
+	}, Snapshot{
+		Backend: "right",
+		Case:    "diff-limit",
+		State:   map[string]CanonicalMap{"session": actualState},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 10000 diffs") {
+		t.Fatalf("Compare() error = %v, want diff limit error", err)
+	}
+}
+
+func TestCompareSafelyEncodesSnapshots(t *testing.T) {
+	t.Run("custom marshaler is rejected before mutating caller snapshot", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		baselineValue := &mutatingJSONExportedState{Values: map[string]string{"value": "original"}}
+		actualValue := &mutatingJSONExportedState{Values: map[string]string{"value": "original"}}
+		baseline.Session["custom"] = baselineValue
+		actual.Session["custom"] = actualValue
+
+		_, err := Compare("allowed", baseline, actual, nil)
+		if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+			t.Fatalf("Compare() error = %v, want custom marshaler rejection", err)
+		}
+		if got := baselineValue.Values["value"]; got != "original" {
+			t.Fatalf("baseline snapshot value = %q, want original", got)
+		}
+		if got := actualValue.Values["value"]; got != "original" {
+			t.Fatalf("actual snapshot value = %q, want original", got)
+		}
+	})
+
+	t.Run("opaque custom marshaler is rejected before execution", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		executed := false
+		baseline.Session["custom"] = &opaqueSnapshotJSON{
+			Channel:  make(chan string, 1),
+			Executed: &executed,
+		}
+
+		_, err := Compare("allowed", baseline, actual, nil)
+		if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+			t.Fatalf("Compare() error = %v, want safe-clone rejection", err)
+		}
+		if executed {
+			t.Fatal("Compare() executed an opaque custom marshaler")
+		}
+	})
+
+	t.Run("custom marshaler alias contract is rejected", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		shared := 1
+		first, second := 1, 1
+		baseline.Session["custom"] = &aliasSensitiveSnapshotJSON{First: &shared, Second: &shared}
+		actual.Session["custom"] = &aliasSensitiveSnapshotJSON{First: &first, Second: &second}
+
+		_, err := Compare("allowed", baseline, actual, nil)
+		if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+			t.Fatalf("Compare() error = %v, want custom marshaler rejection", err)
+		}
+	})
+
+	t.Run("slice-sensitive custom marshaler is not executed", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		executed := false
+		baseline.Session["custom"] = &capacitySensitiveSnapshotJSON{
+			Values:   make([]int, 1, 8),
+			Executed: &executed,
+		}
+
+		_, err := Compare("allowed", baseline, actual, nil)
+		if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+			t.Fatalf("Compare() error = %v, want custom marshaler rejection", err)
+		}
+		if executed {
+			t.Fatal("Compare() executed a slice-sensitive custom marshaler")
+		}
+	})
+
+	t.Run("total encoded size is bounded", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		baseline.Session["oversized"] = strings.Repeat("x", maxReplaySnapshotSize)
+
+		_, err := Compare("allowed", baseline, actual, nil)
+		if err == nil || !strings.Contains(err.Error(), "snapshot exceeds") {
+			t.Fatalf("Compare() error = %v, want snapshot size limit", err)
+		}
+	})
+}
+
+func TestReplayRejectsOversizedAggregateSnapshot(t *testing.T) {
+	replayCase := singleTurnCase()
+	replayCase.Name = "oversized-aggregate-snapshot"
+	replayCase.Requires = append(replayCase.Requires, CapabilitySessionState)
+	replayCase.InitialState = make(session.StateMap)
+	for index := 0; index < 8; index++ {
+		replayCase.InitialState[fmt.Sprintf("state-%d", index)] = []byte(`"` + strings.Repeat("s", 800_000) + `"`)
+	}
+	replayCase.Steps = replayCase.Steps[:1]
+	replayCase.Steps[0].Event.Event.Response.Choices[0].Message.Content = strings.Repeat("e", 2_500_000)
+
+	if _, err := Replay(context.Background(), replayCase, InMemoryBackend()); err == nil ||
+		!strings.Contains(err.Error(), "snapshot exceeds") {
+		t.Fatalf("Replay() error = %v, want aggregate snapshot size rejection", err)
+	}
+}
+
+func TestInMemoryBackendOpenHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	services, err := InMemoryBackend().Open(ctx, "canceled")
+	if services != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open() = (%v, %v), want (nil, context.Canceled)", services, err)
+	}
+}
+
+func TestInjectFaultDoesNotMutateSnapshotCustomMarshaler(t *testing.T) {
+	input := minimalSnapshot("backend", `{}`)
+	value := &mutatingJSONExportedState{Values: map[string]string{"value": "original"}}
+	input.Session["custom"] = value
+
+	if _, err := InjectFault(input, FaultStateValue); err == nil ||
+		!strings.Contains(err.Error(), "cannot be cloned safely") {
+		t.Fatalf("InjectFault() error = %v, want custom marshaler rejection", err)
+	}
+	if got := value.Values["value"]; got != "original" {
+		t.Fatalf("input snapshot value = %q, want original", got)
 	}
 }
 
@@ -85,6 +310,27 @@ func TestReplayRejectsInvalidBackendMetadata(t *testing.T) {
 	if _, err := Replay(context.Background(), replayCase, backend); err == nil ||
 		!strings.Contains(err.Error(), "invalid UTF-8") {
 		t.Fatalf("Replay() backend name error = %v, want invalid UTF-8", err)
+	}
+}
+
+func TestReplayRejectsTypedNilServicesWithoutPanicking(t *testing.T) {
+	var typedNilSession *typedNilSessionService
+	backend := Backend{
+		Name:         "typed-nil-session",
+		Capabilities: Capabilities{CapabilitySession: true},
+		Open: func(context.Context, string) (*Services, error) {
+			return &Services{Session: typedNilSession}, nil
+		},
+	}
+	if _, err := Replay(context.Background(), PublicCases()[0], backend); err == nil ||
+		!strings.Contains(err.Error(), "incomplete services") {
+		t.Fatalf("Replay() error = %v, want incomplete services", err)
+	}
+
+	var typedNilMemory *typedNilMemoryService
+	services := &Services{Memory: typedNilMemory}
+	if err := services.Close(); err != nil {
+		t.Fatalf("Services.Close() error = %v, want nil", err)
 	}
 }
 
@@ -118,13 +364,129 @@ func TestConfigurationIdentifiersRequireValidUTF8(t *testing.T) {
 	}
 }
 
+func TestConfigurationStringsHaveDefensiveLimits(t *testing.T) {
+	oversizedIdentifier := strings.Repeat("x", maxReplayIdentifierSize+1)
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "backend name", run: func() error {
+			backend := InMemoryBackend()
+			backend.Name = oversizedIdentifier
+			return validateBackend(backend)
+		}},
+		{name: "case name", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.Name = oversizedIdentifier
+			return validateCase(candidate)
+		}},
+		{name: "case description", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.Description = strings.Repeat("x", maxReplayExplanationSize+1)
+			return validateCase(candidate)
+		}},
+		{name: "event order", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.EventOrder = EventOrderMode(oversizedIdentifier)
+			return validateCase(candidate)
+		}},
+		{name: "required capability", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.Requires = []Capability{Capability(oversizedIdentifier)}
+			return validateCase(candidate)
+		}},
+		{name: "step name", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.Steps[0].Name = oversizedIdentifier
+			return validateCase(candidate)
+		}},
+		{name: "step kind", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.Steps[0].Kind = StepKind(oversizedIdentifier)
+			return validateCase(candidate)
+		}},
+		{name: "recovery mode", run: func() error {
+			candidate := PublicCases()[0]
+			candidate.Steps[0].Recovery = RecoveryMode(oversizedIdentifier)
+			return validateCase(candidate)
+		}},
+		{name: "allowed backend", run: func() error {
+			return validateAllowedDiffs([]AllowedDiff{{
+				BackendA: oversizedIdentifier,
+				BackendB: "right",
+				Path:     "/events",
+				Rule:     AllowedIgnore,
+				Reason:   "bounded identifier",
+			}})
+		}},
+		{name: "allowed path", run: func() error {
+			return validateAllowedDiffs([]AllowedDiff{{
+				BackendA: "left",
+				BackendB: "right",
+				Path:     "/" + strings.Repeat("x", maxReplayPathSize),
+				Rule:     AllowedIgnore,
+				Reason:   "bounded path",
+			}})
+		}},
+		{name: "allowed reason", run: func() error {
+			return validateAllowedDiffs([]AllowedDiff{{
+				BackendA: "left",
+				BackendB: "right",
+				Path:     "/events",
+				Rule:     AllowedIgnore,
+				Reason:   strings.Repeat("x", maxReplayExplanationSize+1),
+			}})
+		}},
+		{name: "allowed rule", run: func() error {
+			return validateAllowedDiffs([]AllowedDiff{{
+				BackendA: "left",
+				BackendB: "right",
+				Path:     "/events",
+				Rule:     AllowedRule(oversizedIdentifier),
+				Reason:   "bounded rule",
+			}})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.run(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+				t.Fatalf("validation error = %v, want size limit", err)
+			}
+		})
+	}
+}
+
+func TestExecutionFailureDiffReadsAndBoundsErrorOnce(t *testing.T) {
+	unstable := &countingError{}
+	diff := executionFailureDiff("case", "backend", ComparisonConsensus, "", unstable)
+	if unstable.calls != 1 {
+		t.Fatalf("error Error() calls = %d, want 1", unstable.calls)
+	}
+	actual, ok := diff.Actual.(string)
+	if !ok || diff.Exclusion == nil || actual != diff.Exclusion.Error {
+		t.Fatalf("execution evidence contains inconsistent error text: %+v", diff)
+	}
+
+	large := executionFailureDiff(
+		"case",
+		"backend",
+		ComparisonConsensus,
+		"",
+		errors.New(strings.Repeat("x", maxReplayErrorSize+1)),
+	)
+	message, ok := large.Actual.(string)
+	if !ok || len(message) > maxReplayErrorSize || !strings.HasSuffix(message, truncatedErrorSuffix) {
+		t.Fatalf("bounded execution error length/suffix = %d/%q", len(message), message)
+	}
+}
+
 func TestReplayRejectsMissingRequiredCapabilities(t *testing.T) {
 	replayCase := memoryCase()
 	backend := missingCapabilityBackend("missing-memory", CapabilityMemory)
 	openCalls := 0
 	backend.Open = func(context.Context, string) (*Services, error) {
 		openCalls++
-		return nil, errors.New("Open must not be called")
+		return nil, errors.New("open must not be called")
 	}
 	_, err := Replay(context.Background(), replayCase, backend)
 	if err == nil || !strings.Contains(err.Error(), string(CapabilityMemory)) {
@@ -139,10 +501,10 @@ func TestReplayAndRunnerHonorContextCancellation(t *testing.T) {
 	openCalls := 0
 	backend := Backend{
 		Name:         "canceled",
-		Capabilities: FullCapabilities(),
+		Capabilities: PortableCapabilities(),
 		Open: func(context.Context, string) (*Services, error) {
 			openCalls++
-			return nil, errors.New("Open must not be called")
+			return nil, errors.New("open must not be called")
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -403,6 +765,26 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 		}
 	})
 
+	t.Run("event structured output", func(t *testing.T) {
+		inputEvent := event.New("invocation", "author")
+		inputEvent.StructuredOutput = map[string]any{
+			"items": []any{map[string]any{"value": "original"}},
+		}
+		exec := execution{session: &session.Session{CreatedAt: caseEpoch}}
+		prepared, err := exec.prepareEvent(&EventInput{
+			LogicalID: "logical-event",
+			Event:     inputEvent,
+		})
+		if err != nil {
+			t.Fatalf("prepareEvent() error = %v", err)
+		}
+		prepared.StructuredOutput.(map[string]any)["items"].([]any)[0].(map[string]any)["value"] = "changed"
+		got := inputEvent.StructuredOutput.(map[string]any)["items"].([]any)[0].(map[string]any)["value"]
+		if got != "original" {
+			t.Fatalf("prepareEvent() mutated structured output = %q", got)
+		}
+	})
+
 	t.Run("event response graph", func(t *testing.T) {
 		type extraFixture struct {
 			Values []string `json:"values"`
@@ -420,6 +802,7 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 						Text:       &text,
 						Image:      &model.Image{Data: []byte("image")},
 						Audio:      &model.Audio{Data: []byte("audio")},
+						Video:      &model.Video{Data: []byte("video"), Format: "mp4"},
 						File:       &model.File{Data: []byte("file")},
 						ContentRef: &model.ContentRef{RequestID: "request"},
 					}},
@@ -459,6 +842,8 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 		*choice.Message.ContentParts[0].Text = "changed"
 		choice.Message.ContentParts[0].Image.Data[0] = 'x'
 		choice.Message.ContentParts[0].Audio.Data[0] = 'x'
+		choice.Message.ContentParts[0].Video.Data[0] = 'x'
+		choice.Message.ContentParts[0].Video.Format = "changed"
 		choice.Message.ContentParts[0].File.Data[0] = 'x'
 		choice.Message.ContentParts[0].ContentRef.RequestID = "changed"
 		choice.Message.ToolCalls[0].Function.Arguments[0] = 'x'
@@ -477,6 +862,8 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 			*originalChoice.Message.ContentParts[0].Text != "text" ||
 			string(originalChoice.Message.ContentParts[0].Image.Data) != "image" ||
 			string(originalChoice.Message.ContentParts[0].Audio.Data) != "audio" ||
+			string(originalChoice.Message.ContentParts[0].Video.Data) != "video" ||
+			originalChoice.Message.ContentParts[0].Video.Format != "mp4" ||
 			string(originalChoice.Message.ContentParts[0].File.Data) != "file" ||
 			originalChoice.Message.ContentParts[0].ContentRef.RequestID != "request" ||
 			string(originalChoice.Message.ToolCalls[0].Function.Arguments) != `{"value":"original"}` ||
@@ -577,7 +964,7 @@ func TestRunnerIsolatesEventInputsBetweenBackends(t *testing.T) {
 	}
 }
 
-func TestRunnerIsolatesCustomJSONMarshalerStateBetweenBackends(t *testing.T) {
+func TestRunnerRejectsCustomJSONMarshalerWithUnclonableState(t *testing.T) {
 	custom := &customJSONHiddenState{
 		Visible: "original",
 		hidden:  map[string]string{"value": "original"},
@@ -613,35 +1000,49 @@ func TestRunnerIsolatesCustomJSONMarshalerStateBetweenBackends(t *testing.T) {
 		},
 	}
 
-	mutating := InMemoryBackend()
-	mutating.Name = "mutating"
-	open := mutating.Open
-	mutating.Open = func(ctx context.Context, caseName string) (*Services, error) {
-		services, err := open(ctx, caseName)
-		if err == nil {
-			services.Session = &mutatingCustomJSONSessionService{Service: services.Session}
-		}
-		return services, err
-	}
-	baseline := InMemoryBackend()
-	baseline.Name = "baseline"
-
-	report, err := (Runner{}).Run(context.Background(), []Case{replayCase}, []Backend{mutating, baseline})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if report.BlockingDiffs == 0 {
-		t.Fatalf("Run() report = %#v, want custom marshaler mutation to remain visible", report)
+	err := validateCase(replayCase)
+	if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+		t.Fatalf("validateCase() error = %v, want unclonable custom marshaler rejection", err)
 	}
 	if custom.hidden["value"] != "original" {
-		t.Fatalf("Run() mutated custom marshaler input = %#v", custom.hidden)
+		t.Fatalf("validateCase() mutated custom marshaler input = %#v", custom.hidden)
 	}
 	if len(sharedChannel) != 1 {
-		t.Fatalf("Run() consumed custom marshaler channel, length = %d", len(sharedChannel))
+		t.Fatalf("validateCase() consumed custom marshaler channel, length = %d", len(sharedChannel))
 	}
 }
 
-func TestRunnerIsolatesCustomTextMarshalerStateBetweenBackends(t *testing.T) {
+func TestCaseValidationDoesNotMutateCustomJSONMarshalerInput(t *testing.T) {
+	custom := &mutatingJSONExportedState{
+		Values: map[string]string{"value": "original"},
+	}
+	step := responseEvent("mutating-json", 1, "assistant", model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type:        "function",
+					ExtraFields: map[string]any{"custom": custom},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "mutating-json-input",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	}
+	err := validateCase(replayCase)
+	if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+		t.Fatalf("validateCase() error = %v, want custom marshaler rejection", err)
+	}
+	if custom.Values["value"] != "original" {
+		t.Fatalf("validateCase() mutated custom marshaler input = %#v", custom.Values)
+	}
+}
+
+func TestRunnerRejectsCustomTextMarshalerWithUnclonableState(t *testing.T) {
 	custom := &customTextHiddenState{hidden: map[string]string{"value": "original"}}
 	step := responseEvent("custom-text", 1, "assistant", model.Response{
 		Done: true,
@@ -667,28 +1068,12 @@ func TestRunnerIsolatesCustomTextMarshalerStateBetweenBackends(t *testing.T) {
 		},
 	}
 
-	mutating := InMemoryBackend()
-	mutating.Name = "mutating"
-	open := mutating.Open
-	mutating.Open = func(ctx context.Context, caseName string) (*Services, error) {
-		services, err := open(ctx, caseName)
-		if err == nil {
-			services.Session = &mutatingCustomTextSessionService{Service: services.Session}
-		}
-		return services, err
-	}
-	baseline := InMemoryBackend()
-	baseline.Name = "baseline"
-
-	report, err := (Runner{}).Run(context.Background(), []Case{replayCase}, []Backend{mutating, baseline})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if report.BlockingDiffs == 0 {
-		t.Fatalf("Run() report = %#v, want text marshaler mutation to remain visible", report)
+	err := validateCase(replayCase)
+	if err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+		t.Fatalf("validateCase() error = %v, want unclonable custom marshaler rejection", err)
 	}
 	if custom.hidden["value"] != "original" {
-		t.Fatalf("Run() mutated custom text marshaler input = %#v", custom.hidden)
+		t.Fatalf("validateCase() mutated custom text marshaler input = %#v", custom.hidden)
 	}
 }
 
@@ -697,7 +1082,6 @@ func TestCloneToolCallExtraFieldsPreservesSafeMarshalerTypes(t *testing.T) {
 		"raw":      json.RawMessage(`{"value":"raw"}`),
 		"time":     time.Unix(123, 456).UTC(),
 		"json-key": map[jsonOnlyMapKey]string{1: "value"},
-		"text-key": map[textMapKey]string{"key": "value"},
 	}
 	cloned, err := cloneToolCallExtraFields(input)
 	if err != nil {
@@ -712,8 +1096,10 @@ func TestCloneToolCallExtraFieldsPreservesSafeMarshalerTypes(t *testing.T) {
 	if _, ok := cloned["json-key"].(map[jsonOnlyMapKey]string); !ok {
 		t.Fatalf("json map-key type = %T, want map[jsonOnlyMapKey]string", cloned["json-key"])
 	}
-	if _, ok := cloned["text-key"].(map[textMapKey]string); !ok {
-		t.Fatalf("text map-key type = %T, want map[textMapKey]string", cloned["text-key"])
+	if _, err := cloneToolCallExtraFields(map[string]any{
+		"text-key": map[textMapKey]string{"key": "value"},
+	}); err == nil || !strings.Contains(err.Error(), "cannot be cloned safely") {
+		t.Fatalf("cloneToolCallExtraFields() error = %v, want custom map-key marshaler rejection", err)
 	}
 }
 
@@ -773,6 +1159,14 @@ func TestValidateJSONValueRejectsHiddenCustomMarshalCycle(t *testing.T) {
 	err := validateJSONValue("hidden cycle", map[string]any{"value": cyclic})
 	if err == nil || !strings.Contains(err.Error(), "cyclic JSON data") {
 		t.Fatalf("validateJSONValue() error = %v, want cyclic JSON data", err)
+	}
+}
+
+func TestValidateJSONValueAcceptsOverlappingAcyclicSlices(t *testing.T) {
+	value := make([]any, 1)
+	value[0] = value[:0]
+	if err := validateJSONValue("overlapping slices", value); err != nil {
+		t.Fatalf("validateJSONValue() error = %v, want valid acyclic JSON", err)
 	}
 }
 
@@ -838,6 +1232,83 @@ func TestReplayRejectsNilMemorySearchResult(t *testing.T) {
 	}
 }
 
+func TestValidateCaseRejectsInvalidMemorySearchOptions(t *testing.T) {
+	after := caseEpoch.Add(time.Hour)
+	before := caseEpoch
+	tests := []struct {
+		name    string
+		options memory.SearchOptions
+		want    string
+	}{
+		{name: "unknown kind", options: memory.SearchOptions{Kind: "profile"}, want: "unknown kind"},
+		{name: "negative max results", options: memory.SearchOptions{MaxResults: -1}, want: "max results"},
+		{name: "excessive max results", options: memory.SearchOptions{MaxResults: maxReplayMemories + 1}, want: "max results"},
+		{name: "NaN threshold", options: memory.SearchOptions{SimilarityThreshold: math.NaN()}, want: "similarity threshold"},
+		{name: "infinite threshold", options: memory.SearchOptions{SimilarityThreshold: math.Inf(1)}, want: "similarity threshold"},
+		{name: "negative threshold", options: memory.SearchOptions{SimilarityThreshold: -0.1}, want: "similarity threshold"},
+		{name: "threshold above one", options: memory.SearchOptions{SimilarityThreshold: 1.1}, want: "similarity threshold"},
+		{name: "reversed time range", options: memory.SearchOptions{TimeAfter: &after, TimeBefore: &before}, want: "time range"},
+		{name: "negative hybrid RRF k", options: memory.SearchOptions{HybridRRFK: -1}, want: "hybrid RRF k"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateCase(Case{
+				Name:     "invalid-memory-search-options",
+				Requires: []Capability{CapabilitySession, CapabilityMemory, CapabilityMemorySearch},
+				Steps: []Step{{
+					Name: "search",
+					Kind: StepSearchMemory,
+					MemorySearch: &MemorySearchInput{
+						Query:   "query",
+						Options: test.options,
+					},
+				}},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateCase() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestReplayRejectsMemorySearchResultAboveRequestedLimit(t *testing.T) {
+	backend := InMemoryBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, name string) (*Services, error) {
+		services, err := open(ctx, name)
+		if err != nil {
+			return services, err
+		}
+		services.Memory = &ignoringMemorySearchLimitService{Service: services.Memory}
+		return services, nil
+	}
+	replayCase := Case{
+		Name:     "memory-search-limit",
+		Requires: []Capability{CapabilitySession, CapabilityMemory, CapabilityMemorySearch},
+		Steps: []Step{
+			{Name: "first", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "first"}},
+			{Name: "second", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "second"}},
+			{Name: "search", Kind: StepSearchMemory, MemorySearch: &MemorySearchInput{
+				Query:   "memory",
+				Options: memory.SearchOptions{MaxResults: 1},
+			}},
+		},
+	}
+	if _, err := Replay(context.Background(), replayCase, backend); err == nil ||
+		!strings.Contains(err.Error(), "requested limit is 1") {
+		t.Fatalf("Replay() error = %v, want requested result limit rejection", err)
+	}
+}
+
+func TestNormalizeMemorySearchesRejectsExcessiveResults(t *testing.T) {
+	_, err := normalizeMemorySearches(map[string][]*memory.Entry{
+		"oversized": make([]*memory.Entry, maxReplayMemories+1),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "total results") {
+		t.Fatalf("normalizeMemorySearches() error = %v, want result limit rejection", err)
+	}
+}
+
 func TestValidateCaseRejectsOversizedStateValue(t *testing.T) {
 	tooLarge := make([]byte, maxReplayStateValueSize+1)
 	err := validateCase(Case{
@@ -851,6 +1322,301 @@ func TestValidateCaseRejectsOversizedStateValue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("validateCase() error = %v, want size limit error", err)
 	}
+}
+
+func TestValidateCaseBoundsInjectedLogicalEventID(t *testing.T) {
+	step := responseEvent("small", 1, "assistant", model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}},
+	})
+	// Control characters expand to six-byte JSON escapes. Keeping the raw ID
+	// below the event limit proves validation measures the final persisted event.
+	step.Event.LogicalID = strings.Repeat("\x01", maxReplayEventSize/4)
+	err := validateCase(Case{
+		Name:     "oversized-injected-logical-id",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	})
+	if err == nil || !strings.Contains(err.Error(), "event exceeds") {
+		t.Fatalf("validateCase() error = %v, want final event size limit", err)
+	}
+}
+
+func TestValidateCaseRejectsAggregateInputBounds(t *testing.T) {
+	t.Run("state values", func(t *testing.T) {
+		values := make(session.StateMap)
+		for index := 0; index < maxReplayStateTotalSize/maxReplayStateValueSize+1; index++ {
+			values[fmt.Sprintf("key-%d", index)] = make([]byte, maxReplayStateValueSize)
+		}
+		err := validateCase(Case{
+			Name:     "aggregate-state-input",
+			Requires: []Capability{CapabilitySession, CapabilitySessionState},
+			Steps: []Step{{Name: "write", Kind: StepUpdateState, State: &StateInput{
+				Scope: StateScopeSession, Values: values,
+			}}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "state values") {
+			t.Fatalf("validateCase() error = %v, want aggregate state limit", err)
+		}
+	})
+
+	t.Run("event state delta", func(t *testing.T) {
+		values := make(session.StateMap)
+		for index := 0; index < maxReplayStateTotalSize/maxReplayStateValueSize+1; index++ {
+			values[fmt.Sprintf("key-%d", index)] = make([]byte, maxReplayStateValueSize)
+		}
+		step := responseEvent("aggregate-event", 1, "user", model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewUserMessage("hello")}},
+		})
+		step.Event.Event.StateDelta = values
+		err := validateCase(Case{
+			Name:     "aggregate-event-state-input",
+			Requires: []Capability{CapabilitySession, CapabilitySessionState},
+			Steps:    []Step{step},
+		})
+		if err == nil || !strings.Contains(err.Error(), "state delta values") {
+			t.Fatalf("validateCase() error = %v, want aggregate event state limit", err)
+		}
+	})
+
+	t.Run("state value and delete operations", func(t *testing.T) {
+		deleteKeys := make([]string, maxReplayStateKeyCount)
+		for index := range deleteKeys {
+			deleteKeys[index] = fmt.Sprintf("delete-%d", index)
+		}
+		err := validateCase(Case{
+			Name:     "aggregate-state-key-operations",
+			Requires: []Capability{CapabilitySession, CapabilityAppState},
+			Steps: []Step{{Name: "write-delete", Kind: StepUpdateState, State: &StateInput{
+				Scope: StateScopeApp, Values: session.StateMap{"value": nil}, DeleteKeys: deleteKeys,
+			}}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "state key operations") {
+			t.Fatalf("validateCase() error = %v, want aggregate state key operation limit", err)
+		}
+	})
+
+	t.Run("memory metadata", func(t *testing.T) {
+		topics := make([]string, maxReplayStateTotalSize/maxReplayMemorySize+2)
+		for index := range topics {
+			topics[index] = strings.Repeat("t", maxReplayMemorySize/2)
+		}
+		err := validateCase(Case{
+			Name:     "aggregate-memory-input",
+			Requires: []Capability{CapabilitySession, CapabilityMemory},
+			Steps: []Step{{Name: "memory", Kind: StepAddMemory, Memory: &MemoryInput{
+				Memory: "memory", Topics: topics,
+			}}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "metadata") {
+			t.Fatalf("validateCase() error = %v, want aggregate memory metadata limit", err)
+		}
+	})
+}
+
+func TestNormalizeRejectsOversizedBackendOutput(t *testing.T) {
+	t.Run("unrequested domains are not copied", func(t *testing.T) {
+		sess := session.NewSession("replaytest", "user", "unrequested-domains")
+		sess.Tracks = map[session.Track]*session.TrackEvents{"invalid": nil}
+		sess.Summaries = map[string]*session.Summary{"invalid": nil}
+		sess.State = session.StateMap{
+			"ignored": make([]byte, maxReplayStateValueSize+1),
+		}
+
+		if _, err := normalizeSnapshot(
+			"backend", "unrequested-domains", EventOrderGlobal, nil,
+			Capabilities{CapabilitySession: true},
+			nil, sess, nil, nil, nil, nil,
+		); err != nil {
+			t.Fatalf("normalizeSnapshot() touched an unrequested domain: %v", err)
+		}
+	})
+
+	t.Run("session state value", func(t *testing.T) {
+		sess := &session.Session{State: session.StateMap{
+			"large": make([]byte, maxReplayStateValueSize+1),
+		}}
+		_, err := normalizeSnapshot(
+			"backend", "oversized-state", EventOrderGlobal, nil,
+			Capabilities{CapabilitySession: true, CapabilitySessionState: true},
+			nil, sess, nil, nil, nil, nil,
+		)
+		if err == nil || !strings.Contains(err.Error(), "session state key") {
+			t.Fatalf("normalizeSnapshot() error = %v, want session state output limit", err)
+		}
+	})
+
+	t.Run("encoded session state value", func(t *testing.T) {
+		sess := &session.Session{State: session.StateMap{
+			"large": bytes.Repeat([]byte{0xff}, maxReplayStateValueSize),
+		}}
+		_, err := normalizeSnapshot(
+			"backend", "encoded-oversized-state", EventOrderGlobal, nil,
+			Capabilities{CapabilitySession: true, CapabilitySessionState: true},
+			nil, sess, nil, nil, nil, nil,
+		)
+		if err == nil || !strings.Contains(err.Error(), "normalized output") {
+			t.Fatalf("normalizeSnapshot() error = %v, want normalized state output limit", err)
+		}
+	})
+
+	t.Run("state key bounds", func(t *testing.T) {
+		longKey := strings.Repeat("k", maxReplayStateKeySize+1)
+		if err := validateStateMapKeys("backend state", session.StateMap{longKey: nil}); err == nil ||
+			!strings.Contains(err.Error(), "key") {
+			t.Fatalf("validateStateMapKeys() error = %v, want key size limit", err)
+		}
+		state := make(session.StateMap, maxReplayStateKeyCount+1)
+		for index := 0; index <= maxReplayStateKeyCount; index++ {
+			state[fmt.Sprintf("key-%d", index)] = nil
+		}
+		if err := validateStateMapKeys("backend state", state); err == nil ||
+			!strings.Contains(err.Error(), "keys") {
+			t.Fatalf("validateStateMapKeys() error = %v, want key count limit", err)
+		}
+		if _, err := stateKeysForClear("backend state before clear", state); err == nil ||
+			!strings.Contains(err.Error(), "keys") {
+			t.Fatalf("stateKeysForClear() error = %v, want key count limit", err)
+		}
+	})
+
+	t.Run("event JSON", func(t *testing.T) {
+		evt := event.Event{
+			ID:        "physical-event",
+			Timestamp: caseEpoch,
+			Author:    "assistant",
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: strings.Repeat("x", maxReplayEventSize)},
+			}}},
+		}
+		if err := event.SetExtension(&evt, logicalEventIDExtension, "logical-event"); err != nil {
+			t.Fatalf("SetExtension() error = %v", err)
+		}
+		if _, _, _, err := normalizeEvents([]event.Event{evt}, EventOrderGlobal, nil, caseEpoch); err == nil ||
+			!strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("normalizeEvents() error = %v, want event output limit", err)
+		}
+	})
+
+	t.Run("event pages share aggregate budget", func(t *testing.T) {
+		evt := event.Event{
+			ID:        "physical-event",
+			Timestamp: caseEpoch,
+			Author:    "assistant",
+		}
+		if err := event.SetExtension(&evt, logicalEventIDExtension, "logical-event"); err != nil {
+			t.Fatalf("SetExtension() error = %v", err)
+		}
+		normalized, _, _, err := normalizeEvents([]event.Event{evt}, EventOrderGlobal, nil, caseEpoch)
+		if err != nil {
+			t.Fatalf("normalizeEvents() error = %v", err)
+		}
+		raw, err := json.Marshal(normalized[0])
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		pages := map[string][]event.Event{
+			"first":  {evt},
+			"second": {evt},
+		}
+		_, err = normalizeEventPagesWithByteLimit(pages, caseEpoch, 2*len(raw)-1)
+		if err == nil || !strings.Contains(err.Error(), "normalized event pages exceed") {
+			t.Fatalf("normalizeEventPages() error = %v, want aggregate byte limit", err)
+		}
+	})
+
+	t.Run("memory content", func(t *testing.T) {
+		_, err := normalizeMemoryEntry(&memory.Entry{
+			ID:     "memory",
+			Memory: &memory.Memory{Memory: strings.Repeat("x", maxReplayMemorySize+1)},
+		}, "oversized memory")
+		if err == nil || !strings.Contains(err.Error(), "content exceeds") {
+			t.Fatalf("normalizeMemoryEntry() error = %v, want memory content limit", err)
+		}
+	})
+
+	t.Run("summary aggregate", func(t *testing.T) {
+		chunk := strings.Repeat("x", maxReplaySummaryTotalSize/2)
+		sess := &session.Session{Summaries: map[string]*session.Summary{
+			"one": {Summary: chunk},
+			"two": {Summary: chunk},
+		}}
+		if _, err := normalizeSummaries(sess, nil, nil); err == nil || !strings.Contains(err.Error(), "summaries exceed") {
+			t.Fatalf("normalizeSummaries() error = %v, want summary aggregate limit", err)
+		}
+	})
+
+	t.Run("memory search aggregate", func(t *testing.T) {
+		content := strings.Repeat("x", maxReplayMemorySize/2)
+		catalog := []*memory.Entry{
+			{ID: "memory-a", Memory: &memory.Memory{Memory: content, Topics: []string{"a"}}},
+			{ID: "memory-b", Memory: &memory.Memory{Memory: content, Topics: []string{"b"}}},
+		}
+		_, ids, err := normalizeMemoryCatalog(catalog)
+		if err != nil {
+			t.Fatalf("normalizeMemoryCatalog() error = %v", err)
+		}
+		searches := map[string][]*memory.Entry{}
+		for index := 0; index < 9; index++ {
+			searches[fmt.Sprintf("query-%d", index)] = []*memory.Entry{
+				{ID: "memory-a", Memory: &memory.Memory{Memory: content, Topics: []string{"a"}}},
+				{ID: "memory-b", Memory: &memory.Memory{Memory: content, Topics: []string{"b"}}},
+			}
+		}
+		_, err = normalizeMemorySearches(searches, ids)
+		if err == nil || !strings.Contains(err.Error(), "memory searches") {
+			t.Fatalf("normalizeMemorySearches() error = %v, want search aggregate limit", err)
+		}
+	})
+
+	t.Run("track count and aggregate", func(t *testing.T) {
+		tracks := make(map[session.Track]*session.TrackEvents, maxReplayTrackCount+1)
+		for index := 0; index <= maxReplayTrackCount; index++ {
+			name := session.Track(fmt.Sprintf("track-%d", index))
+			tracks[name] = &session.TrackEvents{Track: name}
+		}
+		if _, err := normalizeTracks(&session.Session{Tracks: tracks}, time.Time{}); err == nil ||
+			!strings.Contains(err.Error(), "track catalog") {
+			t.Fatalf("normalizeTracks() error = %v, want track count limit", err)
+		}
+
+		payload := json.RawMessage("\"" + strings.Repeat("x", maxReplayTrackTotalSize/2) + "\"")
+		sess := &session.Session{Tracks: map[session.Track]*session.TrackEvents{
+			"one": {Track: "one", Events: []session.TrackEvent{{Track: "one", Payload: payload}}},
+			"two": {Track: "two", Events: []session.TrackEvent{{Track: "two", Payload: payload}}},
+		}}
+		if _, err := normalizeTracks(sess, time.Time{}); err == nil || !strings.Contains(err.Error(), "normalized tracks exceed") {
+			t.Fatalf("normalizeTracks() aggregate error = %v, want track byte limit", err)
+		}
+	})
+}
+
+func TestNormalizeSnapshotHandlesSharedSessionWrites(t *testing.T) {
+	sess := session.NewSession("replaytest", "user", "shared")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for index := 0; index < 100; index++ {
+			if err := sess.AppendTrackEvent(&session.TrackEvent{
+				Track:   "tools",
+				Payload: json.RawMessage(fmt.Sprintf(`{"index":%d}`, index)),
+			}); err != nil {
+				t.Errorf("AppendTrackEvent() error = %v", err)
+				return
+			}
+		}
+	}()
+	for index := 0; index < 100; index++ {
+		if _, err := normalizeSnapshot(
+			"backend", "shared-session", EventOrderGlobal, nil,
+			Capabilities{CapabilitySession: true, CapabilityTrack: true},
+			nil, sess, nil, nil, nil, nil,
+		); err != nil {
+			t.Fatalf("normalizeSnapshot() error = %v", err)
+		}
+	}
+	<-done
 }
 
 func TestValidateCaseShortCircuitsOversizedStepTree(t *testing.T) {
@@ -886,6 +1652,13 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 	}{
 		{name: "missing generation time", mutate: func(report *Report) { report.GeneratedAt = time.Time{} }},
 		{name: "too few backends", mutate: func(report *Report) { report.Backends = report.Backends[:1] }},
+		{name: "too many backends", mutate: func(report *Report) {
+			extra := make([]string, maxReplayBackends-len(report.Backends)+1)
+			for index := range extra {
+				extra[index] = fmt.Sprintf("extra-%03d", index)
+			}
+			report.Backends = append(report.Backends, extra...)
+		}},
 		{name: "unknown comparison mode", mutate: func(report *Report) { report.ComparisonMode = "unknown" }},
 		{name: "empty backend", mutate: func(report *Report) { report.Backends[1] = "" }},
 		{name: "reserved wildcard backend", mutate: func(report *Report) { report.Backends[1] = "*" }},
@@ -912,9 +1685,124 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 		{name: "invalid diff locator", mutate: func(report *Report) {
 			setBlockingReportDiff(report, Diff{BackendA: "baseline", BackendB: "actual", SessionID: "clean", Path: "/state"})
 		}},
+		{name: "forged event index locator", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/events/0/author"
+			forged := 999
+			diff.EventIndex = &forged
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "missing event index locator", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/events/0/author"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "event locator on state path", mutate: func(report *Report) {
+			diff := validReportDiff()
+			locator := 0
+			diff.EventIndex = &locator
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "forged track locator", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/tracks/tool~1weather/0/status"
+			diff.TrackName = "different"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "missing memory locator", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memories/0/content"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "unknown diff domain", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/not-a-snapshot-field"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "non-canonical event index", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/events/00/author"
+			index := 0
+			diff.EventIndex = &index
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "non-numeric event index", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/events/foo/author"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "negative memory index", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memories/-1/content"
+			diff.MemoryID = "memory-0"
+			report.Cases[0].LocatorEvidence = validLocatorEvidence()
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "forged memory index", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memories/999/content"
+			diff.MemoryID = "memory-0"
+			report.Cases[0].LocatorEvidence = validLocatorEvidence()
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "forged memory id", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memories/0/content"
+			diff.MemoryID = "forged"
+			report.Cases[0].LocatorEvidence = validLocatorEvidence()
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "missing memory evidence", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memories/0/content"
+			diff.MemoryID = "memory-0"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "forged memory search query", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memory_searches/forged/0/content"
+			diff.MemoryID = "memory-0"
+			report.Cases[0].LocatorEvidence = validLocatorEvidence()
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "empty memory search query", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memory_searches//0/content"
+			diff.MemoryID = "memory-0"
+			report.Cases[0].LocatorEvidence = validLocatorEvidence()
+			setBlockingReportDiff(report, diff)
+		}},
 		{name: "invalid diff JSON pointer escape", mutate: func(report *Report) {
 			diff := validReportDiff()
 			diff.Path = "/state/~2"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "unknown session field", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/session/not_a_field"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "unknown state suffix", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/state/app/key/not_a_field"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "unknown summary field", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/summaries/filter/not_a_field"
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "unknown memory field", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/memories/0/not_a_field"
+			diff.MemoryID = "memory-0"
+			report.Cases[0].LocatorEvidence = validLocatorEvidence()
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "unknown track field", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.Path = "/tracks/name/0/not_a_field"
+			diff.TrackName = "name"
 			setBlockingReportDiff(report, diff)
 		}},
 		{name: "unknown left backend", mutate: func(report *Report) {
@@ -928,6 +1816,7 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 		{name: "allowed diff without explanation", mutate: func(report *Report) {
 			diff := validReportDiff()
 			diff.Allowed = true
+			diff.Explanation = ""
 			report.AllowedDiffs = 1
 			report.Cases[0].Diffs = []Diff{diff}
 		}},
@@ -981,6 +1870,29 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 			diff.BackendB = "baseline"
 			setBlockingReportDiff(report, diff)
 		}},
+		{name: "duplicate semantic diff", mutate: func(report *Report) {
+			diff := validReportDiff()
+			report.PassedCases = 0
+			report.FailedCases = 1
+			report.BlockingDiffs = 2
+			report.Cases[0].Status = StatusFailed
+			report.Cases[0].Diffs = []Diff{diff, diff}
+			report.Cases[0].Reference.Pairs[0].BlockingDiffs = 2
+		}},
+		{name: "conflicting duplicate semantic diff", mutate: func(report *Report) {
+			blocking := validReportDiff()
+			allowed := blocking
+			allowed.Allowed = true
+			allowed.Explanation = "forged allowance"
+			report.PassedCases = 0
+			report.FailedCases = 1
+			report.BlockingDiffs = 1
+			report.AllowedDiffs = 1
+			report.Cases[0].Status = StatusFailed
+			report.Cases[0].Diffs = []Diff{blocking, allowed}
+			report.Cases[0].Reference.Pairs[0].BlockingDiffs = 1
+			report.Cases[0].Reference.Pairs[0].AllowedDiffs = 1
+		}},
 		{name: "consensus data in reference mode", mutate: func(report *Report) {
 			report.Cases[0].Consensus = &ConsensusResult{}
 		}},
@@ -998,6 +1910,310 @@ func TestReportValidationRejectsMalformedReports(t *testing.T) {
 				t.Fatal("Validate() unexpectedly accepted a malformed report")
 			}
 		})
+	}
+}
+
+func TestReportStringFieldsHaveDefensiveLimits(t *testing.T) {
+	oversized := strings.Repeat("x", maxReplayIdentifierSize+1)
+	tests := []struct {
+		name   string
+		mutate func(*Report)
+	}{
+		{name: "reference backend", mutate: func(report *Report) { report.Reference = oversized }},
+		{name: "diff backend", mutate: func(report *Report) {
+			diff := validReportDiff()
+			diff.BackendB = oversized
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "reference comparable backend", mutate: func(report *Report) {
+			report.Cases[0].Reference.ComparableBackends[1] = oversized
+		}},
+		{name: "reference pair backend", mutate: func(report *Report) {
+			report.Cases[0].Reference.Pairs[0].BackendB = oversized
+		}},
+		{name: "consensus verdict", mutate: func(report *Report) {
+			setValidConsensusReport(report)
+			report.Cases[0].Consensus.Verdict = ConsensusVerdict(oversized)
+		}},
+		{name: "consensus comparable backend", mutate: func(report *Report) {
+			setValidConsensusReport(report)
+			report.Cases[0].Consensus.ComparableBackends[1] = oversized
+		}},
+		{name: "consensus pair backend", mutate: func(report *Report) {
+			setValidConsensusReport(report)
+			report.Cases[0].Consensus.Pairs[0].BackendB = oversized
+		}},
+		{name: "consensus outlier", mutate: func(report *Report) {
+			setValidConsensusReport(report)
+			report.Cases[0].Consensus.Outliers = []string{oversized}
+		}},
+		{name: "locator evidence backend", mutate: func(report *Report) {
+			report.Cases[0].LocatorEvidence = &LocatorEvidence{
+				MemoryIDs: map[string][]string{oversized: {}},
+			}
+		}},
+		{name: "exclusion kind", mutate: func(report *Report) {
+			diff := executionFailureDiff("clean", "actual", ComparisonReference, "baseline", errors.New("failed"))
+			diff.Exclusion.Kind = ExclusionKind(oversized)
+			setBlockingReportDiff(report, diff)
+		}},
+		{name: "exclusion capability", mutate: func(report *Report) {
+			diff := capabilityDiffs(
+				"clean",
+				[]Backend{{Name: "actual"}},
+				ComparisonReference,
+				"baseline",
+				map[string][]Capability{"actual": {CapabilityMemory}},
+			)[0]
+			diff.Exclusion.Capability = Capability(oversized)
+			report.PassedCases = 0
+			report.UnsupportedCases = 1
+			report.AllowedDiffs = 1
+			report.Cases[0].Status = StatusUnsupported
+			report.Cases[0].Diffs = []Diff{diff}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := validReferenceReport()
+			test.mutate(&report)
+			if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+				t.Fatalf("Validate() error = %v, want defensive string limit", err)
+			}
+		})
+	}
+}
+
+func TestReportStringFieldsRequireValidUTF8(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := []struct {
+		name   string
+		mutate func(*Report)
+	}{
+		{name: "reference backend", mutate: func(report *Report) { report.Reference = invalid }},
+		{name: "consensus verdict", mutate: func(report *Report) {
+			setValidConsensusReport(report)
+			report.Cases[0].Consensus.Verdict = ConsensusVerdict(invalid)
+		}},
+		{name: "locator evidence backend", mutate: func(report *Report) {
+			report.Cases[0].LocatorEvidence = &LocatorEvidence{
+				MemoryIDs: map[string][]string{invalid: {}},
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := validReferenceReport()
+			test.mutate(&report)
+			if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("Validate() error = %v, want invalid UTF-8", err)
+			}
+		})
+	}
+}
+
+func TestReferenceReportRequiresCompleteBackendAndPairManifest(t *testing.T) {
+	t.Run("unaccounted backend", func(t *testing.T) {
+		report := validReferenceReport()
+		report.Backends = append(report.Backends, "phantom")
+		if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "exactly one of comparable or excluded") {
+			t.Fatalf("Validate() error = %v, want unaccounted backend rejection", err)
+		}
+	})
+
+	t.Run("missing pair", func(t *testing.T) {
+		report := validReferenceReport()
+		report.Cases[0].Reference.Pairs = nil
+		if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "pairs, want") {
+			t.Fatalf("Validate() error = %v, want missing pair rejection", err)
+		}
+	})
+
+	t.Run("dropped diff", func(t *testing.T) {
+		report := validReferenceReport()
+		setBlockingReportDiff(&report, validReportDiff())
+		report.Cases[0].Diffs = nil
+		report.Cases[0].Status = StatusPassed
+		report.PassedCases = 1
+		report.FailedCases = 0
+		report.BlockingDiffs = 0
+		if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "pair counters do not add up") {
+			t.Fatalf("Validate() error = %v, want dropped diff rejection", err)
+		}
+	})
+}
+
+func TestReportValidationRejectsTooManyDiffsBeforeIteration(t *testing.T) {
+	report := validReferenceReport()
+	report.PassedCases = 0
+	report.FailedCases = 1
+	report.BlockingDiffs = maxReplayDiffsPerCase + 1
+	report.Cases[0].Status = StatusFailed
+	report.Cases[0].Diffs = make([]Diff, maxReplayDiffsPerCase+1)
+	err := report.Validate()
+	if err == nil || !strings.Contains(err.Error(), "diffs, limit is") {
+		t.Fatalf("Validate() error = %v, want diff limit error", err)
+	}
+}
+
+func TestReportValidationDoesNotEchoOversizedCaseName(t *testing.T) {
+	report := validReferenceReport()
+	report.Cases[0].Name = strings.Repeat("\\", 1<<20)
+	report.Cases[0].Diffs = make([]Diff, maxReplayDiffsPerCase+1)
+	err := report.Validate()
+	if err == nil {
+		t.Fatal("Validate() unexpectedly accepted too many diffs")
+	}
+	if len(err.Error()) > maxReplayIdentifierSize {
+		t.Fatalf("Validate() error has %d bytes, want a bounded diagnostic", len(err.Error()))
+	}
+}
+
+type oversizedZeroSlice []struct{}
+
+func (oversizedZeroSlice) MarshalJSON() ([]byte, error) {
+	panic("oversized value reached custom marshaler")
+}
+
+func TestReportValidationRejectsOversizedJSONBeforeGraphTraversal(t *testing.T) {
+	report := validReferenceReport()
+	diff := validReportDiff()
+	diff.Baseline = make(oversizedZeroSlice, maxReplayJSONBytes/2+1)
+	setBlockingReportDiff(&report, diff)
+	err := report.Validate()
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Validate() error = %v, want preflight JSON size rejection", err)
+	}
+	if strings.Contains(err.Error(), "custom marshaler") {
+		t.Fatalf("Validate() traversed oversized value before rejecting it: %v", err)
+	}
+}
+
+func TestReportValidationAcceptsBoundedByteSlice(t *testing.T) {
+	report := validReferenceReport()
+	diff := validReportDiff()
+	diff.Baseline = make([]byte, maxReplayJSONBytes/2+1)
+	setBlockingReportDiff(&report, diff)
+	if err := report.Validate(); err != nil {
+		t.Fatalf("Validate() rejected bounded base64 JSON value: %v", err)
+	}
+}
+
+func TestReportValidationRejectsTooManyCasesBeforeIteration(t *testing.T) {
+	report := validReferenceReport()
+	report.TotalCases = maxReplayCases + 1
+	report.Cases = make([]CaseResult, report.TotalCases)
+	err := report.Validate()
+	if err == nil || !strings.Contains(err.Error(), "cases, limit is") {
+		t.Fatalf("Validate() error = %v, want case limit error", err)
+	}
+}
+
+func TestReportValidationRejectsOversizedAggregateEncoding(t *testing.T) {
+	report := validReferenceReport()
+	report.PassedCases = 0
+	report.FailedCases = 1
+	report.Cases[0].Status = StatusFailed
+
+	// Reuse one allocation so the regression exercises aggregate report work
+	// without allocating a separate multi-megabyte value for every diff.
+	largeValue := strings.Repeat("x", 7<<20)
+	for index := 0; index < 10; index++ {
+		diff := validReportDiff()
+		diff.Path = fmt.Sprintf("/state/session/key-%d", index)
+		diff.Baseline = largeValue
+		diff.Actual = "changed"
+		report.Cases[0].Diffs = append(report.Cases[0].Diffs, diff)
+	}
+	report.BlockingDiffs = len(report.Cases[0].Diffs)
+	report.Cases[0].Reference.Pairs[0].BlockingDiffs = report.BlockingDiffs
+
+	err := report.Validate()
+	if err == nil || !strings.Contains(err.Error(), "encoded-size budget") {
+		t.Fatalf("Validate() error = %v, want aggregate encoded-size limit", err)
+	}
+}
+
+func TestRunnerStopsBeforeBuildingAnOversizedReport(t *testing.T) {
+	cases := make([]Case, 100)
+	for index := range cases {
+		cases[index] = PublicCases()[0]
+		cases[index].Name = fmt.Sprintf("report-budget-%03d", index)
+	}
+	backendErr := errors.New(strings.Repeat("x", maxReplayErrorSize))
+	openCalls := 0
+	newFailingBackend := func(name string) Backend {
+		return Backend{
+			Name:         name,
+			Capabilities: PortableCapabilities(),
+			Open: func(context.Context, string) (*Services, error) {
+				openCalls++
+				return nil, backendErr
+			},
+		}
+	}
+	_, err := (Runner{}).Run(
+		context.Background(),
+		cases,
+		[]Backend{newFailingBackend("left"), newFailingBackend("right")},
+	)
+	if err == nil || !strings.Contains(err.Error(), "encoded-size budget") {
+		t.Fatalf("Run() error = %v, want aggregate report limit", err)
+	}
+	if openCalls >= len(cases)*2 {
+		t.Fatalf("Run() opened all %d backends before rejecting its report", openCalls)
+	}
+}
+
+func TestReferenceReportRejectsSemanticDiffsForExcludedBackends(t *testing.T) {
+	for _, excluded := range []string{"actual", "baseline"} {
+		t.Run(excluded, func(t *testing.T) {
+			report := validReferenceReport()
+			exclusion := Diff{
+				Case:        "clean",
+				BackendA:    "baseline",
+				BackendB:    excluded,
+				SessionID:   "clean",
+				Path:        "/execution",
+				Baseline:    "success",
+				Actual:      "injected failure",
+				Explanation: "backend replay failed",
+				Exclusion: &ExclusionEvidence{
+					Backend: excluded,
+					Kind:    ExclusionExecutionFailure,
+					Error:   "injected failure",
+				},
+			}
+			semantic := validReportDiff()
+			semantic.Baseline = "before"
+			semantic.Actual = "after"
+			report.PassedCases = 0
+			report.FailedCases = 1
+			report.BlockingDiffs = 2
+			report.Cases[0].Status = StatusFailed
+			report.Cases[0].Diffs = []Diff{exclusion, semantic}
+			if err := report.Validate(); err == nil {
+				t.Fatal("Validate() accepted a semantic diff involving an excluded backend")
+			}
+		})
+	}
+}
+
+func TestReportRejectsPartialIndexedLocatorEvidence(t *testing.T) {
+	report := validReferenceReport()
+	diff := validReportDiff()
+	diff.Path = "/memories/0/content"
+	diff.MemoryID = "memory-0"
+	diff.Baseline = "before"
+	diff.Actual = "after"
+	setBlockingReportDiff(&report, diff)
+	report.Cases[0].LocatorEvidence = &LocatorEvidence{
+		MemoryIDs: map[string][]string{
+			"baseline": {"memory-0"},
+		},
+	}
+	if err := report.Validate(); err == nil {
+		t.Fatal("Validate() unexpectedly accepted indexed memory evidence for only one backend")
 	}
 }
 
@@ -1040,6 +2256,21 @@ func TestConsensusValidationRejectsMalformedMatrix(t *testing.T) {
 		{name: "comparable self diff", mutate: func(_ *ConsensusResult, diffs *[]Diff, _ map[string]struct{}) {
 			*diffs = []Diff{{BackendA: "a", BackendB: "a", Path: "/execution"}}
 		}},
+		{name: "forged execution exclusion payload", mutate: func(_ *ConsensusResult, diffs *[]Diff, known map[string]struct{}) {
+			known["c"] = struct{}{}
+			*diffs = []Diff{{
+				BackendA: "c", BackendB: "c", SessionID: "case", Path: "/execution",
+				Baseline: "success", Actual: "backend failed", Explanation: "backend replay failed",
+			}}
+		}},
+		{name: "forged capability exclusion payload", mutate: func(_ *ConsensusResult, diffs *[]Diff, known map[string]struct{}) {
+			known["c"] = struct{}{}
+			*diffs = []Diff{{
+				BackendA: "c", BackendB: "c", SessionID: "case", Path: "/capabilities/session",
+				Baseline: true, Actual: false, Allowed: true,
+				Explanation: "backend reports this capability as unsupported",
+			}}
+		}},
 		{name: "invalid exclusion evidence", mutate: func(_ *ConsensusResult, diffs *[]Diff, known map[string]struct{}) {
 			known["c"] = struct{}{}
 			*diffs = []Diff{{BackendA: "c", BackendB: "c", Path: "/state"}}
@@ -1073,6 +2304,54 @@ func TestConsensusValidationRejectsMalformedMatrix(t *testing.T) {
 				t.Fatal("validateConsensusResult() unexpectedly accepted a malformed matrix")
 			}
 		})
+	}
+}
+
+func TestConsensusValidationRejectsConflictingExclusionKinds(t *testing.T) {
+	result := ConsensusResult{
+		Verdict:            ConsensusUnanimous,
+		ComparableBackends: []string{"a", "b"},
+		Pairs:              []PairComparison{{BackendA: "a", BackendB: "b"}},
+	}
+	known := map[string]struct{}{"a": {}, "b": {}, "c": {}}
+	diffs := []Diff{
+		{
+			Case: "case", BackendA: "c", BackendB: "c", SessionID: "case",
+			Path: "/execution", Baseline: "success", Actual: "failed",
+			Explanation: "backend replay failed",
+			Exclusion:   &ExclusionEvidence{Backend: "c", Kind: ExclusionExecutionFailure, Error: "failed"},
+		},
+		{
+			Case: "case", BackendA: "c", BackendB: "c", SessionID: "case",
+			Path: "/capabilities/memory", Baseline: true, Actual: false, Allowed: true,
+			Explanation: "backend reports this capability as unsupported",
+			Exclusion:   &ExclusionEvidence{Backend: "c", Kind: ExclusionUnsupportedCapability, Capability: CapabilityMemory},
+		},
+	}
+	if err := validateConsensusResult("case", result, diffs, known); err == nil {
+		t.Fatal("validateConsensusResult() unexpectedly accepted conflicting exclusion kinds")
+	}
+}
+
+func TestReportValidationAcceptsVerifiableMemoryLocators(t *testing.T) {
+	report := validReferenceReport()
+	report.Cases[0].LocatorEvidence = validLocatorEvidence()
+	diff := validReportDiff()
+	diff.Path = "/memories/0/content"
+	diff.MemoryID = "memory-0"
+	setBlockingReportDiff(&report, diff)
+	if err := report.Validate(); err != nil {
+		t.Fatalf("Validate() rejected a verifiable memory locator: %v", err)
+	}
+
+	report = validReferenceReport()
+	report.Cases[0].LocatorEvidence = validLocatorEvidence()
+	diff = validReportDiff()
+	diff.Path = "/memory_searches/query/0/score"
+	diff.MemoryID = "memory-0"
+	setBlockingReportDiff(&report, diff)
+	if err := report.Validate(); err != nil {
+		t.Fatalf("Validate() rejected a verifiable memory search locator: %v", err)
 	}
 }
 
@@ -1474,7 +2753,7 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 			"case",
 			EventOrderGlobal,
 			nil,
-			FullCapabilities(),
+			PortableCapabilities(),
 			nil,
 			nil,
 			nil,
@@ -1833,6 +3112,31 @@ func TestWriteReportPropagatesWriterFailure(t *testing.T) {
 	}
 }
 
+func TestIndentedReportSizeMatchesJSONIndent(t *testing.T) {
+	inputs := []string{
+		`{}`,
+		`[]`,
+		`{"text":"escaped \" quote","empty":[],"nested":{"values":[1,true,null]}}`,
+	}
+	for _, input := range inputs {
+		var output bytes.Buffer
+		if err := json.Indent(&output, []byte(input), "", "  "); err != nil {
+			t.Fatalf("json.Indent(%q) error = %v", input, err)
+		}
+		want := output.Len() + 1
+		got, err := indentedReportSize([]byte(input), want)
+		if err != nil {
+			t.Fatalf("indentedReportSize(%q) error = %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("indentedReportSize(%q) = %d, want %d", input, got, want)
+		}
+		if _, err := indentedReportSize([]byte(input), want-1); err == nil {
+			t.Fatalf("indentedReportSize(%q) unexpectedly accepted an undersized limit", input)
+		}
+	}
+}
+
 func validReferenceReport() Report {
 	return Report{
 		GeneratedAt:    caseEpoch,
@@ -1844,7 +3148,22 @@ func validReferenceReport() Report {
 		Cases: []CaseResult{{
 			Name:   "clean",
 			Status: StatusPassed,
+			Reference: &ReferenceResult{
+				ComparableBackends: []string{"actual", "baseline"},
+				Pairs:              []PairComparison{{BackendA: "actual", BackendB: "baseline"}},
+			},
 		}},
+	}
+}
+
+func setValidConsensusReport(report *Report) {
+	report.ComparisonMode = ComparisonConsensus
+	report.Reference = ""
+	report.Cases[0].Reference = nil
+	report.Cases[0].Consensus = &ConsensusResult{
+		Verdict:            ConsensusUnanimous,
+		ComparableBackends: []string{"actual", "baseline"},
+		Pairs:              []PairComparison{{BackendA: "actual", BackendB: "baseline"}},
 	}
 }
 
@@ -1858,12 +3177,29 @@ func validReportDiff() Diff {
 	}
 }
 
+func validLocatorEvidence() *LocatorEvidence {
+	return &LocatorEvidence{
+		MemoryIDs: map[string][]string{
+			"baseline": {"memory-0"},
+			"actual":   {"memory-0"},
+		},
+		MemorySearchIDs: map[string]map[string][]string{
+			"baseline": {"query": {"memory-0"}},
+			"actual":   {"query": {"memory-0"}},
+		},
+	}
+}
+
 func setBlockingReportDiff(report *Report, diff Diff) {
 	report.PassedCases = 0
 	report.FailedCases = 1
 	report.BlockingDiffs = 1
 	report.Cases[0].Status = StatusFailed
 	report.Cases[0].Diffs = []Diff{diff}
+	if report.Cases[0].Reference != nil && len(report.Cases[0].Reference.Pairs) == 1 {
+		report.Cases[0].Reference.Pairs[0].BlockingDiffs = 1
+		report.Cases[0].Reference.Pairs[0].AllowedDiffs = 0
+	}
 }
 
 type createFailureSessionService struct {
@@ -1937,6 +3273,44 @@ type customJSONChannelState struct {
 	Channel chan string
 }
 
+type mutatingJSONExportedState struct {
+	Values map[string]string `json:"values"`
+}
+
+type opaqueSnapshotJSON struct {
+	Channel  chan string
+	Executed *bool
+}
+
+type capacitySensitiveSnapshotJSON struct {
+	Values   []int
+	Executed *bool
+}
+
+func (value *opaqueSnapshotJSON) MarshalJSON() ([]byte, error) {
+	*value.Executed = true
+	return []byte(`{"value":"executed"}`), nil
+}
+
+type aliasSensitiveSnapshotJSON struct {
+	First  *int
+	Second *int
+}
+
+func (value *aliasSensitiveSnapshotJSON) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]bool{"same": value.First == value.Second})
+}
+
+func (value *capacitySensitiveSnapshotJSON) MarshalJSON() ([]byte, error) {
+	*value.Executed = true
+	return json.Marshal(map[string]int{"capacity": cap(value.Values)})
+}
+
+func (value *mutatingJSONExportedState) MarshalJSON() ([]byte, error) {
+	value.Values["value"] = "mutated"
+	return json.Marshal(value.Values)
+}
+
 func (value *customJSONChannelState) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]int{"queued": len(value.Channel)})
 }
@@ -1968,14 +3342,6 @@ func (value *customJSONHiddenState) MarshalJSON() ([]byte, error) {
 	})
 }
 
-type mutatingCustomJSONSessionService struct {
-	session.Service
-}
-
-type mutatingCustomTextSessionService struct {
-	session.Service
-}
-
 type cyclicJSONValue struct {
 	Next *cyclicJSONValue `json:"next"`
 }
@@ -2002,8 +3368,23 @@ func (value *recursiveHiddenCycleJSONValue) MarshalJSON() ([]byte, error) {
 
 type nilMemorySearchService struct{ memory.Service }
 
+type ignoringMemorySearchLimitService struct{ memory.Service }
+
+type typedNilSessionService struct{ session.Service }
+
+type typedNilMemoryService struct{ memory.Service }
+
 func (s *nilMemorySearchService) SearchMemories(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error) {
 	return []*memory.Entry{nil}, nil
+}
+
+func (s *ignoringMemorySearchLimitService) SearchMemories(
+	ctx context.Context,
+	key memory.UserKey,
+	_ string,
+	_ ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	return s.Service.ReadMemories(ctx, key, 0)
 }
 
 type cancelAfterAppUpdateService struct {
@@ -2055,80 +3436,6 @@ func (s *mutatingAppendSessionService) AppendEvent(
 	return s.Service.AppendEvent(ctx, sess, evt, options...)
 }
 
-func (s *mutatingCustomJSONSessionService) AppendEvent(
-	ctx context.Context,
-	sess *session.Session,
-	evt *event.Event,
-	options ...session.Option,
-) error {
-	if evt.Response == nil || len(evt.Response.Choices) == 0 ||
-		len(evt.Response.Choices[0].Message.ToolCalls) == 0 {
-		return s.Service.AppendEvent(ctx, sess, evt, options...)
-	}
-	extraFields := evt.Response.Choices[0].Message.ToolCalls[0].ExtraFields
-	switch value := extraFields["channel"].(type) {
-	case *customJSONChannelState:
-		<-value.Channel
-	case map[string]any:
-		value["queued"] = json.Number("0")
-	default:
-		return fmt.Errorf("unexpected custom channel clone type %T", extraFields["channel"])
-	}
-	switch value := extraFields["custom"].(type) {
-	case *customJSONHiddenState:
-		value.hidden["value"] = "mutated"
-	case map[string]any:
-		value["hidden"] = "mutated"
-	default:
-		return fmt.Errorf("unexpected custom JSON clone type %T", extraFields["custom"])
-	}
-	switch value := extraFields["embedded"].(type) {
-	case *embeddedCustomJSONState:
-		value.Custom.hidden["value"] = "mutated"
-	case map[string]any:
-		custom, ok := value["custom"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("unexpected embedded custom clone value %T", value["custom"])
-		}
-		custom["hidden"] = "mutated"
-	default:
-		return fmt.Errorf("unexpected embedded custom clone type %T", extraFields["embedded"])
-	}
-	return s.Service.AppendEvent(ctx, sess, evt, options...)
-}
-
-func (s *mutatingCustomTextSessionService) AppendEvent(
-	ctx context.Context,
-	sess *session.Session,
-	evt *event.Event,
-	options ...session.Option,
-) error {
-	if evt.Response == nil || len(evt.Response.Choices) == 0 ||
-		len(evt.Response.Choices[0].Message.ToolCalls) == 0 {
-		return s.Service.AppendEvent(ctx, sess, evt, options...)
-	}
-	extraFields := evt.Response.Choices[0].Message.ToolCalls[0].ExtraFields
-	switch value := extraFields["custom"].(type) {
-	case *customTextHiddenState:
-		value.hidden["value"] = "mutated"
-	case string:
-		extraFields["custom"] = "mutated"
-	default:
-		return fmt.Errorf("unexpected custom text clone type %T", extraFields["custom"])
-	}
-	switch value := extraFields["custom-key"].(type) {
-	case map[*customTextHiddenState]string:
-		for key := range value {
-			key.hidden["value"] = "mutated"
-		}
-	case map[string]any:
-		value["original"] = "mutated"
-	default:
-		return fmt.Errorf("unexpected custom text map-key clone type %T", extraFields["custom-key"])
-	}
-	return s.Service.AppendEvent(ctx, sess, evt, options...)
-}
-
 func (*nilGetSessionService) GetSession(
 	context.Context,
 	session.Key,
@@ -2141,4 +3448,13 @@ type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, errors.New("injected writer failure")
+}
+
+type countingError struct {
+	calls int
+}
+
+func (e *countingError) Error() string {
+	e.calls++
+	return fmt.Sprintf("failure-%d", e.calls)
 }

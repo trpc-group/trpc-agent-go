@@ -6,19 +6,70 @@ backend, normalizes backend-generated values, and compares every result with a
 named reference backend or with every other backend in oracle-free consensus
 mode.
 
-The public matrix contains 17 cases: single-turn and multi-turn messages, tool
-calls, scoped state CRUD, mid-replay Session reload continuity, memory
+The public matrix contains 21 cases: single-turn and multi-turn messages, tool
+calls, scoped state CRUD and clear semantics, mid-replay Session reload continuity, memory
 persistence, ranked memory search, idempotent memory retry recovery, summary
 generation/update, summary retained-tail reconstruction, summary filter keys,
-tracks, concurrent event branches, and conflict-free concurrent State, Memory,
-Summary, and Track writes. Each case names an injected fault; the unit test
-proves that every fault produces a blocking diff.
+tracks, offset-based event pagination, observable Session TTL expiration,
+concurrent event branches, and conflict-free concurrent State, Memory,
+Summary, and Track writes. Package tests assign one deterministic snapshot
+mutation to each case and prove that every mutation produces a blocking diff.
+This is normalized Snapshot/Compare mutation coverage, not a claim that all 21
+cases inject faults into a durable database. The SQLite submodule separately
+executes eight persistence-level fault classes end to end; see its README for
+the exact boundary.
 
-Replay applies defensive per-case limits for steps, branches, events, memories,
-state values, JSON payloads, summaries, and track payloads. These limits are
-part of the harness safety contract and prevent malformed adapters from
-exhausting the process; very large datasets should be partitioned into multiple
-cases.
+Event pagination is exercised through
+`session.WithGetSessionEventPage`, not by slicing the final normalized event
+list. A backend declares `CapabilityEventPage` only when that public service
+operation is implemented. The InMemory and SQLite lightweight adapters leave
+it undeclared, so their reports retain an `unsupported_capability` exclusion
+for the pagination case while all portable cases continue to run.
+Event-page snapshots preserve the global storage order returned by the backend,
+even when the complete event set uses causal comparison. A case cannot combine
+event pagination with concurrent event appends because offset selection would
+depend on their intentionally unspecified global interleaving.
+
+Session TTL is also an observable operation rather than a declaration-only
+flag. An adapter declaring `CapabilitySessionTTL` must return the positive TTL
+actually configured on its service as `Services.SessionTTL`. The expiration
+step first proves that the created Session is visible with the requested
+identity, then waits longer than the TTL, subject to a fixed five-second
+ceiling, and requires `GetSession` to return no Session. Backends without a
+portable TTL configuration leave the capability undeclared and produce
+explicit `unsupported_capability` evidence without sleeping.
+
+Replay applies fixed defensive limits. One run accepts at most 64 backends,
+1,000 cases, and 1,000 `AllowedDiff` rules per case. One case accepts at most
+10,000 steps, 2,000 concurrent branches, and 10,000 generated diffs; one report
+accepts at most 100,000 diffs within a 64 MiB encoded-size budget. State keys,
+memory entries and searches,
+summaries, events, and track events are each capped at 100,000 entries. JSON
+nesting is capped at 256 levels. Individual state values are capped at 1 MiB;
+event, memory, summary, track payload, and generic JSON values are capped at
+8 MiB. A fully encoded comparison snapshot is also capped at 8 MiB, which is
+the stricter aggregate boundary even where a domain has a larger cumulative
+normalization limit. These limits are part of the harness safety contract;
+larger datasets should be partitioned into multiple cases.
+
+Backend, case, step, mode, capability, and other identifier strings are capped
+at 4 KiB. JSON Pointer paths are capped at 16 KiB; descriptions, allowed-diff
+reasons, and report explanations are capped at 64 KiB. Backend execution errors
+are copied into immutable report text, repaired to valid UTF-8, and truncated
+to 64 KiB with an explicit suffix. `Report.Validate` applies the same limits to
+reports constructed or decoded outside `Runner`.
+Arbitrary JSON evidence is also bounded by a graph-node preflight before
+reflection, cloning, or marshaling. Report and Diff JSON decoding preserves
+numbers as `json.Number`, so integers outside float64's exact range do not drift
+across a write/decode/write cycle.
+
+Tool-call extra fields and caller-supplied snapshots are cloned before JSON
+encoding. The package-test fault helper uses the same boundary. The harness
+permits the known value types `time.Time` and `json.RawMessage`, but rejects
+every other value that implements `json.Marshaler` or `encoding.TextMarshaler`
+before invoking user code. This conservative boundary prevents mutation,
+hidden-state reads, and alias- or capacity-sensitive output from breaking
+deterministic replay.
 
 Memory persistence snapshots are content-sorted because `ReadMemories` does not
 define cross-backend result order. `StepSearchMemory` is separate: it requires
@@ -50,7 +101,12 @@ identity and a fresh-session probe; `Summary` itself has no owner field.
 
 Write recovery is explicit per step. `RecoveryVerify` performs a
 read-after-write check after an error and accepts the operation only when the
-requested event, state, memory, summary change, or track append is observed.
+requested event, state, memory, or track append is observed. Summary recovery
+verification is intentionally rejected: summary text is generated by a
+backend-owned summarizer, and the harness has no portable expected value with
+which to prove that an observed change came from the failed request. Callers
+must use `RecoveryNone` for summaries and handle an error as uncertain at the
+application boundary.
 `RecoveryRetryIdempotent` may retry once after a negative check, but is valid
 only for State and Memory because those writes have idempotent service
 contracts. Event, Summary, and Track writes are never retried blindly; an
@@ -84,7 +140,7 @@ implementation:
 | Event | Persistable, state-delta-free events in ordered lanes | `CapabilityConcurrent` | Verify only |
 | State | Disjoint scope and key pairs | `CapabilityConcurrent` + `CapabilityConcurrentState` | Verify or retry once |
 | Memory | Distinct memory content | `CapabilityConcurrent` + `CapabilityConcurrentMemory` | Verify or retry once |
-| Summary | Distinct, non-empty filter keys | `CapabilityConcurrent` + `CapabilityConcurrentSummary` | Verify only |
+| Summary | Distinct, non-empty filter keys | `CapabilityConcurrent` + `CapabilityConcurrentSummary` | Unsupported; errors remain uncertain |
 | Track | Distinct track names | `CapabilityConcurrent` + `CapabilityConcurrentTrack` | Verify only |
 
 Anything outside this table is rejected during case validation rather than
@@ -141,12 +197,22 @@ successful comparable backends are `insufficient`. Execution errors and
 unsupported capabilities stay outside the consensus matrix and remain visible
 as ordinary report diffs.
 
+Reference mode records an equally explicit comparison manifest: every backend
+that produced a snapshot and every completed reference pair with its blocking
+and allowed diff counts. `Report.Validate` rejects omitted pairs, unaccounted
+backends, and pair counters that disagree with the diff list. This is
+structural integrity for runner-generated reports, not a signature or proof of
+authenticity for JSON supplied by an untrusted party.
+
 ## Additional backends
 
-This package does not register external server-backed adapters. Such adapters
+This package does not register external server-backed adapters. No environment
+variable currently enables Redis, PostgreSQL, MySQL, or ClickHouse in this
+matrix; setting a database driver's environment variables alone does not add a
+backend. Such adapters
 belong in the independent `test` module so the root module does not acquire
-database drivers or integration-only dependency upgrades. Future Redis,
-PostgreSQL, MySQL, and ClickHouse adapters can register their existing Session
+database drivers or integration-only dependency upgrades. An owning integration
+module can register its existing Session
 and Memory services through `Backend.Open` and follow the owning module's
 existing environment configuration and skip behavior.
 
