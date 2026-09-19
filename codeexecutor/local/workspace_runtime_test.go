@@ -794,7 +794,7 @@ func TestRuntime_Collect_FiltersRootMetadataTempFiles(t *testing.T) {
 
 	require.NotContains(t, names, tmpName)
 	require.Contains(t, names, nonGeneratedRootName)
-	require.Contains(t, names, nestedName)
+	require.Contains(t, names, filepath.ToSlash(nestedName))
 }
 
 func TestRuntime_Collect_EnvPrefixes(t *testing.T) {
@@ -818,7 +818,7 @@ func TestRuntime_Collect_EnvPrefixes(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, files, 1)
-	require.Equal(t, filepath.Join(codeexecutor.DirOut, name),
+	require.Equal(t, filepath.ToSlash(filepath.Join(codeexecutor.DirOut, name)),
 		files[0].Name)
 }
 
@@ -1340,6 +1340,74 @@ func TestRuntime_CollectOutputs_MatchesWorkspaceRoot(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, mf.Files)
+}
+
+// TestRuntime_Collect_GlobMatchesCrossPlatform guards against a regression
+// where Collect returned nothing on Windows: the previous implementation
+// joined the workspace root with the glob using the native separator (so
+// backslashes leaked into the doublestar pattern, which is matched
+// literally) and used os.DirFS("/") (invalid on Windows). The test uses a
+// slash-separated relative glob and runs on every platform, so a Windows CI
+// job would fail it until the hostFS adapter fixed the separator handling.
+func TestRuntime_Collect_GlobMatchesCrossPlatform(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-xplat", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	content := []byte("hello")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.DirOut, "a.txt"),
+		content, 0o644,
+	))
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(ws.Path, codeexecutor.DirOut, "nested"), 0o755,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.DirOut, "nested", "b.txt"),
+		content, 0o644,
+	))
+
+	files, err := rt.Collect(ctx, ws, []string{
+		filepath.Join(codeexecutor.DirOut, "**"),
+	})
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	names := []string{files[0].Name, files[1].Name}
+	require.Contains(t, names,
+		filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "a.txt")))
+	require.Contains(t, names,
+		filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "nested", "b.txt")))
+}
+
+// TestRuntime_CollectOutputs_GlobMatchesCrossPlatform is the CollectOutputs
+// counterpart of TestRuntime_Collect_GlobMatchesCrossPlatform; it asserts the
+// declarative collector (which shares the same buggy os.DirFS("/") path) also
+// matches slash-separated relative globs on every platform.
+func TestRuntime_CollectOutputs_GlobMatchesCrossPlatform(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collectout-xplat", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	content := []byte("hello")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, codeexecutor.DirOut, "a.txt"),
+		content, 0o644,
+	))
+
+	mf, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs:  []string{filepath.Join(codeexecutor.DirOut, "**")},
+		Inline: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, mf.Files, 1)
 }
 
 func TestRuntime_CollectOutputs_TraversalOutsideFiltered(t *testing.T) {

@@ -420,22 +420,23 @@ func (r *Runtime) Collect(
 	}
 	seen := map[string]bool{}
 
+	// Match patterns inside the workspace root through a slash-separator
+	// adapter (hostFS) instead of os.DirFS("/"): doublestar uses io/fs
+	// slash-separated paths, and on Windows os.DirFS("/") is invalid while
+	// backslash-joined absolute patterns were matched literally, so every
+	// match was dropped. Patterns stay relative to root, which works on
+	// every platform.
+	fsys := hostFS{dir: root}
 	for _, p := range patterns {
-		// Use doublestar to support ** patterns.
-		abs := filepath.Join(root, p)
-		// Doublestar on os.DirFS("/") expects patterns relative to "/".
-		pattern := strings.TrimPrefix(abs, "/")
-		matches, err := ds.Glob(os.DirFS("/"), pattern)
+		matches, err := ds.Glob(fsys, filepath.ToSlash(p))
 		if err != nil {
 			return nil, err
 		}
 		for _, m := range matches {
-			// Convert match back to absolute path.
-			mAbs := "/" + strings.TrimPrefix(m, "/")
+			// m is slash-separated and relative to root.
+			mAbs := filepath.Join(root, filepath.FromSlash(m))
 			// Ensure it is within root.
-			if !strings.HasPrefix(
-				mAbs, root+string(os.PathSeparator),
-			) && mAbs != root {
+			if !withinWorkspacePath(root, mAbs) {
 				continue
 			}
 			// Collapse symlinks to canonical path and dedupe.
@@ -443,14 +444,17 @@ func (r *Runtime) Collect(
 			if err != nil {
 				realp = mAbs
 			}
-			// Re-check containment against canonical root.
-			if !strings.HasPrefix(
-				realp, realRoot+string(os.PathSeparator),
-			) && realp != realRoot {
+			// Re-check containment against canonical root so a symlink
+			// resolved outside the workspace is dropped.
+			if !withinWorkspacePath(realRoot, realp) {
 				continue
 			}
+			// Name is the workspace-relative path. Use slash separators
+			// unconditionally so collected names are identical across
+			// platforms (realp comes back with the native separator).
 			name := strings.TrimPrefix(
-				realp, realRoot+string(os.PathSeparator),
+				filepath.ToSlash(realp),
+				filepath.ToSlash(realRoot)+"/",
 			)
 			if codeexecutor.IsRootMetadataTempPath(name) {
 				continue
@@ -692,10 +696,12 @@ func (r *Runtime) CollectOutputs(
 	var savedNames []string
 	var savedVers []int
 	count := 0
+	// Match inside the workspace root through a slash-separator adapter
+	// (hostFS) so behaviour is identical across platforms; see Collect for
+	// why os.DirFS("/") cannot be used here.
+	rootFS := hostFS{dir: ws.Path}
 	for _, g := range globs {
-		abs := filepath.Join(ws.Path, g)
-		pattern := strings.TrimPrefix(abs, "/")
-		matches, err := ds.Glob(os.DirFS("/"), pattern)
+		matches, err := ds.Glob(rootFS, filepath.ToSlash(g))
 		if err != nil {
 			return codeexecutor.OutputManifest{}, err
 		}
@@ -707,7 +713,7 @@ func (r *Runtime) CollectOutputs(
 			ref, consumed, skip, err := collectOutputMatch(
 				ctx,
 				ws.Path,
-				"/"+strings.TrimPrefix(m, "/"),
+				filepath.Join(ws.Path, filepath.FromSlash(m)),
 				spec,
 				maxFileBytes,
 				leftTotal,
@@ -775,8 +781,12 @@ func collectOutputMatch(
 	if !withinWorkspacePath(wsPath, absPath) {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
+	// Name is the workspace-relative path. Use slash separators
+	// unconditionally so collected names are identical across platforms
+	// (absPath comes back with the native separator).
 	name := strings.TrimPrefix(
-		absPath, wsPath+string(os.PathSeparator),
+		filepath.ToSlash(absPath),
+		filepath.ToSlash(wsPath)+"/",
 	)
 	if codeexecutor.IsRootMetadataTempPath(name) {
 		return codeexecutor.FileRef{}, 0, true, nil
@@ -838,6 +848,18 @@ func withinWorkspacePath(wsPath string, absPath string) bool {
 		return true
 	}
 	return strings.HasPrefix(absPath, wsPath+sep)
+}
+
+// hostFS is a slash-separator adapter over the host filesystem. It lets
+// doublestar (which matches io/fs slash-separated paths) look up files on any
+// platform by mapping each requested name through filepath.FromSlash onto dir.
+// os.DirFS is unsuitable here: os.DirFS("/") is invalid on Windows, and
+// os.DirFS rejects ".." segments, whereas callers may pass globs such as
+// "../" that must be matched and then dropped by the containment checks.
+type hostFS struct{ dir string }
+
+func (f hostFS) Open(name string) (fs.File, error) {
+	return os.Open(filepath.Join(f.dir, filepath.FromSlash(name)))
 }
 
 // ExecuteInline writes temp files for code blocks and runs them.
