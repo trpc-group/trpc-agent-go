@@ -984,20 +984,6 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-Use `WithSkipRecentContext` when the skip decision needs request-scoped values
-such as a trace ID:
-
-```go
-summarizer := summary.NewSummarizer(
-    summaryModel,
-    summary.WithSkipRecentContext(func(ctx context.Context, events []event.Event) int {
-        traceID, _ := ctx.Value(traceIDKey{}).(string)
-        _ = traceID
-        return 2
-    }),
-)
-```
-
 ## Summary Hooks
 
 ### PreSummaryHook

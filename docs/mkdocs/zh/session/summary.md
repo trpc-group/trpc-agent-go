@@ -922,20 +922,6 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-如果跳过逻辑需要读取请求级信息，例如 trace ID，可以使用
-`WithSkipRecentContext`：
-
-```go
-summarizer := summary.NewSummarizer(
-    summaryModel,
-    summary.WithSkipRecentContext(func(ctx context.Context, events []event.Event) int {
-        traceID, _ := ctx.Value(traceIDKey{}).(string)
-        _ = traceID
-        return 2
-    }),
-)
-```
-
 ## 摘要 Hook
 
 ### PreSummaryHook

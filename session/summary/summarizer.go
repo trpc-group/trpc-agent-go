@@ -374,7 +374,7 @@ func (s *sessionSummarizer) evaluateTrigger(
 		return Trigger{}
 	}
 
-	checkSess := s.buildCheckSessionWithSelectionContext(ctx, sess, selection)
+	checkSess := s.buildCheckSessionWithSelection(ctx, sess, selection)
 	if len(s.checks) == 0 {
 		return Trigger{
 			Fired:     true,
@@ -471,7 +471,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 ) summaryEventSelection {
 	view, ok := modelVisibleViewForSession(ctx, sess)
 	if !ok {
-		retained, decision := s.filterEventsForSummaryObservedContext(ctx, sess.Events)
+		retained, decision := s.filterEventsForSummaryObserved(ctx, sess.Events)
 		events := filterSummaryInputEventsForSession(retained, sess)
 		recordSelection(
 			ctx,
@@ -519,7 +519,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		)
 		boundaries = append([]summaryview.Boundary{{}}, boundaries...)
 	}
-	events, decision := s.filterEventsForSummaryObservedContext(ctx, events)
+	events, decision := s.filterEventsForSummaryObserved(ctx, events)
 	if len(boundaries) > len(events) {
 		boundaries = boundaries[:len(events)]
 	}
@@ -970,19 +970,13 @@ func (state summaryBoundaryState) restore(sess *session.Session) {
 }
 
 func (s *sessionSummarizer) buildCheckSession(
-	sess *session.Session,
-) *session.Session {
-	return s.buildCheckSessionContext(context.Background(), sess)
-}
-
-func (s *sessionSummarizer) buildCheckSessionContext(
 	ctx context.Context,
 	sess *session.Session,
 ) *session.Session {
 	if sess == nil {
 		return nil
 	}
-	return s.buildCheckSessionWithSelectionContext(
+	return s.buildCheckSessionWithSelection(
 		ctx,
 		sess,
 		s.selectSummaryEvents(ctx, sess),
@@ -990,17 +984,6 @@ func (s *sessionSummarizer) buildCheckSessionContext(
 }
 
 func (s *sessionSummarizer) buildCheckSessionWithSelection(
-	sess *session.Session,
-	selection summaryEventSelection,
-) *session.Session {
-	return s.buildCheckSessionWithSelectionContext(
-		context.Background(),
-		sess,
-		selection,
-	)
-}
-
-func (s *sessionSummarizer) buildCheckSessionWithSelectionContext(
 	ctx context.Context,
 	sess *session.Session,
 	selection summaryEventSelection,
@@ -1015,7 +998,7 @@ func (s *sessionSummarizer) buildCheckSessionWithSelectionContext(
 		checkSess.Events = append([]event.Event(nil), filtered...)
 	} else {
 		delta := filterDeltaEvents(checkSess)
-		filtered = s.filterEventsForSummaryContext(ctx, delta)
+		filtered = s.filterEventsForSummary(ctx, delta)
 	}
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
 	var thresholdMessage model.Message
@@ -1051,16 +1034,11 @@ type skipRecentDecision struct {
 
 // filterEventsForSummary filters events for summarization, excluding recent events
 // and ensuring that retained events still have enough context to summarize.
-func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
-	filtered, _ := s.filterEventsForSummaryObserved(events)
-	return filtered
-}
-
-func (s *sessionSummarizer) filterEventsForSummaryContext(
+func (s *sessionSummarizer) filterEventsForSummary(
 	ctx context.Context,
 	events []event.Event,
 ) []event.Event {
-	filtered, _ := s.filterEventsForSummaryObservedContext(ctx, events)
+	filtered, _ := s.filterEventsForSummaryObserved(ctx, events)
 	return filtered
 }
 
@@ -1069,12 +1047,6 @@ func (s *sessionSummarizer) filterEventsForSummaryContext(
 // diagnostics can distinguish a skip-recent callback that consumed everything
 // from a retained prefix rejected as unsafe.
 func (s *sessionSummarizer) filterEventsForSummaryObserved(
-	events []event.Event,
-) ([]event.Event, skipRecentDecision) {
-	return s.filterEventsForSummaryObservedContext(context.Background(), events)
-}
-
-func (s *sessionSummarizer) filterEventsForSummaryObservedContext(
 	ctx context.Context,
 	events []event.Event,
 ) ([]event.Event, skipRecentDecision) {
