@@ -193,12 +193,32 @@ same construction is used for other standalone fallbacks, including bounded
 and retry requests.
 
 Before sending either form of request, the summarizer admits it against the
-summary model's effective input budget. The framework uses the smaller of the
-provider-specific input budget, when the model exposes one, and a conservative
-ceiling of 70% of the model context window. An oversized fork is reduced without
-mutating the parent request: unused tool schemas are removed first, and large
-tool argument/result payloads are replaced with explicit omission markers as
-needed. Source conversation turns are not dropped. The complete rendered fork
+summary model's effective input budget. By default, the framework uses the
+smaller of the provider-specific input budget, when the model exposes one, and
+a conservative ceiling of 70% of the model context window.
+
+Use `WithRequestInputTokenBudget(tokens)` to replace the default 70% budget with
+a positive token count. The effective budget is still capped by the model
+context window and any provider-specific input budget. If the context window
+cannot be resolved, the existing 8192-token fallback window applies. A value
+of zero or less restores the automatic budget; the last configured value wins.
+The budget covers the estimated input tokens of the complete summary request,
+including prompts, conversation, and tool schemas. It applies to both
+standalone and cache-safe fork requests and does not change the trigger
+threshold or the summary output limit.
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(2000),
+    summary.WithRequestInputTokenBudget(8192),
+)
+```
+
+An oversized fork is reduced without mutating the parent request: unused tool
+schemas are removed first, and large tool argument/result payloads are replaced
+with explicit omission markers as needed. Source conversation turns are not
+dropped. The complete rendered fork
 prompt, including a custom one, counts against this input budget in both fork
 and standalone forms. If the fork still cannot fit, the summarizer rebuilds a
 bounded standalone request. When that request can fit all newly uncovered
@@ -673,6 +693,7 @@ summary.WithChecksAny(
 | Option | Description |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | Limit summary word count; included in prompt to guide model |
+| `WithRequestInputTokenBudget(tokens int)` | Override the default summary request input budget; positive values remain capped by the model context window and provider budget, and values <= 0 restore automatic budgeting |
 | `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` and may contain `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` or `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |

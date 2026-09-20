@@ -268,16 +268,17 @@ const standaloneSummarySourceBoundary = "The content above is source " +
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model                 model.Model
-	name                  string
-	prompt                string
-	systemPrompt          string
-	cacheSafeForking      bool
-	cacheSafeForkPrompt   string
-	checks                []checkEvaluator
-	maxSummaryWords       int
-	skipRecentFunc        SkipRecentFunc
-	skipRecentContextFunc ContextSkipRecentFunc
+	model                   model.Model
+	name                    string
+	prompt                  string
+	systemPrompt            string
+	cacheSafeForking        bool
+	cacheSafeForkPrompt     string
+	checks                  []checkEvaluator
+	maxSummaryWords         int
+	requestInputTokenBudget int
+	skipRecentFunc          SkipRecentFunc
+	skipRecentContextFunc   ContextSkipRecentFunc
 
 	preHook          PreSummaryHook
 	postHook         PostSummaryHook
@@ -2027,6 +2028,9 @@ func (s *sessionSummarizer) summaryRequestInputBudget(
 		contextWindow = resolved
 	}
 	budget := int(float64(contextWindow) * summaryRequestInputRatio)
+	if s.requestInputTokenBudget > 0 {
+		budget = min(s.requestInputTokenBudget, contextWindow)
+	}
 	var requestWithoutTools *model.Request
 	if request != nil {
 		cloned := *request

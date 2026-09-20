@@ -112,6 +112,22 @@ func WithMaxSummaryWords(maxWords int) Option {
 	}
 }
 
+// WithRequestInputTokenBudget sets the estimated input token budget for each
+// summary model request, including its prompts, conversation, and tool schemas.
+// A positive value replaces the default budget of 70% of the model context
+// window. The effective budget is still capped by the model context window
+// (8192 tokens when unknown) and any input budget advertised by the model.
+// Values <= 0 restore the default budget. The last configured value wins.
+//
+// This option applies to standalone and cache-safe fork requests. Existing
+// budget fitting and bounded retry behavior still apply. It does not change
+// summary trigger thresholds or the summary output limit.
+func WithRequestInputTokenBudget(tokens int) Option {
+	return func(s *sessionSummarizer) {
+		s.requestInputTokenBudget = tokens
+	}
+}
+
 // WithSkipRecent sets a legacy callback that determines how many recent events
 // to skip.
 //
