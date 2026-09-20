@@ -2032,6 +2032,11 @@ func backfillEventMetadata(dst *event.Event, src *event.Event) {
 	if dst.FilterKey == "" {
 		dst.FilterKey = src.FilterKey
 	}
+	if dst.RunOutcome == nil && src.RunOutcome != nil {
+		dst.RunOutcome = &event.RunOutcome{
+			Status: src.RunOutcome.Status,
+		}
+	}
 }
 
 func (r *runner) markCompletionSnapshotOnly(
@@ -3120,11 +3125,6 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	}
 
 	agent.InjectIntoEvent(loop.invocation, runnerCompletionEvent)
-	runnerCompletionEvent = r.applyEventPlugins(
-		ctx,
-		loop.invocation,
-		runnerCompletionEvent,
-	)
 	switch {
 	case runoutcome.IsExplicitCancel(ctx):
 		runnerCompletionEvent.RunOutcome = &event.RunOutcome{
@@ -3135,6 +3135,11 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			Status: event.RunOutcomeStatusTimedOut,
 		}
 	}
+	runnerCompletionEvent = r.applyEventPlugins(
+		ctx,
+		loop.invocation,
+		runnerCompletionEvent,
+	)
 
 	propagateFallbackState := shouldPropagateFallbackState(
 		loop.finalError,

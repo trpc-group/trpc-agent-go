@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package runoutcome contains cancellation markers shared by runners.
+// Package runoutcome contains run outcome markers shared by runners.
 package runoutcome
 
 import (
@@ -18,7 +18,7 @@ import (
 //
 // The marker is intentionally shared internally so protocol adapters can
 // identify explicit cancellation when the run completion event is persisted.
-var ErrExplicitCancel = errors.New("agui: explicit cancel")
+var ErrExplicitCancel = errors.New("run: explicit cancel")
 
 // IsExplicitCancel reports whether ctx was cancelled with ErrExplicitCancel.
 func IsExplicitCancel(ctx context.Context) bool {
@@ -27,5 +27,5 @@ func IsExplicitCancel(ctx context.Context) bool {
 
 // IsTimedOut reports whether ctx ended because its deadline was exceeded.
 func IsTimedOut(ctx context.Context) bool {
-	return ctx != nil && errors.Is(context.Cause(ctx), context.DeadlineExceeded)
+	return ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
 }

@@ -2520,6 +2520,7 @@ func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
 	inv := &agent.Invocation{Plugins: plugin.MustNewManager(p)}
 	orig := &event.Event{
 		Response:           &model.Response{Done: true},
+		RunOutcome:         &event.RunOutcome{Status: event.RunOutcomeStatusCancelled},
 		RequestID:          reqID,
 		InvocationID:       invID,
 		ParentInvocationID: parentID,
@@ -2536,6 +2537,8 @@ func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
 	require.Equal(t, parentID, out.ParentInvocationID)
 	require.Equal(t, branch, out.Branch)
 	require.Equal(t, filter, out.FilterKey)
+	require.NotNil(t, out.RunOutcome)
+	require.Equal(t, event.RunOutcomeStatusCancelled, out.RunOutcome.Status)
 }
 
 func TestRunner_applyEventPlugins_ErrorKeepsOriginal(t *testing.T) {
@@ -7803,6 +7806,8 @@ func TestRunner_ExplicitCancelAnnotatesRunnerCompletion(t *testing.T) {
 
 	var hookStatus event.RunOutcomeStatus
 	var hookSawOutcome bool
+	var pluginStatus event.RunOutcomeStatus
+	var pluginSawOutcome bool
 	sessionService := sessioninmemory.NewSessionService(
 		sessioninmemory.WithAppendEventHook(
 			func(ctx *session.AppendEventContext, next func() error) error {
@@ -7818,6 +7823,22 @@ func TestRunner_ExplicitCancelAnnotatesRunnerCompletion(t *testing.T) {
 		"app",
 		&tickCtxAgent{name: "t", interval: 10 * time.Millisecond},
 		WithSessionService(sessionService),
+		WithPlugins(&testPlugin{
+			name: "run-outcome-observer",
+			reg: func(r *plugin.Registry) {
+				r.OnEvent(func(
+					ctx context.Context,
+					inv *agent.Invocation,
+					e *event.Event,
+				) (*event.Event, error) {
+					if e != nil && e.IsRunnerCompletion() && e.RunOutcome != nil {
+						pluginSawOutcome = true
+						pluginStatus = e.RunOutcome.Status
+					}
+					return nil, nil
+				})
+			},
+		}),
 	)
 
 	events, err := r.Run(
@@ -7856,6 +7877,8 @@ func TestRunner_ExplicitCancelAnnotatesRunnerCompletion(t *testing.T) {
 	require.NotNil(t, completion)
 	require.NotNil(t, completion.RunOutcome)
 	require.Equal(t, event.RunOutcomeStatusCancelled, completion.RunOutcome.Status)
+	require.True(t, pluginSawOutcome)
+	require.Equal(t, event.RunOutcomeStatusCancelled, pluginStatus)
 	require.True(t, hookSawOutcome)
 	require.Equal(t, event.RunOutcomeStatusCancelled, hookStatus)
 }
@@ -7872,6 +7895,8 @@ func TestRunner_TimeoutAnnotatesRunnerCompletion(t *testing.T) {
 
 	var hookStatus event.RunOutcomeStatus
 	var hookSawOutcome bool
+	var pluginStatus event.RunOutcomeStatus
+	var pluginSawOutcome bool
 	sessionService := sessioninmemory.NewSessionService(
 		sessioninmemory.WithAppendEventHook(
 			func(ctx *session.AppendEventContext, next func() error) error {
@@ -7887,6 +7912,22 @@ func TestRunner_TimeoutAnnotatesRunnerCompletion(t *testing.T) {
 		"app",
 		&tickCtxAgent{name: "t", interval: 10 * time.Millisecond},
 		WithSessionService(sessionService),
+		WithPlugins(&testPlugin{
+			name: "run-outcome-observer",
+			reg: func(r *plugin.Registry) {
+				r.OnEvent(func(
+					ctx context.Context,
+					inv *agent.Invocation,
+					e *event.Event,
+				) (*event.Event, error) {
+					if e != nil && e.IsRunnerCompletion() && e.RunOutcome != nil {
+						pluginSawOutcome = true
+						pluginStatus = e.RunOutcome.Status
+					}
+					return nil, nil
+				})
+			},
+		}),
 	)
 
 	events, err := r.Run(
@@ -7917,6 +7958,8 @@ func TestRunner_TimeoutAnnotatesRunnerCompletion(t *testing.T) {
 	require.NotNil(t, completion)
 	require.NotNil(t, completion.RunOutcome)
 	require.Equal(t, event.RunOutcomeStatusTimedOut, completion.RunOutcome.Status)
+	require.True(t, pluginSawOutcome)
+	require.Equal(t, event.RunOutcomeStatusTimedOut, pluginStatus)
 	require.True(t, hookSawOutcome)
 	require.Equal(t, event.RunOutcomeStatusTimedOut, hookStatus)
 }

@@ -102,7 +102,8 @@ type Event struct {
 
 	// RunOutcome describes the outcome of the run represented by this event.
 	// It is populated on runner completion events when the run was explicitly
-	// cancelled; it is nil for other events and normal completion.
+	// cancelled or exceeded its deadline. It is nil for non-completion events,
+	// normal completion, and generic cancellation.
 	RunOutcome *RunOutcome `json:"run_outcome,omitempty"`
 
 	// RequestID is the request ID of the event.
@@ -183,8 +184,7 @@ type RunOutcome struct {
 type RunOutcomeStatus string
 
 const (
-	// RunOutcomeStatusCancelled indicates that the run was explicitly cancelled
-	// through the AG-UI cancel API.
+	// RunOutcomeStatusCancelled indicates that the run was explicitly cancelled.
 	RunOutcomeStatusCancelled RunOutcomeStatus = "cancelled"
 	// RunOutcomeStatusTimedOut indicates that the run ended because its deadline
 	// was exceeded.
