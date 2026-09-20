@@ -268,15 +268,16 @@ const standaloneSummarySourceBoundary = "The content above is source " +
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model               model.Model
-	name                string
-	prompt              string
-	systemPrompt        string
-	cacheSafeForking    bool
-	cacheSafeForkPrompt string
-	checks              []checkEvaluator
-	maxSummaryWords     int
-	skipRecentFunc      SkipRecentFunc
+	model                 model.Model
+	name                  string
+	prompt                string
+	systemPrompt          string
+	cacheSafeForking      bool
+	cacheSafeForkPrompt   string
+	checks                []checkEvaluator
+	maxSummaryWords       int
+	skipRecentFunc        SkipRecentFunc
+	skipRecentContextFunc ContextSkipRecentFunc
 
 	preHook          PreSummaryHook
 	postHook         PostSummaryHook
@@ -373,7 +374,7 @@ func (s *sessionSummarizer) evaluateTrigger(
 		return Trigger{}
 	}
 
-	checkSess := s.buildCheckSessionWithSelection(sess, selection)
+	checkSess := s.buildCheckSessionWithSelection(ctx, sess, selection)
 	if len(s.checks) == 0 {
 		return Trigger{
 			Fired:     true,
@@ -470,7 +471,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 ) summaryEventSelection {
 	view, ok := modelVisibleViewForSession(ctx, sess)
 	if !ok {
-		retained, decision := s.filterEventsForSummaryObserved(sess.Events)
+		retained, decision := s.filterEventsForSummaryObserved(ctx, sess.Events)
 		events := filterSummaryInputEventsForSession(retained, sess)
 		recordSelection(
 			ctx,
@@ -518,7 +519,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		)
 		boundaries = append([]summaryview.Boundary{{}}, boundaries...)
 	}
-	events, decision := s.filterEventsForSummaryObserved(events)
+	events, decision := s.filterEventsForSummaryObserved(ctx, events)
 	if len(boundaries) > len(events) {
 		boundaries = boundaries[:len(events)]
 	}
@@ -969,18 +970,21 @@ func (state summaryBoundaryState) restore(sess *session.Session) {
 }
 
 func (s *sessionSummarizer) buildCheckSession(
+	ctx context.Context,
 	sess *session.Session,
 ) *session.Session {
 	if sess == nil {
 		return nil
 	}
 	return s.buildCheckSessionWithSelection(
+		ctx,
 		sess,
-		s.selectSummaryEvents(context.Background(), sess),
+		s.selectSummaryEvents(ctx, sess),
 	)
 }
 
 func (s *sessionSummarizer) buildCheckSessionWithSelection(
+	ctx context.Context,
 	sess *session.Session,
 	selection summaryEventSelection,
 ) *session.Session {
@@ -994,7 +998,7 @@ func (s *sessionSummarizer) buildCheckSessionWithSelection(
 		checkSess.Events = append([]event.Event(nil), filtered...)
 	} else {
 		delta := filterDeltaEvents(checkSess)
-		filtered = s.filterEventsForSummary(delta)
+		filtered = s.filterEventsForSummary(ctx, delta)
 	}
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
 	var thresholdMessage model.Message
@@ -1030,8 +1034,11 @@ type skipRecentDecision struct {
 
 // filterEventsForSummary filters events for summarization, excluding recent events
 // and ensuring that retained events still have enough context to summarize.
-func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
-	filtered, _ := s.filterEventsForSummaryObserved(events)
+func (s *sessionSummarizer) filterEventsForSummary(
+	ctx context.Context,
+	events []event.Event,
+) []event.Event {
+	filtered, _ := s.filterEventsForSummaryObserved(ctx, events)
 	return filtered
 }
 
@@ -1040,14 +1047,23 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 // diagnostics can distinguish a skip-recent callback that consumed everything
 // from a retained prefix rejected as unsafe.
 func (s *sessionSummarizer) filterEventsForSummaryObserved(
+	ctx context.Context,
 	events []event.Event,
 ) ([]event.Event, skipRecentDecision) {
 	decision := skipRecentDecision{eligible: len(events)}
-	if s.skipRecentFunc == nil {
+	if s.skipRecentFunc == nil && s.skipRecentContextFunc == nil {
 		return events, decision
 	}
 
-	skipCount := s.skipRecentFunc(events)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	skipCount := 0
+	if s.skipRecentContextFunc != nil {
+		skipCount = s.skipRecentContextFunc(ctx, events)
+	} else {
+		skipCount = s.skipRecentFunc(events)
+	}
 	decision.requested = skipCount
 	decision.applied = skipRecentApplied(skipCount, len(events))
 	if skipCount <= 0 {
@@ -1213,13 +1229,14 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:         modelName,
-		metadataKeySummarizerName:    s.name,
-		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
-		metadataKeyModelAvailable:    modelAvailable,
-		metadataKeyCheckFunctions:    len(s.checks),
-		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil,
-		metadataKeyCacheSafeForking:  s.cacheSafeForking,
+		metadataKeyModelName:       modelName,
+		metadataKeySummarizerName:  s.name,
+		metadataKeyMaxSummaryWords: s.maxSummaryWords,
+		metadataKeyModelAvailable:  modelAvailable,
+		metadataKeyCheckFunctions:  len(s.checks),
+		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil ||
+			s.skipRecentContextFunc != nil,
+		metadataKeyCacheSafeForking: s.cacheSafeForking,
 	}
 }
 
