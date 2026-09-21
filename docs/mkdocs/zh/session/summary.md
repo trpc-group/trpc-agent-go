@@ -187,11 +187,28 @@ summarizer := summary.NewSummarizer(
 当作待总结的源数据，而不是需要继续执行的任务。其他 standalone fallback（包括
 bounded 请求和 retry 请求）也使用相同结构。
 
-无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查：如果模型
-能够提供 provider-specific input budget，框架会取它与“模型 context window 的
-70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
-请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
-的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
+无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查。默认情况下，
+如果模型能够提供 provider-specific input budget，框架会取它与“模型 context window
+的 70%”这层保守上限中的较小值。
+
+使用 `WithRequestInputTokenBudget(tokens)` 可以用正数 token 预算替代默认的 70%
+预算。有效预算仍不能超过模型 context window 和 provider-specific input budget。
+如果无法解析 context window，沿用现有的 8192-token fallback window。传入零或负数
+会恢复自动预算；多次配置时最后一次生效。预算统计完整摘要请求的估算输入 token，
+包含提示词、对话和 tool schemas，同时适用于 standalone 和 cache-safe fork 请求，
+不改变摘要触发阈值或摘要输出限制。
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(2000),
+    summary.WithRequestInputTokenBudget(8192),
+)
+```
+
+fork 请求超预算时，框架只修改 clone，不会污染父请求：先移除摘要调用不会使用的
+tool schemas，必要时再用明确的省略标记替换较大的 tool arguments/results payload，
+但不会删除 source conversation turn。如果仍然
 放不下，再重建为 bounded standalone 请求。完整渲染后的 fork prompt（包括自定义
 内容）在 fork 和 standalone 两种请求中都会占用输入预算。当预算能够容纳全部尚未
 覆盖的新对话时，standalone 路径会完整保留这些内容；使用
@@ -618,6 +635,7 @@ summary.WithChecksAny(
 | 选项 | 说明 |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | 限制摘要的最大字数，包含在提示词中指导模型生成 |
+| `WithRequestInputTokenBudget(tokens int)` | 覆盖默认的摘要请求输入预算；正数仍受模型 context window 和 provider 预算限制，零或负数恢复自动预算 |
 | `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}`，可选包含 `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
