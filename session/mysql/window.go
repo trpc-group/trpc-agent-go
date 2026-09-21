@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,7 +151,7 @@ func (s *Service) loadWindowAnchor(
 	err := s.mysqlClient.Query(
 		ctx,
 		func(rows *sql.Rows) error {
-			row, err := scanWindowMetadata(rows)
+			row, err := scanWindowEntry(rows)
 			if err != nil {
 				return err
 			}
@@ -158,15 +159,37 @@ func (s *Service) loadWindowAnchor(
 			return nil
 		},
 		fmt.Sprintf(
-			`SELECT id, created_at FROM %s
+			// Find the first matching timestamp using the existing time index,
+			// then order only that timestamp by id. Fetch JSON by the selected
+			// primary key so it never participates in the tie-breaker sort.
+			`SELECT id, created_at, event FROM %s
+WHERE user_id = ? AND deleted_at IS NULL
+AND id = (
+SELECT id FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND JSON_UNQUOTE(JSON_EXTRACT(event, '$.id')) = ?
 AND deleted_at IS NULL
-ORDER BY created_at ASC, id ASC
-LIMIT 1`,
+AND created_at = (
+SELECT created_at FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND created_at >= ?
+AND JSON_UNQUOTE(JSON_EXTRACT(event, '$.id')) = ?
+AND deleted_at IS NULL
+ORDER BY created_at ASC LIMIT 1
+)
+ORDER BY id ASC LIMIT 1
+)`,
+			s.tableSessionEvents,
+			s.tableSessionEvents,
 			s.tableSessionEvents,
 		),
+		key.UserID,
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		sessionCreatedAt,
+		anchorEventID,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
@@ -178,9 +201,6 @@ LIMIT 1`,
 	}
 	if anchor == nil {
 		return nil, nil
-	}
-	if err := s.materializeWindowEntries(ctx, key, []*persistedWindowEntry{anchor}); err != nil {
-		return nil, fmt.Errorf("load event window anchor payload: %w", err)
 	}
 	if !sessionwindow.EventAllowed(&anchor.entry.Event, roleFilter) {
 		return nil, nil
@@ -204,7 +224,7 @@ func (s *Service) loadWindowNeighbors(
 	cursorID := anchor.rowID
 	out := make([]session.EventWindowEntry, 0, limit)
 	for len(out) < limit {
-		rows, err := s.queryWindowNeighborBatch(
+		rows, more, err := s.queryWindowNeighborBatch(
 			ctx,
 			key,
 			sessionCreatedAt,
@@ -232,7 +252,7 @@ func (s *Service) loadWindowNeighbors(
 				break
 			}
 		}
-		if len(rows) < eventWindowBatchSize {
+		if !more {
 			break
 		}
 	}
@@ -249,22 +269,25 @@ func (s *Service) queryWindowNeighborBatch(
 	cursorCreatedAt time.Time,
 	cursorID int64,
 	before bool,
-) ([]*persistedWindowEntry, error) {
+) ([]*persistedWindowEntry, bool, error) {
 	// Compare the complete ordering key. This is an expanded OR rather than a
 	// tuple comparison because the TDSQL proxy cannot extract shard routing from
 	// tuple predicates.
 	comparator := `(created_at > ? OR (created_at = ? AND id > ?))`
-	orderBy := `ORDER BY created_at ASC, id ASC`
+	orderBy := `ORDER BY created_at ASC`
 	if before {
 		comparator = `(created_at < ? OR (created_at = ? AND id < ?))`
-		orderBy = `ORDER BY created_at DESC, id DESC`
+		orderBy = `ORDER BY created_at DESC`
 	}
 
-	rows := make([]*persistedWindowEntry, 0, eventWindowBatchSize)
+	// Use the default time index for a bounded prefix. Do not ask MySQL to
+	// sort the entire remaining range by id (or carry JSON through that sort).
+	// One extra row tells us which final timestamp might be incomplete.
+	rows := make([]*persistedWindowEntry, 0, eventWindowBatchSize+1)
 	err := s.mysqlClient.Query(
 		ctx,
 		func(sqlRows *sql.Rows) error {
-			row, err := scanWindowMetadata(sqlRows)
+			row, err := scanWindowEntry(sqlRows)
 			if err != nil {
 				return err
 			}
@@ -272,7 +295,7 @@ func (s *Service) queryWindowNeighborBatch(
 			return nil
 		},
 		fmt.Sprintf(
-			`SELECT id, created_at FROM %s
+			`SELECT id, created_at, event FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND deleted_at IS NULL
@@ -290,15 +313,104 @@ LIMIT ?`,
 		cursorCreatedAt,
 		cursorCreatedAt,
 		cursorID,
-		eventWindowBatchSize,
+		eventWindowBatchSize+1,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("load event window neighbors: %w", err)
+		return nil, false, fmt.Errorf("load event window neighbors: %w", err)
+	}
+	more := len(rows) > eventWindowBatchSize
+	if more {
+		boundary := rows[len(rows)-1].entry.CreatedAt
+		end := len(rows)
+		for end > 0 && rows[end-1].entry.CreatedAt.Equal(boundary) {
+			end--
+		}
+		if end == 0 {
+			// The prefix is entirely one timestamp. Its arbitrary id order
+			// cannot be used as a cursor: select only this timestamp by id.
+			last := rows[len(rows)-1]
+			rows, err = s.queryWindowTimestampBatch(ctx, key, boundary, cursorCreatedAt, cursorID, before)
+			if err != nil {
+				return nil, false, err
+			}
+			if len(rows) == 0 {
+				// The group disappeared between reads. Advance a metadata-only
+				// cursor instead of mistaking this for the end of the session.
+				rows = []*persistedWindowEntry{{rowID: last.rowID, entry: session.EventWindowEntry{CreatedAt: boundary}}}
+			}
+		} else {
+			// Defer the incomplete boundary group to the next batch. A short
+			// batch here does not imply exhaustion of the remaining range.
+			rows = rows[:end]
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].entry.CreatedAt.Equal(rows[j].entry.CreatedAt) {
+			if before {
+				return rows[i].rowID > rows[j].rowID
+			}
+			return rows[i].rowID < rows[j].rowID
+		}
+		if before {
+			return rows[i].entry.CreatedAt.After(rows[j].entry.CreatedAt)
+		}
+		return rows[i].entry.CreatedAt.Before(rows[j].entry.CreatedAt)
+	})
+	return rows, more, nil
+}
+
+func (s *Service) queryWindowTimestampBatch(
+	ctx context.Context,
+	key session.Key,
+	timestamp, cursorCreatedAt time.Time,
+	cursorID int64,
+	before bool,
+) ([]*persistedWindowEntry, error) {
+	query := fmt.Sprintf(`SELECT id, created_at FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND created_at = ? AND deleted_at IS NULL`, s.tableSessionEvents)
+	args := []any{key.AppName, key.UserID, key.SessionID, timestamp}
+	if timestamp.Equal(cursorCreatedAt) {
+		if before {
+			query += ` AND id < ?`
+		} else {
+			query += ` AND id > ?`
+		}
+		args = append(args, cursorID)
+	}
+	if before {
+		query += ` ORDER BY id DESC LIMIT ?`
+	} else {
+		query += ` ORDER BY id ASC LIMIT ?`
+	}
+	args = append(args, eventWindowBatchSize)
+	var rows []*persistedWindowEntry
+	err := s.mysqlClient.Query(ctx, func(sqlRows *sql.Rows) error {
+		row, err := scanWindowMetadata(sqlRows)
+		if err == nil {
+			rows = append(rows, row)
+		}
+		return err
+	}, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load event window timestamp: %w", err)
 	}
 	if err := s.materializeWindowEntries(ctx, key, rows); err != nil {
 		return nil, fmt.Errorf("load event window neighbor payloads: %w", err)
 	}
 	return rows, nil
+}
+
+func scanWindowEntry(rows *sql.Rows) (*persistedWindowEntry, error) {
+	row := &persistedWindowEntry{}
+	var payload []byte
+	if err := rows.Scan(&row.rowID, &row.entry.CreatedAt, &payload); err != nil {
+		return nil, fmt.Errorf("scan event window entry: %w", err)
+	}
+	if err := json.Unmarshal(payload, &row.entry.Event); err != nil {
+		return nil, fmt.Errorf("unmarshal event window entry: %w", err)
+	}
+	return row, nil
 }
 
 func scanWindowMetadata(rows *sql.Rows) (*persistedWindowEntry, error) {
