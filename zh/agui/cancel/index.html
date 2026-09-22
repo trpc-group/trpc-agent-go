@@ -3676,6 +3676,8 @@
 <li><code>404 Not Found</code>：没有找到对应 <code>SessionKey</code> 的运行中任务（可能已结束，或标识不匹配）</li>
 </ul>
 <p>取消成功后，框架仍会执行必要的运行结束收尾，补齐协议结束事件，并将聚合缓存尽量写入 <code>SessionService</code>。取消请求返回成功不表示同一个 <code>SessionKey</code> 已经可以立即发起新的实时对话请求；如果需要继续发起下一次运行，应等待原实时对话流返回终态事件。因此，后续通过 <code>/history</code> 读取历史时，拿到的是取消后的合法一致状态，而不是一段未收尾的中间状态。收尾流程和超时配置可参考 <a href="../history/#session-存储与事件聚合">Session 存储与事件聚合</a>。</p>
+<p>如果需要从框架事件流判断本次是否由 <code>/cancel</code> 主动取消，可以检查最终 runner completion 事件的 <code>RunOutcome</code> 字段。当 <code>RunOutcome</code> 非空且 <code>Status</code> 为 <code>event.RunOutcomeStatusCancelled</code> 时，表示本次运行由 <code>/cancel</code> 主动取消。</p>
+<p>如果运行因配置的超时时间到达而结束，则同一字段的 <code>Status</code> 为 <code>event.RunOutcomeStatusTimedOut</code>。</p>
 <h2 id="_4">多实例分布式取消</h2>
 <p>如果多实例部署中无法保证同一个 <code>SessionKey</code> 的实时对话请求和取消请求落到同一个实例，可以开启分布式取消：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
@@ -3722,7 +3724,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月27日 10:15:16 UTC">2026-05-27 10:15:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月22日 07:51:55 UTC">2026-09-22 07:51:55</span>
   </span>
 
     
