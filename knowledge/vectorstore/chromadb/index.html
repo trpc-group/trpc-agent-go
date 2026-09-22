@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/vectorstore/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/vectorstore/chromadb/">
       
       
-        <link rel="prev" href="../ocr/">
+        <link rel="prev" href="../milvus/">
       
       
-        <link rel="next" href="inmemory/">
+        <link rel="next" href="../../troubleshooting/">
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>Overview - tRPC-Agent-Go</title>
+        <title>ChromaDB - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#vector-store" class="md-skip">
+        <a href="#chromadb" class="md-skip">
           Skip to content
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../../../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Overview
+              ChromaDB
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/knowledge/vectorstore/" hreflang="zh" class="md-select__link">
+            <a href="../../../zh/knowledge/vectorstore/chromadb/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
   
@@ -295,7 +295,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../agent/" class="md-tabs__link">
+        <a href="../../../agent/" class="md-tabs__link">
           
   
   
@@ -318,7 +318,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../gateway/" class="md-tabs__link">
+        <a href="../../../gateway/" class="md-tabs__link">
           
   
   
@@ -338,7 +338,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../observability/" class="md-tabs__link">
+        <a href="../../../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +356,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../ecosystem/" class="md-tabs__link">
+      <a href="../../../ecosystem/" class="md-tabs__link">
         
   
   
@@ -377,7 +377,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../blog/trpcagentgo/" class="md-tabs__link">
+        <a href="../../../blog/trpcagentgo/" class="md-tabs__link">
           
   
   
@@ -411,9 +411,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../../../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -440,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   
@@ -549,7 +549,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agent/" class="md-nav__link">
+      <a href="../../../agent/" class="md-nav__link">
         
   
   
@@ -572,7 +572,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../goal/" class="md-nav__link">
+      <a href="../../../goal/" class="md-nav__link">
         
   
   
@@ -595,7 +595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../multiagent/" class="md-nav__link">
+      <a href="../../../multiagent/" class="md-nav__link">
         
   
   
@@ -618,7 +618,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../dynamic-workflow/" class="md-nav__link">
+      <a href="../../../dynamic-workflow/" class="md-nav__link">
         
   
   
@@ -641,7 +641,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../taskrun/" class="md-nav__link">
+      <a href="../../../taskrun/" class="md-nav__link">
         
   
   
@@ -664,7 +664,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../team/" class="md-nav__link">
+      <a href="../../../team/" class="md-nav__link">
         
   
   
@@ -687,7 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../graph/" class="md-nav__link">
+      <a href="../../../graph/" class="md-nav__link">
         
   
   
@@ -710,7 +710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../custom-agent/" class="md-nav__link">
+      <a href="../../../custom-agent/" class="md-nav__link">
         
   
   
@@ -733,7 +733,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../dify/" class="md-nav__link">
+      <a href="../../../dify/" class="md-nav__link">
         
   
   
@@ -756,7 +756,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../claudecode/" class="md-nav__link">
+      <a href="../../../claudecode/" class="md-nav__link">
         
   
   
@@ -779,7 +779,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codex/" class="md-nav__link">
+      <a href="../../../codex/" class="md-nav__link">
         
   
   
@@ -810,7 +810,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runner/" class="md-nav__link">
+      <a href="../../../runner/" class="md-nav__link">
         
   
   
@@ -833,7 +833,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeexecutor/" class="md-nav__link">
+      <a href="../../../codeexecutor/" class="md-nav__link">
         
   
   
@@ -856,7 +856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeact/" class="md-nav__link">
+      <a href="../../../codeact/" class="md-nav__link">
         
   
   
@@ -879,7 +879,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../error-handling/" class="md-nav__link">
+      <a href="../../../error-handling/" class="md-nav__link">
         
   
   
@@ -902,7 +902,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../model/" class="md-nav__link">
+      <a href="../../../model/" class="md-nav__link">
         
   
   
@@ -925,7 +925,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../prompt/" class="md-nav__link">
+      <a href="../../../prompt/" class="md-nav__link">
         
   
   
@@ -948,7 +948,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../callbacks/" class="md-nav__link">
+      <a href="../../../callbacks/" class="md-nav__link">
         
   
   
@@ -971,7 +971,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../plugin/" class="md-nav__link">
+      <a href="../../../plugin/" class="md-nav__link">
         
   
   
@@ -1035,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/" class="md-nav__link">
+      <a href="../../../memory/" class="md-nav__link">
         
   
   
@@ -1058,7 +1058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/usage/" class="md-nav__link">
+      <a href="../../../memory/usage/" class="md-nav__link">
         
   
   
@@ -1081,7 +1081,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/inmemory/" class="md-nav__link">
+      <a href="../../../memory/inmemory/" class="md-nav__link">
         
   
   
@@ -1104,7 +1104,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/sqlite/" class="md-nav__link">
+      <a href="../../../memory/sqlite/" class="md-nav__link">
         
   
   
@@ -1127,7 +1127,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/sqlitevec/" class="md-nav__link">
+      <a href="../../../memory/sqlitevec/" class="md-nav__link">
         
   
   
@@ -1150,7 +1150,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/redis/" class="md-nav__link">
+      <a href="../../../memory/redis/" class="md-nav__link">
         
   
   
@@ -1173,7 +1173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/mysql/" class="md-nav__link">
+      <a href="../../../memory/mysql/" class="md-nav__link">
         
   
   
@@ -1196,7 +1196,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/mysqlvec/" class="md-nav__link">
+      <a href="../../../memory/mysqlvec/" class="md-nav__link">
         
   
   
@@ -1219,7 +1219,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/postgres/" class="md-nav__link">
+      <a href="../../../memory/postgres/" class="md-nav__link">
         
   
   
@@ -1242,7 +1242,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/pgvector/" class="md-nav__link">
+      <a href="../../../memory/pgvector/" class="md-nav__link">
         
   
   
@@ -1265,7 +1265,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/chromadb/" class="md-nav__link">
+      <a href="../../../memory/chromadb/" class="md-nav__link">
         
   
   
@@ -1288,7 +1288,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/mem0/" class="md-nav__link">
+      <a href="../../../memory/mem0/" class="md-nav__link">
         
   
   
@@ -1311,7 +1311,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/tencentdb/" class="md-nav__link">
+      <a href="../../../memory/tencentdb/" class="md-nav__link">
         
   
   
@@ -1342,7 +1342,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../artifact/" class="md-nav__link">
+      <a href="../../../artifact/" class="md-nav__link">
         
   
   
@@ -1365,7 +1365,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skill/" class="md-nav__link">
+      <a href="../../../skill/" class="md-nav__link">
         
   
   
@@ -1388,7 +1388,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evolution/" class="md-nav__link">
+      <a href="../../../evolution/" class="md-nav__link">
         
   
   
@@ -1411,7 +1411,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tool/" class="md-nav__link">
+      <a href="../../../tool/" class="md-nav__link">
         
   
   
@@ -1475,7 +1475,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/" class="md-nav__link">
+      <a href="../../../session/" class="md-nav__link">
         
   
   
@@ -1498,7 +1498,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/noop/" class="md-nav__link">
+      <a href="../../../session/noop/" class="md-nav__link">
         
   
   
@@ -1521,7 +1521,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/summary/" class="md-nav__link">
+      <a href="../../../session/summary/" class="md-nav__link">
         
   
   
@@ -1544,7 +1544,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/inmemory/" class="md-nav__link">
+      <a href="../../../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1567,7 +1567,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/sqlite/" class="md-nav__link">
+      <a href="../../../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1590,7 +1590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/redis/" class="md-nav__link">
+      <a href="../../../session/redis/" class="md-nav__link">
         
   
   
@@ -1613,7 +1613,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mysql/" class="md-nav__link">
+      <a href="../../../session/mysql/" class="md-nav__link">
         
   
   
@@ -1636,7 +1636,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/tdsql/" class="md-nav__link">
+      <a href="../../../session/tdsql/" class="md-nav__link">
         
   
   
@@ -1659,7 +1659,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/postgres/" class="md-nav__link">
+      <a href="../../../session/postgres/" class="md-nav__link">
         
   
   
@@ -1682,7 +1682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/pgvector/" class="md-nav__link">
+      <a href="../../../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1705,7 +1705,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/clickhouse/" class="md-nav__link">
+      <a href="../../../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1728,7 +1728,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mongodb/" class="md-nav__link">
+      <a href="../../../session/mongodb/" class="md-nav__link">
         
   
   
@@ -1802,7 +1802,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
@@ -1825,7 +1825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../embedder/" class="md-nav__link">
+      <a href="../../embedder/" class="md-nav__link">
         
   
   
@@ -1848,7 +1848,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reranker/" class="md-nav__link">
+      <a href="../../reranker/" class="md-nav__link">
         
   
   
@@ -1871,7 +1871,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../query-enhancer/" class="md-nav__link">
+      <a href="../../query-enhancer/" class="md-nav__link">
         
   
   
@@ -1894,7 +1894,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../source/" class="md-nav__link">
+      <a href="../../source/" class="md-nav__link">
         
   
   
@@ -1917,7 +1917,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../code-rag/" class="md-nav__link">
+      <a href="../../code-rag/" class="md-nav__link">
         
   
   
@@ -1940,7 +1940,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filter/" class="md-nav__link">
+      <a href="../../filter/" class="md-nav__link">
         
   
   
@@ -1963,7 +1963,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../extractor/" class="md-nav__link">
+      <a href="../../extractor/" class="md-nav__link">
         
   
   
@@ -1986,7 +1986,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../management/" class="md-nav__link">
+      <a href="../../management/" class="md-nav__link">
         
   
   
@@ -2009,7 +2009,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ocr/" class="md-nav__link">
+      <a href="../../ocr/" class="md-nav__link">
         
   
   
@@ -2072,32 +2072,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Overview
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -2108,62 +2086,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#supported-vector-stores" class="md-nav__link">
-    <span class="md-ellipsis">
-      Supported Vector Stores
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#search-modes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Search Modes
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#filter-support" class="md-nav__link">
-    <span class="md-ellipsis">
-      Filter Support
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#more-content" class="md-nav__link">
-    <span class="md-ellipsis">
-      More Content
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2176,7 +2098,7 @@
   
   
     <li class="md-nav__item">
-      <a href="inmemory/" class="md-nav__link">
+      <a href="../inmemory/" class="md-nav__link">
         
   
   
@@ -2199,7 +2121,7 @@
   
   
     <li class="md-nav__item">
-      <a href="pgvector/" class="md-nav__link">
+      <a href="../pgvector/" class="md-nav__link">
         
   
   
@@ -2222,7 +2144,7 @@
   
   
     <li class="md-nav__item">
-      <a href="tcvector/" class="md-nav__link">
+      <a href="../tcvector/" class="md-nav__link">
         
   
   
@@ -2245,7 +2167,7 @@
   
   
     <li class="md-nav__item">
-      <a href="elasticsearch/" class="md-nav__link">
+      <a href="../elasticsearch/" class="md-nav__link">
         
   
   
@@ -2268,7 +2190,7 @@
   
   
     <li class="md-nav__item">
-      <a href="qdrant/" class="md-nav__link">
+      <a href="../qdrant/" class="md-nav__link">
         
   
   
@@ -2291,7 +2213,7 @@
   
   
     <li class="md-nav__item">
-      <a href="milvus/" class="md-nav__link">
+      <a href="../milvus/" class="md-nav__link">
         
   
   
@@ -2311,10 +2233,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="chromadb/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    ChromaDB
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2325,6 +2269,131 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chroma-cloud-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Chroma Cloud Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connection-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Connection Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#collection-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Collection Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#built-in-cloud-splade-embedder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Built-in Cloud SPLADE Embedder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-sparse-embedders" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Sparse Embedders
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#search-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Modes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metadata-and-filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metadata And Filters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#behavioral-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Behavioral Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2345,7 +2414,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../troubleshooting/" class="md-nav__link">
         
   
   
@@ -2376,7 +2445,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../planner/" class="md-nav__link">
+      <a href="../../../planner/" class="md-nav__link">
         
   
   
@@ -2399,7 +2468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../event/" class="md-nav__link">
+      <a href="../../../event/" class="md-nav__link">
         
   
   
@@ -2463,7 +2532,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/" class="md-nav__link">
+      <a href="../../../evaluation/" class="md-nav__link">
         
   
   
@@ -2486,7 +2555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/evalset/" class="md-nav__link">
+      <a href="../../../evaluation/evalset/" class="md-nav__link">
         
   
   
@@ -2509,7 +2578,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/metric/" class="md-nav__link">
+      <a href="../../../evaluation/metric/" class="md-nav__link">
         
   
   
@@ -2532,7 +2601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/evaluator/" class="md-nav__link">
+      <a href="../../../evaluation/evaluator/" class="md-nav__link">
         
   
   
@@ -2555,7 +2624,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/evalresult/" class="md-nav__link">
+      <a href="../../../evaluation/evalresult/" class="md-nav__link">
         
   
   
@@ -2578,7 +2647,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/service/" class="md-nav__link">
+      <a href="../../../evaluation/service/" class="md-nav__link">
         
   
   
@@ -2601,7 +2670,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/agentevaluator/" class="md-nav__link">
+      <a href="../../../evaluation/agentevaluator/" class="md-nav__link">
         
   
   
@@ -2624,7 +2693,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/methods/" class="md-nav__link">
+      <a href="../../../evaluation/methods/" class="md-nav__link">
         
   
   
@@ -2647,7 +2716,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/server/" class="md-nav__link">
+      <a href="../../../evaluation/server/" class="md-nav__link">
         
   
   
@@ -2678,7 +2747,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../promptiter/" class="md-nav__link">
+      <a href="../../../promptiter/" class="md-nav__link">
         
   
   
@@ -2749,7 +2818,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../gateway/" class="md-nav__link">
+      <a href="../../../gateway/" class="md-nav__link">
         
   
   
@@ -2772,7 +2841,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../trpcagent/" class="md-nav__link">
+      <a href="../../../trpcagent/" class="md-nav__link">
         
   
   
@@ -2836,7 +2905,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/" class="md-nav__link">
+      <a href="../../../agui/" class="md-nav__link">
         
   
   
@@ -2859,7 +2928,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/chat/" class="md-nav__link">
+      <a href="../../../agui/chat/" class="md-nav__link">
         
   
   
@@ -2882,7 +2951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/history/" class="md-nav__link">
+      <a href="../../../agui/history/" class="md-nav__link">
         
   
   
@@ -2905,7 +2974,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/cancel/" class="md-nav__link">
+      <a href="../../../agui/cancel/" class="md-nav__link">
         
   
   
@@ -2936,7 +3005,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a_v1/" class="md-nav__link">
+      <a href="../../../a2a_v1/" class="md-nav__link">
         
   
   
@@ -2959,7 +3028,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a/" class="md-nav__link">
+      <a href="../../../a2a/" class="md-nav__link">
         
   
   
@@ -2982,7 +3051,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2ui/" class="md-nav__link">
+      <a href="../../../a2ui/" class="md-nav__link">
         
   
   
@@ -3005,7 +3074,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../openclaw-runtime/" class="md-nav__link">
+      <a href="../../../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -3076,7 +3145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../observability/" class="md-nav__link">
+      <a href="../../../observability/" class="md-nav__link">
         
   
   
@@ -3099,7 +3168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../telemetry-multimodal/" class="md-nav__link">
+      <a href="../../../telemetry-multimodal/" class="md-nav__link">
         
   
   
@@ -3129,7 +3198,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../ecosystem/" class="md-nav__link">
+      <a href="../../../ecosystem/" class="md-nav__link">
         
   
   
@@ -3192,7 +3261,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/trpcagentgo/" class="md-nav__link">
+      <a href="../../../blog/trpcagentgo/" class="md-nav__link">
         
   
   
@@ -3215,7 +3284,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/memory/" class="md-nav__link">
+      <a href="../../../blog/memory/" class="md-nav__link">
         
   
   
@@ -3238,7 +3307,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/summary/" class="md-nav__link">
+      <a href="../../../blog/summary/" class="md-nav__link">
         
   
   
@@ -3261,7 +3330,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/evolution/" class="md-nav__link">
+      <a href="../../../blog/evolution/" class="md-nav__link">
         
   
   
@@ -3284,7 +3353,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/observability/" class="md-nav__link">
+      <a href="../../../blog/observability/" class="md-nav__link">
         
   
   
@@ -3307,7 +3376,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/promptcache/" class="md-nav__link">
+      <a href="../../../blog/promptcache/" class="md-nav__link">
         
   
   
@@ -3330,7 +3399,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/codeexecutor/" class="md-nav__link">
+      <a href="../../../blog/codeexecutor/" class="md-nav__link">
         
   
   
@@ -3353,7 +3422,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/graphagent/" class="md-nav__link">
+      <a href="../../../blog/graphagent/" class="md-nav__link">
         
   
   
@@ -3376,7 +3445,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/agui/" class="md-nav__link">
+      <a href="../../../blog/agui/" class="md-nav__link">
         
   
   
@@ -3399,7 +3468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/skill/" class="md-nav__link">
+      <a href="../../../blog/skill/" class="md-nav__link">
         
   
   
@@ -3422,7 +3491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/evaluation/" class="md-nav__link">
+      <a href="../../../blog/evaluation/" class="md-nav__link">
         
   
   
@@ -3445,7 +3514,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/llmverifier/" class="md-nav__link">
+      <a href="../../../blog/llmverifier/" class="md-nav__link">
         
   
   
@@ -3468,7 +3537,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/openclaw/" class="md-nav__link">
+      <a href="../../../blog/openclaw/" class="md-nav__link">
         
   
   
@@ -3491,7 +3560,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/promptiter/" class="md-nav__link">
+      <a href="../../../blog/promptiter/" class="md-nav__link">
         
   
   
@@ -3514,7 +3583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/multiagent-boundaries/" class="md-nav__link">
+      <a href="../../../blog/multiagent-boundaries/" class="md-nav__link">
         
   
   
@@ -3564,11 +3633,80 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#supported-vector-stores" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Supported Vector Stores
+      Basic Configuration
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chroma-cloud-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Chroma Cloud Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connection-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Connection Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#collection-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Collection Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#built-in-cloud-splade-embedder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Built-in Cloud SPLADE Embedder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-sparse-embedders" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Sparse Embedders
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -3582,18 +3720,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#filter-support" class="md-nav__link">
+  <a href="#metadata-and-filters" class="md-nav__link">
     <span class="md-ellipsis">
-      Filter Support
+      Metadata And Filters
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#more-content" class="md-nav__link">
+  <a href="#behavioral-notes" class="md-nav__link">
     <span class="md-ellipsis">
-      More Content
+      Behavioral Notes
     </span>
   </a>
   
@@ -3615,7 +3753,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/vectorstore/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/vectorstore/chromadb.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -3624,97 +3762,20 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/vectorstore/index.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/vectorstore/chromadb.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="vector-store">Vector Store</h1>
+<h1 id="chromadb">ChromaDB</h1>
 <blockquote>
-<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores">examples/knowledge/vectorstores</a></p>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/chroma">examples/knowledge/vectorstores/chroma</a></p>
 </blockquote>
-<p>Vector store is the core component of the Knowledge system, responsible for storing and retrieving vector representations of documents.</p>
-<h2 id="supported-vector-stores">Supported Vector Stores</h2>
-<p>trpc-agent-go supports multiple vector store implementations:</p>
-<table>
-<thead>
-<tr>
-<th>Vector Store</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="inmemory/">Memory</a></td>
-<td>In-memory vector store</td>
-</tr>
-<tr>
-<td><a href="pgvector/">PGVector</a></td>
-<td>PostgreSQL + pgvector extension</td>
-</tr>
-<tr>
-<td><a href="tcvector/">TcVector</a></td>
-<td>Tencent Cloud vector database</td>
-</tr>
-<tr>
-<td><a href="elasticsearch/">Elasticsearch</a></td>
-<td>Supports v7/v8/v9 versions</td>
-</tr>
-<tr>
-<td><a href="qdrant/">Qdrant</a></td>
-<td>High-performance vector database</td>
-</tr>
-<tr>
-<td><a href="milvus/">Milvus</a></td>
-<td>High-performance vector database</td>
-</tr>
-<tr>
-<td><a href="chromadb/">ChromaDB</a></td>
-<td>Chroma v2 REST API</td>
-</tr>
-</tbody>
-</table>
-<h2 id="search-modes">Search Modes</h2>
-<p>Vector stores support four search modes. The system <strong>automatically selects</strong> the most appropriate mode based on the query:</p>
-<table>
-<thead>
-<tr>
-<th>Search Mode</th>
-<th>Enum Value</th>
-<th>Description</th>
-<th>Requirements</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Vector</strong></td>
-<td><code>SearchModeVector</code></td>
-<td>Semantic similarity search, understands query intent</td>
-<td>Requires Embedder</td>
-</tr>
-<tr>
-<td><strong>Keyword</strong></td>
-<td><code>SearchModeKeyword</code></td>
-<td>Exact keyword matching, suitable for technical terms</td>
-<td>PGVector requires <code>WithEnableTSVector(true)</code></td>
-</tr>
-<tr>
-<td><strong>Hybrid</strong></td>
-<td><code>SearchModeHybrid</code></td>
-<td>Combines vector and keyword search (recommended, default)</td>
-<td>PGVector requires <code>WithEnableTSVector(true)</code></td>
-</tr>
-<tr>
-<td><strong>Filter</strong></td>
-<td><code>SearchModeFilter</code></td>
-<td>Metadata-only filtering, no similarity score</td>
-<td>-</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Examples</strong>:
+<p><a href="https://docs.trychroma.com/">Chroma</a> is an open-source vector database. The <code>knowledge/vectorstore/chroma</code> package implements <code>vectorstore.VectorStore</code> against the Chroma v2 REST API and requires Chroma 1.5.3 or newer.</p>
+<p>Keyword search and the sparse half of hybrid search rely on the <code>/search</code> API provided by <a href="https://docs.trychroma.com/cloud/getting-started">Chroma Cloud</a>. Self-hosted servers support vector and filter search; hybrid search degrades to dense vector search when sparse search is not configured.</p>
+<h2 id="basic-configuration">Basic Configuration</h2>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
@@ -3732,87 +3793,262 @@
 <span class="normal"><a href="#__codelineno-0-15">15</a></span>
 <span class="normal"><a href="#__codelineno-0-16">16</a></span>
 <span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span>
-<span class="normal"><a href="#__codelineno-0-19">19</a></span>
-<span class="normal"><a href="#__codelineno-0-20">20</a></span>
-<span class="normal"><a href="#__codelineno-0-21">21</a></span>
-<span class="normal"><a href="#__codelineno-0-22">22</a></span>
-<span class="normal"><a href="#__codelineno-0-23">23</a></span>
-<span class="normal"><a href="#__codelineno-0-24">24</a></span>
-<span class="normal"><a href="#__codelineno-0-25">25</a></span>
-<span class="normal"><a href="#__codelineno-0-26">26</a></span>
-<span class="normal"><a href="#__codelineno-0-27">27</a></span>
-<span class="normal"><a href="#__codelineno-0-28">28</a></span>
-<span class="normal"><a href="#__codelineno-0-29">29</a></span>
-<span class="normal"><a href="#__codelineno-0-30">30</a></span>
-<span class="normal"><a href="#__codelineno-0-31">31</a></span>
-<span class="normal"><a href="#__codelineno-0-32">32</a></span>
-<span class="normal"><a href="#__codelineno-0-33">33</a></span>
-<span class="normal"><a href="#__codelineno-0-34">34</a></span>
-<span class="normal"><a href="#__codelineno-0-35">35</a></span>
-<span class="normal"><a href="#__codelineno-0-36">36</a></span>
-<span class="normal"><a href="#__codelineno-0-37">37</a></span>
-<span class="normal"><a href="#__codelineno-0-38">38</a></span>
-<span class="normal"><a href="#__codelineno-0-39">39</a></span>
-<span class="normal"><a href="#__codelineno-0-40">40</a></span>
-<span class="normal"><a href="#__codelineno-0-41">41</a></span>
-<span class="normal"><a href="#__codelineno-0-42">42</a></span>
-<span class="normal"><a href="#__codelineno-0-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="c1">// Default automatic search</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="nx">reqSearch</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchRequest</span><span class="p">{</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w"> </span><span class="s">"Large language model applications"</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="c1">//History: nil,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">//UserID: "",</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="c1">//SessionID: "",</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="c1">//MaxResults: 0,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">//MinScore: 0,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="c1">//SearchFilter: nil,</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="c1">//SearchMode: 0,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="p">}</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="nx">rspSearch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reqSearch</span><span class="p">)</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Debugf</span><span class="p">(</span><span class="s">"Failed to search knowledge base: %v"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="p">}</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">"Search Result:[%+v]"</span><span class="p">,</span><span class="w"> </span><span class="nx">rspSearch</span><span class="p">)</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspSearch</span><span class="p">.</span><span class="nx">Documents</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">"rspSearch.DOC_%d.score=%v,doc:[%+v]"</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Document</span><span class="p">)</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="p">}</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="c1">// Search with filter conditions</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchFilter</span><span class="p">{</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="c1">//DocumentIDs: nil,</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">    </span><span class="c1">//Metadata: nil,</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="nx">FilterCondition</span><span class="p">:</span><span class="w"> </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">And</span><span class="p">(</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">        </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="s">"category"</span><span class="p">,</span><span class="w"> </span><span class="s">"film"</span><span class="p">),</span>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">        </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="s">"country_code"</span><span class="p">,</span><span class="w"> </span><span class="s">"us"</span><span class="p">),</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="p">}</span>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="nx">reqSearchWithFilter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchRequest</span><span class="p">{</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w">        </span><span class="s">"Top ranked movie"</span><span class="p">,</span>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="w">    </span><span class="nx">SearchFilter</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">filter</span><span class="p">,</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="p">}</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="nx">rspSearchWithFilter</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reqSearchWithFilter</span><span class="p">)</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Debugf</span><span class="p">(</span><span class="s">"Failed to search knowledge base: %v"</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="p">}</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">"Search Result:[%+v]"</span><span class="p">,</span><span class="w"> </span><span class="nx">rspSearchWithFilter</span><span class="p">)</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspSearchWithFilter</span><span class="p">.</span><span class="nx">Documents</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">"rspSearchWithFilter.DOC_%d.score=%v,doc:[%+v]"</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Document</span><span class="p">)</span>
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div></p>
-<h2 id="filter-support">Filter Support</h2>
-<p>All vector stores support filter functionality, including ID filtering, metadata filtering, and complex condition filtering (<code>FilterCondition</code>).</p>
-<h2 id="more-content">More Content</h2>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/knowledge"</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">chroma</span><span class="w"> </span><span class="s">"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/chroma"</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">chromaVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">"http://localhost:8000"</span><span class="p">),</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithCollection</span><span class="p">(</span><span class="s">"my_documents"</span><span class="p">),</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span><span class="w"> </span><span class="c1">// Must match the embedding model</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// Handle error</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="p">}</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">chromaVS</span><span class="p">),</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="chroma-cloud-configuration">Chroma Cloud Configuration</h2>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">chromaVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">"https://api.trychroma.com"</span><span class="p">),</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="s">"your-api-key"</span><span class="p">),</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithCollection</span><span class="p">(</span><span class="s">"my_documents"</span><span class="p">),</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithAPIKey</code> sends <code>X-Chroma-Token</code>. A Cloud API key can be scoped to a database, in which case <code>WithTenant</code> and <code>WithDatabase</code> may be omitted because both are resolved from the Cloud identity. Inference requires the identity to report exactly one database; keys that report no database or several databases must set both options explicitly.</p>
+<h2 id="configuration-options">Configuration Options</h2>
+<h3 id="connection-configuration">Connection Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithBaseURL(url)</code></td>
+<td>Chroma HTTP address. Required without a named instance.</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>WithChromaInstance(name)</code></td>
+<td>Use a client registered with <code>storage.RegisterChromaInstance</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>WithTenant(tenant)</code> / <code>WithDatabase(database)</code></td>
+<td>Tenant and database. Empty uses the server default; with <code>WithAPIKey</code> a database-scoped key resolves both from the Cloud identity. Keys that report no database or several databases must set both explicitly.</td>
+<td>Server default</td>
+</tr>
+<tr>
+<td><code>WithAPIKey(key)</code></td>
+<td>Send <code>X-Chroma-Token</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>WithBearerToken(token)</code></td>
+<td>Send <code>Authorization: Bearer</code></td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>WithHeaders(headers)</code></td>
+<td>Extra request headers. Custom auth headers require tenant and database.</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>WithExtraOptions(opts...)</code></td>
+<td>Pass opaque values to a custom ClientBuilder. The default HTTP builder ignores them.</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Authentication options only add request headers; self-hosted Chroma 1.0+ has no built-in auth.</p>
+</blockquote>
+<h3 id="collection-configuration">Collection Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithCollection(name)</code></td>
+<td>Collection name</td>
+<td>Required</td>
+</tr>
+<tr>
+<td><code>WithIndexDimension(dim)</code></td>
+<td>Vector dimension (must match the embedding model)</td>
+<td><code>1536</code></td>
+</tr>
+<tr>
+<td><code>WithAutoCreateCollection(enable)</code></td>
+<td>Create the collection when it is missing</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>WithMaxResults(n)</code></td>
+<td>Default search limit</td>
+<td><code>10</code></td>
+</tr>
+<tr>
+<td><code>WithMaxRequestRecords(n)</code></td>
+<td>Maximum records in one Chroma request. Vector Query and <code>/search</code> results are capped at this size; Get operations page beyond it.</td>
+<td><code>300</code></td>
+</tr>
+<tr>
+<td><code>WithMaxUpdateRecords(n)</code></td>
+<td>Maximum records one <code>UpdateByFilter</code> call may match</td>
+<td><code>100000</code></td>
+</tr>
+</tbody>
+</table>
+<p>Collections must use the cosine metric: new collections are created as cosine HNSW, and an existing non-cosine collection fails at startup.</p>
+<h3 id="search-configuration">Search Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithSparseSearch(embedder...)</code></td>
+<td>Enable keyword and hybrid search. The embedder is optional: omitting it uses the built-in Cloud SPLADE embedder, which requires <code>WithAPIKey</code>.</td>
+<td>Disabled</td>
+</tr>
+<tr>
+<td><code>WithSparseSearchKey(key)</code></td>
+<td>Metadata key that stores sparse vectors</td>
+<td><code>"sparse_embedding"</code></td>
+</tr>
+<tr>
+<td><code>WithHybridSearchWeights(dense, sparse)</code></td>
+<td>Dense/sparse RRF weights; normalized to sum to 1</td>
+<td><code>0.5, 0.5</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="built-in-cloud-splade-embedder">Built-in Cloud SPLADE Embedder</h3>
+<p><code>WithSparseSearch()</code> without an embedder uses <code>NewCloudSpladeEmbedder</code>, which encodes documents and queries through Chroma Cloud's hosted SPLADE embedding API (<code>prithivida/Splade_PP_en_v1</code>) with the key from <code>WithAPIKey</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span>
+<span class="normal"><a href="#__codelineno-2-4">4</a></span>
+<span class="normal"><a href="#__codelineno-2-5">5</a></span>
+<span class="normal"><a href="#__codelineno-2-6">6</a></span>
+<span class="normal"><a href="#__codelineno-2-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">vs</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithBaseURL</span><span class="p">(</span><span class="s">"https://api.trychroma.com"</span><span class="p">),</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">apiKey</span><span class="p">),</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithCollection</span><span class="p">(</span><span class="s">"docs"</span><span class="p">),</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">    </span><span class="nx">chroma</span><span class="p">.</span><span class="nx">WithSparseSearch</span><span class="p">(),</span><span class="w"> </span><span class="c1">// built-in Cloud SPLADE embedder</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <ul>
-<li><a href="inmemory/">Memory</a> - In-memory vector store configuration</li>
-<li><a href="pgvector/">PGVector</a> - PostgreSQL + pgvector configuration</li>
-<li><a href="tcvector/">TcVector</a> - Tencent Cloud vector database configuration</li>
-<li><a href="elasticsearch/">Elasticsearch</a> - Elasticsearch configuration</li>
-<li><a href="qdrant/">Qdrant</a> - Qdrant configuration</li>
-<li><a href="milvus/">Milvus</a> - Milvus configuration</li>
-<li><a href="chromadb/">ChromaDB</a> - ChromaDB configuration</li>
+<li>Every write of a non-empty document and every keyword or hybrid search performs one hosted embedding call, subject to the account's rate limits.</li>
+<li>Auto-created collections declare the <code>chroma-cloud-splade</code> embedding function in their schema, mirroring the official Python, TypeScript, and Rust clients, so clients reading the schema can reconstruct a compatible embedding function for the same collection.</li>
+<li>The model is English-focused. For other languages (including Chinese), implement the <code>SparseEmbedder</code> interface and pass it to <code>WithSparseSearch</code>.</li>
+<li><code>WithSpladeBaseURL</code> and <code>WithSpladeModel</code> customize the embedding service address and model when constructing <code>NewCloudSpladeEmbedder</code> explicitly; <code>WithSpladeTransport</code> customizes the transport (proxy, TLS, timeouts, tracing) used for embedding requests while the redirect policy stays with the package.</li>
 </ul>
+<h3 id="custom-sparse-embedders">Custom Sparse Embedders</h3>
+<p>For other languages or self-managed sparse models, implement the <code>SparseEmbedder</code> interface (e.g. dictionary segmentation or BGE-M3 sparse output) and pass it to <code>WithSparseSearch</code>. Implementations must be safe for concurrent use, both encodings must share one vector space, and sparse vector indices must be strictly increasing and fit in int32. Once a collection is written with one encoder, keep using the same encoder for queries; switching encoders requires rewriting the collection.</p>
+<h2 id="search-modes">Search Modes</h2>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Support</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vector</td>
+<td>✅</td>
+<td>Dense cosine similarity via Chroma <code>Query</code></td>
+</tr>
+<tr>
+<td>Filter</td>
+<td>✅</td>
+<td>IDs, metadata, or document text via <code>Get</code></td>
+</tr>
+<tr>
+<td>Keyword</td>
+<td>⚠️</td>
+<td>Sparse KNN via Cloud <code>/search</code>. Errors when <code>WithSparseSearch</code> is not configured.</td>
+</tr>
+<tr>
+<td>Hybrid</td>
+<td>⚠️</td>
+<td>Dense+sparse weighted RRF. Falls back to Vector when sparse search is not configured.</td>
+</tr>
+</tbody>
+</table>
+<p>Notes:</p>
+<ul>
+<li><code>WithSparseSearch</code> writes a sparse index only on <strong>newly created</strong> collections. An existing collection must already have one; Chroma cannot add it later.</li>
+<li>Hybrid fuses both branches with <code>score = wd·k/(k+dense_rank) + ws·k/(k+sparse_rank)</code>, <code>k = 60</code> by default. A rank missing from one branch uses the position after that branch's candidate window.</li>
+<li>Once sparse search is configured, a <code>/search</code> failure returns an error; there is no silent fallback to dense search.</li>
+</ul>
+<h2 id="metadata-and-filters">Metadata And Filters</h2>
+<p><code>name</code>, <code>created_at</code>, <code>updated_at</code>, and <code>_json</code> are reserved metadata keys; Add and Update reject documents that use them. Nested metadata values are stored in <code>_json</code> for round-trip but cannot be filtered. The configured sparse key is adapter-owned and must not be written directly.</p>
+<p>Simple metadata map filters (<code>SearchFilter.Metadata</code>, <code>WithDeleteFilter</code>, <code>WithCountFilter</code>, <code>WithGetMetadataFilter</code>) accept user metadata keys only. Passing one of the reserved keys above is rejected with an error; filter the document <code>name</code>, <code>created_at</code>, or <code>updated_at</code> through <code>FilterCondition</code> instead.</p>
+<table>
+<thead>
+<tr>
+<th>Universal operator</th>
+<th>Chroma operator</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>eq / ne / gt / gte / lt / lte</td>
+<td><code>$eq</code> / <code>$ne</code> / <code>$gt</code> / <code>$gte</code> / <code>$lt</code> / <code>$lte</code></td>
+</tr>
+<tr>
+<td>in / not in</td>
+<td><code>$in</code> / <code>$nin</code></td>
+</tr>
+<tr>
+<td>and / or</td>
+<td><code>$and</code> / <code>$or</code></td>
+</tr>
+<tr>
+<td>like / not like (<code>content</code> field only)</td>
+<td><code>$contains</code> / <code>$not_contains</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>between</code> is not supported, and OR across IDs, metadata, and document text is not supported.</p>
+<h2 id="behavioral-notes">Behavioral Notes</h2>
+<ul>
+<li>Add is upsert. Update only replaces an existing document and keeps the previous vector when the new embedding is empty.</li>
+<li>Add and Update replace the complete metadata set (a non-atomic read-then-write).</li>
+<li><code>UpdateByFilter</code> fixes its matched ID set before writing and rejects more than 100,000 matches; tune with <code>WithMaxUpdateRecords</code>.</li>
+<li>Filter search with no selector returns an error instead of scanning the whole collection.</li>
+<li>DeleteAll requires <code>vectorstore.WithDeleteAll(true)</code> and cannot be combined with other selectors:</li>
+</ul>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nx">store</span><span class="p">.</span><span class="nx">DeleteByFilter</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">vectorstore</span><span class="p">.</span><span class="nx">WithDeleteAll</span><span class="p">(</span><span class="kc">true</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
 
 
 
@@ -3845,7 +4081,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 22, 2026 03:33:20 UTC">2026-09-22 03:33:20</span>
   </span>
 
     
@@ -3926,7 +4162,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../ocr/" class="md-footer__link md-footer__link--prev" aria-label="Previous: OCR">
+          <a href="../milvus/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Milvus">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3936,20 +4172,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                OCR
+                Milvus
               </div>
             </div>
           </a>
         
         
           
-          <a href="inmemory/" class="md-footer__link md-footer__link--next" aria-label="Next: Memory">
+          <a href="../../troubleshooting/" class="md-footer__link md-footer__link--next" aria-label="Next: Troubleshooting">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Memory
+                Troubleshooting
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -3985,12 +4221,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../assets/javascripts/mathjax.js"></script>
+        <script src="../../../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
