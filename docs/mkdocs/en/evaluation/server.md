@@ -148,6 +148,26 @@ if err != nil {
 }
 ```
 
+### Case Concurrency
+
+Langfuse remote experiments process cases serially by default. To process up to
+eight cases concurrently within each request, add
+`langfuseeval.WithCaseParallelism(8)` when constructing the handler. The value
+must be positive.
+
+Each case retains its own trace context, evaluation call, and Langfuse writes.
+Response cases remain in dataset order even when execution finishes out of
+order. This handler option is independent of
+`evaluation.WithEvalCaseParallelism` and the evaluator's parallel inference and
+evaluation flags: those options apply within a single `Evaluate` call, while
+the Langfuse handler calls `Evaluate` once per case.
+
+When enabling concurrency, the supplied evaluator, runners, callbacks, and
+managers must support concurrent calls. The limit covers each case's evaluation
+and Langfuse writes, and applies per request, not across requests. A case error
+or request cancellation cancels in-flight cases and waits for them to finish;
+completed Langfuse writes are not rolled back.
+
 ### Data Format
 
 Langfuse allows users to define the structure of dataset items on the platform side, so `input`, `expectedOutput`, and `metadata` do not need to follow a fixed schema. On the tRPC-Agent-Go side, evaluation still needs to run against an explicit `EvalCase`. `CaseBuilder` is the layer that bridges those two models.
