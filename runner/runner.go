@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/runoutcome"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
@@ -2031,6 +2032,11 @@ func backfillEventMetadata(dst *event.Event, src *event.Event) {
 	if dst.FilterKey == "" {
 		dst.FilterKey = src.FilterKey
 	}
+	if dst.RunOutcome == nil && src.RunOutcome != nil {
+		dst.RunOutcome = &event.RunOutcome{
+			Status: src.RunOutcome.Status,
+		}
+	}
 }
 
 func (r *runner) markCompletionSnapshotOnly(
@@ -3119,6 +3125,16 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	}
 
 	agent.InjectIntoEvent(loop.invocation, runnerCompletionEvent)
+	switch {
+	case runoutcome.IsExplicitCancel(ctx):
+		runnerCompletionEvent.RunOutcome = &event.RunOutcome{
+			Status: event.RunOutcomeStatusCancelled,
+		}
+	case runoutcome.IsTimedOut(ctx):
+		runnerCompletionEvent.RunOutcome = &event.RunOutcome{
+			Status: event.RunOutcomeStatusTimedOut,
+		}
+	}
 	runnerCompletionEvent = r.applyEventPlugins(
 		ctx,
 		loop.invocation,
