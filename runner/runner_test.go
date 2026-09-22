@@ -2287,35 +2287,66 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 }
 
 func TestCombineRunPlugins_PreservesBeforeResponseDispatchCapability(t *testing.T) {
-	var order []string
-	newManager := func(name string) *plugin.Manager {
+	newManager := func(name string, withHook bool, order *[]string) *plugin.Manager {
 		return plugin.MustNewManager(&testPlugin{
 			name: name,
 			reg: func(r *plugin.Registry) {
+				if !withHook {
+					return
+				}
 				r.BeforeResponseDispatch(func(
 					context.Context,
 					*plugin.BeforeResponseDispatchArgs,
 				) error {
-					order = append(order, name)
+					*order = append(*order, name)
 					return nil
 				})
 			},
 		})
 	}
 
-	combined := combineRunPlugins(
-		newManager("runner"),
-		[]agent.PluginManager{newManager("run")},
-	)
-	hooks, ok := combined.(plugin.BeforeResponseDispatchManager)
-	require.True(t, ok)
+	tests := []struct {
+		name       string
+		runnerHook bool
+		runHook    bool
+		wantOrder  []string
+	}{
+		{
+			name:       "runner manager only",
+			runnerHook: true,
+			wantOrder:  []string{"runner"},
+		},
+		{
+			name:      "run manager only",
+			runHook:   true,
+			wantOrder: []string{"run"},
+		},
+		{
+			name:       "both managers",
+			runnerHook: true,
+			runHook:    true,
+			wantOrder:  []string{"runner", "run"},
+		},
+	}
 
-	err := hooks.RunBeforeResponseDispatch(
-		context.Background(),
-		&plugin.BeforeResponseDispatchArgs{Response: &model.Response{Done: true}},
-	)
-	require.NoError(t, err)
-	require.Equal(t, []string{"runner", "run"}, order)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var order []string
+			combined := combineRunPlugins(
+				newManager("runner", tt.runnerHook, &order),
+				[]agent.PluginManager{newManager("run", tt.runHook, &order)},
+			)
+			hooks, ok := combined.(plugin.BeforeResponseDispatchManager)
+			require.True(t, ok)
+
+			err := hooks.RunBeforeResponseDispatch(
+				context.Background(),
+				&plugin.BeforeResponseDispatchArgs{Response: &model.Response{Done: true}},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantOrder, order)
+		})
+	}
 }
 
 func TestPluginManagerChain_BeforeResponseDispatchStopsOnError(t *testing.T) {
