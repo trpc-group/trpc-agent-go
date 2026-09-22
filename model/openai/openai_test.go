@@ -9626,6 +9626,7 @@ func TestChatStreamAccumulator_PreservesLongFields(t *testing.T) {
 	const (
 		chunkCount   = 2048
 		contentPart  = "content-"
+		refusalPart  = "refusal-"
 		argumentPart = `{"city":"shenzhen"}`
 	)
 
@@ -9641,6 +9642,7 @@ func TestChatStreamAccumulator_PreservesLongFields(t *testing.T) {
 				Index: 0,
 				Delta: openai.ChatCompletionChunkChoiceDelta{
 					Content: contentPart,
+					Refusal: refusalPart,
 					ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{{
 						Index: 0,
 						ID: func() string {
@@ -9658,7 +9660,10 @@ func TestChatStreamAccumulator_PreservesLongFields(t *testing.T) {
 						Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
 							Name: func() string {
 								if i == 0 {
-									return "lookup_weather"
+									return "lookup_"
+								}
+								if i == 1 {
+									return "weather"
 								}
 								return ""
 							}(),
@@ -9675,6 +9680,7 @@ func TestChatStreamAccumulator_PreservesLongFields(t *testing.T) {
 	require.Len(t, acc.acc.Choices, 1)
 	require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 1)
 	assert.Equal(t, strings.Repeat(contentPart, chunkCount), acc.acc.Choices[0].Message.Content)
+	assert.Equal(t, strings.Repeat(refusalPart, chunkCount), acc.acc.Choices[0].Message.Refusal)
 	assert.Equal(t, "lookup_weather", acc.acc.Choices[0].Message.ToolCalls[0].Function.Name)
 	assert.Equal(t, strings.Repeat(argumentPart, chunkCount), acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
 }
