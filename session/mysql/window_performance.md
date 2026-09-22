@@ -43,7 +43,9 @@ ties. The benchmark below uses distinct timestamps and therefore measures the
 common indexed path; the integration tests separately cover large timestamp
 groups, role filtering, missing payloads and duplicate anchors.
 
-## Local comparison (2026-09-22)
+## Local comparison (2026-09-21 UTC)
+
+The measurements were taken on September 21 UTC (September 22 in UTC+08:00).
 
 MySQL 8.4.11 in Docker on Windows amd64, Ryzen 7 7840HS, Go 1.27.1,
 `GOMAXPROCS=2`, 512 MiB InnoDB buffer pool, 256 KiB sort buffer. One request at a

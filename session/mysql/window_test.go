@@ -502,6 +502,96 @@ AND created_at = ? AND deleted_at IS NULL`
 	}
 }
 
+func TestService_QueryWindowNeighborBatchDefersIncompleteTimestamp(t *testing.T) {
+	for _, before := range []bool{false, true} {
+		t.Run(fmt.Sprintf("before=%t", before), func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			svc := createTestService(t, db)
+			key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+			base := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+			step := time.Second
+			if before {
+				step = -step
+			}
+			rows := sqlmock.NewRows([]string{"id", "created_at", "event"})
+			// Two complete timestamps precede a group cut off by the LIMIT.
+			for i := 1; i <= eventWindowBatchSize+1; i++ {
+				offset := i
+				if offset > 3 {
+					offset = 3
+				}
+				rows.AddRow(int64(i), base.Add(time.Duration(offset)*step), mysqlWindowEventBytes(t, fmt.Sprint(i), model.RoleUser, "event"))
+			}
+			mock.ExpectQuery("SELECT id, created_at, event FROM session_events").
+				WithArgs(key.AppName, key.UserID, key.SessionID, base.Add(-time.Hour), base, base, int64(100), eventWindowBatchSize+1).
+				WillReturnRows(rows)
+			got, more, err := svc.queryWindowNeighborBatch(context.Background(), key, base.Add(-time.Hour), base, 100, before)
+			require.NoError(t, err)
+			require.True(t, more, "a short batch must not signal exhaustion")
+			require.Len(t, got, 2)
+			require.Equal(t, int64(1), got[0].rowID)
+			require.Equal(t, int64(2), got[1].rowID)
+			require.Equal(t, base.Add(2*step), got[1].entry.CreatedAt)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestService_QueryWindowNeighborBatchFallbackErrors(t *testing.T) {
+	for _, stage := range []string{"metadata query", "metadata scan", "payload query", "payload scan", "payload JSON"} {
+		t.Run(stage, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			svc := createTestService(t, db)
+			key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+			base := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+			prefix := sqlmock.NewRows([]string{"id", "created_at", "event"})
+			for id := int64(11); id < 76; id++ {
+				prefix.AddRow(id, base, mysqlWindowEventBytes(t, "event", model.RoleUser, "event"))
+			}
+			mock.ExpectQuery("SELECT id, created_at, event FROM session_events").
+				WithArgs(key.AppName, key.UserID, key.SessionID, base, base, base, int64(10), eventWindowBatchSize+1).
+				WillReturnRows(prefix)
+			metadata := mock.ExpectQuery("SELECT id, created_at FROM session_events").
+				WithArgs(key.AppName, key.UserID, key.SessionID, base, int64(10), eventWindowBatchSize)
+			failure := fmt.Errorf("database unavailable")
+			want := "load event window timestamp"
+			switch stage {
+			case "metadata query":
+				metadata.WillReturnError(failure)
+			case "metadata scan":
+				metadata.WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("invalid-id", base))
+				want = "scan event window entry"
+			default:
+				metadata.WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(11), base))
+				payload := mock.ExpectQuery("SELECT id, event FROM session_events").WithArgs(int64(11), key.UserID)
+				switch stage {
+				case "payload query":
+					payload.WillReturnError(failure)
+					want = "load event window neighbor payloads"
+				case "payload scan":
+					payload.WillReturnRows(sqlmock.NewRows([]string{"id", "event"}).AddRow("invalid-id", []byte("{}")))
+					want = "scan event window payload"
+				case "payload JSON":
+					payload.WillReturnRows(sqlmock.NewRows([]string{"id", "event"}).AddRow(int64(11), []byte("invalid-json")))
+					want = "unmarshal event window entry"
+				}
+			}
+			got, more, err := svc.queryWindowNeighborBatch(context.Background(), key, base, base, 10, false)
+			require.ErrorContains(t, err, want)
+			if stage == "metadata query" || stage == "payload query" {
+				require.ErrorIs(t, err, failure)
+			}
+			require.Nil(t, got, "failed fallback must not return a partial window")
+			require.False(t, more)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestService_QueryWindowNeighborBatchDisappearingTimestamp(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
