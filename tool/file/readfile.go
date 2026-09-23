@@ -12,6 +12,7 @@ package file
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -383,7 +384,11 @@ func (f *fileToolSet) readLargeFileRange(
 		start = *req.StartLine
 	}
 	var lines []string
-	var collected int64
+	// budget is what the returned range may still grow by: the lines joined
+	// by "\n", a separator between lines and none after the last. It is
+	// charged fragment by fragment as each in-range line streams in, so an
+	// oversized line fails the read before it is ever held whole.
+	budget := f.maxFileSize
 	lineNo := 0
 	endLine := 0
 	rangeSatisfied := false
@@ -394,42 +399,20 @@ func (f *fileToolSet) readLargeFileRange(
 				return err
 			}
 		}
-		segment, rerr := reader.ReadString('\n')
-		atEOF := errors.Is(rerr, io.EOF)
-		if rerr != nil && !atEOF {
-			rsp.Message = fmt.Sprintf("Error: cannot read file: %v", rerr)
-			return fmt.Errorf("reading file: %w", rerr)
-		}
 		// Mirror strings.Split semantics: every segment is a line, including
 		// the empty final segment after a trailing newline.
 		lineNo++
 		inRange := lineNo >= start &&
 			(req.NumLines == nil || len(lines) < *req.NumLines)
-		// The head check saw only the first 512 bytes; a NUL anywhere the
-		// scan passes over makes the file not text, as it does for a whole
-		// read. Bytes past the range are not scanned.
-		if err := rejectNonText(segment, ""); err != nil {
-			rsp.Message = fmt.Sprintf("Error: %v", notTextFileErr(mimeType))
-			return notTextFileErr(mimeType)
+		if inRange && len(lines) > 0 {
+			budget--
+		}
+		line, atEOF, rerr := readLineBounded(ctx, reader, inRange, &budget)
+		if rerr != nil {
+			return f.failLargeFileRange(rsp, rerr, mimeType)
 		}
 		if inRange {
-			line := strings.TrimSuffix(segment, "\n")
-			// What is returned is the lines joined by "\n": a separator
-			// between lines, none after the last.
-			if len(lines) > 0 {
-				collected++
-			}
-			collected += int64(len(line))
-			if collected > f.maxFileSize {
-				err := fmt.Errorf(
-					"selected range is larger than %d bytes; "+
-						"request fewer lines",
-					f.maxFileSize,
-				)
-				rsp.Message = "Error: " + err.Error()
-				return err
-			}
-			lines = append(lines, line)
+			lines = append(lines, string(line))
 			endLine = lineNo
 			if req.NumLines != nil && len(lines) == *req.NumLines {
 				rangeSatisfied = !atEOF
@@ -448,6 +431,88 @@ func (f *fileToolSet) readLargeFileRange(
 		rangeSatisfied: rangeSatisfied,
 		mimeType:       mimeType,
 	})
+}
+
+var (
+	// errLineHasNUL reports a NUL byte in a line the ranged read passed over.
+	errLineHasNUL = errors.New("line contains NUL")
+	// errRangeBudget reports that the selected range outgrew maxFileSize.
+	errRangeBudget = errors.New("range exceeds the read limit")
+)
+
+// readLineBounded reads one line from reader in buffer-sized fragments, so a
+// line longer than the buffer is never held whole, and a cancelled context
+// stops the read between fragments rather than at the next newline. Every
+// fragment is checked for NUL as it arrives: the head check saw only the first
+// 512 bytes, and a NUL anywhere the scan passes over makes the file not text,
+// as it does for a whole read. When keep is set each fragment is charged
+// against budget and appended to the returned line, failing with
+// errRangeBudget the moment the range would exceed it; otherwise the bytes are
+// discarded. The returned line has its trailing "\n" removed, and atEOF
+// reports that the file ended with this line.
+func readLineBounded(
+	ctx context.Context,
+	reader *bufio.Reader,
+	keep bool,
+	budget *int64,
+) ([]byte, bool, error) {
+	var line []byte
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		frag, rerr := reader.ReadSlice('\n')
+		more := errors.Is(rerr, bufio.ErrBufferFull)
+		atEOF := errors.Is(rerr, io.EOF)
+		if rerr != nil && !more && !atEOF {
+			return nil, false, rerr
+		}
+		if bytes.IndexByte(frag, 0) >= 0 {
+			return nil, false, errLineHasNUL
+		}
+		if !more {
+			frag = bytes.TrimSuffix(frag, []byte{'\n'})
+		}
+		if keep {
+			*budget -= int64(len(frag))
+			if *budget < 0 {
+				return nil, false, errRangeBudget
+			}
+			line = append(line, frag...)
+		}
+		if !more {
+			return line, atEOF, nil
+		}
+	}
+}
+
+// failLargeFileRange turns a streaming failure into the response message and
+// error a ranged read reports.
+func (f *fileToolSet) failLargeFileRange(
+	rsp *readFileResponse,
+	err error,
+	mimeType string,
+) error {
+	switch {
+	case errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded):
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	case errors.Is(err, errLineHasNUL):
+		err = notTextFileErr(mimeType)
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return err
+	case errors.Is(err, errRangeBudget):
+		err = fmt.Errorf(
+			"selected range is larger than %d bytes; request fewer lines",
+			f.maxFileSize,
+		)
+		rsp.Message = "Error: " + err.Error()
+		return err
+	default:
+		rsp.Message = fmt.Sprintf("Error: cannot read file: %v", err)
+		return fmt.Errorf("reading file: %w", err)
+	}
 }
 
 // collectedRange is what streaming a ranged read gathered: the lines in the
