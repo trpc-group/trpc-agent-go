@@ -162,17 +162,19 @@ func (f *fileToolSet) searchWorkspaceFiles(
 	dir string,
 	req *searchFileRequest,
 ) (*searchFileResponse, error) {
+	limit := f.searchFileLimit()
 	files, folders, err := matchWorkspacePaths(
 		ctx,
 		dir,
 		req.Pattern,
 		req.CaseSensitive,
+		limit,
 	)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
-	if limit := f.searchFileLimit(); len(files)+len(folders) > limit {
+	if len(files)+len(folders) > limit {
 		err := &tooManyFilesError{
 			pattern: req.Pattern,
 			path:    rsp.Path,
