@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	openaigo "github.com/openai/openai-go"
+	"github.com/openai/openai-go/packages/respjson"
 )
 
 // chatStreamAccumulator keeps the SDK accumulator's structural behavior while
@@ -39,7 +40,19 @@ type chatStreamToolCallAccumulator struct {
 }
 
 func (a *chatStreamAccumulator) addChunk(chunk openaigo.ChatCompletionChunk) bool {
-	if !a.acc.AddChunk(a.sdkChunk(chunk)) {
+	sdkChunk := a.sdkChunk(chunk)
+	for index, choice := range chunk.Choices {
+		if choice.Delta.JSON.Content.Valid() {
+			sdkChunk.Choices[index].Delta.JSON.Content = respjson.NewField("true")
+		}
+		if choice.Delta.JSON.Refusal.Valid() {
+			sdkChunk.Choices[index].Delta.JSON.Refusal = respjson.NewField("true")
+		}
+		if choice.Delta.JSON.ToolCalls.Valid() && len(choice.Delta.ToolCalls) > 0 {
+			sdkChunk.Choices[index].Delta.JSON.ToolCalls = respjson.NewField("true")
+		}
+	}
+	if !a.acc.AddChunk(sdkChunk) {
 		return false
 	}
 

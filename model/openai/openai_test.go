@@ -9732,6 +9732,65 @@ func TestChatStreamAccumulator_ClearsScratchRawJSON(t *testing.T) {
 	assert.Nil(t, acc.scratchToolCalls[0])
 }
 
+func TestChatStreamAccumulator_ReportsFinishedDecodedFields(t *testing.T) {
+	tests := []struct {
+		name             string
+		firstChunk       string
+		secondChunk      string
+		wantContent      string
+		wantRefusal      string
+		wantToolCallName string
+		wantToolCallArgs string
+	}{
+		{
+			name:        "content",
+			firstChunk:  `{"id":"stream-id","choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+			secondChunk: `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantContent: "answer",
+		},
+		{
+			name:        "refusal",
+			firstChunk:  `{"id":"stream-id","choices":[{"index":0,"delta":{"refusal":"cannot help"}}]}`,
+			secondChunk: `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantRefusal: "cannot help",
+		},
+		{
+			name:             "tool call",
+			firstChunk:       `{"id":"stream-id","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+			secondChunk:      `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantToolCallName: "lookup",
+			wantToolCallArgs: "{}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New("test-model", WithAPIKey("test-key"))
+			acc := chatStreamAccumulator{}
+			var reasoningBuf bytes.Buffer
+
+			m.accumulateChunk(parseChunkWithExtraFields(t, tt.firstChunk), &acc, &reasoningBuf)
+			m.accumulateChunk(parseChunkWithExtraFields(t, tt.secondChunk), &acc, &reasoningBuf)
+
+			if tt.wantContent != "" {
+				content, ok := acc.acc.JustFinishedContent()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantContent, content)
+			}
+			if tt.wantRefusal != "" {
+				refusal, ok := acc.acc.JustFinishedRefusal()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantRefusal, refusal)
+			}
+			if tt.wantToolCallName != "" {
+				toolCall, ok := acc.acc.JustFinishedToolCall()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantToolCallName, toolCall.Name)
+				assert.Equal(t, tt.wantToolCallArgs, toolCall.Arguments)
+			}
+		})
+	}
+}
 func TestChatStreamAccumulator_AllocationGrowth(t *testing.T) {
 	m := New("test-model", WithAPIKey("test-key"))
 	chunk := openai.ChatCompletionChunk{
