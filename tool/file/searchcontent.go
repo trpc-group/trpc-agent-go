@@ -210,11 +210,7 @@ func (f *fileToolSet) searchContentByFilePatternRef(
 	if len(match.Matches) == 0 {
 		return []*fileMatch{}, true, nil
 	}
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		path,
-	)
+	match.Message = fileMatchMessage(match, path)
 	return []*fileMatch{match}, true, nil
 }
 
@@ -237,11 +233,11 @@ func (f *fileToolSet) searchContentByPath(
 		)
 	case fileref.SchemeWorkspace:
 		path := fileref.WorkspaceRef(pathRef.Path)
-		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
+		matches, skipped := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
 		if err := ctx.Err(); err != nil {
 			return path, nil, nil, err
 		}
-		return path, matches, nil, nil
+		return path, matches, skipped, nil
 	default:
 		reqPath := normalizeToolPath(f.baseDir, pathRef.Path)
 		matches, skipped, err := f.searchContentLocal(ctx, reqPath, req, re)
@@ -401,11 +397,7 @@ func (f *fileToolSet) searchSinglePath(
 	if len(match.Matches) == 0 {
 		return []*fileMatch{}, true
 	}
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		path,
-	)
+	match.Message = fileMatchMessage(match, path)
 	return []*fileMatch{match}, true
 }
 
@@ -492,22 +484,22 @@ func (f *fileToolSet) searchSkillCache(
 	if len(match.Matches) == 0 {
 		return []*fileMatch{}, true
 	}
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		candidate,
-	)
+	match.Message = fileMatchMessage(match, candidate)
 	return []*fileMatch{match}, true
 }
 
+// searchWorkspaceContent searches the workspace entries under dir that match
+// the file pattern. Entries beyond the search cap are not searched; they are
+// returned by name in the second result, sorted, so the caller reports them
+// in skipped_files exactly as an oversized local file is reported.
 func (f *fileToolSet) searchWorkspaceContent(
 	ctx context.Context,
 	dir string,
 	req *searchContentRequest,
 	re *regexp.Regexp,
-) []*fileMatch {
+) ([]*fileMatch, []string) {
 	if req == nil || re == nil {
-		return []*fileMatch{}
+		return []*fileMatch{}, nil
 	}
 
 	sep := string(filepath.Separator)
@@ -520,7 +512,10 @@ func (f *fileToolSet) searchWorkspaceContent(
 		prefix += sep
 	}
 
-	var out []*fileMatch
+	var (
+		out     []*fileMatch
+		skipped []string
+	)
 	for _, entry := range fileref.WorkspaceFiles(ctx) {
 		if ctx.Err() != nil {
 			break
@@ -542,27 +537,32 @@ func (f *fileToolSet) searchWorkspaceContent(
 			continue
 		}
 		path := fileref.WorkspaceRef(full)
+		if int64(len(entry.Content)) > f.searchSizeCap() {
+			skipped = append(skipped, path)
+			continue
+		}
 		match := searchTextContent(path, entry.Content, re)
 		if len(match.Matches) == 0 {
 			continue
 		}
-		match.Message = fmt.Sprintf(
-			"Found %d matches in file '%s'",
-			len(match.Matches),
-			path,
-		)
+		match.Message = fileMatchMessage(match, path)
 		out = append(out, match)
 	}
 	slices.SortFunc(out, func(a, b *fileMatch) int {
 		return strings.Compare(a.FilePath, b.FilePath)
 	})
-	return out
+	slices.Sort(skipped)
+	return out, skipped
 }
 
 func hasGlob(p string) bool {
 	return strings.ContainsAny(p, "*?[")
 }
 
+// searchTextContent searches in-memory content the way searchFileContent
+// searches a file: it lists at most maxMatchesPerFile matching lines and sets
+// Truncated when it stops early, so cached and workspace searches are bounded
+// exactly like streamed ones.
 func searchTextContent(
 	path string,
 	content string,
@@ -575,6 +575,10 @@ func searchTextContent(
 	}
 	for lineNum, line := range lines {
 		if re.MatchString(line) {
+			if len(matches.Matches) >= maxMatchesPerFile {
+				matches.Truncated = true
+				return matches
+			}
 			matches.Matches = append(matches.Matches, &lineMatch{
 				LineNumber:  lineNum + 1,
 				LineContent: line,
@@ -628,20 +632,32 @@ func regexCompile(
 	return re, nil
 }
 
-// scanLinesKeepCR splits on "\n" alone, so a CRLF line keeps its "\r" exactly as
-// strings.Split(content, "\n") in searchTextContent leaves it: the two backends
-// must report the same line content and match the same patterns.
-func scanLinesKeepCR(data []byte, atEOF bool) (int, []byte, error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[:i], nil
-	}
-	if atEOF {
+// newLineSplitter returns a split function that yields exactly the lines
+// strings.Split(content, "\n") yields in searchTextContent, so the streamed and
+// in-memory backends number lines identically and match the same patterns. It
+// splits on "\n" alone, so a CRLF line keeps its "\r", and it emits the line
+// after the last "\n" even when that line is empty: "foo\n" is two lines and an
+// empty file is one, which is what a pattern such as "^$" relies on.
+func newLineSplitter() bufio.SplitFunc {
+	// pending reports that the line after the last delimiter has not been
+	// emitted yet; it starts true because an empty input is still one line.
+	pending := true
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			pending = true
+			return i + 1, data[:i], nil
+		}
+		if !atEOF || !pending {
+			return 0, nil, nil
+		}
+		pending = false
+		if len(data) == 0 {
+			// A non-nil empty token is the final empty line; a nil token
+			// would end the scan without it.
+			return 0, []byte{}, nil
+		}
 		return len(data), data, nil
 	}
-	return 0, nil, nil
 }
 
 // searchFileContent searches for content matches in a single file. It streams
@@ -661,8 +677,11 @@ func searchFileContent(
 	defer file.Close()
 	fileMatches := &fileMatch{Matches: []*lineMatch{}}
 	sc := bufio.NewScanner(file)
-	sc.Buffer(make([]byte, 64*1024), maxSearchLineSize)
-	sc.Split(scanLinesKeepCR)
+	// The scanner's maximum is the token-buffer size, and a terminated line
+	// occupies its length plus one for "\n"; the extra byte keeps a line of
+	// exactly maxSearchLineSize bytes searchable and fails only longer ones.
+	sc.Buffer(make([]byte, 64*1024), maxSearchLineSize+1)
+	sc.Split(newLineSplitter())
 	lineNum := 0
 	for sc.Scan() {
 		lineNum++
