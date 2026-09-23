@@ -11,9 +11,11 @@
 package file
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1163,6 +1165,93 @@ func TestFileTool_ReadFile_RangedReadOfLargeFileCancelled(t *testing.T) {
 	)
 
 	assert.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, rsp.Message, "context canceled")
+}
+
+// A line longer than the reader's buffer streams through in fragments: out of
+// range it is discarded fragment by fragment, in range it fails the budget as
+// soon as it crosses the limit, and a NUL inside it still marks the file as not
+// text. None of these paths ever hold the long line whole.
+func TestFileTool_ReadFile_RangedReadOfLargeFileLongLines(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(1024))
+	assert.NoError(t, err)
+	fts := toolSet.(*fileToolSet)
+
+	long := strings.Repeat("a", 200*1024)
+	content := long + "\nshort\n" + long + "\n"
+	assert.NoError(t, os.WriteFile(
+		filepath.Join(tempDir, "long.txt"), []byte(content), 0o644,
+	))
+
+	start, num := 2, 1
+	rsp, err := fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "long.txt", StartLine: &start, NumLines: &num},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, "short", rsp.Contents)
+
+	start = 1
+	rsp, err = fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "long.txt", StartLine: &start, NumLines: &num},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "request fewer lines")
+
+	withNUL := long + "\x00" + long + "\nshort\n"
+	assert.NoError(t, os.WriteFile(
+		filepath.Join(tempDir, "nul.txt"), []byte(withNUL), 0o644,
+	))
+	start = 2
+	rsp, err = fts.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "nul.txt", StartLine: &start, NumLines: &num},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, rsp.Message, "not a UTF-8 text file")
+}
+
+// cancelAfterReads cancels a context once the underlying reader has been asked
+// for data n times, so a test can cancel partway through one long line.
+type cancelAfterReads struct {
+	r      io.Reader
+	n      int
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (c *cancelAfterReads) Read(p []byte) (int, error) {
+	c.reads++
+	if c.reads > c.n {
+		c.cancel()
+	}
+	return c.r.Read(p)
+}
+
+// A newline-free stream larger than the reader's buffer is cancelled between
+// fragments, before the line completes, so an abandoned request stops
+// scanning a huge line instead of running to its end.
+func TestReadLineBounded_CancelledMidLine(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	src := &cancelAfterReads{
+		r:      strings.NewReader(strings.Repeat("a", 1024*1024)),
+		n:      1,
+		cancel: cancel,
+	}
+	reader := bufio.NewReaderSize(src, 64*1024)
+	budget := int64(2 * 1024 * 1024)
+	line, atEOF, err := readLineBounded(ctx, reader, true, &budget)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, line)
+	assert.False(t, atEOF)
+	assert.Less(t, src.reads, 8, "the read stopped well before the line's end")
+
+	rsp := &readFileResponse{}
+	fts := &fileToolSet{maxFileSize: 16}
+	assert.ErrorIs(t, fts.failLargeFileRange(rsp, err, ""), context.Canceled)
 	assert.Contains(t, rsp.Message, "context canceled")
 }
 
