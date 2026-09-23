@@ -1542,11 +1542,25 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
-		close(loop.processedEventCh)
-		loop.invocation.CleanupNotice(ctx)
+		// Producer-done completion contract: ask the agent's producer goroutines
+		// to stop FIRST, then JOIN the agent event stream by draining
+		// agentEventCh until the agent closes it. The agent.Agent contract
+		// closes its event channel when its producing goroutine exits, so once
+		// we reach the close below the producer has actually finished and
+		// consumers may treat processedEventCh close as producer-done. On the
+		// normal completion path the channel is already closed and this drain
+		// is a no-op. Drained events are discarded, matching the pre-existing
+		// behavior of a loop that has stopped processing. A well-behaved agent
+		// returns (and closes its channel) once its context is cancelled; an
+		// agent that ignores cancellation and never returns keeps this defer
+		// waiting by the same contract violation that would hang Run itself.
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
+		for range loop.agentEventCh {
+		}
+		close(loop.processedEventCh)
+		loop.invocation.CleanupNotice(ctx)
 	}()
 	for {
 		select {
