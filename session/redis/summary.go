@@ -46,7 +46,11 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -57,17 +61,23 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	sess.SummariesMu.RUnlock()
 
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
+
+	// recordWrite reports the outcome of a set-if-newer summary write. Both
+	// storage routes deliberately skip a write whose stored summary is newer,
+	// so a nil error alone does not prove a durable write happened.
+	recordWrite := summaryWriteRecorder(att)
 
 	// Fast path: use version tag from session
 	switch ver := getSessionVersion(sess); ver {
 	case util.StorageTypeHashIdx:
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
-		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return recordWrite(s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL))
 	case util.StorageTypeZset:
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
-		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return recordWrite(s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL))
 	}
 
 	// Slow path: check which storage has the session
@@ -78,15 +88,39 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 
 	if s.compatEnabled() && zsetExists {
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
-		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return recordWrite(s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL))
 	}
 	if hashidxExists {
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
-		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return recordWrite(s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL))
 	}
 
 	log.WarnfContext(ctx, "session not found when creating summary: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 	return nil
+}
+
+// summaryWriteRecorder returns a function that records the outcome of a
+// set-if-newer summary write on att and returns the write error unchanged. It
+// accepts the storage client result directly so callers can report and return
+// in one statement. A recognized 1 is stored, a recognized 0 is a deliberate
+// stale skip, and any other successful reply is unknown rather than guessed.
+func summaryWriteRecorder(
+	att *isummary.Attempt,
+) func(util.SummaryWriteResult, error) error {
+	return func(write util.SummaryWriteResult, err error) error {
+		if err != nil {
+			return att.RecordWrite(err)
+		}
+		switch write {
+		case util.SummaryWriteApplied:
+			att.Persisted(isummary.PersistStored)
+		case util.SummaryWriteStale:
+			att.Persisted(isummary.PersistStale)
+		default:
+			att.Persisted(isummary.PersistUnknown)
+		}
+		return nil
+	}
 }
 
 // GetSessionSummaryText returns the latest summary text from the session state if present.

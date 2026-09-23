@@ -9,6 +9,7 @@
 package summary
 
 import (
+	"context"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -31,7 +32,14 @@ func WithName(name string) Option {
 // SkipRecentFunc defines a function that determines how many recent events to skip during summarization.
 // It receives all events and returns the number of recent events to skip.
 // Return 0 to skip no events.
+//
+// Deprecated: Use ContextSkipRecentFunc.
 type SkipRecentFunc func(events []event.Event) int
+
+// ContextSkipRecentFunc defines a function that determines how many recent
+// events to skip during summarization using the current request context.
+// Return 0 to skip no events.
+type ContextSkipRecentFunc func(context.Context, []event.Event) int
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
@@ -69,7 +77,7 @@ func WithSystemPrompt(prompt string) Option {
 // available, or the parent cannot fit the summary model's input budget,
 // summarization falls back to a bounded standalone prompt. Framework-provided
 // model-request views restrict the fork to the same history prefix selected by
-// WithSkipRecent, excluding later responses appended after that request.
+// WithSkipRecentContext, excluding later responses appended after that request.
 //
 // This is disabled by default.
 func WithCacheSafeForking(enable bool) Option {
@@ -104,22 +112,46 @@ func WithMaxSummaryWords(maxWords int) Option {
 	}
 }
 
-// WithSkipRecent sets a custom function to determine how many of the most recent
-// events (from the tail) should be skipped during summarization. In the normal
-// Runner LLM flow, the function receives the projected session history visible
-// to the model, after history filtering and request-side compaction. Standalone
-// summarization without a model-request view preserves the legacy raw-session
-// input. Return 0 to skip none.
+// WithRequestInputTokenBudget sets the estimated input token budget for each
+// summary model request, including its prompts, conversation, and tool schemas.
+// A positive value replaces the default budget of 70% of the model context
+// window. The effective budget is still capped by the model context window
+// (8192 tokens when unknown) and any input budget advertised by the model.
+// Values <= 0 restore the default budget. The last configured value wins.
+//
+// This option applies to standalone and cache-safe fork requests. Existing
+// budget fitting and bounded retry behavior still apply. It does not change
+// summary trigger thresholds or the summary output limit.
+func WithRequestInputTokenBudget(tokens int) Option {
+	return func(s *sessionSummarizer) {
+		s.requestInputTokenBudget = tokens
+	}
+}
+
+// WithSkipRecent sets a legacy callback that determines how many recent events
+// to skip.
+//
+// Deprecated: Use WithSkipRecentContext.
+func WithSkipRecent(skipFunc SkipRecentFunc) Option {
+	return func(s *sessionSummarizer) {
+		s.skipRecentFunc = skipFunc
+		s.skipRecentContextFunc = nil
+	}
+}
+
+// WithSkipRecentContext sets a function to determine how many of the most
+// recent events should be skipped during summarization. The context is the
+// same request context passed to ShouldSummarizeWithContext or Summarize. In
+// the normal Runner LLM flow, the function receives the projected session
+// history visible to the model, after history filtering and request-side
+// compaction. Standalone summarization without a model-request view preserves
+// the legacy raw-session input. Return 0 to skip none. When both skip-recent
+// options are configured, the last option takes precedence.
 //
 // Example:
 //
-//	WithSkipRecent(func(events []event.Event) int {
-//	    // Skip the last 3 events
-//	    return 3
-//	})
-//
-//	WithSkipRecent(func(events []event.Event) int {
-//	    // Skip events from the last 5 minutes
+//	WithSkipRecentContext(func(ctx context.Context, events []event.Event) int {
+//	    // Skip events from the last 5 minutes.
 //	    cutoff := time.Now().Add(-5 * time.Minute)
 //	    skipCount := 0
 //	    for i := len(events) - 1; i >= 0; i-- {
@@ -131,9 +163,10 @@ func WithMaxSummaryWords(maxWords int) Option {
 //	    }
 //	    return skipCount
 //	})
-func WithSkipRecent(skipFunc SkipRecentFunc) Option {
+func WithSkipRecentContext(skipFunc ContextSkipRecentFunc) Option {
 	return func(s *sessionSummarizer) {
-		s.skipRecentFunc = skipFunc
+		s.skipRecentFunc = nil
+		s.skipRecentContextFunc = skipFunc
 	}
 }
 

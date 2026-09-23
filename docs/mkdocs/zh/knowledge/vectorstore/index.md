@@ -16,6 +16,7 @@ trpc-agent-go 支持多种向量存储实现：
 | [Elasticsearch](elasticsearch.md) | 支持 v7/v8/v9 多版本 |
 | [Qdrant](qdrant.md) | 高性能向量数据库 |
 | [Milvus](milvus.md) | 高性能向量数据库 |
+| [ChromaDB](chromadb.md) | 基于 Chroma v2 REST API |
 
 ## 搜索模式
 
@@ -87,3 +88,4 @@ for i, r := range rspSearchWithFilter.Documents {
 - [Elasticsearch](elasticsearch.md) - Elasticsearch 配置
 - [Qdrant](qdrant.md) - Qdrant 配置
 - [Milvus](milvus.md) - Milvus 配置
+- [ChromaDB](chromadb.md) - ChromaDB 配置

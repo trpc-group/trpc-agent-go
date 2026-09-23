@@ -389,6 +389,57 @@ func TestProcessStreamingEventsAggregatesFileParts(t *testing.T) {
 	}
 }
 
+func TestProcessStreamingEventsPreservesMixedContentPartOrder(t *testing.T) {
+	remote := &A2AAgent{
+		name:           "remote",
+		eventConverter: &defaultA2AEventConverter{},
+	}
+	stream := make(chan protocol.StreamResponse, 3)
+	stream <- protocol.NewStreamResponseArtifactUpdate(&protocol.TaskArtifactUpdateEvent{
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts: []*protocol.Part{
+				protocol.NewRawPart([]byte("artifact"), "image/png"),
+			},
+		},
+	})
+	message := protocol.NewMessage(protocol.MessageRoleAgent, []*protocol.Part{
+		protocol.NewRawPart([]byte("message"), "image/png"),
+	})
+	stream <- protocol.NewStreamResponseMessage(&message)
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 3),
+		stream,
+	)
+	if result.terminalError != nil {
+		t.Fatalf("terminal error = %v, want nil", result.terminalError)
+	}
+	if len(result.aggregatedContentParts) != 2 {
+		t.Fatalf(
+			"aggregated content parts = %#v, want two images",
+			result.aggregatedContentParts,
+		)
+	}
+	if got := string(result.aggregatedContentParts[0].Image.Data); got != "artifact" {
+		t.Fatalf("first content part = %q, want artifact", got)
+	}
+	if got := string(result.aggregatedContentParts[1].Image.Data); got != "message" {
+		t.Fatalf("second content part = %q, want message", got)
+	}
+}
+
 func TestProcessStreamingEventsReplacesArtifactSnapshot(t *testing.T) {
 	remote := &A2AAgent{
 		name:           "remote",
@@ -667,5 +718,72 @@ func TestNewUsesSuppliedAgentCardIdentityAndPrimaryURL(t *testing.T) {
 	}
 	if card.URL != "http://legacy.example.com" {
 		t.Fatalf("caller-owned card URL was mutated to %q", card.URL)
+	}
+}
+
+func TestNewDoesNotMutateSuppliedAgentCardInterfaceBackingArray(t *testing.T) {
+	backing := []protocolserver.AgentInterface{{
+		URL:             "https://sentinel.example.com",
+		ProtocolBinding: "sentinel",
+	}}
+	card := &protocolserver.AgentCard{
+		Name:                "remote",
+		URL:                 "https://legacy.example.com",
+		SupportedInterfaces: backing[:0],
+	}
+	remote, err := New(WithAgentCard(card))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if got := backing[0].URL; got != "https://sentinel.example.com" {
+		t.Fatalf("caller-owned backing URL = %q, want sentinel unchanged", got)
+	}
+	if len(card.SupportedInterfaces) != 0 {
+		t.Fatalf("caller-owned interfaces length = %d, want 0", len(card.SupportedInterfaces))
+	}
+	if got := remote.agentCard.PrimaryURL(); got != "https://legacy.example.com" {
+		t.Fatalf("normalized primary URL = %q, want legacy URL", got)
+	}
+}
+
+func TestNewPreservesSignedAgentCardPayload(t *testing.T) {
+	card := &protocolserver.AgentCard{
+		Name: "remote",
+		URL:  "https://legacy.example.com",
+		SupportedInterfaces: []protocolserver.AgentInterface{
+			{
+				URL:             "https://grpc.example.com",
+				ProtocolBinding: "GRPC",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			},
+			{
+				URL:             "https://jsonrpc.example.com",
+				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			},
+		},
+		SecurityRequirements: protocol.SecurityRequirements{{"taskApiKey": {}}},
+		Signatures: []protocolserver.AgentCardSignature{{
+			Protected: "header",
+			Signature: "signature",
+		}},
+	}
+	snapshotJSON, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("marshal Agent Card snapshot failed: %v", err)
+	}
+	var snapshot protocolserver.AgentCard
+	if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+		t.Fatalf("unmarshal Agent Card snapshot failed: %v", err)
+	}
+	remote, err := New(WithAgentCard(card))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if !reflect.DeepEqual(card, &snapshot) {
+		t.Fatalf("input signed Agent Card = %#v, want original payload %#v", card, &snapshot)
+	}
+	if got := remote.GetAgentCard(); !reflect.DeepEqual(got, &snapshot) {
+		t.Fatalf("stored signed Agent Card = %#v, want original payload %#v", got, &snapshot)
 	}
 }

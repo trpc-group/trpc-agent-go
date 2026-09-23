@@ -8539,8 +8539,8 @@ func TestBuildThinkingOption(t *testing.T) {
 // calls when the provider returns all indices as 0.
 func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 	t.Run("fix indices for parallel tool calls with same index 0", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First tool call chunk with ID "call_1" and index 0.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8561,10 +8561,10 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
 		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
-		assert.Equal(t, 0, idToIndexMap["call_1"])
-		assert.Equal(t, 1, nextIndex)
+		assert.Equal(t, 0, state.idToIndexMap["call_1"])
+		assert.Equal(t, 1, state.nextIndex)
 
 		// Second tool call chunk with ID "call_2" and index 0 (should be fixed to 1).
 		chunk2 := openai.ChatCompletionChunk{
@@ -8585,16 +8585,16 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
 		assert.Equal(t, int64(1), fixed2.Choices[0].Delta.ToolCalls[0].Index)
-		assert.Equal(t, 1, idToIndexMap["call_2"])
-		assert.Equal(t, 2, nextIndex)
+		assert.Equal(t, 1, state.idToIndexMap["call_2"])
+		assert.Equal(t, 2, state.nextIndex)
 	})
 
 	t.Run("fix indices for repeated chunks of the same tool call ID", func(t *testing.T) {
 		// This test covers providers that keep returning index 0 for subsequent chunks of a later tool call, which would otherwise corrupt the accumulator state.
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 		// Prepare streaming chunks.
 		chunk1 := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8671,17 +8671,17 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 		// Apply index fixing per chunk.
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
-		fixed3 := fixToolCallIndices(chunk3, idToIndexMap, &nextIndex)
-		fixed4 := fixToolCallIndices(chunk4, idToIndexMap, &nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
+		fixed2 := fixToolCallIndices(chunk2, states)
+		fixed3 := fixToolCallIndices(chunk3, states)
+		fixed4 := fixToolCallIndices(chunk4, states)
 		// Verify fixed indices and mapping.
 		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(1), fixed3.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(1), fixed4.Choices[0].Delta.ToolCalls[0].Index)
-		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
-		assert.Equal(t, 2, nextIndex)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, state.idToIndexMap)
+		assert.Equal(t, 2, state.nextIndex)
 		// Feed fixed chunks into the accumulator.
 		acc := openai.ChatCompletionAccumulator{}
 		acc.AddChunk(fixed1)
@@ -8701,8 +8701,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 
 	t.Run("fix indices for multiple tool calls in a single chunk with same index 0", func(t *testing.T) {
 		// This test covers providers that emit multiple tool calls in a single chunk with all indices set to 0.
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 		// Prepare a chunk containing two tool calls.
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8733,11 +8733,11 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 		// Apply index fixing and verify mapping.
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		assert.Equal(t, int64(0), fixed.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(1), fixed.Choices[0].Delta.ToolCalls[1].Index)
-		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
-		assert.Equal(t, 2, nextIndex)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, state.idToIndexMap)
+		assert.Equal(t, 2, state.nextIndex)
 		// Verify accumulator output.
 		acc := openai.ChatCompletionAccumulator{}
 		acc.AddChunk(fixed)
@@ -8753,8 +8753,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 
 	t.Run("fix indices for multiple tool calls in a single chunk with colliding non-zero index", func(t *testing.T) {
 		// This test covers providers that emit multiple tool calls sharing a non-zero index in the same chunk.
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 		// Prepare a chunk containing two tool calls that both claim the same non-zero index.
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8785,12 +8785,12 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 		// Apply index fixing and verify both tool calls end up with distinct indices.
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		idx1 := int(fixed.Choices[0].Delta.ToolCalls[0].Index)
 		idx2 := int(fixed.Choices[0].Delta.ToolCalls[1].Index)
 		require.NotEqual(t, idx1, idx2)
-		assert.Equal(t, idx1, idToIndexMap["call_1"])
-		assert.Equal(t, idx2, idToIndexMap["call_2"])
+		assert.Equal(t, idx1, state.idToIndexMap["call_1"])
+		assert.Equal(t, idx2, state.idToIndexMap["call_2"])
 		// Verify accumulator output uses separate slots for both tool calls.
 		acc := openai.ChatCompletionAccumulator{}
 		acc.AddChunk(fixed)
@@ -8809,8 +8809,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 	})
 
 	t.Run("preserve correct indices when provider sets them properly", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First tool call with correct index 0.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8831,7 +8831,7 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
 		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
 
 		// Second tool call with correct index 1.
@@ -8853,14 +8853,14 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
 		// Should preserve the original index 1.
 		assert.Equal(t, int64(1), fixed2.Choices[0].Delta.ToolCalls[0].Index)
 	})
 
 	t.Run("handle continuation chunks without ID", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First chunk with ID.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8881,7 +8881,7 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixToolCallIndices(chunk1, states)
 
 		// Continuation chunk without ID (arguments streaming).
 		chunk2 := openai.ChatCompletionChunk{
@@ -8902,26 +8902,26 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
 		// Should preserve index 0 for continuation.
 		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
 	})
 
 	t.Run("empty choices returns unchanged chunk", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{},
 		}
 
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		assert.Equal(t, chunk, fixed)
 	})
 
 	t.Run("no tool calls returns unchanged chunk", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8933,7 +8933,7 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		assert.Equal(t, "Hello", fixed.Choices[0].Delta.Content)
 	})
 }
@@ -8943,8 +8943,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 func TestAccumulatorWithFixedIndices(t *testing.T) {
 	t.Run("accumulator separates tool calls with different indices", func(t *testing.T) {
 		acc := openai.ChatCompletionAccumulator{}
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First tool call chunk with ID "call_1" and index 0.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8967,8 +8967,8 @@ func TestAccumulatorWithFixedIndices(t *testing.T) {
 			},
 		}
 
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
-		t.Logf("fixed1 index: %d, nextIndex: %d", fixed1.Choices[0].Delta.ToolCalls[0].Index, nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
+		t.Logf("fixed1 index: %d, nextIndex: %d", fixed1.Choices[0].Delta.ToolCalls[0].Index, state.nextIndex)
 		acc.AddChunk(fixed1)
 
 		// Second tool call chunk with ID "call_2" and index 0 (should be fixed to 1).
@@ -8992,8 +8992,8 @@ func TestAccumulatorWithFixedIndices(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
-		t.Logf("fixed2 index: %d, nextIndex: %d", fixed2.Choices[0].Delta.ToolCalls[0].Index, nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
+		t.Logf("fixed2 index: %d, nextIndex: %d", fixed2.Choices[0].Delta.ToolCalls[0].Index, state.nextIndex)
 		acc.AddChunk(fixed2)
 
 		// Verify accumulator has two separate tool calls.

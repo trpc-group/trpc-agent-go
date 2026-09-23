@@ -11,6 +11,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -166,6 +168,60 @@ func (s *summaryPartialFailureService) Calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
+}
+
+type postRebuildFailingTokenCounter struct {
+	rangeCalls int
+}
+
+func (c *postRebuildFailingTokenCounter) CountTokens(
+	context.Context,
+	model.Message,
+) (int, error) {
+	return 1, nil
+}
+
+func (c *postRebuildFailingTokenCounter) CountTokensRange(
+	context.Context,
+	[]model.Message,
+	int,
+	int,
+) (int, error) {
+	c.rangeCalls++
+	if c.rangeCalls == 1 {
+		return 3000, nil
+	}
+	return 0, errors.New("post-rebuild token count failed")
+}
+
+func captureWarningLogs(t *testing.T) func() string {
+	t.Helper()
+	var warnings []string
+	oldWarnfContext := log.WarnfContext
+	log.WarnfContext = func(_ context.Context, format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() {
+		log.WarnfContext = oldWarnfContext
+	})
+	return func() string {
+		return strings.Join(warnings, "\n")
+	}
+}
+
+func captureInfoLogs(t *testing.T) func() string {
+	t.Helper()
+	var infos []string
+	oldInfofContext := log.InfofContext
+	log.InfofContext = func(_ context.Context, format string, args ...any) {
+		infos = append(infos, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() {
+		log.InfofContext = oldInfofContext
+	})
+	return func() string {
+		return strings.Join(infos, "\n")
+	}
 }
 
 func TestSummarySnapshotAdvancedUsesBoundary(t *testing.T) {
@@ -515,6 +571,65 @@ func TestMaybeCompactContextBeforeLLM_RebuildsRequestWithSummary(t *testing.T) {
 	require.Equal(t, "completed", doneDiagnostic.Status)
 	require.NotNil(t, doneDiagnostic.Updated)
 	require.True(t, *doneDiagnostic.Updated)
+}
+
+func TestMaybeCompactContextBeforeLLM_LogsPostCountError(t *testing.T) {
+	modelName := "compact-retry-post-count-error"
+	model.RegisterModelContextWindow(modelName, 10000)
+	warningLogs := captureWarningLogs(t)
+	service := &summaryInjectingService{}
+	sess := &session.Session{Events: []event.Event{{
+		RequestID: "req-old",
+		Timestamp: time.Now().Add(-time.Hour),
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("history"),
+			}},
+		},
+	}}}
+	counter := &postRebuildFailingTokenCounter{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationModel(&compactingModel{name: modelName}),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+				processor.WithContextCompactionTokenCounter(counter),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.2,
+		},
+	)
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+
+	rebuilt := f.maybeCompactContextBeforeLLM(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		rebuildPlan,
+	)
+
+	require.NotSame(t, req, rebuilt)
+	require.Equal(t, 2, counter.rangeCalls)
+	logged := warningLogs()
+	require.Contains(t, logged, "outcome=post_count_error")
+	require.Contains(t, logged, "post_request_tokens=-1")
+	require.NotContains(t, logged, "outcome=success")
+	binding := summaryview.BindingFromInvocation(inv)
+	require.Contains(t, logged, fmt.Sprintf("summary_view_present=%t", binding.Present))
+	require.Contains(t, logged, fmt.Sprintf("summary_view_bound=%t", binding.Bound))
+	require.Contains(t, logged, fmt.Sprintf("summary_view_items=%d", binding.Items))
+	require.Contains(t, logged, fmt.Sprintf("binding_reason=%s", binding.Reason))
 }
 
 func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
@@ -906,6 +1021,8 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryInjectionDisabled(t *testi
 func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T) {
 	modelName := "compact-retry-summary-error"
 	model.RegisterModelContextWindow(modelName, 10000)
+	const sensitiveErrorText = "sensitive summary provider content"
+	warningLogs := captureWarningLogs(t)
 
 	baseSvc := inmemory.NewSessionService()
 	t.Cleanup(func() {
@@ -914,7 +1031,7 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 
 	service := &summaryFailingService{
 		Service: baseSvc,
-		err:     context.DeadlineExceeded,
+		err:     errors.New(sensitiveErrorText),
 	}
 	longContent := strings.Repeat("history ", 2000)
 	sess := &session.Session{
@@ -967,6 +1084,182 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenSummaryRefreshFails(t *testing.T)
 
 	require.Equal(t, 1, service.Calls())
 	require.Same(t, req, rebuilt)
+	logged := warningLogs()
+	require.Contains(t, logged, "outcome=summary_error")
+	require.Contains(t, logged, "schema_version=1")
+	require.Contains(t, logged, `filter_key="branch/test"`)
+	require.Contains(t, logged, "filter_key_truncated=false")
+	require.NotContains(t, logged, sensitiveErrorText)
+	require.NotContains(t, logged, "post_request_tokens=0")
+}
+
+func TestRunContextCompactionLogsRebuildUnavailable(t *testing.T) {
+	warningLogs := captureWarningLogs(t)
+	service := &summaryInjectingService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(service),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+		model.NewUserMessage("current"),
+	}}
+	decision := contextCompactionDecision{
+		shouldCompact: true,
+		tokenCount:    3000,
+		threshold:     2000,
+		contextWindow: 4000,
+	}
+
+	rebuilt := new(Flow).runContextCompaction(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		&contextCompactionRebuildPlan{},
+		decision,
+	)
+
+	require.Same(t, req, rebuilt)
+	logged := warningLogs()
+	require.Contains(t, logged, "outcome=rebuild_unavailable")
+	require.Contains(t, logged, "schema_version=1")
+	require.Contains(t, logged, `filter_key=""`)
+	require.Contains(t, logged, "filter_key_truncated=false")
+	require.Contains(t, logged, "post_request_tokens=3000")
+	require.Contains(t, logged, "binding_reason=absent")
+}
+
+// TestRunContextCompactionReportsBindingReason proves the compaction record
+// names the stage that broke the model-visible binding. A bare
+// summary_view_bound=false cannot be traced back to a cause after the fact.
+func TestRunContextCompactionReportsBindingReason(t *testing.T) {
+	warningLogs := captureWarningLogs(t)
+	service := &summaryInjectingService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(service),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		SessionID:            "session",
+		ContentRequestLength: 2,
+		Items: []summaryview.Item{{
+			Message:      model.NewUserMessage("history"),
+			RequestIndex: 1,
+		}},
+	})
+	// Provider-side token tailoring rewrote the request for the previous
+	// model call, so the projection is no longer proof of visibility.
+	summaryview.InvalidateBinding(inv)
+
+	new(Flow).runContextCompaction(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		&contextCompactionRebuildPlan{},
+		contextCompactionDecision{
+			shouldCompact: true,
+			tokenCount:    3000,
+			threshold:     2000,
+			contextWindow: 4000,
+		},
+	)
+
+	logged := warningLogs()
+	require.Contains(t, logged, "summary_view_present=true")
+	require.Contains(t, logged, "summary_view_bound=false")
+	require.Contains(t, logged,
+		"binding_reason="+summaryview.BindingReasonInvalidated)
+}
+
+// TestMaybeCompactContextBeforeLLM_SuccessLogsPostFinalizeBinding proves the
+// success record reads the invocation binding after rebuild Finalize, not the
+// snapshot frozen before summarization.
+func TestMaybeCompactContextBeforeLLM_SuccessLogsPostFinalizeBinding(t *testing.T) {
+	modelName := "compact-success-post-finalize-binding"
+	model.RegisterModelContextWindow(modelName, 10000)
+	infoLogs := captureInfoLogs(t)
+	warningLogs := captureWarningLogs(t)
+
+	baseSvc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, baseSvc.Close())
+	})
+
+	service := &summaryInjectingService{Service: baseSvc}
+	longContent := strings.Repeat("history ", 2000)
+	sess := &session.Session{
+		Events: []event.Event{{
+			RequestID: "req-old",
+			Timestamp: time.Now().Add(-time.Hour),
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewUserMessage(longContent),
+				}},
+			},
+		}},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-current"}),
+		agent.WithInvocationModel(&compactingModel{name: modelName}),
+		agent.WithInvocationEventFilterKey("branch/test"),
+	)
+
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.2,
+		},
+	)
+
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+	summaryview.InvalidateBinding(inv)
+	preBinding := summaryview.BindingFromInvocation(inv)
+	require.False(t, preBinding.Bound)
+	require.Equal(t, summaryview.BindingReasonInvalidated, preBinding.Reason)
+
+	rebuilt := f.maybeCompactContextBeforeLLM(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		rebuildPlan,
+	)
+
+	require.NotSame(t, req, rebuilt)
+	postBinding := summaryview.BindingFromInvocation(inv)
+	require.True(t, postBinding.Bound)
+	require.Equal(t, summaryview.BindingReasonBound, postBinding.Reason)
+	require.NotEqual(t, preBinding.Reason, postBinding.Reason)
+
+	logged := infoLogs()
+	require.Contains(t, logged, "outcome=success")
+	require.Contains(t, logged, "summary_view_bound=true")
+	require.Contains(t, logged,
+		"binding_reason="+summaryview.BindingReasonBound)
+	require.Contains(t, logged,
+		fmt.Sprintf("summary_view_items=%d", postBinding.Items))
+	require.NotContains(t, logged,
+		"binding_reason="+summaryview.BindingReasonInvalidated)
+	require.Empty(t, warningLogs())
 }
 
 func TestMaybeCompactContextBeforeLLM_RebuildsWithoutReplayingEarlierProcessors(t *testing.T) {
@@ -1109,6 +1402,7 @@ func TestMaybeCompactContextBeforeLLM_SkipsWhenUnsafeTailProcessorPresent(t *tes
 func TestMaybeCompactContextBeforeLLM_RebuildsAfterPartialSummaryFailure(t *testing.T) {
 	modelName := "compact-retry-partial-summary-error"
 	model.RegisterModelContextWindow(modelName, 10000)
+	warningLogs := captureWarningLogs(t)
 
 	baseSvc := inmemory.NewSessionService()
 	t.Cleanup(func() {
@@ -1157,6 +1451,10 @@ func TestMaybeCompactContextBeforeLLM_RebuildsAfterPartialSummaryFailure(t *test
 
 	req := &model.Request{}
 	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+	summaryview.InvalidateBinding(inv)
+	preBinding := summaryview.BindingFromInvocation(inv)
+	require.False(t, preBinding.Bound)
+	require.Equal(t, summaryview.BindingReasonInvalidated, preBinding.Reason)
 
 	rebuilt := f.maybeCompactContextBeforeLLM(
 		context.Background(),
@@ -1170,6 +1468,17 @@ func TestMaybeCompactContextBeforeLLM_RebuildsAfterPartialSummaryFailure(t *test
 	require.NotSame(t, req, rebuilt)
 	require.Contains(t, rebuilt.Messages[0].Content, "compressed despite persistence failure")
 	require.Equal(t, "current", rebuilt.Messages[1].Content)
+
+	postBinding := summaryview.BindingFromInvocation(inv)
+	require.True(t, postBinding.Bound)
+	require.Equal(t, summaryview.BindingReasonBound, postBinding.Reason)
+	logged := warningLogs()
+	require.Contains(t, logged, "outcome=persistence_error")
+	require.Contains(t, logged, "summary_view_bound=true")
+	require.Contains(t, logged,
+		"binding_reason="+summaryview.BindingReasonBound)
+	require.NotContains(t, logged,
+		"binding_reason="+summaryview.BindingReasonInvalidated)
 }
 
 func TestMaybeCompactContextBeforeLLM_RebuildPreservesPreContentRequestState(

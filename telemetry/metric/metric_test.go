@@ -19,11 +19,61 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 )
+
+func TestBuildResourceUsesDefaultServiceName(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+
+	res, err := buildResource(context.Background(), &options{})
+	if err != nil {
+		t.Fatalf("buildResource() error = %v", err)
+	}
+	serviceName, ok := res.Set().Value(semconv.ServiceNameKey)
+	if !ok {
+		t.Fatal("service.name should be set by default")
+	}
+	defaultServiceName, ok := resource.Default().Set().Value(semconv.ServiceNameKey)
+	if !ok {
+		t.Fatal("OpenTelemetry default resource does not contain service.name")
+	}
+	if serviceName.AsString() != defaultServiceName.AsString() {
+		t.Fatalf("service.name = %q, want %q", serviceName.AsString(), defaultServiceName.AsString())
+	}
+	if !strings.HasPrefix(serviceName.AsString(), "unknown_service:") {
+		t.Fatalf("service.name = %q, want unknown_service fallback", serviceName.AsString())
+	}
+	if _, ok := res.Set().Value(semconv.ServiceNamespaceKey); ok {
+		t.Fatal("service.namespace should be unset by default")
+	}
+	if _, ok := res.Set().Value(semconv.ServiceVersionKey); ok {
+		t.Fatal("service.version should be unset by default")
+	}
+}
+
+func TestInitMeterProviderUsesInstrumentationVersion(t *testing.T) {
+	provider := &scopeRecordingMeterProvider{versions: make(map[string]string)}
+	if err := InitMeterProvider(provider); err != nil {
+		t.Fatalf("InitMeterProvider() error = %v", err)
+	}
+
+	for _, name := range []string{
+		metrics.MeterNameChat,
+		metrics.MeterNameExecuteTool,
+		metrics.MeterNameInvokeAgent,
+		metrics.MeterNameWorkflow,
+	} {
+		if got := provider.versions[name]; got != identity.InstrumentationVersion() {
+			t.Fatalf("meter %q scope version = %q, want %q", name, got, identity.InstrumentationVersion())
+		}
+	}
+}
 
 // TestMetricsEndpoint validates metrics endpoint precedence rules.
 func TestGRPCMetricsEndpoint(t *testing.T) {
@@ -1017,6 +1067,16 @@ type namedMockMeterProvider struct {
 	noop.MeterProvider
 	workflowMeter metric.Meter
 	defaultMeter  metric.Meter
+}
+
+type scopeRecordingMeterProvider struct {
+	noop.MeterProvider
+	versions map[string]string
+}
+
+func (p *scopeRecordingMeterProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
+	p.versions[name] = metric.NewMeterConfig(opts...).InstrumentationVersion()
+	return p.MeterProvider.Meter(name, opts...)
 }
 
 func (m *namedMockMeterProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {

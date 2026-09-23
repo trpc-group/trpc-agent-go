@@ -27,11 +27,19 @@ if err != nil {
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
 
-**Redis ACL 要求**：`UpdateMemory` 使用服务端 Lua 脚本，以原子方式校验并
-轮换记忆 ID。除 `HGET`、脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
-访问权限外，ACL 用户还必须具有 `EVALSHA` 和 `EVAL` 权限；脚本尚未缓存时
-需要 `EVAL`。Redis 重启或执行 `SCRIPT FLUSH` 后脚本缓存可能被清除，因此
-不能只在预热阶段临时授予 `EVAL`。
+**Redis ACL 要求**：默认的每用户记忆上限为 `1000`。配置的上限为正数时，
+`AddMemory` 使用服务端 Lua 脚本，以原子方式检查容量并写入记忆；该脚本使用
+`HEXISTS`、`HLEN` 和 `HSET`。`UpdateMemory` 始终使用 Lua 脚本，以原子方式
+校验并轮换记忆 ID；其更新路径使用 `HGET`，脚本使用 `HEXISTS`、`HSET` 和
+`HDEL`。
+
+ACL 用户必须具有 `EVALSHA` 和 `EVAL` 权限（脚本尚未缓存时需要 `EVAL`）、
+两份脚本所用命令的权限，以及对应记忆 key 的访问权限。Redis 重启或执行
+`SCRIPT FLUSH` 后脚本缓存可能被清除，因此不能只在预热阶段临时授予 `EVAL`。
+在这些脚本路径下使用 Redis 兼容后端时，必须确认后端支持服务端 Lua。
+
+`WithMemoryLimit(0)` 会让 `AddMemory` 保持直接执行 `HSET` 的路径，不依赖
+Lua 脚本；`UpdateMemory` 仍然使用 Lua。
 
 **Key 前缀示例**：
 

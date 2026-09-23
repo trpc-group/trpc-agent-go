@@ -53,7 +53,11 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -62,12 +66,13 @@ func (s *Service) CreateSessionSummary(
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))
 	}
 
 	now := time.Now()
@@ -95,14 +100,32 @@ func (s *Service) CreateSessionSummary(
 		},
 		"$unset": bson.M{"expires_at": ""},
 	}
-	if _, err := s.client.UpdateOne(ctx, s.database, s.collSessionSummaries, filter, update,
-		options.Update().SetUpsert(true)); err != nil {
+	result, err := s.client.UpdateOne(ctx, s.database, s.collSessionSummaries, filter, update,
+		options.Update().SetUpsert(true))
+	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
+			// The conditional filter did not match a newer persisted summary,
+			// so the upsert raced an existing row. The stored summary stays.
+			att.Persisted(isummary.PersistStale)
 			return nil
 		}
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("upsert summary failed: %w", err))
 	}
+	att.Persisted(mongoPersistResult(result))
 	return nil
+}
+
+// mongoPersistResult maps an upsert result to a persistence diagnostic.
+// Acknowledged match or insert is stored. A nil or zero-count result cannot
+// prove stored or stale. Duplicate-key races are classified by the caller.
+func mongoPersistResult(result *mongo.UpdateResult) isummary.PersistResult {
+	if result == nil {
+		return isummary.PersistUnknown
+	}
+	if result.MatchedCount == 0 && result.UpsertedCount == 0 {
+		return isummary.PersistUnknown
+	}
+	return isummary.PersistStored
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
