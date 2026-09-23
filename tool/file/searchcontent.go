@@ -335,7 +335,12 @@ func (f *fileToolSet) searchContentLocal(
 	// within that single file. Models commonly pass a file path in "path"
 	// together with a glob file_pattern like "*", which would otherwise be
 	// treated as a directory and fail.
+	// A cached search stops early on a cancelled context, so the cancellation
+	// is reported rather than its partial result returned as a success.
 	if matches, ok := f.searchSinglePath(ctx, reqPath, re); ok {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		return matches, nil, nil
 	}
 	// Fast path: if the requested file exists only as a skill_run output_files
@@ -343,6 +348,9 @@ func (f *fileToolSet) searchContentLocal(
 	// This avoids model loops where a workspace-relative skill output path is
 	// passed to file tools whose base directory is different.
 	if matches, ok := f.searchSkillCache(ctx, reqPath, req, re); ok {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		return matches, nil, nil
 	}
 

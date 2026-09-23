@@ -177,6 +177,22 @@ func TestSearchContent_WorkspaceHonoursFileLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, sf.Files, 2)
+
+	// A path that exists only in the workspace falls back to the same
+	// entries and is bound by the same limit as the explicit workspace ref.
+	sf, err = f.searchFile(ctx, &searchFileRequest{
+		Path:    "out",
+		Pattern: "*.txt",
+	})
+	require.Error(t, err)
+	assert.ErrorAs(t, err, &tooMany)
+	assert.Contains(t, sf.Message, "more than 2 entries")
+	sf, err = f.searchFile(ctx, &searchFileRequest{
+		Path:    "out",
+		Pattern: "[ab].txt",
+	})
+	require.NoError(t, err)
+	assert.Len(t, sf.Files, 2)
 }
 
 func TestSearchTextContent_BoundedAndCancellable(t *testing.T) {

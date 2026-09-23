@@ -1140,3 +1140,42 @@ func TestSearchContent_InMemoryMatchesAreCapped(t *testing.T) {
 		assertCapped(t, rsp, err)
 	})
 }
+
+// A cancelled context is reported from a cached-file search, whether the file
+// is named by path or by file pattern, rather than returned as a partial or
+// empty success.
+func TestSearchContent_CachedFile_CancelledContext(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx, cancel := context.WithCancel(agent.NewInvocationContext(context.Background(), inv))
+	cancel()
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{{
+		Name:     "out/a.txt",
+		Content:  strings.Repeat("foo\n", 3000),
+		MIMEType: "text/plain",
+	}})
+
+	t.Run("by path", func(t *testing.T) {
+		rsp, err := fts.searchContent(ctx, &searchContentRequest{
+			Path:           "out/a.txt",
+			FilePattern:    "*",
+			ContentPattern: "foo",
+		})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, rsp.FileMatches)
+		assert.Contains(t, rsp.Message, "context canceled")
+	})
+	t.Run("by file pattern", func(t *testing.T) {
+		rsp, err := fts.searchContent(ctx, &searchContentRequest{
+			Path:           "out",
+			FilePattern:    "a.txt",
+			ContentPattern: "foo",
+		})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, rsp.FileMatches)
+		assert.Contains(t, rsp.Message, "context canceled")
+	})
+}
