@@ -9,6 +9,7 @@
 package tool
 
 import (
+	"context"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -246,5 +247,46 @@ func TestConcurrencyResolutionStopsAtDegenerateWrappers(t *testing.T) {
 	}
 	if !IsConcurrencySafe(self) || !IsConcurrencySafe(empty) {
 		t.Error("degenerate wrappers declare nothing and are admitted")
+	}
+}
+
+// A toolset's name mode changes only the model-facing name. Whether the tools
+// come out qualified or under their original names, the wrapper still does not
+// answer for them, and the resolver still finds each tool's own state.
+func TestNamedToolSetNameModesPreserveConcurrencyState(t *testing.T) {
+	modes := []struct {
+		name string
+		mode tool.ToolSetToolNameMode
+	}{
+		{"qualified", tool.ToolSetToolNameModeQualified},
+		{"original", tool.ToolSetToolNameModeOriginal},
+	}
+	members := []tool.Tool{plainTool{}, unsafeTool{}, guaranteeingTool{}}
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			set := NewNamedToolSetWithMode(
+				&fakeToolSet{name: "set", tools: members},
+				mode.mode,
+			)
+			named := set.Tools(context.Background())
+			if len(named) != len(members) {
+				t.Fatalf("Tools() returned %d tools, want %d", len(named), len(members))
+			}
+			for i, wrapped := range named {
+				member := members[i]
+				if _, declared := declaresConcurrency(wrapped); declared {
+					t.Errorf("%T: the named wrapper must not answer ConcurrencyAware itself", member)
+				}
+				if got := resolveConcurrencyOwner(wrapped); got != member {
+					t.Errorf("%T: resolveConcurrencyOwner() = %T, want the member", member, got)
+				}
+				if got, want := IsConcurrencySafe(wrapped), tool.IsConcurrencySafe(member); got != want {
+					t.Errorf("%T: IsConcurrencySafe(named) = %v, want the member's own %v", member, got, want)
+				}
+				if got, want := tool.MetadataOf(wrapped), tool.MetadataOf(member); got != want {
+					t.Errorf("%T: MetadataOf(named) = %+v, want %+v", member, got, want)
+				}
+			}
+		})
 	}
 }
