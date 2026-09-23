@@ -57,6 +57,7 @@ type Options struct {
 	MessagesSnapshotFollowEnabled             bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
 	MessagesSnapshotFollowMaxDuration         time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	MessagesSnapshotRunLifecycleEventsEnabled bool                  // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
+	MessagesSnapshotBestEffortEnabled         bool                  // MessagesSnapshotBestEffortEnabled skips malformed track events while reducing history snapshots.
 	StartSpan                                 StartSpan             // StartSpan starts a span for an AG-UI run.
 	PostRunFinalizationTimeout                time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
 	TrackPersistenceTimeout                   time.Duration         // TrackPersistenceTimeout bounds how long AG-UI track persistence is allowed to take.
@@ -234,6 +235,14 @@ func WithMessagesSnapshotFollowMaxDuration(d time.Duration) Option {
 func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.MessagesSnapshotRunLifecycleEventsEnabled = enabled
+	}
+}
+
+// WithMessagesSnapshotBestEffortEnabled controls whether malformed history
+// track events are skipped while building MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotBestEffortEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotBestEffortEnabled = enabled
 	}
 }
 

@@ -304,6 +304,14 @@ func WithMessagesSnapshotRunLifecycleEventsEnabled(enabled bool) Option {
 	}
 }
 
+// WithMessagesSnapshotBestEffortEnabled controls whether malformed history
+// track events are skipped while building MESSAGES_SNAPSHOT.
+func WithMessagesSnapshotBestEffortEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotBestEffortEnabled(enabled))
+	}
+}
+
 // WithAppName sets the app name.
 func WithAppName(n string) Option {
 	return func(o *options) {

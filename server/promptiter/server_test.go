@@ -575,6 +575,38 @@ func TestHandleRunsPassesTargetSurfaceIDsWithoutDescribe(t *testing.T) {
 	assert.Equal(t, []string{"unknown#instruction"}, captured.TargetSurfaceIDs)
 }
 
+func TestHandleRunsPassesStopOnNoTrainLossesPolicy(t *testing.T) {
+	var captured *enginepkg.RunRequest
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = opts
+				captured = request
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
+	body, err := json.Marshal(&RunRequest{
+		Run: &enginepkg.RunRequest{
+			Train:      testEvalSetInputs("train"),
+			Validation: testEvalSetInputs("validation"),
+			StopPolicy: enginepkg.StopPolicy{
+				StopOnNoTrainLosses: true,
+			},
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotNil(t, captured)
+	assert.True(t, captured.StopPolicy.StopOnNoTrainLosses)
+}
+
 func TestHandleAsyncRunsIsNotExposedWithoutManager(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, srv.AsyncRunsPath(), bytes.NewBufferString(`{"run":null}`))

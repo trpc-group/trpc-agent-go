@@ -1852,9 +1852,16 @@ When `WithEnableContextCompaction(true)` is enabled, the framework applies promp
 - Pass 2 skips tool results returned by `session_load` itself. This prevents recovered slices from being silently compacted again; `session_load` output size is controlled by its own window parameters and `content_limit`, so very large results should be reloaded in slices instead of as one full payload.
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
 - Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request.
-- Context compaction uses `SimpleTokenCounter` by default. For CJK-heavy
-  workloads or provider-specific tokenization, pass the same custom counter
-  used by token tailoring via `WithContextCompactionTokenCounter(...)`.
+- Request-size estimates for the pre-LLM summary trigger and automatic summary
+  checks use the agent's `WithContextCompactionTokenCounter(...)` when set,
+  otherwise the process default configured by `summary.SetTokenCounter(...)`,
+  otherwise `SimpleTokenCounter`. The process default is resolved at evaluation
+  time, including for agents that were constructed before it changed. Automatic
+  summary checks use this rule even when context compaction is disabled.
+- Tool-result budgets and model token tailoring retain their independent
+  defaults. For CJK-heavy workloads or provider-specific tokenization, configure
+  the same counter explicitly for those paths when consistent estimates are
+  needed.
 
 ```go
 counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.6))
@@ -2038,7 +2045,7 @@ summarizer := summary.NewSummarizer(
 
 **Important Notes:**
 
-- **Global Effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process. Set it once during application initialization.
+- **Global Effect**: `SetTokenCounter` configures summary checks and summary-request estimates in the current process. It also supplies the default for model-visible request sizes and pre-LLM summary triggers. An explicit `WithContextCompactionTokenCounter` on an agent takes precedence for that agent's request-size estimates. This preserves custom counting when checks receive a finalized request view instead of recounting stored events. Tool-result compaction and model token tailoring retain their separate defaults. Set the process default during application initialization; later updates apply to subsequent evaluations, and `SetTokenCounter(nil)` restores the built-in default. Custom counters must be safe for concurrent calls.
 - **Default Counter**: If not set, a `SimpleTokenCounter` with default configuration is used (approx. 4 characters per token).
 - **Use Cases**:
   - Use accurate tokenizers (tiktoken) when precise estimation is needed

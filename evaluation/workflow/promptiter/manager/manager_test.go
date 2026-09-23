@@ -738,6 +738,68 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	assert.Equal(t, "structure_1", current.AcceptedProfile.StructureID)
 }
 
+func TestRunObserverPreservesSkippedAcceptance(t *testing.T) {
+	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	concreteManager, ok := managerInstance.(*manager)
+	require.True(t, ok)
+	run := &promptiterengine.RunResult{
+		AppName:         "demo-app",
+		ID:              "run-1",
+		Status:          promptiterengine.RunStatusRunning,
+		AcceptedProfile: &promptiter.Profile{StructureID: "structure_1"},
+	}
+	require.NoError(t, concreteManager.store.Create(context.Background(), "demo-app", run))
+	observer := &observer{
+		manager: concreteManager,
+		run:     run,
+	}
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:    promptiterengine.EventKindBaselineValidation,
+		Payload: newEvaluationResult(0.55),
+	}))
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:  promptiterengine.EventKindRoundStarted,
+		Round: 1,
+	}))
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:    promptiterengine.EventKindRoundTrainEvaluation,
+		Round:   1,
+		Payload: newEvaluationResult(0.80),
+	}))
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:    promptiterengine.EventKindRoundLosses,
+		Round:   1,
+		Payload: []promptiter.CaseLoss{},
+	}))
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:  promptiterengine.EventKindRoundCompleted,
+		Round: 1,
+		Payload: &promptiterengine.RoundCompleted{
+			ShouldStop: true,
+			StopReason: "no train losses extracted",
+		},
+	}))
+	current, err := concreteManager.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Len(t, current.Rounds, 1)
+	round := current.Rounds[0]
+	assert.Nil(t, round.Backward)
+	assert.Nil(t, round.Aggregation)
+	assert.Nil(t, round.Patches)
+	assert.Nil(t, round.OutputProfile)
+	assert.Nil(t, round.Validation)
+	assert.Nil(t, round.Acceptance)
+	require.NotNil(t, round.Stop)
+	assert.True(t, round.Stop.ShouldStop)
+	assert.Equal(t, "no train losses extracted", round.Stop.Reason)
+	require.NotNil(t, current.AcceptedProfile)
+	assert.Equal(t, "structure_1", current.AcceptedProfile.StructureID)
+}
+
 func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	store := &recordingStore{}
 	managerInstance, err := New("demo-app", &fakePromptIterEngine{}, WithStore(store))

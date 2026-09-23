@@ -18,6 +18,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
 // =============================================================================
@@ -36,15 +37,19 @@ const summaryNilError = "summary is nil"
 // TTL is set atomically inside the Lua script to avoid orphan keys without expiry.
 // UpdatedAt is normalized to UTC before serialization so that the Lua-side
 // lexicographic comparison of ISO 8601 strings equals chronological order.
+//
+// It reports the set-if-newer classification. A successful script execution
+// never becomes a caller-visible error just because the reply is unrecognized;
+// that reply is classified as unknown instead of stored or stale.
 func (c *Client) CreateSummary(
 	ctx context.Context,
 	key session.Key,
 	filterKey string,
 	sum *session.Summary,
 	ttl time.Duration,
-) error {
+) (write util.SummaryWriteResult, err error) {
 	if sum == nil {
-		return errors.New(summaryNilError)
+		return util.SummaryWriteUnknown, errors.New(summaryNilError)
 	}
 	// Normalize to UTC so Lua string comparison of "updated_at" is correct.
 	normalized := sum.Clone()
@@ -52,7 +57,7 @@ func (c *Client) CreateSummary(
 
 	payload, err := json.Marshal(normalized)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return util.SummaryWriteUnknown, fmt.Errorf("marshal summary failed: %w", err)
 	}
 
 	ttlSeconds := int64(0)
@@ -62,13 +67,13 @@ func (c *Client) CreateSummary(
 
 	sumKey := c.keys.SummaryKey(key)
 
-	if _, err := c.runScript(
+	result, err := c.runScript(
 		ctx, luaSummarySetIfNewer, []string{sumKey}, filterKey, string(payload), ttlSeconds,
-	).Result(); err != nil {
-		return fmt.Errorf("store summary failed: %w", err)
+	).Result()
+	if err != nil {
+		return util.SummaryWriteUnknown, fmt.Errorf("store summary failed: %w", err)
 	}
-
-	return nil
+	return util.ParseSummaryWriteResult(result), nil
 }
 
 // GetSummary retrieves all summaries for the session.

@@ -520,6 +520,107 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
 }
 
+func TestRunStopsBeforeBackwardWhenTrainLossesAreEmpty(t *testing.T) {
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		_ = evalSetID
+		_ = profileValue
+		return scriptedEvalOutcome{
+			score:             0.8,
+			metricStatus:      status.EvalStatusPassed,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+	})
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
+	)
+	require.NoError(t, err)
+	observedKinds := make([]EventKind, 0)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:          testEvalSetInputs("train"),
+		Validation:     testEvalSetInputs("validation"),
+		InitialProfile: runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+		StopPolicy: StopPolicy{
+			StopOnNoTrainLosses: true,
+		},
+		MaxRounds:        5,
+		TargetSurfaceIDs: []string{testSurfaceID},
+	}, WithObserver(func(ctx context.Context, event *Event) error {
+		_ = ctx
+		observedKinds = append(observedKinds, event.Kind)
+		return nil
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, []string{"base prompt", "base prompt"}, evalService.profiles)
+	require.Len(t, result.Rounds, 1)
+	round := result.Rounds[0]
+	assert.Empty(t, round.Losses)
+	assert.Nil(t, round.Backward)
+	assert.Nil(t, round.Aggregation)
+	assert.Nil(t, round.Patches)
+	assert.Nil(t, round.OutputProfile)
+	assert.Nil(t, round.Validation)
+	assert.Nil(t, round.Acceptance)
+	require.NotNil(t, round.Stop)
+	assert.True(t, round.Stop.ShouldStop)
+	assert.Equal(t, "no train losses extracted", round.Stop.Reason)
+	assert.Equal(t, []EventKind{
+		EventKindBaselineValidation,
+		EventKindRoundStarted,
+		EventKindRoundTrainEvaluation,
+		EventKindRoundLosses,
+		EventKindRoundCompleted,
+	}, observedKinds)
+}
+
+func TestRunContinuesOnEmptyTrainLossesWhenPolicyDisabled(t *testing.T) {
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		_ = evalSetID
+		_ = profileValue
+		return scriptedEvalOutcome{
+			score:             0.8,
+			metricStatus:      status.EvalStatusPassed,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+	})
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
+	)
+	require.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, []string{"base prompt", "base prompt", "base prompt"}, evalService.profiles)
+	require.Len(t, result.Rounds, 1)
+	round := result.Rounds[0]
+	assert.Empty(t, round.Losses)
+	assert.NotNil(t, round.Backward)
+	assert.NotNil(t, round.Aggregation)
+	assert.NotNil(t, round.Patches)
+	assert.NotNil(t, round.OutputProfile)
+	assert.NotNil(t, round.Validation)
+	require.NotNil(t, round.Acceptance)
+	assert.True(t, round.Acceptance.Accepted)
+	require.NotNil(t, round.Stop)
+	assert.Equal(t, "max rounds reached", round.Stop.Reason)
+}
+
 func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
 	backward := &fakeBackwarder{
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
