@@ -149,14 +149,26 @@ func TestFormatLogicalEdgeCases(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCombineWhere(t *testing.T) {
-	assert.Equal(t, " WHERE a > 0", combineWhere("a > 0", ""))
-	assert.Equal(t, " WHERE (a > 0) AND (b = 1)", combineWhere("a > 0", " WHERE b = 1"))
-	// The existing clause may contain a top-level OR, which must stay grouped.
-	assert.Equal(t,
-		" WHERE (a > 0) AND (b = 1 OR c = 2)",
-		combineWhere("a > 0", " WHERE b = 1 OR c = 2"),
-	)
+func TestPredicateAnd(t *testing.T) {
+	// A single predicate keeps its parentheses so callers can AND-append it.
+	got, args := literalPredicate("a > 0").whereClause()
+	assert.Equal(t, " WHERE a > 0", got)
+	assert.Nil(t, args)
+
+	// Arguments follow the order of their SQL fragments.
+	got, args = literalPredicate("k = ?").and(predicate{sql: "id IN (?)", args: []any{"a"}}).whereClause()
+	assert.Equal(t, " WHERE (k = ?) AND (id IN (?))", got)
+	assert.Equal(t, []any{"a"}, args)
+
+	// An existing clause may contain a top-level OR, which must stay grouped.
+	got, _ = literalPredicate("a > 0").and(literalPredicate("b = 1 OR c = 2")).whereClause()
+	assert.Equal(t, " WHERE (a > 0) AND (b = 1 OR c = 2)", got)
+
+	// Empty predicates drop out instead of producing dangling ANDs.
+	empty := literalPredicate("")
+	assert.True(t, empty.empty())
+	got, _ = empty.and(literalPredicate("")).whereClause()
+	assert.Equal(t, "", got)
 }
 
 func TestToFloat64AllTypes(t *testing.T) {
@@ -188,7 +200,7 @@ func TestToFloat64AllTypes(t *testing.T) {
 }
 
 func TestMarshalMetadataError(t *testing.T) {
-	_, err := marshalMetadata(map[string]any{"ch": make(chan int)})
+	_, err := marshalMetadata(map[string]any{"ch": make(chan int)}, "")
 	require.Error(t, err)
 }
 
@@ -196,7 +208,9 @@ func TestScanMetadataRow(t *testing.T) {
 	vs := vsWithClient(&mockClient{}, WithFilterFields(
 		FilterFieldSpec{Name: "category", Type: FilterFieldString},
 	))
-	rows := newMockRows([][]any{{"doc1", `{"x":1,"category":"news"}`, "news"}})
+	// The filter column is Nullable, so the row carries a pointer value.
+	category := "news"
+	rows := newMockRows([][]any{{"doc1", `{"x":1,"category":"news"}`, &category}})
 	require.True(t, rows.Next())
 	id, md, err := vs.scanMetadataRow(rows)
 	require.NoError(t, err)

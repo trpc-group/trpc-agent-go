@@ -18,10 +18,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-// internalEmbeddingTextKey stores document.EmbeddingText inside the metadata
-// column. It is stripped from the metadata map on every read path, so callers
-// never see it.
-const internalEmbeddingTextKey = "__clickhouse_embedding_text"
+// internalMetadataKey is the only key the store writes into the metadata
+// column. Everything the store persists on its own, including
+// document.EmbeddingText, lives inside that envelope, while caller metadata is
+// nested one level deeper. No caller-supplied metadata key can therefore be
+// overwritten by internal state, and callers never observe the envelope.
+const internalMetadataKey = "__clickhouse_v1"
 
 // Document mapping between trpc-agent-go document.Document and the ClickHouse row.
 //
@@ -30,24 +32,39 @@ const internalEmbeddingTextKey = "__clickhouse_embedding_text"
 //	ID                              id        String
 //	Name                            name      String
 //	Content                         content   String
-//	Metadata (map[string]any)       metadata  String (JSON encoded)
+//	Metadata (map[string]any)       metadata  String (JSON encoded envelope)
+//	EmbeddingText                   metadata  envelope field "embedding_text"
 //	CreatedAt (time.Time)           created_at DateTime64(6)
 //	UpdatedAt (time.Time)           updated_at DateTime64(6)
 //	embedding ([]float64)           embedding Array(Float64)
-//	filterFields                    <name>    typed column
+//	filterFields                    <name>    Nullable typed column
 //
 // Filter fields declared through WithFilterFields are materialized as dedicated
-// typed columns in addition to being present in the JSON-encoded metadata.
+// Nullable typed columns in addition to being present in the JSON-encoded
+// metadata. Nullable is required to tell a document that never set a field
+// apart from one that set it to the type's zero value: filtering on
+// "count = 0" must not match documents without a count.
+
+// storedMetadata is the envelope persisted in the metadata column. Caller
+// metadata is nested under Metadata so that no caller key can collide with the
+// fields the store owns.
+type storedMetadata struct {
+	// Metadata is the caller-supplied document metadata, returned unchanged.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// EmbeddingText persists document.EmbeddingText across a round trip.
+	EmbeddingText string `json:"embedding_text,omitempty"`
+}
 
 // row is the internal in-memory representation of a ClickHouse row.
 type row struct {
-	id        string
-	name      string
-	content   string
-	embedding []float64
-	metadata  map[string]any
-	createdAt time.Time
-	updatedAt time.Time
+	id            string
+	name          string
+	content       string
+	embedding     []float64
+	embeddingText string
+	metadata      map[string]any
+	createdAt     time.Time
+	updatedAt     time.Time
 }
 
 // docToRow converts a trpc-agent-go document and embedding into an internal row.
@@ -62,29 +79,15 @@ func (vs *VectorStore) docToRow(doc *document.Document, embedding []float64, now
 		return nil, errDocumentIDRequired
 	}
 	return &row{
-		id:        doc.ID,
-		name:      doc.Name,
-		content:   doc.Content,
-		embedding: embedding,
-		metadata:  withEmbeddingText(doc.Metadata, doc.EmbeddingText),
-		createdAt: now,
-		updatedAt: now,
+		id:            doc.ID,
+		name:          doc.Name,
+		content:       doc.Content,
+		embedding:     embedding,
+		embeddingText: doc.EmbeddingText,
+		metadata:      doc.Metadata,
+		createdAt:     now,
+		updatedAt:     now,
 	}, nil
-}
-
-// withEmbeddingText returns a copy of metadata carrying embeddingText under an
-// internal key, so the field survives a round trip through the metadata column.
-// The caller's map is never mutated.
-func withEmbeddingText(metadata map[string]any, embeddingText string) map[string]any {
-	if embeddingText == "" {
-		return metadata
-	}
-	stored := make(map[string]any, len(metadata)+1)
-	for k, v := range metadata {
-		stored[k] = v
-	}
-	stored[internalEmbeddingTextKey] = embeddingText
-	return stored
 }
 
 // rowToDoc converts an internal row back into a trpc-agent-go document.
@@ -92,66 +95,69 @@ func (vs *VectorStore) rowToDoc(r *row) (*document.Document, []float64, error) {
 	if r == nil {
 		return nil, nil, fmt.Errorf("clickhouse: row is nil")
 	}
-	metadata, embeddingText := splitEmbeddingText(r.metadata)
 	doc := &document.Document{
 		ID:            r.id,
 		Name:          r.name,
 		Content:       r.content,
-		Metadata:      metadata,
-		EmbeddingText: embeddingText,
+		Metadata:      r.metadata,
+		EmbeddingText: r.embeddingText,
 		CreatedAt:     r.createdAt,
 		UpdatedAt:     r.updatedAt,
 	}
 	return doc, r.embedding, nil
 }
 
-// splitEmbeddingText extracts the internally stored embedding text and returns
-// the metadata without that key, so callers never observe it.
-func splitEmbeddingText(metadata map[string]any) (map[string]any, string) {
-	raw, ok := metadata[internalEmbeddingTextKey]
-	if !ok {
-		return metadata, ""
-	}
-	text, _ := raw.(string)
-	out := make(map[string]any, len(metadata)-1)
-	for k, v := range metadata {
-		if k == internalEmbeddingTextKey {
-			continue
-		}
-		out[k] = v
-	}
-	return out, text
-}
-
-// marshalMetadata JSON-encodes the document metadata map into a string suitable
-// for the metadata String column. A nil or empty map encodes to "{}".
-func marshalMetadata(m map[string]any) (string, error) {
-	if m == nil {
-		return "{}", nil
-	}
-	b, err := json.Marshal(m)
+// marshalMetadata JSON-encodes caller metadata and the persisted embedding text
+// into the metadata column value. Both are nested under internalMetadataKey so
+// that no caller metadata key can be shadowed by internal state.
+func marshalMetadata(m map[string]any, embeddingText string) (string, error) {
+	b, err := json.Marshal(map[string]any{
+		internalMetadataKey: storedMetadata{Metadata: m, EmbeddingText: embeddingText},
+	})
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
 }
 
-// unmarshalMetadata JSON-decodes a metadata String column value. An empty string
-// yields an empty map.
-func unmarshalMetadata(s string) (map[string]any, error) {
+// unmarshalMetadata JSON-decodes a metadata column value into caller metadata
+// and the persisted embedding text.
+//
+// A value written without the envelope, for example directly by an external
+// writer, is treated as plain caller metadata with no embedding text.
+func unmarshalMetadata(s string) (map[string]any, string, error) {
 	if s == "" {
-		return map[string]any{}, nil
+		return map[string]any{}, "", nil
 	}
-	m := map[string]any{}
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
-		return nil, err
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return nil, "", err
 	}
-	return m, nil
+	envelope, ok := raw[internalMetadataKey]
+	if !ok {
+		var md map[string]any
+		if err := json.Unmarshal([]byte(s), &md); err != nil {
+			return nil, "", err
+		}
+		if md == nil {
+			md = map[string]any{}
+		}
+		return md, "", nil
+	}
+	var stored storedMetadata
+	if err := json.Unmarshal(envelope, &stored); err != nil {
+		return nil, "", err
+	}
+	if stored.Metadata == nil {
+		stored.Metadata = map[string]any{}
+	}
+	return stored.Metadata, stored.EmbeddingText, nil
 }
 
 // filterFieldValues extracts the declared filter-field values from metadata and
 // converts them to the typed column values expected by the ClickHouse driver.
-// Missing values map to the column type's zero value.
+// A field the document does not carry yields nil, which is stored as SQL NULL so
+// filtering can tell it apart from an explicit zero value.
 func (vs *VectorStore) filterFieldValues(metadata map[string]any) ([]any, error) {
 	if len(vs.option.filterFields) == 0 {
 		return nil, nil
@@ -168,12 +174,13 @@ func (vs *VectorStore) filterFieldValues(metadata map[string]any) ([]any, error)
 }
 
 // convertFilterFieldValue converts a metadata value to the typed value expected
-// by the ClickHouse column for the given FilterFieldType.
+// by the ClickHouse column for the given FilterFieldType. A nil value yields
+// nil, which the driver writes as SQL NULL.
 func convertFilterFieldValue(t FilterFieldType, v any) (any, error) {
 	switch t {
 	case FilterFieldString:
 		if v == nil {
-			return "", nil
+			return nil, nil
 		}
 		s, ok := v.(string)
 		if !ok {
@@ -182,12 +189,12 @@ func convertFilterFieldValue(t FilterFieldType, v any) (any, error) {
 		return s, nil
 	case FilterFieldInt64:
 		if v == nil {
-			return int64(0), nil
+			return nil, nil
 		}
 		return toInt64(v)
 	case FilterFieldFloat64:
 		if v == nil {
-			return float64(0), nil
+			return nil, nil
 		}
 		return toFloat64(v)
 	default:

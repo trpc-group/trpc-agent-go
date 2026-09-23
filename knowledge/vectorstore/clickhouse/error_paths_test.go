@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestAddUpdateDeleteBackendErrors(t *testing.T) {
 	err = vs.DeleteByFilter(context.Background(), vectorstore.WithDeleteAll(true))
 	require.Error(t, err)
 
-	vsAll := vsWithClient(failingExecClient(), WithAllowDestructiveDeleteAll(true))
+	vsAll := vsWithClient(failingExecClient())
 	err = vsAll.DeleteByFilter(context.Background(), vectorstore.WithDeleteAll(true))
 	require.ErrorIs(t, err, errBackend)
 }
@@ -314,8 +315,8 @@ func TestUpdateByFilterErrors(t *testing.T) {
 	ctx := context.Background()
 	updates := map[string]any{"name": "new"}
 
-	// Selecting the matching IDs fails.
-	_, err := vsWithClient(newFailingQueryClient("SELECT id FROM")).UpdateByFilter(ctx,
+	// Selecting the matching rows fails.
+	_, err := vsWithClient(newFailingQueryClient("FROM docs FINAL")).UpdateByFilter(ctx,
 		vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
 		vectorstore.WithUpdateByFilterUpdates(updates),
 	)
@@ -460,31 +461,33 @@ func TestMetadataColumnsWithFilterFields(t *testing.T) {
 	assert.Equal(t, []string{"id", "metadata"}, vsWithClient(&mockClient{}).metadataColumns())
 }
 
-// TestBuildUpdateWhereErrors covers the UpdateByFilter predicate builder.
-func TestBuildUpdateWhereErrors(t *testing.T) {
+// TestBuildUpdatePredicateErrors covers the UpdateByFilter predicate builder.
+func TestBuildUpdatePredicateErrors(t *testing.T) {
 	vs := vsWithClient(&mockClient{}, WithFilterFields(
 		FilterFieldSpec{Name: "category", Type: FilterFieldString},
 	))
 
 	// Undeclared field.
-	_, _, err := vs.buildUpdateWhere(nil, searchfilter.Equal("not_declared", "x"))
+	_, err := vs.buildUpdatePredicate(nil, searchfilter.Equal("not_declared", "x"))
 	require.Error(t, err)
 
 	// IDs only.
-	where, args, err := vs.buildUpdateWhere([]string{"a", "b"}, nil)
+	pred, err := vs.buildUpdatePredicate([]string{"a", "b"}, nil)
 	require.NoError(t, err)
-	assert.Contains(t, where, "id IN")
+	where, args := pred.whereClause()
+	assert.Contains(t, where, "id IN (?, ?)")
 	assert.Equal(t, []any{"a", "b"}, args)
 
 	// Condition only.
-	where, _, err = vs.buildUpdateWhere(nil, searchfilter.Equal("category", "news"))
+	pred, err = vs.buildUpdatePredicate(nil, searchfilter.Equal("category", "news"))
 	require.NoError(t, err)
+	where, _ = pred.whereClause()
 	assert.Contains(t, where, "category = 'news'")
 
 	// Neither yields an empty predicate.
-	where, _, err = vs.buildUpdateWhere(nil, nil)
+	pred, err = vs.buildUpdatePredicate(nil, nil)
 	require.NoError(t, err)
-	assert.Empty(t, where)
+	assert.True(t, pred.empty())
 }
 
 // TestNewRejectsUnsupportedMetric asserts an unknown Metric is rejected instead
@@ -503,7 +506,7 @@ func TestNewRejectsUnsupportedMetric(t *testing.T) {
 		WithMetric(Metric(99)),
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not a supported Metric")
+	assert.Contains(t, err.Error(), "not a supported metric")
 
 	// The three supported metrics are accepted.
 	for _, m := range []Metric{MetricCosine, MetricL2, MetricInnerProduct} {
@@ -518,8 +521,43 @@ func TestNewRejectsUnsupportedMetric(t *testing.T) {
 	}
 }
 
+// TestDeleteMutationsAreSynchronous guards the regression where deletes queued
+// an asynchronous ClickHouse mutation and returned before the row was gone, so
+// a following read could still observe the deleted document.
+func TestDeleteMutationsAreSynchronous(t *testing.T) {
+	ctx := context.Background()
+
+	// Enabled by default.
+	vs := vsWithClient(&mockClient{})
+	require.Equal(t, clickhouse.Settings{"mutations_sync": 1}, vs.mutationSettings())
+
+	// Opting out leaves the statement context untouched.
+	async := vsWithClient(&mockClient{}, WithSynchronousMutations(false))
+	require.Nil(t, async.mutationSettings())
+	require.Equal(t, ctx, async.mutationContext(ctx))
+
+	// Every delete path runs with the mutation settings applied.
+	for name, call := range map[string]func(*VectorStore) error{
+		"Delete": func(v *VectorStore) error { return v.Delete(ctx, "doc1") },
+		"DeleteByFilter": func(v *VectorStore) error {
+			return v.DeleteByFilter(ctx, vectorstore.WithDeleteDocumentIDs([]string{"doc1"}))
+		},
+		"DeleteAll": func(v *VectorStore) error { return v.DeleteByFilter(ctx, vectorstore.WithDeleteAll(true)) },
+	} {
+		c := &mockClient{}
+		v := vsWithClient(c)
+		require.NoError(t, call(v), name)
+		require.Len(t, c.execCalls, 1, name)
+		require.Contains(t, c.execCalls[0].query, "ALTER TABLE", name)
+		require.NotNil(t, c.execCalls[0].ctx, name)
+		// The context must be wrapped with the settings; an unwrapped context
+		// would let the mutation stay asynchronous.
+		require.NotEqual(t, ctx, c.execCalls[0].ctx, name)
+	}
+}
+
 // TestEmbeddingTextRoundTrip asserts document.EmbeddingText survives the row
-// mapping and that the internal storage key is never exposed to callers.
+// mapping and that internal storage never leaks into caller metadata.
 func TestEmbeddingTextRoundTrip(t *testing.T) {
 	vs := vsWithClient(&mockClient{})
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -533,26 +571,56 @@ func TestEmbeddingTextRoundTrip(t *testing.T) {
 	}
 	r, err := vs.docToRow(doc, []float64{1, 2, 3}, now)
 	require.NoError(t, err)
-	// The caller's map must not be mutated.
-	assert.NotContains(t, doc.Metadata, internalEmbeddingTextKey)
-	assert.Equal(t, "text used for embedding", r.metadata[internalEmbeddingTextKey])
+	// The caller's map must not be mutated, and the embedding text is kept
+	// outside of it.
+	assert.NotContains(t, doc.Metadata, internalMetadataKey)
+	assert.Equal(t, "text used for embedding", r.embeddingText)
+	assert.Equal(t, "news", r.metadata["category"])
 
 	got, emb, err := vs.rowToDoc(r)
 	require.NoError(t, err)
 	assert.Equal(t, "text used for embedding", got.EmbeddingText)
 	assert.Equal(t, "news", got.Metadata["category"])
-	assert.NotContains(t, got.Metadata, internalEmbeddingTextKey)
+	assert.NotContains(t, got.Metadata, internalMetadataKey)
 	assert.Equal(t, []float64{1, 2, 3}, emb)
 
 	// A document without EmbeddingText keeps the metadata map untouched.
 	plain := &document.Document{ID: "doc2", Metadata: map[string]any{"k": "v"}}
 	r2, err := vs.docToRow(plain, []float64{1, 2, 3}, now)
 	require.NoError(t, err)
-	assert.NotContains(t, r2.metadata, internalEmbeddingTextKey)
+	assert.Empty(t, r2.embeddingText)
 	got2, _, err := vs.rowToDoc(r2)
 	require.NoError(t, err)
 	assert.Empty(t, got2.EmbeddingText)
 	assert.Equal(t, "v", got2.Metadata["k"])
+}
+
+// TestEmbeddingTextDoesNotOverwriteCallerMetadata guards the regression where
+// the persisted embedding text was stored under a caller-visible metadata key
+// and silently replaced a caller value with the same name.
+func TestEmbeddingTextDoesNotOverwriteCallerMetadata(t *testing.T) {
+	vs := vsWithClient(&mockClient{})
+	doc := &document.Document{
+		ID:            "doc1",
+		EmbeddingText: "text used for embedding",
+		Metadata:      map[string]any{internalMetadataKey: "caller value"},
+	}
+	r, err := vs.docToRow(doc, []float64{1}, time.Now())
+	require.NoError(t, err)
+
+	// Exercise the full metadata column round trip.
+	encoded, err := marshalMetadata(r.metadata, r.embeddingText)
+	require.NoError(t, err)
+	md, text, err := unmarshalMetadata(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", md[internalMetadataKey])
+	assert.Equal(t, "text used for embedding", text)
+
+	// The same holds through the row mapping.
+	got, _, err := vs.rowToDoc(r)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", got.Metadata[internalMetadataKey])
+	assert.Equal(t, "text used for embedding", got.EmbeddingText)
 }
 
 // TestCloseError covers Close propagating a backend failure.
@@ -572,20 +640,28 @@ func TestNewFilterDestsAllTypes(t *testing.T) {
 	}}}
 	dests := vs.newFilterDests()
 	require.Len(t, dests, 3)
-	require.IsType(t, new(string), dests[0])
-	require.IsType(t, new(int64), dests[1])
-	require.IsType(t, new(float64), dests[2])
+	// Nullable columns are scanned into a pointer to a pointer.
+	require.IsType(t, new(*string), dests[0])
+	require.IsType(t, new(*int64), dests[1])
+	require.IsType(t, new(*float64), dests[2])
 
-	*(dests[0].(*string)) = "v"
-	*(dests[1].(*int64)) = 7
-	*(dests[2].(*float64)) = 1.5
+	strVal, intVal, floatVal := "v", int64(7), 1.5
+	*(dests[0].(**string)) = &strVal
+	*(dests[1].(**int64)) = &intVal
+	*(dests[2].(**float64)) = &floatVal
 
-	// Only keys already present are restored.
+	// Values are restored with the declared column type.
 	md := map[string]any{"s": "", "i": float64(0), "f": float64(0)}
 	vs.mergeFilterDests(md, dests)
 	assert.Equal(t, "v", md["s"])
 	assert.Equal(t, int64(7), md["i"])
 	assert.Equal(t, 1.5, md["f"])
+
+	// A NULL column means the document never carried the field, so the key is
+	// removed rather than surfaced as the zero value.
+	*(dests[1].(**int64)) = nil
+	vs.mergeFilterDests(md, dests)
+	assert.NotContains(t, md, "i")
 
 	// A shorter dests slice must not panic.
 	vs.mergeFilterDests(map[string]any{"s": ""}, nil)

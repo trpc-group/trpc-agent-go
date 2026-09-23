@@ -11,6 +11,7 @@ package clickhouse
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,20 +76,24 @@ func TestBuildFilterExprOperators(t *testing.T) {
 func TestBuildFilterExprErrors(t *testing.T) {
 	allowed := map[string]struct{}{"category": {}}
 
+	// Every filter validation failure is matchable through ErrInvalidFilter.
 	// Field not allowed.
 	_, err := buildFilterExpr(searchfilter.Equal("notallowed", "x"), allowed)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFieldNotAllowed)
+	assert.ErrorIs(t, err, ErrInvalidFilter)
+	assert.ErrorIs(t, err, errFieldNotAllowed)
 
 	// Invalid field name.
 	_, err = buildFilterExpr(searchfilter.Equal("bad name", "x"), allowed)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFieldNameInvalid)
+	assert.ErrorIs(t, err, ErrInvalidFilter)
+	assert.ErrorIs(t, err, errFieldNameInvalid)
 
 	// Empty IN array.
 	_, err = buildFilterExpr(searchfilter.In("category"), allowed)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrEmptyValueArray)
+	assert.ErrorIs(t, err, ErrInvalidFilter)
+	assert.ErrorIs(t, err, errEmptyValueArray)
 
 	// Unknown operator.
 	_, err = buildFilterExpr(&searchfilter.UniversalFilterCondition{Operator: "??", Field: "category"}, allowed)
@@ -166,13 +171,14 @@ func TestMetadataMapToExpr(t *testing.T) {
 
 	got, err := vs.metadataMapToExpr(map[string]any{"category": "news", "name": "doc"})
 	require.NoError(t, err)
-	assert.Contains(t, got, "category = 'news'")
-	assert.Contains(t, got, "name = 'doc'")
+	assert.Contains(t, got.sql, "category = 'news'")
+	assert.Contains(t, got.sql, "name = 'doc'")
+	assert.Nil(t, got.args, "metadata values are inlined as literals")
 
 	// Empty map.
 	got, err = vs.metadataMapToExpr(nil)
 	require.NoError(t, err)
-	assert.Equal(t, "", got)
+	assert.True(t, got.empty())
 
 	// Not-allowed field.
 	_, err = vs.metadataMapToExpr(map[string]any{"notallowed": "x"})
@@ -200,7 +206,7 @@ func TestBuildFilterFromSearch(t *testing.T) {
 	// nil filter.
 	got, err := vs.buildFilterFromSearch(nil)
 	require.NoError(t, err)
-	assert.Equal(t, "", got)
+	assert.True(t, got.empty())
 
 	// Metadata + condition combined with AND.
 	f := &vectorstore.SearchFilter{
@@ -209,8 +215,35 @@ func TestBuildFilterFromSearch(t *testing.T) {
 	}
 	got, err = vs.buildFilterFromSearch(f)
 	require.NoError(t, err)
-	assert.Contains(t, got, "category = 'news'")
-	assert.Contains(t, got, "score > 10")
+	assert.Contains(t, got.sql, "category = 'news'")
+	assert.Contains(t, got.sql, "score > 10")
+}
+
+// TestFormatLiteralTime asserts that time.Time is accepted for the built-in
+// created_at and updated_at filter fields, which are exposed as filterable but
+// are naturally supplied as time values.
+func TestFormatLiteralTime(t *testing.T) {
+	// The literal is normalized to UTC so it does not depend on the caller's
+	// location.
+	utc := time.Date(2026, 3, 4, 5, 6, 7, 890123000, time.UTC)
+	got, err := formatLiteral(utc)
+	require.NoError(t, err)
+	assert.Equal(t, "toDateTime64('2026-03-04 05:06:07.890123', 6, 'UTC')", got)
+
+	// A non-UTC value is converted, so both spellings compare equal.
+	cst := time.FixedZone("CST", 8*3600)
+	got, err = formatLiteral(utc.In(cst))
+	require.NoError(t, err)
+	assert.Equal(t, "toDateTime64('2026-03-04 05:06:07.890123', 6, 'UTC')", got)
+
+	// The built-in timestamp fields therefore accept equality and range filters.
+	vs := &VectorStore{option: defaultOptions}
+	expr, err := buildFilterExpr(
+		searchfilter.GreaterThanOrEqual("created_at", utc),
+		vs.allowedFilterFields(),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "created_at >= toDateTime64('2026-03-04 05:06:07.890123', 6, 'UTC')", expr)
 }
 
 func TestJoinAnd(t *testing.T) {

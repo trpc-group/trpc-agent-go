@@ -36,6 +36,9 @@ type mockClient struct {
 type execCall struct {
 	query string
 	args  []any
+	// ctx is the context the call was issued with, so tests can assert that a
+	// statement carries query settings such as mutations_sync.
+	ctx context.Context
 }
 
 type queryCall struct {
@@ -44,7 +47,7 @@ type queryCall struct {
 }
 
 func (m *mockClient) Exec(ctx context.Context, query string, args ...any) error {
-	m.execCalls = append(m.execCalls, execCall{query: query, args: append([]any(nil), args...)})
+	m.execCalls = append(m.execCalls, execCall{query: query, args: append([]any(nil), args...), ctx: ctx})
 	if m.execFunc != nil {
 		return m.execFunc(ctx, query, args...)
 	}

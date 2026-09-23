@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -208,13 +209,44 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	return nil
 }
 
+// mutationSettings returns the ClickHouse settings that make an ALTER TABLE
+// mutation wait for completion before the statement returns, or nil when
+// mutations are allowed to stay asynchronous.
+//
+// ClickHouse queues mutations asynchronously by default, so without
+// mutations_sync a delete can return successfully while a following Get,
+// Search, or Count still observes the deleted row, and a mutation that fails
+// later cannot be reported through the returned error.
+func (vs *VectorStore) mutationSettings() clickhouse.Settings {
+	if !vs.option.syncMutations {
+		return nil
+	}
+	return clickhouse.Settings{"mutations_sync": 1}
+}
+
+// mutationContext returns ctx annotated with mutationSettings. Delete paths run
+// their statements with this context so the mutation is visible, and any
+// cancellation, once it returns.
+func (vs *VectorStore) mutationContext(ctx context.Context) context.Context {
+	settings := vs.mutationSettings()
+	if len(settings) == 0 {
+		return ctx
+	}
+	return clickhouse.Context(ctx, clickhouse.WithSettings(settings))
+}
+
 // Delete removes one document by ID using an ALTER TABLE DELETE mutation.
+//
+// The mutation is synchronous unless WithSynchronousMutations(false) was set,
+// so the document is no longer visible to Get, Search, or Count once Delete
+// returns nil. A canceled or expired ctx aborts the wait and is reported as an
+// error.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errDocumentIDRequired
 	}
 	sql := fmt.Sprintf("ALTER TABLE %s DELETE WHERE %s = ?", vs.option.tableName, vs.option.idFieldName)
-	if err := vs.client.Exec(ctx, sql, id); err != nil {
+	if err := vs.client.Exec(vs.mutationContext(ctx), sql, id); err != nil {
 		return fmt.Errorf("clickhouse: delete: %w", err)
 	}
 	return nil
@@ -276,20 +308,36 @@ func (vs *VectorStore) buildSelectSQL() string {
 	return fmt.Sprintf("SELECT %s FROM %s FINAL", strings.Join(vs.selectColumns(), ", "), vs.option.tableName)
 }
 
-// buildInsertSQL builds "INSERT INTO <table> (<cols>) VALUES (?, ?, ...)".
+// buildInsertSQL builds "INSERT INTO <table> (<cols>) VALUES (?, ?, ...)" for a
+// single row.
 func (vs *VectorStore) buildInsertSQL() string {
+	return vs.buildInsertSQLRows(1)
+}
+
+// buildInsertSQLRows builds an INSERT statement carrying rowCount value groups,
+// so several rows can be written with one round trip. rowCount below one is
+// treated as one.
+func (vs *VectorStore) buildInsertSQLRows(rowCount int) string {
+	if rowCount < 1 {
+		rowCount = 1
+	}
 	cols := vs.selectColumns()
 	placeholders := make([]string, len(cols))
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		vs.option.tableName, strings.Join(cols, ", "), strings.Join(placeholders, ", "))
+	group := "(" + strings.Join(placeholders, ", ") + ")"
+	groups := make([]string, rowCount)
+	for i := range groups {
+		groups[i] = group
+	}
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+		vs.option.tableName, strings.Join(cols, ", "), strings.Join(groups, ", "))
 }
 
 // insertArgs builds the ordered argument list for buildInsertSQL from a row.
 func (vs *VectorStore) insertArgs(r *row) ([]any, error) {
-	metadataJSON, err := marshalMetadata(r.metadata)
+	metadataJSON, err := marshalMetadata(r.metadata, r.embeddingText)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse: marshal metadata: %w", err)
 	}
@@ -302,56 +350,71 @@ func (vs *VectorStore) insertArgs(r *row) ([]any, error) {
 	return args, nil
 }
 
+// newFilterDests allocates one scan destination per declared filter field,
+// typed according to the column type in the table schema. The ClickHouse driver
+// rejects *interface{} destinations, so concrete pointers are required.
+//
+// Filter columns are Nullable, so each destination is a pointer to a pointer:
+// the driver leaves the inner pointer nil when the column is NULL.
+func (vs *VectorStore) newFilterDests() []any {
+	dests := make([]any, len(vs.option.filterFields))
+	for i, spec := range vs.option.filterFields {
+		switch spec.Type {
+		case FilterFieldInt64:
+			dests[i] = new(*int64)
+		case FilterFieldFloat64:
+			dests[i] = new(*float64)
+		default:
+			dests[i] = new(*string)
+		}
+	}
+	return dests
+}
+
+// mergeFilterDests reconciles the decoded metadata with the materialized filter
+// columns.
+//
+// JSON decoding turns every number into float64, so a Nullable(Int64) column
+// would otherwise come back as float64. A NULL column means the document never
+// carried the field, so the key is removed instead of being reported as the
+// type's zero value.
+func (vs *VectorStore) mergeFilterDests(md map[string]any, dests []any) {
+	if md == nil {
+		return
+	}
+	for i, spec := range vs.option.filterFields {
+		if i >= len(dests) {
+			return
+		}
+		switch dest := dests[i].(type) {
+		case **string:
+			if *dest == nil {
+				delete(md, spec.Name)
+				continue
+			}
+			md[spec.Name] = **dest
+		case **int64:
+			if *dest == nil {
+				delete(md, spec.Name)
+				continue
+			}
+			md[spec.Name] = **dest
+		case **float64:
+			if *dest == nil {
+				delete(md, spec.Name)
+				continue
+			}
+			md[spec.Name] = **dest
+		}
+	}
+}
+
 // scanRow scans the current driver.Rows row into an internal row, decoding the
 // JSON metadata and merging the declared filter-field columns back into it.
 //
 // When scorePtr is non-nil, an additional trailing Float64 column (the vector
 // distance/product) is scanned into it. This is used by vector search, which
 // appends the distance expression as the final SELECT column.
-// newFilterDests allocates one scan destination per declared filter field,
-// typed according to the column type in the table schema. The ClickHouse driver
-// rejects *interface{} destinations, so concrete pointers are required.
-func (vs *VectorStore) newFilterDests() []any {
-	dests := make([]any, len(vs.option.filterFields))
-	for i, spec := range vs.option.filterFields {
-		switch spec.Type {
-		case FilterFieldInt64:
-			dests[i] = new(int64)
-		case FilterFieldFloat64:
-			dests[i] = new(float64)
-		default:
-			dests[i] = new(string)
-		}
-	}
-	return dests
-}
-
-// mergeFilterDests restores the declared column type for filter values that are
-// present in the decoded metadata. JSON decoding turns every number into
-// float64, so an Int64 column would otherwise come back as float64.
-//
-// Keys absent from the metadata are left untouched: insertArgs writes the column
-// zero value for missing fields, and copying that back would invent a key the
-// caller never set.
-func (vs *VectorStore) mergeFilterDests(md map[string]any, dests []any) {
-	for i, spec := range vs.option.filterFields {
-		if i >= len(dests) {
-			return
-		}
-		if _, ok := md[spec.Name]; !ok {
-			continue
-		}
-		switch dest := dests[i].(type) {
-		case *int64:
-			md[spec.Name] = *dest
-		case *float64:
-			md[spec.Name] = *dest
-		case *string:
-			md[spec.Name] = *dest
-		}
-	}
-}
-
 func (vs *VectorStore) scanRow(rows driver.Rows, scorePtr *float64) (*row, error) {
 	r := &row{}
 	var metadataStr string
@@ -364,11 +427,12 @@ func (vs *VectorStore) scanRow(rows driver.Rows, scorePtr *float64) (*row, error
 	if err := rows.Scan(targets...); err != nil {
 		return nil, fmt.Errorf("clickhouse: scan row: %w", err)
 	}
-	md, err := unmarshalMetadata(metadataStr)
+	md, embeddingText, err := unmarshalMetadata(metadataStr)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse: decode metadata: %w", err)
 	}
 	r.metadata = md
+	r.embeddingText = embeddingText
 	vs.mergeFilterDests(r.metadata, filterDests)
 	return r, nil
 }

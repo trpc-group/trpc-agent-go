@@ -7,7 +7,6 @@
 //
 //
 
-// Package clickhouse provides a ClickHouse-backed vector store.
 package clickhouse
 
 import (
@@ -43,7 +42,10 @@ const (
 	MetricCosine Metric = iota
 	// MetricL2 uses L2Distance and maps distance to (0, 1] similarity.
 	MetricL2
-	// MetricInnerProduct uses dotProduct; scores are unbounded.
+	// MetricInnerProduct ranks by dotProduct. The raw product is unbounded in
+	// both directions, but search results report it through the same [0, 1]
+	// Score contract as the other metrics, via the monotonic mapping in
+	// Metric.toScore. Ordering follows the raw product.
 	MetricInnerProduct
 )
 
@@ -102,14 +104,17 @@ const (
 )
 
 // clickhouseType returns the ClickHouse column type for the filter field type.
+//
+// The column is Nullable so that a document without the field can be stored as
+// NULL and distinguished from one that explicitly set the zero value.
 func (t FilterFieldType) clickhouseType() string {
 	switch t {
 	case FilterFieldInt64:
-		return "Int64"
+		return "Nullable(Int64)"
 	case FilterFieldFloat64:
-		return "Float64"
+		return "Nullable(Float64)"
 	default:
-		return "String"
+		return "Nullable(String)"
 	}
 }
 
@@ -147,8 +152,9 @@ type options struct {
 	// table is provisioned externally.
 	autoCreateTable bool
 
-	// allowDestructiveDeleteAll permits DeleteByFilter with DeleteAll=true.
-	allowDestructiveDeleteAll bool
+	// syncMutations makes delete mutations wait for completion before the
+	// call returns, so a following read observes the deletion.
+	syncMutations bool
 
 	// Named instance registered through storage.RegisterClickHouseInstance.
 	instanceName string
@@ -174,6 +180,7 @@ var defaultOptions = options{
 	updatedAtFieldName: defaultUpdatedAtFieldName,
 	maxResults:         defaultMaxResults,
 	autoCreateTable:    true,
+	syncMutations:      true,
 }
 
 // Option configures a VectorStore.
@@ -202,11 +209,16 @@ func WithAutoCreateTable(enable bool) Option {
 	return func(o *options) { o.autoCreateTable = enable }
 }
 
-// WithAllowDestructiveDeleteAll controls whether DeleteByFilter with
-// DeleteAll=true may run. It is disabled by default and must be explicitly
-// enabled because it clears the entire table.
-func WithAllowDestructiveDeleteAll(enable bool) Option {
-	return func(o *options) { o.allowDestructiveDeleteAll = enable }
+// WithSynchronousMutations controls whether delete mutations wait for
+// completion before Delete, DeleteByFilter, and DeleteAll return. It defaults
+// to true so a read issued right after a delete observes the deletion.
+//
+// Disable it only when the caller accepts that a deleted document can remain
+// visible for a short time, for example to keep bulk deletions off the critical
+// path. A failed asynchronous mutation cannot be reported through the returned
+// error.
+func WithSynchronousMutations(enable bool) Option {
+	return func(o *options) { o.syncMutations = enable }
 }
 
 // WithInstanceName selects a named client registered with
@@ -217,7 +229,15 @@ func WithInstanceName(name string) Option { return func(o *options) { o.instance
 // than WithInstanceName.
 func WithDSN(dsn string) Option { return func(o *options) { o.dsn = dsn } }
 
-// WithExtraOptions passes options to a custom storage ClientBuilder.
+// WithExtraOptions passes extra options through to the ClickHouse client
+// builder from trpc-agent-go/storage/clickhouse. They are appended to the
+// options resolved from WithDSN or WithInstanceName and are meant for builders
+// registered through storage.SetClientBuilder that accept their own values.
+//
+// The values are opaque here: they are forwarded verbatim and are not
+// validated, so a builder that does not recognize one may fail at connect
+// time. Callers that only need a preconfigured client can pass these options
+// once when registering a named instance and select it with WithInstanceName.
 func WithExtraOptions(opts ...any) Option {
 	return func(o *options) { o.extraOptions = append(o.extraOptions, opts...) }
 }
@@ -227,28 +247,28 @@ func WithMaxResults(n int) Option { return func(o *options) { o.maxResults = n }
 
 // Field-name overrides are intended for compatibility with existing tables.
 
-// WithIDFieldName overrides the id column name.
-func WithIDFieldName(s string) Option { return func(o *options) { o.idFieldName = s } }
+// WithIDField overrides the id column name.
+func WithIDField(s string) Option { return func(o *options) { o.idFieldName = s } }
 
-// WithNameFieldName overrides the name column name.
-func WithNameFieldName(s string) Option { return func(o *options) { o.nameFieldName = s } }
+// WithNameField overrides the name column name.
+func WithNameField(s string) Option { return func(o *options) { o.nameFieldName = s } }
 
-// WithContentFieldName overrides the content column name.
-func WithContentFieldName(s string) Option { return func(o *options) { o.contentFieldName = s } }
+// WithContentField overrides the content column name.
+func WithContentField(s string) Option { return func(o *options) { o.contentFieldName = s } }
 
-// WithEmbeddingFieldName overrides the embedding column name.
-func WithEmbeddingFieldName(s string) Option { return func(o *options) { o.embeddingFieldName = s } }
+// WithEmbeddingField overrides the embedding column name.
+func WithEmbeddingField(s string) Option { return func(o *options) { o.embeddingFieldName = s } }
 
-// WithMetadataFieldName overrides the metadata column name.
-func WithMetadataFieldName(s string) Option { return func(o *options) { o.metadataFieldName = s } }
+// WithMetadataField overrides the metadata column name.
+func WithMetadataField(s string) Option { return func(o *options) { o.metadataFieldName = s } }
 
-// WithCreatedAtFieldName overrides the created_at column name.
-func WithCreatedAtFieldName(s string) Option {
+// WithCreatedAtField overrides the created_at column name.
+func WithCreatedAtField(s string) Option {
 	return func(o *options) { o.createdAtFieldName = s }
 }
 
-// WithUpdatedAtFieldName overrides the updated_at column name.
-func WithUpdatedAtFieldName(s string) Option {
+// WithUpdatedAtField overrides the updated_at column name.
+func WithUpdatedAtField(s string) Option {
 	return func(o *options) { o.updatedAtFieldName = s }
 }
 
@@ -274,7 +294,7 @@ func validateOptions(o *options) error {
 	switch o.metric {
 	case MetricCosine, MetricL2, MetricInnerProduct:
 	default:
-		return fmt.Errorf("clickhouse: metric %d is not a supported Metric", o.metric)
+		return fmt.Errorf("clickhouse: metric %d is not a supported metric", o.metric)
 	}
 
 	// Validate built-in column names.

@@ -217,19 +217,16 @@ func TestDeleteByFilter(t *testing.T) {
 	err = vs2.DeleteByFilter(context.Background(), vectorstore.WithDeleteFilter(map[string]any{"category": "news"}))
 	require.NoError(t, err)
 
-	// DeleteAll without allow -> error.
-	vs3 := vsWithClient(&mockClient{})
-	err = vs3.DeleteByFilter(context.Background(), vectorstore.WithDeleteAll(true))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "destructive")
-
-	// DeleteAll with allow.
-	vs4 := vsWithClient(&mockClient{}, WithAllowDestructiveDeleteAll(true))
-	err = vs4.DeleteByFilter(context.Background(), vectorstore.WithDeleteAll(true))
+	// DeleteAll is confirmed per operation through WithDeleteAll(true); there is
+	// no second construction-time switch to enable.
+	c3 := &mockClient{}
+	err = vsWithClient(c3).DeleteByFilter(context.Background(), vectorstore.WithDeleteAll(true))
 	require.NoError(t, err)
+	require.Len(t, c3.execCalls, 1)
+	assert.Contains(t, c3.execCalls[0].query, "DELETE WHERE 1")
 
 	// DeleteAll combined with IDs -> error.
-	err = vs4.DeleteByFilter(context.Background(),
+	err = vsWithClient(&mockClient{}).DeleteByFilter(context.Background(),
 		vectorstore.WithDeleteAll(true), vectorstore.WithDeleteDocumentIDs([]string{"a"}))
 	require.Error(t, err)
 }
@@ -369,10 +366,7 @@ func TestUpdateByFilter(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	c := &mockClient{}
 	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
-		// First query returns matching IDs; subsequent queries return the doc row.
-		if strings.Contains(q, "SELECT id FROM") {
-			return newMockRows([][]any{{"doc1"}}), nil
-		}
+		// A single query returns the full matching rows.
 		return newMockRows([][]any{{"doc1", "old", "old", []float64{1, 2, 3}, "{}", now, now}}), nil
 	}
 	vs := vsWithClient(c)
@@ -382,9 +376,43 @@ func TestUpdateByFilter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 
+	// The rewrite is a single batch INSERT rather than one round trip per
+	// document, so the number of round trips does not grow with the match count.
+	require.Len(t, c.execCalls, 1)
+	assert.Contains(t, c.execCalls[0].query, "INSERT INTO docs")
+	assert.Equal(t, len(vs.selectColumns()), strings.Count(c.execCalls[0].query, "?"))
+
 	// Validation errors.
 	_, err = vs.UpdateByFilter(context.Background())
 	require.Error(t, err)
+}
+
+// TestUpdateByFilterBatchesEveryMatch asserts that all matched documents are
+// rewritten with one INSERT and that the reported count is the number of
+// documents actually rewritten.
+func TestUpdateByFilterBatchesEveryMatch(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	const matched = 3
+	c := &mockClient{}
+	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
+		rows := make([][]any, 0, matched)
+		for i := 0; i < matched; i++ {
+			rows = append(rows, []any{
+				"doc" + string(rune('1'+i)), "old", "old", []float64{1, 2, 3}, "{}", now, now,
+			})
+		}
+		return newMockRows(rows), nil
+	}
+	vs := vsWithClient(c)
+	n, err := vs.UpdateByFilter(context.Background(),
+		vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1", "doc2", "doc3"}),
+		vectorstore.WithUpdateByFilterUpdates(map[string]any{"name": "new name"}))
+	require.NoError(t, err)
+	assert.Equal(t, int64(matched), n)
+
+	require.Len(t, c.execCalls, 1)
+	assert.Equal(t, matched*len(vs.selectColumns()), strings.Count(c.execCalls[0].query, "?"))
+	assert.Equal(t, matched-1, strings.Count(c.execCalls[0].query, "), ("))
 }
 
 func TestApplyUpdatesToDoc(t *testing.T) {
@@ -425,20 +453,23 @@ func TestBuildWhereClause(t *testing.T) {
 	))
 
 	// nil filter.
-	where, args, err := vs.buildWhereClause(nil)
+	pred, err := vs.buildWherePredicate(nil)
 	require.NoError(t, err)
+	assert.True(t, pred.empty())
+	where, args := pred.whereClause()
 	assert.Equal(t, "", where)
 	assert.Nil(t, args)
 
 	// IDs only.
-	where, args, err = vs.buildWhereClause(&vectorstore.SearchFilter{IDs: []string{"a", "b"}})
+	pred, err = vs.buildWherePredicate(&vectorstore.SearchFilter{IDs: []string{"a", "b"}})
 	require.NoError(t, err)
+	where, args = pred.whereClause()
 	assert.Equal(t, " WHERE (id IN (?, ?))", where)
 	assert.Equal(t, []any{"a", "b"}, args)
 
 	// A top-level OR combined with an ID set must stay grouped, otherwise AND
 	// would bind tighter than OR and match rows outside the ID set.
-	where, args, err = vs.buildWhereClause(&vectorstore.SearchFilter{
+	pred, err = vs.buildWherePredicate(&vectorstore.SearchFilter{
 		IDs: []string{"a"},
 		FilterCondition: searchfilter.Or(
 			searchfilter.Equal("category", "news"),
@@ -446,6 +477,7 @@ func TestBuildWhereClause(t *testing.T) {
 		),
 	})
 	require.NoError(t, err)
+	where, args = pred.whereClause()
 	assert.Equal(t,
 		" WHERE (id IN (?)) AND (((category = 'news') OR (score > 5)))",
 		where,
@@ -453,12 +485,13 @@ func TestBuildWhereClause(t *testing.T) {
 	assert.Equal(t, []any{"a"}, args)
 
 	// Metadata + condition + IDs.
-	where, args, err = vs.buildWhereClause(&vectorstore.SearchFilter{
+	pred, err = vs.buildWherePredicate(&vectorstore.SearchFilter{
 		IDs:             []string{"a"},
 		Metadata:        map[string]any{"category": "news"},
 		FilterCondition: searchfilter.GreaterThan("score", 5),
 	})
 	require.NoError(t, err)
+	where, args = pred.whereClause()
 	assert.Contains(t, where, "id IN (?)")
 	assert.Contains(t, where, "category = 'news'")
 	assert.Contains(t, where, "score > 5")

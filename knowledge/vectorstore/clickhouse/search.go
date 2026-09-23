@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -50,35 +51,17 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	}
 }
 
-// buildWhereClause builds a " WHERE ..." clause from a SearchFilter, together with
-// positional arguments for ID placeholders. Metadata and filter-condition values
-// are inlined as quoted literals, while IDs use placeholders.
-func (vs *VectorStore) buildWhereClause(f *vectorstore.SearchFilter) (string, []any, error) {
-	var parts []string
-	var args []any
-	if f != nil {
-		if len(f.IDs) > 0 {
-			placeholders := make([]string, len(f.IDs))
-			for i := range placeholders {
-				placeholders[i] = "?"
-			}
-			parts = append(parts, fmt.Sprintf("%s IN (%s)", vs.option.idFieldName, strings.Join(placeholders, ", ")))
-			for _, id := range f.IDs {
-				args = append(args, id)
-			}
-		}
-		expr, err := vs.buildFilterFromSearch(f)
-		if err != nil {
-			return "", nil, err
-		}
-		if expr != "" {
-			parts = append(parts, expr)
-		}
+// buildWherePredicate combines the IDs and the metadata or filter condition of a
+// SearchFilter into one predicate.
+func (vs *VectorStore) buildWherePredicate(f *vectorstore.SearchFilter) (predicate, error) {
+	if f == nil {
+		return predicate{}, nil
 	}
-	if len(parts) == 0 {
-		return "", args, nil
+	expr, err := vs.buildFilterFromSearch(f)
+	if err != nil {
+		return predicate{}, err
 	}
-	return " WHERE " + joinAnd(parts...), args, nil
+	return vs.idPredicate(f.IDs).and(expr), nil
 }
 
 // searchByVector performs KNN vector search with optional expression prefiltering.
@@ -90,14 +73,15 @@ func (vs *VectorStore) searchByVector(
 		return nil, fmt.Errorf("%w: want=%d got=%d",
 			errVectorDimMismatch, vs.option.vectorDimension, len(q.Vector))
 	}
-	where, whereArgs, err := vs.buildWhereClause(q.Filter)
+	where, err := vs.buildWherePredicate(q.Filter)
 	if err != nil {
 		return nil, err
 	}
+	whereSQL, whereArgs := where.whereClause()
 	distanceExpr := fmt.Sprintf("%s(%s, ?)", vs.option.metric.distanceFunction(), vs.option.embeddingFieldName)
 	cols := append(append([]string{}, vs.selectColumns()...), distanceExpr+" AS _distance")
 	sql := fmt.Sprintf("SELECT %s FROM %s FINAL%s ORDER BY _distance %s LIMIT ?",
-		strings.Join(cols, ", "), vs.option.tableName, where, vs.option.metric.orderByDirection())
+		strings.Join(cols, ", "), vs.option.tableName, whereSQL, vs.option.metric.orderByDirection())
 	args := append([]any{q.Vector}, whereArgs...)
 	args = append(args, vs.limitOrDefault(q.Limit))
 
@@ -148,15 +132,16 @@ func (vs *VectorStore) searchByFilter(
 		(len(q.Filter.IDs) == 0 && len(q.Filter.Metadata) == 0 && q.Filter.FilterCondition == nil) {
 		return &vectorstore.SearchResult{Results: nil}, nil
 	}
-	where, whereArgs, err := vs.buildWhereClause(q.Filter)
+	where, err := vs.buildWherePredicate(q.Filter)
 	if err != nil {
 		return nil, err
 	}
 	// No effective constraint: avoid a full scan.
-	if where == "" {
+	if where.empty() {
 		return &vectorstore.SearchResult{Results: nil}, nil
 	}
-	sql := fmt.Sprintf("%s%s LIMIT ?", vs.buildSelectSQL(), where)
+	whereSQL, whereArgs := where.whereClause()
+	sql := fmt.Sprintf("%s%s LIMIT ?", vs.buildSelectSQL(), whereSQL)
 	args := append(whereArgs, vs.limitOrDefault(q.Limit))
 
 	rows, err := vs.client.Query(ctx, sql, args...)
@@ -195,15 +180,14 @@ func (vs *VectorStore) searchByKeyword(
 	if q.Query == "" {
 		return nil, errors.New("clickhouse: keyword is required for keyword search")
 	}
-	where, whereArgs, err := vs.buildWhereClause(q.Filter)
+	where, err := vs.buildWherePredicate(q.Filter)
 	if err != nil {
 		return nil, err
 	}
-	keywordCond := fmt.Sprintf("positionCaseInsensitive(%s, ?) > 0", vs.option.contentFieldName)
-	combined := combineWhere(keywordCond, where)
-	sql := fmt.Sprintf("%s%s LIMIT ?", vs.buildSelectSQL(), combined)
-	args := append([]any{q.Query}, whereArgs...)
-	args = append(args, vs.limitOrDefault(q.Limit))
+	combined := vs.keywordPredicate(q.Query).and(where)
+	whereSQL, whereArgs := combined.whereClause()
+	sql := fmt.Sprintf("%s%s LIMIT ?", vs.buildSelectSQL(), whereSQL)
+	args := append(whereArgs, vs.limitOrDefault(q.Limit))
 
 	rows, err := vs.client.Query(ctx, sql, args...)
 	if err != nil {
@@ -245,17 +229,17 @@ func (vs *VectorStore) searchByHybrid(
 		return nil, fmt.Errorf("%w: want=%d got=%d",
 			errVectorDimMismatch, vs.option.vectorDimension, len(q.Vector))
 	}
-	where, whereArgs, err := vs.buildWhereClause(q.Filter)
+	where, err := vs.buildWherePredicate(q.Filter)
 	if err != nil {
 		return nil, err
 	}
-	keywordCond := fmt.Sprintf("positionCaseInsensitive(%s, ?) > 0", vs.option.contentFieldName)
-	combined := combineWhere(keywordCond, where)
+	combined := vs.keywordPredicate(q.Query).and(where)
+	whereSQL, whereArgs := combined.whereClause()
 	distanceExpr := fmt.Sprintf("%s(%s, ?)", vs.option.metric.distanceFunction(), vs.option.embeddingFieldName)
 	cols := append(append([]string{}, vs.selectColumns()...), distanceExpr+" AS _distance")
 	sql := fmt.Sprintf("SELECT %s FROM %s FINAL%s ORDER BY _distance %s LIMIT ?",
-		strings.Join(cols, ", "), vs.option.tableName, combined, vs.option.metric.orderByDirection())
-	args := append([]any{q.Vector, q.Query}, whereArgs...)
+		strings.Join(cols, ", "), vs.option.tableName, whereSQL, vs.option.metric.orderByDirection())
+	args := append([]any{q.Vector}, whereArgs...)
 	args = append(args, vs.limitOrDefault(q.Limit))
 
 	docs, err := vs.queryScored(ctx, sql, args...)
@@ -263,17 +247,6 @@ func (vs *VectorStore) searchByHybrid(
 		return nil, err
 	}
 	return &vectorstore.SearchResult{Results: applyMinScore(docs, q.MinScore)}, nil
-}
-
-// combineWhere joins a keyword predicate with an existing " WHERE ..." clause.
-// Both sides are parenthesized so a top-level OR in either one cannot escape
-// its scope when the two are AND-combined.
-func combineWhere(keywordCond, where string) string {
-	if where == "" {
-		return " WHERE " + keywordCond
-	}
-	// Strip the leading " WHERE " and AND-combine.
-	return " WHERE " + joinAnd(keywordCond, strings.TrimPrefix(where, " WHERE "))
 }
 
 // applyMinScore retains documents whose score is at least minScore.
@@ -306,58 +279,37 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.D
 	if len(cfg.DocumentIDs) == 0 && len(cfg.Filter) == 0 {
 		return errors.New("clickhouse: DeleteByFilter requires DocumentIDs, Filter, or DeleteAll")
 	}
-	where, args, err := vs.buildDeleteWhere(cfg.DocumentIDs, cfg.Filter)
+	where, err := vs.buildDeletePredicate(cfg.DocumentIDs, cfg.Filter)
 	if err != nil {
 		return err
 	}
-	sql := fmt.Sprintf("ALTER TABLE %s DELETE%s", vs.option.tableName, where)
-	if err := vs.client.Exec(ctx, sql, args...); err != nil {
+	whereSQL, args := where.whereClause()
+	sql := fmt.Sprintf("ALTER TABLE %s DELETE%s", vs.option.tableName, whereSQL)
+	// Match Delete: wait for the mutation unless the caller opted out, so the
+	// deleted rows are gone by the time this returns nil.
+	if err := vs.client.Exec(vs.mutationContext(ctx), sql, args...); err != nil {
 		return fmt.Errorf("clickhouse: delete by filter: %w", err)
 	}
 	return nil
 }
 
-// buildDeleteWhere builds a " WHERE ..." clause for delete operations from IDs
-// and/or a metadata filter.
-func (vs *VectorStore) buildDeleteWhere(ids []string, filter map[string]any) (string, []any, error) {
-	var parts []string
-	var args []any
-	if len(ids) > 0 {
-		placeholders := make([]string, len(ids))
-		for i := range placeholders {
-			placeholders[i] = "?"
-		}
-		parts = append(parts, fmt.Sprintf("%s IN (%s)", vs.option.idFieldName, strings.Join(placeholders, ", ")))
-		for _, id := range ids {
-			args = append(args, id)
-		}
+// buildDeletePredicate builds the predicate selecting the rows a delete or a
+// metadata query touches, from IDs and/or a metadata filter.
+func (vs *VectorStore) buildDeletePredicate(ids []string, filter map[string]any) (predicate, error) {
+	md, err := vs.metadataMapToExpr(filter)
+	if err != nil {
+		return predicate{}, err
 	}
-	if len(filter) > 0 {
-		expr, err := vs.metadataMapToExpr(filter)
-		if err != nil {
-			return "", nil, err
-		}
-		if expr != "" {
-			parts = append(parts, expr)
-		}
-	}
-	if len(parts) == 0 {
-		return "", args, nil
-	}
-	return " WHERE " + strings.Join(parts, " AND "), args, nil
+	return vs.idPredicate(ids).and(md), nil
 }
 
-// deleteAll clears the whole table. It is destructive and requires
-// WithAllowDestructiveDeleteAll(true).
+// deleteAll clears the whole table. It is destructive; callers opt in per
+// operation through vectorstore.WithDeleteAll(true), matching the other vector
+// store implementations.
 func (vs *VectorStore) deleteAll(ctx context.Context) error {
-	if !vs.option.allowDestructiveDeleteAll {
-		return errors.New(
-			"clickhouse: DeleteAll is destructive (clears all documents); enable it explicitly via " +
-				"WithAllowDestructiveDeleteAll(true)")
-	}
 	// ClickHouse has no TRUNCATE; use a broad ALTER TABLE DELETE mutation.
 	sql := fmt.Sprintf("ALTER TABLE %s DELETE WHERE 1", vs.option.tableName)
-	if err := vs.client.Exec(ctx, sql); err != nil {
+	if err := vs.client.Exec(vs.mutationContext(ctx), sql); err != nil {
 		return fmt.Errorf("clickhouse: delete all: %w", err)
 	}
 	return nil
@@ -366,17 +318,12 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 // Count returns the number of matching documents.
 func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	cfg := vectorstore.ApplyCountOptions(opts...)
-	where := ""
-	if len(cfg.Filter) > 0 {
-		expr, err := vs.metadataMapToExpr(cfg.Filter)
-		if err != nil {
-			return 0, err
-		}
-		if expr != "" {
-			where = " WHERE " + expr
-		}
+	md, err := vs.metadataMapToExpr(cfg.Filter)
+	if err != nil {
+		return 0, err
 	}
-	sql := fmt.Sprintf("SELECT count() FROM %s FINAL%s", vs.option.tableName, where)
+	whereSQL, _ := md.whereClause()
+	sql := fmt.Sprintf("SELECT count() FROM %s FINAL%s", vs.option.tableName, whereSQL)
 	rows, err := vs.client.Query(ctx, sql)
 	if err != nil {
 		return 0, fmt.Errorf("clickhouse: count: %w", err)
@@ -454,15 +401,16 @@ func (vs *VectorStore) queryMetadataOnce(
 	filter map[string]any,
 	limit, offset int,
 ) (map[string]map[string]any, int, error) {
-	where, args, err := vs.buildMetadataWhere(ids, filter)
+	where, err := vs.buildDeletePredicate(ids, filter)
 	if err != nil {
 		return nil, 0, err
 	}
+	whereSQL, args := where.whereClause()
 	// ORDER BY must follow WHERE, and it is required for stable LIMIT/OFFSET
 	// pagination: without it ClickHouse returns rows in an arbitrary order, so
 	// successive pages can overlap or skip IDs.
 	sql := fmt.Sprintf("%s%s ORDER BY %s LIMIT ? OFFSET ?",
-		vs.buildMetadataSelectSQL(), where, vs.option.idFieldName)
+		vs.buildMetadataSelectSQL(), whereSQL, vs.option.idFieldName)
 	args = append(args, limit, offset)
 
 	rows, err := vs.client.Query(ctx, sql, args...)
@@ -506,11 +454,6 @@ func (vs *VectorStore) buildMetadataSelectSQL() string {
 		strings.Join(vs.metadataColumns(), ", "), vs.option.tableName)
 }
 
-// buildMetadataWhere builds a " WHERE ..." clause for metadata queries.
-func (vs *VectorStore) buildMetadataWhere(ids []string, filter map[string]any) (string, []any, error) {
-	return vs.buildDeleteWhere(ids, filter)
-}
-
 // scanMetadataRow scans a (id, metadata [, filter fields]) row.
 func (vs *VectorStore) scanMetadataRow(rows interface{ Scan(dest ...any) error }) (string, map[string]any, error) {
 	var id string
@@ -521,55 +464,62 @@ func (vs *VectorStore) scanMetadataRow(rows interface{ Scan(dest ...any) error }
 	if err := rows.Scan(targets...); err != nil {
 		return "", nil, fmt.Errorf("clickhouse: scan metadata row: %w", err)
 	}
-	md, err := unmarshalMetadata(metadataStr)
+	// The embedding text is dropped here: GetMetadata reports caller metadata
+	// only. unmarshalMetadata already strips the internal envelope.
+	md, _, err := unmarshalMetadata(metadataStr)
 	if err != nil {
 		return "", nil, fmt.Errorf("clickhouse: decode metadata: %w", err)
 	}
 	vs.mergeFilterDests(md, filterDests)
-	// Drop the internal embedding-text key so it never reaches callers.
-	md, _ = splitEmbeddingText(md)
 	return id, md, nil
 }
 
 // UpdateByFilter partially updates documents selected by DocumentIDs and/or a
-// FilterCondition. It reads the matching rows, applies the field updates in
-// memory, and re-inserts each updated document, returning the number updated.
+// FilterCondition. It reads the matching rows once, applies the field updates in
+// memory, and rewrites every updated version with a single batch INSERT.
+//
+// The returned count is the number of documents rewritten. Because the rewrite
+// is one INSERT, the backend applies it as a unit: the count is either the full
+// number of matches on success, or 0 together with an error. The operation is
+// not divided into per-document commits, so callers never observe a partially
+// applied count.
 func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
 	cfg, err := vectorstore.ApplyUpdateByFilterOptions(opts...)
 	if err != nil {
 		return 0, err
 	}
 
-	// Resolve the matching document IDs.
-	where, args, err := vs.buildUpdateWhere(cfg.DocumentIDs, cfg.FilterCondition)
+	where, err := vs.buildUpdatePredicate(cfg.DocumentIDs, cfg.FilterCondition)
 	if err != nil {
 		return 0, err
 	}
-	if where == "" {
+	if where.empty() {
 		return 0, errors.New("clickhouse: UpdateByFilter requires DocumentIDs or FilterCondition")
 	}
-	sql := fmt.Sprintf("SELECT %s FROM %s FINAL%s", vs.option.idFieldName, vs.option.tableName, where)
+	whereSQL, args := where.whereClause()
+
+	// Read the full matching rows instead of only their IDs: each document is
+	// needed to build its new version, and a single query avoids the 1+3N round
+	// trips of reading and re-reading one document at a time.
+	sql := fmt.Sprintf("%s%s", vs.buildSelectSQL(), whereSQL)
 	rows, err := vs.client.Query(ctx, sql, args...)
 	if err != nil {
 		return 0, fmt.Errorf("clickhouse: update by filter: %w", err)
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("clickhouse: scan id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("clickhouse: update by filter: %w", err)
-	}
-	rows.Close()
+	defer rows.Close()
 
-	for _, id := range ids {
-		doc, embedding, err := vs.Get(ctx, id)
+	now := time.Now()
+	var batchArgs []any
+	var count int
+	for rows.Next() {
+		current, err := vs.scanRow(rows, nil)
+		if err != nil {
+			return 0, err
+		}
+		if current == nil {
+			continue
+		}
+		doc, embedding, err := vs.rowToDoc(current)
 		if err != nil {
 			return 0, err
 		}
@@ -577,41 +527,45 @@ func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.U
 		if err != nil {
 			return 0, err
 		}
-		if err := vs.Update(ctx, newDoc, newEmbedding); err != nil {
+		newRow, err := vs.docToRow(newDoc, newEmbedding, now)
+		if err != nil {
 			return 0, err
 		}
+		// Preserve the original creation time, as Update does.
+		if !current.createdAt.IsZero() {
+			newRow.createdAt = current.createdAt
+		}
+		insertArgs, err := vs.insertArgs(newRow)
+		if err != nil {
+			return 0, err
+		}
+		batchArgs = append(batchArgs, insertArgs...)
+		count++
 	}
-	return int64(len(ids)), nil
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("clickhouse: update by filter: %w", err)
+	}
+	if count == 0 {
+		return 0, nil
+	}
+
+	if err := vs.client.Exec(ctx, vs.buildInsertSQLRows(count), batchArgs...); err != nil {
+		return 0, fmt.Errorf("clickhouse: update by filter: %w", err)
+	}
+	return int64(count), nil
 }
 
-// buildUpdateWhere builds a " WHERE ..." clause for update-by-filter from IDs
-// and/or a filter condition.
-func (vs *VectorStore) buildUpdateWhere(ids []string, cond *searchfilter.UniversalFilterCondition) (string, []any, error) {
-	var parts []string
-	var args []any
-	if len(ids) > 0 {
-		placeholders := make([]string, len(ids))
-		for i := range placeholders {
-			placeholders[i] = "?"
-		}
-		parts = append(parts, fmt.Sprintf("%s IN (%s)", vs.option.idFieldName, strings.Join(placeholders, ", ")))
-		for _, id := range ids {
-			args = append(args, id)
-		}
+// buildUpdatePredicate builds the predicate selecting the rows an update by
+// filter touches, from IDs and/or a filter condition.
+func (vs *VectorStore) buildUpdatePredicate(
+	ids []string,
+	cond *searchfilter.UniversalFilterCondition,
+) (predicate, error) {
+	expr, err := buildFilterExpr(cond, vs.allowedFilterFields())
+	if err != nil {
+		return predicate{}, err
 	}
-	if cond != nil {
-		expr, err := buildFilterExpr(cond, vs.allowedFilterFields())
-		if err != nil {
-			return "", nil, err
-		}
-		if expr != "" {
-			parts = append(parts, expr)
-		}
-	}
-	if len(parts) == 0 {
-		return "", args, nil
-	}
-	return " WHERE " + strings.Join(parts, " AND "), args, nil
+	return vs.idPredicate(ids).and(literalPredicate(expr)), nil
 }
 
 // applyUpdatesToDoc applies the UpdateByFilterConfig.Updates map to a document.

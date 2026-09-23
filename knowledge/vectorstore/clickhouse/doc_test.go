@@ -75,31 +75,45 @@ func TestRowToDoc(t *testing.T) {
 }
 
 func TestMarshalUnmarshalMetadata(t *testing.T) {
-	// nil.
-	s, err := marshalMetadata(nil)
+	// nil metadata and no embedding text.
+	s, err := marshalMetadata(nil, "")
 	require.NoError(t, err)
-	assert.Equal(t, "{}", s)
+	m, text, err := unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Empty(t, m)
+	assert.Empty(t, text)
 
-	// empty map.
-	s, err = marshalMetadata(map[string]any{})
+	// populated metadata and embedding text survive together.
+	s, err = marshalMetadata(map[string]any{"a": 1, "b": "x"}, "embedded")
 	require.NoError(t, err)
-	assert.Equal(t, "{}", s)
-
-	// populated.
-	s, err = marshalMetadata(map[string]any{"a": 1, "b": "x"})
-	require.NoError(t, err)
-	m, err := unmarshalMetadata(s)
+	m, text, err = unmarshalMetadata(s)
 	require.NoError(t, err)
 	assert.Equal(t, float64(1), m["a"])
 	assert.Equal(t, "x", m["b"])
+	assert.Equal(t, "embedded", text)
+
+	// A caller key equal to the internal envelope key is preserved, because
+	// caller metadata is nested one level below the envelope.
+	s, err = marshalMetadata(map[string]any{internalMetadataKey: "caller value"}, "embedded")
+	require.NoError(t, err)
+	m, text, err = unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", m[internalMetadataKey])
+	assert.Equal(t, "embedded", text)
+
+	// A value written without the envelope is treated as plain metadata.
+	m, text, err = unmarshalMetadata(`{"a":1}`)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), m["a"])
+	assert.Empty(t, text)
 
 	// empty string.
-	m, err = unmarshalMetadata("")
+	m, _, err = unmarshalMetadata("")
 	require.NoError(t, err)
 	assert.Empty(t, m)
 
 	// invalid JSON.
-	_, err = unmarshalMetadata("{invalid")
+	_, _, err = unmarshalMetadata("{invalid")
 	require.Error(t, err)
 }
 
@@ -120,18 +134,48 @@ func TestFilterFieldValues(t *testing.T) {
 	assert.Equal(t, int64(10), vals[1])
 	assert.Equal(t, float64(0.5), vals[2])
 
-	// Missing values map to zero values.
+	// Missing fields map to NULL so they stay distinct from explicit zeros.
 	vals, err = vs.filterFieldValues(map[string]any{})
 	require.NoError(t, err)
-	assert.Equal(t, "", vals[0])
-	assert.Equal(t, int64(0), vals[1])
-	assert.Equal(t, float64(0), vals[2])
+	assert.Nil(t, vals[0])
+	assert.Nil(t, vals[1])
+	assert.Nil(t, vals[2])
 
 	// No filter fields.
 	vs2 := &VectorStore{option: defaultOptions}
 	vals, err = vs2.filterFieldValues(map[string]any{"x": 1})
 	require.NoError(t, err)
 	assert.Nil(t, vals)
+}
+
+// TestFilterFieldAbsenceVersusZeroValue asserts that a document without a
+// filter field is stored as SQL NULL, so an equality filter such as
+// "count = 0" cannot match it. Storing the zero value instead would let
+// Search, Count, and DeleteByFilter match documents that never set the field.
+func TestFilterFieldAbsenceVersusZeroValue(t *testing.T) {
+	vs := &VectorStore{option: defaultOptions}
+	vs.option.filterFields = []FilterFieldSpec{{Name: "count", Type: FilterFieldInt64}}
+
+	absent, err := vs.filterFieldValues(map[string]any{})
+	require.NoError(t, err)
+	assert.Nil(t, absent[0], "an unset field must be stored as NULL")
+
+	explicit, err := vs.filterFieldValues(map[string]any{"count": 0})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), explicit[0], "an explicit zero must stay a value")
+
+	// Reading NULL back drops the key, while reading a value back restores the
+	// declared column type instead of the JSON float64.
+	var nullCount *int64
+	md := map[string]any{"count": float64(0)}
+	vs.mergeFilterDests(md, []any{&nullCount})
+	assert.NotContains(t, md, "count")
+
+	storedCount := int64(0)
+	storedPtr := &storedCount
+	md = map[string]any{"count": float64(9)}
+	vs.mergeFilterDests(md, []any{&storedPtr})
+	assert.Equal(t, int64(0), md["count"])
 }
 
 func TestConvertFilterFieldValue(t *testing.T) {
@@ -141,7 +185,7 @@ func TestConvertFilterFieldValue(t *testing.T) {
 	assert.Equal(t, "x", v)
 	v, err = convertFilterFieldValue(FilterFieldString, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "", v)
+	assert.Nil(t, v)
 	_, err = convertFilterFieldValue(FilterFieldString, 123)
 	require.Error(t, err)
 
@@ -151,7 +195,7 @@ func TestConvertFilterFieldValue(t *testing.T) {
 	assert.Equal(t, int64(5), v)
 	v, err = convertFilterFieldValue(FilterFieldInt64, nil)
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), v)
+	assert.Nil(t, v)
 
 	// Float64.
 	v, err = convertFilterFieldValue(FilterFieldFloat64, float64(1.5))

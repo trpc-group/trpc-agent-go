@@ -330,8 +330,8 @@ func TestSQLBuilders(t *testing.T) {
 
 	create := vs.buildCreateTableSQL()
 	assert.Contains(t, create, "CREATE TABLE IF NOT EXISTS docs")
-	assert.Contains(t, create, "category String")
-	assert.Contains(t, create, "count Int64")
+	assert.Contains(t, create, "category Nullable(String)")
+	assert.Contains(t, create, "count Nullable(Int64)")
 	assert.Contains(t, create, "ENGINE = ReplacingMergeTree(updated_at)")
 	assert.Contains(t, create, "ORDER BY id")
 
@@ -378,7 +378,9 @@ func TestScanRow(t *testing.T) {
 	))
 	// The metadata JSON always carries the declared filter fields, because
 	// insertArgs writes them into both the JSON blob and the typed column.
-	rows := newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, `{"x":1,"category":"news"}`, now, now, "news"}})
+	// The filter column is Nullable, so the row carries a pointer value.
+	category := "news"
+	rows := newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, `{"x":1,"category":"news"}`, now, now, &category}})
 	require.True(t, rows.Next())
 	r, err := vs.scanRow(rows, nil)
 	require.NoError(t, err)
@@ -388,16 +390,16 @@ func TestScanRow(t *testing.T) {
 	assert.Equal(t, "news", r.metadata["category"])
 	assert.Equal(t, now, r.createdAt)
 
-	// A filter field absent from the metadata is not invented from the column
-	// zero value.
-	rowsNoKey := newMockRows([][]any{{"doc2", "n", "c", []float64{1, 2, 3}, `{"x":1}`, now, now, ""}})
+	// A NULL filter column means the document never carried the field, so it is
+	// not invented as a zero value.
+	rowsNoKey := newMockRows([][]any{{"doc2", "n", "c", []float64{1, 2, 3}, `{"x":1}`, now, now, nil}})
 	require.True(t, rowsNoKey.Next())
 	rNoKey, err := vs.scanRow(rowsNoKey, nil)
 	require.NoError(t, err)
 	assert.NotContains(t, rNoKey.metadata, "category")
 
 	// With score pointer.
-	rows = newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, "{}", now, now, "news", 0.25}})
+	rows = newMockRows([][]any{{"doc1", "n", "c", []float64{1, 2, 3}, "{}", now, now, &category, 0.25}})
 	require.True(t, rows.Next())
 	var score float64
 	_, err = vs.scanRow(rows, &score)

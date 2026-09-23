@@ -29,6 +29,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -256,14 +257,31 @@ func printResults(results *vectorstore.SearchResult) {
 
 // redactDSN hides the password in a ClickHouse DSN so credentials never leak
 // into demo output. It preserves the user and the host/port/database parts.
+//
+// The DSN is parsed with net/url so that a password containing a colon is
+// masked completely; splitting on the last colon would leave the leading part
+// of such a password visible.
 func redactDSN(dsn string) string {
+	if u, err := url.Parse(dsn); err == nil {
+		if password, ok := u.User.Password(); ok && password != "" {
+			username := u.User.Username()
+			u.User = nil
+			// url.UserPassword escapes the asterisks, so the masked
+			// credentials are spliced into the rebuilt URL instead.
+			return strings.Replace(u.String(), "://",
+				"://"+url.User(username).String()+":****@", 1)
+		}
+		return dsn
+	}
+	// Fallback for DSNs net/url cannot parse: split user and password on the
+	// first separator and mask everything after it.
 	scheme, rest := "", dsn
 	if i := strings.Index(dsn, "://"); i >= 0 {
 		scheme, rest = dsn[:i+3], dsn[i+3:]
 	}
 	if at := strings.Index(rest, "@"); at >= 0 {
 		auth, tail := rest[:at], rest[at:]
-		if c := strings.LastIndex(auth, ":"); c >= 0 {
+		if c := strings.Index(auth, ":"); c >= 0 {
 			return scheme + auth[:c] + ":****" + tail
 		}
 	}

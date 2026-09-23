@@ -90,10 +90,11 @@ func TestMetricHelpers(t *testing.T) {
 }
 
 func TestFilterFieldTypeClickHouseType(t *testing.T) {
-	assert.Equal(t, "String", FilterFieldString.clickhouseType())
-	assert.Equal(t, "Int64", FilterFieldInt64.clickhouseType())
-	assert.Equal(t, "Float64", FilterFieldFloat64.clickhouseType())
-	assert.Equal(t, "String", FilterFieldType(99).clickhouseType())
+	// Columns are Nullable so an unset field stays distinct from a zero value.
+	assert.Equal(t, "Nullable(String)", FilterFieldString.clickhouseType())
+	assert.Equal(t, "Nullable(Int64)", FilterFieldInt64.clickhouseType())
+	assert.Equal(t, "Nullable(Float64)", FilterFieldFloat64.clickhouseType())
+	assert.Equal(t, "Nullable(String)", FilterFieldType(99).clickhouseType())
 }
 
 func TestWithOptions(t *testing.T) {
@@ -103,25 +104,25 @@ func TestWithOptions(t *testing.T) {
 	WithMetric(MetricL2)(&o)
 	WithFilterFields(FilterFieldSpec{Name: "cat", Type: FilterFieldString})(&o)
 	WithAutoCreateTable(false)(&o)
-	WithAllowDestructiveDeleteAll(true)(&o)
+	WithSynchronousMutations(false)(&o)
 	WithInstanceName("inst")(&o)
 	WithDSN("clickhouse://x")(&o)
 	WithExtraOptions("e1")(&o)
 	WithMaxResults(20)(&o)
-	WithIDFieldName("doc_id")(&o)
-	WithNameFieldName("title")(&o)
-	WithContentFieldName("body")(&o)
-	WithEmbeddingFieldName("vec")(&o)
-	WithMetadataFieldName("meta")(&o)
-	WithCreatedAtFieldName("c_at")(&o)
-	WithUpdatedAtFieldName("u_at")(&o)
+	WithIDField("doc_id")(&o)
+	WithNameField("title")(&o)
+	WithContentField("body")(&o)
+	WithEmbeddingField("vec")(&o)
+	WithMetadataField("meta")(&o)
+	WithCreatedAtField("c_at")(&o)
+	WithUpdatedAtField("u_at")(&o)
 
 	assert.Equal(t, "mytable", o.tableName)
 	assert.Equal(t, 512, o.vectorDimension)
 	assert.Equal(t, MetricL2, o.metric)
 	assert.Len(t, o.filterFields, 1)
 	assert.False(t, o.autoCreateTable)
-	assert.True(t, o.allowDestructiveDeleteAll)
+	assert.False(t, o.syncMutations)
 	assert.Equal(t, "inst", o.instanceName)
 	assert.Equal(t, "clickhouse://x", o.dsn)
 	assert.Equal(t, []any{"e1"}, o.extraOptions)
