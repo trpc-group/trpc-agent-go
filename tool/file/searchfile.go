@@ -75,36 +75,7 @@ func (f *fileToolSet) searchFile(
 	}
 	if ref.Scheme == fileref.SchemeWorkspace {
 		rsp.Path = fileref.WorkspaceRef(ref.Path)
-		files, folders, err := matchWorkspacePaths(
-			ctx,
-			ref.Path,
-			req.Pattern,
-			req.CaseSensitive,
-		)
-		if err != nil {
-			rsp.Message = fmt.Sprintf("Error: %v", err)
-			return rsp, err
-		}
-		if limit := f.searchFileLimit(); len(files)+len(folders) > limit {
-			err := &tooManyFilesError{
-				pattern: req.Pattern,
-				path:    rsp.Path,
-				limit:   limit,
-			}
-			rsp.Message = fmt.Sprintf("Error: %v", err)
-			return rsp, err
-		}
-		rsp.Files = files
-		rsp.Folders = folders
-		rsp.Message = fmt.Sprintf(
-			"Found %d files and %d folders matching pattern "+
-				"'%s' in %s",
-			len(rsp.Files),
-			len(rsp.Folders),
-			req.Pattern,
-			rsp.Path,
-		)
-		return rsp, nil
+		return f.searchWorkspaceFiles(ctx, rsp, ref.Path, req)
 	}
 
 	reqPath := strings.TrimSpace(req.Path)
@@ -126,38 +97,9 @@ func (f *fileToolSet) searchFile(
 					clean = ""
 				}
 				rsp.Path = fileref.WorkspaceRef(clean)
-				files, folders, err := matchWorkspacePaths(
-					ctx,
-					reqPath,
-					req.Pattern,
-					req.CaseSensitive,
-				)
-				if err != nil {
-					rsp.Message = fmt.Sprintf("Error: %v", err)
-					return rsp, err
-				}
 				// The implicit workspace fallback honours the same file
 				// limit as an explicit workspace:// path.
-				if limit := f.searchFileLimit(); len(files)+len(folders) > limit {
-					err := &tooManyFilesError{
-						pattern: req.Pattern,
-						path:    rsp.Path,
-						limit:   limit,
-					}
-					rsp.Message = fmt.Sprintf("Error: %v", err)
-					return rsp, err
-				}
-				rsp.Files = files
-				rsp.Folders = folders
-				rsp.Message = fmt.Sprintf(
-					"Found %d files and %d folders matching "+
-						"pattern '%s' in %s",
-					len(rsp.Files),
-					len(rsp.Folders),
-					req.Pattern,
-					rsp.Path,
-				)
-				return rsp, nil
+				return f.searchWorkspaceFiles(ctx, rsp, reqPath, req)
 			}
 		}
 		rsp.Message = fmt.Sprintf(
@@ -205,6 +147,49 @@ func (f *fileToolSet) searchFile(
 		len(rsp.Folders),
 		req.Pattern,
 		targetPath,
+	)
+	return rsp, nil
+}
+
+// searchWorkspaceFiles lists the workspace entries under dir that match the
+// request's pattern into rsp, whose Path the caller has already set to the
+// workspace ref being reported. The file limit applies as it does on disk: a
+// pattern that selects more entries than the limit is refused rather than
+// listed.
+func (f *fileToolSet) searchWorkspaceFiles(
+	ctx context.Context,
+	rsp *searchFileResponse,
+	dir string,
+	req *searchFileRequest,
+) (*searchFileResponse, error) {
+	files, folders, err := matchWorkspacePaths(
+		ctx,
+		dir,
+		req.Pattern,
+		req.CaseSensitive,
+	)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	if limit := f.searchFileLimit(); len(files)+len(folders) > limit {
+		err := &tooManyFilesError{
+			pattern: req.Pattern,
+			path:    rsp.Path,
+			limit:   limit,
+		}
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	rsp.Files = files
+	rsp.Folders = folders
+	rsp.Message = fmt.Sprintf(
+		"Found %d files and %d folders matching pattern "+
+			"'%s' in %s",
+		len(rsp.Files),
+		len(rsp.Folders),
+		req.Pattern,
+		rsp.Path,
 	)
 	return rsp, nil
 }
