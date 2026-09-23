@@ -97,7 +97,6 @@ const invalidOutputSchemaAwaitUserReply = "" +
 	"Invalid LLMAgent configuration: if output_schema is set, " +
 	"await_user_reply must be disabled"
 
-// New creates a new LLMAgent with the given options.
 // toolBatchingAnnotators returns the annotator that names the tools that must
 // run alone, so the model can form batches that actually run concurrently. It
 // is only meaningful with parallel tools on, and it annotates the finalized
@@ -112,6 +111,7 @@ func toolBatchingAnnotators(options *Options) []llmflow.FinalizedRequestAnnotato
 	}
 }
 
+// New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
 	options := defaultOptions
 
