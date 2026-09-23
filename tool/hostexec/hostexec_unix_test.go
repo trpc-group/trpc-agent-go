@@ -101,16 +101,25 @@ func TestPrepareCommands(t *testing.T) {
 			&syscall.SysProcAttr{Setsid: true}},
 		{"kept-with-both", keepStdin,
 			&syscall.SysProcAttr{Setsid: true, Setpgid: true}},
+		// A hook that copied PTY attributes must not leave a pipe child
+		// asking for a controlling terminal it does not have.
+		{"detached-with-ctty", detachStdin,
+			&syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 3}},
+		{"kept-with-ctty", keepStdin,
+			&syscall.SysProcAttr{Setpgid: true, Setctty: true, Ctty: 3}},
 	} {
 		cmd := &exec.Cmd{SysProcAttr: tc.attrs}
 		preparePipeCommand(cmd, tc.detach)
 		require.Equal(t, tc.detach, cmd.SysProcAttr.Setsid, tc.name)
 		require.Equal(t, !tc.detach, cmd.SysProcAttr.Setpgid, tc.name)
+		require.False(t, cmd.SysProcAttr.Setctty, tc.name)
+		require.Zero(t, cmd.SysProcAttr.Ctty, tc.name)
 	}
-	replaced := &exec.Cmd{SysProcAttr: &syscall.SysProcAttr{Setpgid: true}}
+	replaced := &exec.Cmd{SysProcAttr: &syscall.SysProcAttr{Setpgid: true, Ctty: 3}}
 	preparePTYCommand(replaced)
 	require.True(t, replaced.SysProcAttr.Setsid)
 	require.True(t, replaced.SysProcAttr.Setctty)
+	require.Zero(t, replaced.SysProcAttr.Ctty)
 	require.False(t, replaced.SysProcAttr.Setpgid)
 }
 

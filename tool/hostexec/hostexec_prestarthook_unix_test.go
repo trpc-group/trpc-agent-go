@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/creack/pty"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +35,19 @@ func rewriteToEcho(t *testing.T, marker string) PreStartHook {
 		cmd.Args = []string{"sh", "-c", "echo " + marker}
 		return nil
 	}
+}
+
+// requirePTY skips the test when the host cannot allocate a pseudo-terminal.
+// The hook runs before pty.Start, so a failed allocation cannot be told apart
+// from a hook-side failure afterwards; probing first keeps the skip honest.
+func requirePTY(t *testing.T) {
+	t.Helper()
+	master, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty unavailable: %v", err)
+	}
+	_ = tty.Close()
+	_ = master.Close()
 }
 
 // attrsSeen copies the attributes the hook observed, so a test asserts what
@@ -125,6 +139,7 @@ func TestPreStartHook_RewritesPTYCommand(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
 	}
+	requirePTY(t)
 
 	var seen *syscall.SysProcAttr
 	rewrite := rewriteToEcho(t, "hooked-pty")
@@ -146,9 +161,6 @@ func TestPreStartHook_RewritesPTYCommand(t *testing.T) {
 			"yieldMs": 0,
 		}),
 	)
-	if err != nil && seen == nil {
-		t.Skip(err.Error())
-	}
 	require.NoError(t, err)
 
 	res := out.(map[string]any)
@@ -171,6 +183,7 @@ func TestPreStartHook_ReceivesCallContext(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
 	}
+	requirePTY(t)
 
 	var seen []any
 	set, err := NewToolSet(WithPreStartHook(
@@ -190,9 +203,6 @@ func TestPreStartHook_ReceivesCallContext(t *testing.T) {
 	} {
 		ctx := context.WithValue(context.Background(), hookContextKey{}, i)
 		out, err := execTool.Call(ctx, mustJSON(t, args))
-		if err != nil && args["tty"] == true && len(seen) == i {
-			t.Skip(err.Error())
-		}
 		require.NoError(t, err)
 		if id, _ := out.(map[string]any)["session_id"].(string); id != "" {
 			pollUntilExited(t, mgr, id)
@@ -352,6 +362,7 @@ func TestPreStartHook_RestoresPTYProcessAttributes(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
 	}
+	requirePTY(t)
 
 	var started *exec.Cmd
 	set, err := NewToolSet(WithPreStartHook(
@@ -373,9 +384,6 @@ func TestPreStartHook_RestoresPTYProcessAttributes(t *testing.T) {
 			"yieldMs": 0,
 		}),
 	)
-	if err != nil && started == nil {
-		t.Skip(err.Error())
-	}
 	require.NoError(t, err)
 
 	res := out.(map[string]any)

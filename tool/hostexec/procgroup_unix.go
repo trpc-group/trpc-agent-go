@@ -60,6 +60,11 @@ func preparePipeCommand(cmd *exec.Cmd, detach bool) {
 	attrs := ensureSysProcAttr(cmd)
 	attrs.Setsid = detach
 	attrs.Setpgid = !detach
+	// A pipe child has no terminal to take: stdin is a pipe or the null device,
+	// so Setctty would make the exec fail. It is cleared here so a hook that
+	// copied PTY attributes cannot stop the command from starting.
+	attrs.Setctty = false
+	attrs.Ctty = 0
 	applyParentDeathSignal(attrs)
 }
 
@@ -78,6 +83,9 @@ func preparePTYCommand(cmd *exec.Cmd) {
 	attrs := ensureSysProcAttr(cmd)
 	attrs.Setsid = true
 	attrs.Setctty = true
+	// Ctty is the child's file descriptor of the terminal; pty.Start wires the
+	// terminal to stdin, so descriptor 0 is the only valid value.
+	attrs.Ctty = 0
 	attrs.Setpgid = false
 	applyParentDeathSignal(attrs)
 }
