@@ -160,7 +160,8 @@ knowledge/
 │   ├── tcvector/        # Tencent Cloud vector database implementation
 │   ├── elasticsearch/   # Elasticsearch implementation
 │   ├── milvus/          # Milvus vector database implementation
-│   └── qdrant/          # Qdrant vector database implementation
+│   ├── qdrant/          # Qdrant vector database implementation
+│   └── chroma/          # ChromaDB vector database implementation
 ├── embedder/             # Text embedding models
 │   ├── embedder.go      # Embedder interface definition
 │   ├── openai/          # OpenAI embedding model

@@ -478,7 +478,16 @@ func (c *CodeExecutor) StageDirectory(
 	return c.ensureRuntime().StageDirectory(ctx, ws, src, to, opt)
 }
 
-// RunProgram executes a command inside the sandbox workspace.
+// RunProgram executes a command through native envd inside the sandbox workspace.
+// A non-positive timeout uses 30 seconds. Non-zero program exits are returned
+// in RunResult with a nil error; cancellation and transport failures are errors.
+// Recognized Linux signal termination returns exit code 128 + signal with a
+// nil error, preserving captured output (for example, SIGTERM returns 143).
+// Finite stdin requires a known envd version of at least 0.5.2. Output is
+// captured without trimming or truncation. There is no Code Interpreter fallback.
+// Remote programs default to root to match standard Code Interpreter workspace
+// ownership. Custom templates should set Authorization through WithHeaders to
+// select their kernel account; an explicit Authorization header takes precedence.
 func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
@@ -527,16 +536,9 @@ func (c *CodeExecutor) ExecuteInline(
 // tool/workspaceexec policy mode run on the e2b backend instead of
 // failing closed.
 //
-// Scope note: the e2b Jupyter `/execute` API exposes no hook to
-// launch the *framing* shell (the kernel-side bash that runs our
-// script and the output sentinels) in an empty environment, so that
-// shell still inherits the sandbox environment. This is not a
-// model-injection vector: the sandbox environment is fixed by the
-// template / WithEnvVars at sandbox creation (operator-controlled),
-// and model-supplied env (spec.Env) is confined to the `env -i`
-// invocation rather than the framing shell. The SupportsCleanEnv
-// contract is about the spawned program's environment, which `env -i`
-// satisfies.
+// RunProgram uses native envd processes with separate stdout and stderr.
+// ExecuteCode continues to use Code Interpreter kernels. Workspace filesystem
+// operations still require the Code Interpreter endpoint.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(

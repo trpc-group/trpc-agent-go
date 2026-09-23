@@ -1328,6 +1328,44 @@ tools:
         num_retries: 3
 ```
 
+### ToolSet: youcom
+
+You.com Web Search toolset. Live web search with URLs, titles, and
+snippets; good general-purpose companion to the `duckduckgo` provider and
+the credentialed `google` toolset.
+
+Requires a You.com API key. Set `api_key` in the config or export
+`YDC_API_KEY` (config wins when both are present). Keys are available at
+[you.com/platform/api-keys](https://you.com/platform/api-keys). The toolset
+calls the documented Web Search API endpoint
+(`https://ydc-index.io/v1/search`); `base_url` exists for testing and must
+be HTTPS.
+
+```yaml
+tools:
+  refresh_toolsets_on_run: true
+  toolsets:
+    - type: "youcom"
+      name: "youcom"
+      config:
+        # api_key: "..."  # or use the YDC_API_KEY env var
+        num_results: 5
+        country: "US"
+        safe_search: "moderate"
+        timeout: "30s"
+```
+
+Config fields:
+
+- `api_key` (or environment `YDC_API_KEY`)
+- optional: `num_results` (default 10, max 10), `country`, `safe_search`
+  (`strict` / `moderate` / `off`), `base_url`, `user_agent`, `timeout`
+
+The search tool is named `search` and is automatically namespaced under
+the toolset `name` (for example `youcom_search` when the toolset is named
+`youcom`). Per-call request fields `num_results`, `country`, and
+`safe_search` override the configured defaults.
+
 ### ToolSet: email
 
 Email sending toolset.

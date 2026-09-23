@@ -160,6 +160,19 @@ func TestNamedToolSet_Idempotent(t *testing.T) {
 	require.Same(t, nts, nts2, "idempotent wrapper should be same instance")
 }
 
+func TestNamedToolSet_ModeOverride(t *testing.T) {
+	base := &fakeToolSet{
+		name:  "github",
+		tools: []tool.Tool{&simpleTool{name: "search", desc: "search"}},
+	}
+	qualified := NewNamedToolSet(base)
+	original := NewNamedToolSetWithMode(qualified, tool.ToolSetToolNameModeOriginal)
+	require.NotSame(t, qualified, original)
+	require.Equal(t, "search", original.Tools(context.Background())[0].Declaration().Name)
+	require.Same(t, qualified, NewNamedToolSetWithMode(qualified, tool.ToolSetToolNameModeQualified))
+	require.Same(t, original, NewNamedToolSet(original))
+}
+
 func TestNamedToolSet_Tools_PrefixingAndPassthrough(t *testing.T) {
 	// With a name, tool names should be prefixed.
 	base := &fakeToolSet{
@@ -176,6 +189,20 @@ func TestNamedToolSet_Tools_PrefixingAndPassthrough(t *testing.T) {
 	nts2 := NewNamedToolSet(base2)
 	got2 := nts2.Tools(context.Background())
 	require.Equal(t, "write", got2[0].Declaration().Name)
+}
+
+func TestNamedToolSet_Tools_OriginalNames(t *testing.T) {
+	base := &fakeToolSet{
+		name:  "github",
+		tools: []tool.Tool{&simpleTool{name: "search", desc: "search"}},
+	}
+
+	got := NewNamedToolSetWithMode(base, tool.ToolSetToolNameModeOriginal).Tools(context.Background())
+	require.Len(t, got, 1)
+	require.Equal(t, "search", got[0].Declaration().Name)
+	named, ok := got[0].(*NamedTool)
+	require.True(t, ok)
+	require.Equal(t, "github", named.ToolSetName())
 }
 
 func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {

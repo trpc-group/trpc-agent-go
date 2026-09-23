@@ -34,6 +34,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -57,14 +58,6 @@ const (
 	// Maximum bytes read back from the sandbox for a single file when
 	// collecting outputs.
 	maxReadSizeBytes = 4 * 1024 * 1024 // 4 MiB
-
-	// Sentinels used to frame RunProgram stdout / stderr / exit code so
-	// wrapper-script noise is stripped before returning to callers.
-	sentinelStdoutBegin = "__E2B_STDOUT_BEGIN__"
-	sentinelStdoutEnd   = "__E2B_STDOUT_END__"
-	sentinelStderrBegin = "__E2B_STDERR_BEGIN__"
-	sentinelStderrEnd   = "__E2B_STDERR_END__"
-	sentinelExitPrefix  = "__E2B_EXITCODE__="
 
 	metadataFileMode = 0o600
 )
@@ -591,13 +584,22 @@ func (r *workspaceRuntime) RunProgram(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
-) (codeexecutor.RunResult, error) {
+) (res codeexecutor.RunResult, err error) {
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrCmd, spec.Cmd),
 		attribute.String(codeexecutor.AttrCwd, spec.Cwd),
 	)
-	defer span.End()
+	defer func() {
+		span.SetAttributes(
+			attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
+			attribute.Bool(codeexecutor.AttrTimedOut, res.TimedOut),
+		)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 
 	timeout := spec.Timeout
 	if timeout <= 0 {
@@ -623,104 +625,60 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	// envAssign is the leading `env ...` / `env -i ...` token spliced
-	// in front of the command. When spec.CleanEnv is set
-	// (workspace_exec / skill_run policy mode) it becomes `env -i ...`
-	// so the spawned program starts from an empty environment plus the
-	// workspace base vars and a minimal PATH, honoring
-	// RunProgramSpec.CleanEnv on the e2b backend (issue #1845).
-	envAssign := envToken(baseEnv, spec.Env, spec.CleanEnv)
-
-	quotedCmd := shellQuote(spec.Cmd)
-	var quotedArgs strings.Builder
-	for _, a := range spec.Args {
-		quotedArgs.WriteByte(' ')
-		quotedArgs.WriteString(shellQuote(a))
+	bootstrap := programBootstrap
+	if spec.Stdin == "" {
+		// Old envd versions ignore Start.Stdin=false. Close the program input
+		// explicitly without depending on Process.CloseStdin.
+		bootstrap += " < /dev/null"
+	}
+	args := []string{"-c", bootstrap, "trpc-run", runDir, outDir, cwd, "/usr/bin/env"}
+	envArgs, err := programEnvArgs(baseEnv, spec.Env, spec.CleanEnv)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	args = append(args, envArgs...)
+	args = append(args, spec.Cmd)
+	args = append(args, spec.Args...)
+	if err := validateProgramArgs(spec.Cmd, args); err != nil {
+		return codeexecutor.RunResult{}, err
 	}
 
-	var stdinRedir string
-	if spec.Stdin != "" {
-		b64 := base64.StdEncoding.EncodeToString([]byte(spec.Stdin))
-		stdinRedir = " < <(printf %s " + shellQuote(b64) + " | base64 -d)"
+	if r.ce == nil {
+		return codeexecutor.RunResult{}, errors.New("e2b: sandbox not initialized")
 	}
-
-	inner := fmt.Sprintf(
-		"mkdir -p %s %s && cd %s && %s%s%s%s",
-		shellQuote(runDir), shellQuote(outDir),
-		shellQuote(cwd),
-		envAssign, quotedCmd, quotedArgs.String(),
-		stdinRedir,
-	)
-	script := buildRunWrapper(inner)
-
+	r.ce.mu.Lock()
+	sbx := r.ce.sbx
+	r.ce.mu.Unlock()
 	start := time.Now()
-	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)
-	dur := time.Since(start)
-
-	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
-
-	timedOut := false
-	if err != nil {
-		if isTimeoutErr(err) {
-			timedOut = true
-			err = nil
-		}
+	result, err := ci.RunProcess(ctx, sbx, envdprocess.Request{
+		Cmd: "/bin/bash", Args: args, Stdin: spec.Stdin, Timeout: timeout,
+	})
+	res = codeexecutor.RunResult{
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		ExitCode: result.ExitCode,
+		Duration: time.Since(start),
+		TimedOut: result.TimedOut,
 	}
 
-	res := codeexecutor.RunResult{
-		Stdout:   stdout,
-		Stderr:   stderr,
-		ExitCode: exit,
-		Duration: dur,
-		TimedOut: timedOut,
-	}
-	span.SetAttributes(
-		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
-		attribute.Bool(codeexecutor.AttrTimedOut, res.TimedOut),
-	)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-	}
 	return res, err
 }
 
-// buildRunWrapper produces a bash script that executes `inner` while framing
-// stdout/stderr/exit-code with sentinels, so the driver can parse them out.
-func buildRunWrapper(inner string) string {
-	var b strings.Builder
-	b.WriteString("__ERR=$(mktemp); ")
-	b.WriteString("echo " + sentinelStdoutBegin + "; ")
-	b.WriteString("{ ")
-	b.WriteString(inner)
-	b.WriteString("; } 2>\"$__ERR\"; __EC=$?; ")
-	b.WriteString("echo " + sentinelStdoutEnd + "; ")
-	b.WriteString("echo " + sentinelExitPrefix + "$__EC; ")
-	b.WriteString("echo " + sentinelStderrBegin + " >&2; ")
-	b.WriteString("cat \"$__ERR\" >&2; ")
-	b.WriteString("echo " + sentinelStderrEnd + " >&2; ")
-	b.WriteString("rm -f \"$__ERR\"")
-	return b.String()
-}
+// programBootstrap keeps preparation under the same process deadline. Dynamic
+// values are positional arguments, and caller environment variables reach only
+// the final env invocation. exec preserves the managed PID for the program.
+const programBootstrap = `/bin/mkdir -p -- "$1" "$2" && cd -- "$3" && shift 3 && exec "$@"`
 
-// parseFramedOutput extracts the user's stdout/stderr and exit code from the
-// framed streaming output produced by buildRunWrapper.
-func parseFramedOutput(rawStdout, rawStderr string) (string, string, int) {
-	stdout := extractBetween(rawStdout, sentinelStdoutBegin,
-		sentinelStdoutEnd)
-	stderr := extractBetween(rawStderr, sentinelStderrBegin,
-		sentinelStderrEnd)
-	exit := 0
-	if idx := strings.LastIndex(rawStdout, sentinelExitPrefix); idx >= 0 {
-		rest := rawStdout[idx+len(sentinelExitPrefix):]
-		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-			rest = rest[:nl]
-		}
-		rest = strings.TrimSpace(rest)
-		if v, err := strconv.Atoi(rest); err == nil {
-			exit = v
+func validateProgramArgs(cmd string, args []string) error {
+	if cmd == "" {
+		return errors.New("e2b: command is empty")
+	}
+	for _, arg := range args {
+		if strings.ContainsRune(arg, 0) {
+			return errors.New("e2b: program arguments must not contain NUL")
 		}
 	}
-	return stdout, stderr, exit
+	return nil
 }
 
 // extractBetween returns the text between begin and end sentinels. Surrounding
@@ -847,14 +805,6 @@ func (r *workspaceRuntime) runBashStreaming(
 		)
 	}
 	return stdoutB.String(), stderrB.String(), 0, nil
-}
-
-func isTimeoutErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout")
 }
 
 func tarGzFromFiles(files []codeexecutor.PutFile) ([]byte, error) {
