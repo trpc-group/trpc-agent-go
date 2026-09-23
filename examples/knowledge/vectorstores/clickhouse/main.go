@@ -17,7 +17,7 @@
 // Required environment:
 //   - CLICKHOUSE_DSN: (Optional) ClickHouse DSN, defaults to
 //     "clickhouse://default:@localhost:9000/default"
-//   - CLICKHOUSE_TABLE: (Optional) Table name, defaults to "documents"
+//   - CLICKHOUSE_TABLE: (Optional) Table name, defaults to "clickhouse_vectorstore_example"
 //
 // Example usage:
 //
@@ -207,21 +207,45 @@ func main() {
 	if err := vs.Delete(ctx, "doc3"); err != nil {
 		log.Fatalf("Delete failed: %v", err)
 	}
-	// ClickHouse deletes run as asynchronous mutations, so the row can still be
-	// counted right after Delete returns. Poll until the expected count shows up.
-	n, err = waitForCount(ctx, vs, 2)
+	// Mutations are synchronous by default, so the row is already gone once
+	// Delete returns: count the table directly.
+	n, err = vs.Count(ctx)
 	if err != nil {
 		log.Fatalf("Count after delete failed: %v", err)
 	}
 	fmt.Printf("  ✓ total after delete = %d\n", n)
 
+	// ── 11. Delete with asynchronous mutations ───────────────────────────────
+	// WithSynchronousMutations(false) opts out of that default. Delete then
+	// returns as soon as the mutation is queued, so the row can still be
+	// counted for a while; polling is required in that mode only.
+	fmt.Println("\n🗑️  Delete doc2 with async mutations ...")
+	asyncVS, err := clickhouse.New(
+		clickhouse.WithDSN(dsn),
+		clickhouse.WithTableName(table),
+		clickhouse.WithVectorDimension(vectorDim),
+		clickhouse.WithSynchronousMutations(false),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create async vector store: %v", err)
+	}
+	defer asyncVS.Close()
+	if err := asyncVS.Delete(ctx, "doc2"); err != nil {
+		log.Fatalf("Async delete failed: %v", err)
+	}
+	n, err = waitForCount(ctx, asyncVS, 1)
+	if err != nil {
+		log.Fatalf("Count after async delete failed: %v", err)
+	}
+	fmt.Printf("  ✓ total after async delete = %d\n", n)
+
 	fmt.Println("\n✅ ClickHouse vector store verification passed.")
 }
 
 // waitForCount polls Count until it reports want, and fails if that does not
-// happen before the deadline. It exists because Delete is implemented as an
-// asynchronous ClickHouse mutation, so the row can still be counted right after
-// Delete returns.
+// happen before the deadline. It is only needed for a store built with
+// WithSynchronousMutations(false): there Delete returns as soon as the mutation
+// is queued, so the row can still be counted right after it returns.
 func waitForCount(ctx context.Context, vs *clickhouse.VectorStore, want int) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
