@@ -887,7 +887,7 @@ Notes:
 
 ## Token Counter Configuration
 
-By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
+Summary checks use a built-in `SimpleTokenCounter` by default. Use `summary.SetTokenCounter` to customize the process default for summary checks, summary-request estimates, and model-visible request estimates used by automatic summaries and pre-LLM summary triggers. An agent's explicit `WithContextCompactionTokenCounter(...)` takes precedence for its request estimates:
 
 For `SimpleTokenCounter`, `WithApproxRunesPerToken(v)` means roughly `v` UTF-8 characters per token. The formula is `estimatedTokens = countedUTF8Runes / v`. For example, `v=1.5` means about `1.5` characters per token; do not treat it as a token multiplier.
 
@@ -952,8 +952,10 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 **Notes**:
 
-- **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
-- **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
+- **Counter precedence**: Model-visible request estimates use the agent's explicit `WithContextCompactionTokenCounter(...)`, otherwise the process default from `summary.SetTokenCounter(...)`, otherwise the built-in `SimpleTokenCounter`. This applies to pre-LLM summary triggers and automatic checks using a finalized request view. Automatic checks follow this rule even when context compaction is disabled.
+- **Updates and reset**: Set the process default during application initialization. Later updates apply to subsequent evaluations, including for existing agents; `SetTokenCounter(nil)` restores the built-in default. Custom counters must support concurrent calls.
+- **Independent counters**: Tool-result compaction and model token tailoring retain their separate defaults. Configure the same counter explicitly for those paths when consistent estimates are needed.
+- **Default counter**: The built-in `SimpleTokenCounter` estimates approximately 4 characters per token.
 - **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `2.0/3.0` means about `0.67` characters per token, which is about `1.5` tokens per character
 
 ## Skip Recent Events
@@ -1385,10 +1387,15 @@ Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
 - Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request
-- Context compaction uses `SimpleTokenCounter` by default. If your application
-  uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
-  pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1
-  decisions and Pass 2 truncation use the same estimate as token tailoring.
+- Request estimates for the pre-LLM summary trigger and automatic summary checks
+  use the agent's explicit `WithContextCompactionTokenCounter(...)`, otherwise
+  the current `summary.SetTokenCounter(...)` process default, otherwise the
+  built-in `SimpleTokenCounter`. Automatic checks follow this rule even when
+  context compaction is disabled.
+- Tool-result compaction and model token tailoring retain independent defaults.
+  For consistent CJK or provider-specific estimates, configure the same counter
+  explicitly for Pass 1/Pass 2 with `WithContextCompactionTokenCounter(...)` and
+  for model token tailoring with the model's token-counter option.
 
 ```go
 counter := model.NewSimpleTokenCounter(

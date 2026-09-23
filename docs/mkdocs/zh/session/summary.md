@@ -826,7 +826,7 @@ summarizer := summary.NewSummarizer(
 
 ## Token 计数器配置
 
-默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果需要自定义 token 计数行为，可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
+摘要检查默认使用内置的 `SimpleTokenCounter`。可以通过 `summary.SetTokenCounter` 设置进程默认计数器，用于摘要检查、摘要请求估算，以及自动摘要和 LLM 调用前摘要触发所需的模型可见请求计数。Agent 显式设置的 `WithContextCompactionTokenCounter(...)` 对该 agent 的请求计数优先：
 
 `SimpleTokenCounter` 的 `WithApproxRunesPerToken(v)` 表示约 `v` 个 UTF-8 字符对应 1 个 token，估算公式是 `estimatedTokens = countedUTF8Runes / v`。例如 `v=1.5` 表示约 `1.5` 字符/token；不要把它当成 token 乘数。
 
@@ -887,8 +887,10 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 **注意**：
 
-- **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估，建议在应用初始化时一次性设置
-- **默认计数器**：如果不设置，将使用默认的 `SimpleTokenCounter`（约每 token 对应 4 个字符）
+- **计数器优先级**：模型可见请求计数优先使用 agent 显式设置的 `WithContextCompactionTokenCounter(...)`，其次是 `summary.SetTokenCounter(...)` 配置的进程默认值，最后回落到内置 `SimpleTokenCounter`。LLM 调用前摘要触发和使用最终 request view 的自动摘要检查都遵循此规则。关闭 context compaction 时，自动摘要检查仍遵循此规则。
+- **更新与重置**：建议在应用初始化时设置进程默认值；后续更新会作用于接下来的评估，已创建的 agent 也会生效。`SetTokenCounter(nil)` 恢复内置默认值。自定义计数器须支持并发调用。
+- **独立计数器**：Tool result 压缩和模型层 token tailoring 保留各自的默认值。如需统一估算口径，应为这些路径显式配置相同的计数器。
+- **默认计数器**：内置 `SimpleTokenCounter` 按每 token 约 4 个字符估算。
 - **参数语义**：`WithApproxRunesPerToken(v)` 中的 `v` 是字符/token。传入 `2.0/3.0` 表示约 `0.67` 字符/token，等价于约 `1.5` token/字符
 
 ## 跳过最近事件
@@ -1304,10 +1306,14 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底。它按消息轮次裁剪，因此恢复片段应保持足够小，避免在最后的模型请求中被整体挤出
-- Context compaction 默认使用 `SimpleTokenCounter` 估算 token。如果业务使用了针对中文
-  或特定 provider 的自定义 counter，建议同时通过
-  `WithContextCompactionTokenCounter(...)` 传入同一个 counter，让 Pass 1 判断和
-  Pass 2 截断与模型层 token tailoring 使用一致的估算口径。
+- LLM 调用前摘要触发和自动摘要检查的请求计数，优先采用 agent 显式设置的
+  `WithContextCompactionTokenCounter(...)`，其次是当前
+  `summary.SetTokenCounter(...)` 进程默认值，最后回落到内置 `SimpleTokenCounter`。
+  关闭 context compaction 时，自动摘要检查仍遵循此规则。
+- Tool result 压缩和模型层 token tailoring 保留独立默认值。如需统一中文或特定
+  provider 的估算口径，应通过 `WithContextCompactionTokenCounter(...)` 为
+  Pass 1/Pass 2 显式配置计数器，并通过模型的 token-counter 选项为 token tailoring
+  配置相同的计数器。
 
 ```go
 counter := model.NewSimpleTokenCounter(
