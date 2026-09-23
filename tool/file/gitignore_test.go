@@ -11,6 +11,7 @@
 package file
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -143,4 +144,14 @@ func TestIgnoreRules_Ignored(t *testing.T) {
 		})
 	}
 	assert.False(t, ignoreRules{}.ignored("anything", false))
+}
+
+func TestParseIgnoreRules_LongLineAndCRLF(t *testing.T) {
+	long := strings.Repeat("x", 70*1024)
+	content := "# c\r\n" + long + "\r\nnode_modules/\r\n"
+	rules := parseIgnoreRules("", []byte(content))
+	if assert.Len(t, rules, 2, "a line past 64 KiB loses no rule after it") {
+		assert.Equal(t, long, rules[0].literalName)
+		assert.Equal(t, ignoreRule{literalName: "node_modules", dirOnly: true}, rules[1])
+	}
 }

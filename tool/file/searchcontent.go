@@ -158,8 +158,11 @@ func (f *fileToolSet) searchContent(
 			rsp.Message = fmt.Sprintf("Error: %v", err)
 			return rsp, err
 		}
+		matched := len(matches)
+		matches, omitted, capped := capSearchMatches(matches, f.searchMatchLimit())
 		rsp.FileMatches = matches
-		rsp.Message = fmt.Sprintf("Found %v files matching", len(matches))
+		rsp.OmittedFiles = omitted
+		rsp.Message = f.searchResultMessage(matched, omitted, capped, nil)
 		return rsp, nil
 	}
 
@@ -169,12 +172,12 @@ func (f *fileToolSet) searchContent(
 		return rsp, err
 	}
 	matched := len(matches)
-	matches, omitted := capSearchMatches(matches, f.searchMatchLimit())
+	matches, omitted, capped := capSearchMatches(matches, f.searchMatchLimit())
 	rsp.Path = path
 	rsp.FileMatches = matches
 	rsp.SkippedFiles = skipped
 	rsp.OmittedFiles = omitted
-	rsp.Message = f.searchResultMessage(matched, omitted, skipped)
+	rsp.Message = f.searchResultMessage(matched, omitted, capped, skipped)
 	return rsp, nil
 }
 
@@ -185,17 +188,19 @@ func (f *fileToolSet) searchContent(
 func (f *fileToolSet) searchResultMessage(
 	matched int,
 	omitted int,
+	capped bool,
 	skipped []string,
 ) string {
 	msg := fmt.Sprintf("Found %v files matching", matched)
-	if omitted > 0 {
+	if capped {
 		msg += fmt.Sprintf(
-			"; stopped listing at %d matching lines, %d matching file(s) "+
-				"not shown — narrow path, the file pattern or the "+
-				"content pattern",
+			"; stopped listing at %d matching lines",
 			f.searchMatchLimit(),
-			omitted,
 		)
+		if omitted > 0 {
+			msg += fmt.Sprintf(", %d matching file(s) not shown", omitted)
+		}
+		msg += " — narrow path, the file pattern or the content pattern"
 	}
 	if len(skipped) > 0 {
 		msg += fmt.Sprintf(
@@ -212,11 +217,15 @@ func (f *fileToolSet) searchResultMessage(
 
 // capSearchMatches keeps the first files, in path order, whose matching lines
 // fit within limit. The file that crosses the limit is cut to fit and marked
-// truncated; the count of files dropped entirely is returned so the caller can
-// report a partial listing rather than pass it off as complete.
-func capSearchMatches(matches []*fileMatch, limit int) ([]*fileMatch, int) {
+// truncated. It returns the count of files dropped entirely and whether the
+// cap cut anything at all, so the caller can report a partial listing rather
+// than pass it off as complete.
+func capSearchMatches(
+	matches []*fileMatch,
+	limit int,
+) ([]*fileMatch, int, bool) {
 	if limit <= 0 {
-		return matches, 0
+		return matches, 0, false
 	}
 	slices.SortFunc(matches, func(a, b *fileMatch) int {
 		return strings.Compare(a.FilePath, b.FilePath)
@@ -228,7 +237,7 @@ func capSearchMatches(matches []*fileMatch, limit int) ([]*fileMatch, int) {
 			continue
 		}
 		if remaining == 0 {
-			return matches[:i], len(matches) - i
+			return matches[:i], len(matches) - i, true
 		}
 		m.Matches = m.Matches[:remaining]
 		m.Truncated = true
@@ -237,9 +246,9 @@ func capSearchMatches(matches []*fileMatch, limit int) ([]*fileMatch, int) {
 			len(m.Matches),
 			m.FilePath,
 		)
-		return matches[:i+1], len(matches) - i - 1
+		return matches[:i+1], len(matches) - i - 1, true
 	}
-	return matches, 0
+	return matches, 0, false
 }
 
 func (f *fileToolSet) searchContentByFilePatternRef(
@@ -271,15 +280,14 @@ func (f *fileToolSet) searchContentByFilePatternRef(
 		ref.Scheme == fileref.SchemeWorkspace {
 		path = fileref.WorkspaceRef(ref.Path)
 	}
-	match := searchTextContent(path, content, re)
+	match := searchTextContent(ctx, path, content, re)
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
 	if len(match.Matches) == 0 {
 		return []*fileMatch{}, true, nil
 	}
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		path,
-	)
+	match.Message = fileMatchMessage(match, path)
 	return []*fileMatch{match}, true, nil
 }
 
@@ -302,7 +310,10 @@ func (f *fileToolSet) searchContentByPath(
 		)
 	case fileref.SchemeWorkspace:
 		path := fileref.WorkspaceRef(pathRef.Path)
-		matches := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
+		matches, err := f.searchWorkspaceContent(ctx, pathRef.Path, req, re)
+		if err != nil {
+			return path, nil, nil, err
+		}
 		if err := ctx.Err(); err != nil {
 			return path, nil, nil, err
 		}
@@ -469,15 +480,11 @@ func (f *fileToolSet) searchSinglePath(
 		return nil, false
 	}
 	path := fileref.WorkspaceRef(reqPath)
-	match := searchTextContent(path, content, re)
+	match := searchTextContent(ctx, path, content, re)
 	if len(match.Matches) == 0 {
 		return []*fileMatch{}, true
 	}
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		path,
-	)
+	match.Message = fileMatchMessage(match, path)
 	return []*fileMatch{match}, true
 }
 
@@ -560,26 +567,25 @@ func (f *fileToolSet) searchSkillCache(
 	if !ok {
 		return nil, false
 	}
-	match := searchTextContent(candidate, content, re)
+	match := searchTextContent(ctx, candidate, content, re)
 	if len(match.Matches) == 0 {
 		return []*fileMatch{}, true
 	}
-	match.Message = fmt.Sprintf(
-		"Found %d matches in file '%s'",
-		len(match.Matches),
-		candidate,
-	)
+	match.Message = fileMatchMessage(match, candidate)
 	return []*fileMatch{match}, true
 }
 
+// searchWorkspaceContent searches exported workspace files under dir. The
+// file limit applies here as it does on disk: a file pattern that selects more
+// workspace files than the limit is refused rather than scanned.
 func (f *fileToolSet) searchWorkspaceContent(
 	ctx context.Context,
 	dir string,
 	req *searchContentRequest,
 	re *regexp.Regexp,
-) []*fileMatch {
+) ([]*fileMatch, error) {
 	if req == nil || re == nil {
-		return []*fileMatch{}
+		return []*fileMatch{}, nil
 	}
 
 	sep := string(filepath.Separator)
@@ -592,6 +598,8 @@ func (f *fileToolSet) searchWorkspaceContent(
 		prefix += sep
 	}
 
+	limit := f.searchFileLimit()
+	selected := 0
 	var out []*fileMatch
 	for _, entry := range fileref.WorkspaceFiles(ctx) {
 		if ctx.Err() != nil {
@@ -613,29 +621,38 @@ func (f *fileToolSet) searchWorkspaceContent(
 		if err != nil || !ok {
 			continue
 		}
+		selected++
+		if selected > limit {
+			return nil, &tooManyFilesError{
+				pattern: req.FilePattern,
+				path:    fileref.WorkspaceRef(base),
+				limit:   limit,
+			}
+		}
 		path := fileref.WorkspaceRef(full)
-		match := searchTextContent(path, entry.Content, re)
+		match := searchTextContent(ctx, path, entry.Content, re)
 		if len(match.Matches) == 0 {
 			continue
 		}
-		match.Message = fmt.Sprintf(
-			"Found %d matches in file '%s'",
-			len(match.Matches),
-			path,
-		)
+		match.Message = fileMatchMessage(match, path)
 		out = append(out, match)
 	}
 	slices.SortFunc(out, func(a, b *fileMatch) int {
 		return strings.Compare(a.FilePath, b.FilePath)
 	})
-	return out
+	return out, nil
 }
 
 func hasGlob(p string) bool {
 	return strings.ContainsAny(p, "*?[")
 }
 
+// searchTextContent matches re against in-memory content line by line under
+// the same bounds as a streamed file: at most maxMatchesPerFile lines are
+// collected, with the result marked truncated past that, and a cancelled
+// context stops the scan early — the caller reports the cancellation.
 func searchTextContent(
+	ctx context.Context,
 	path string,
 	content string,
 	re *regexp.Regexp,
@@ -646,12 +663,20 @@ func searchTextContent(
 		Matches:  []*lineMatch{},
 	}
 	for lineNum, line := range lines {
-		if re.MatchString(line) {
-			matches.Matches = append(matches.Matches, &lineMatch{
-				LineNumber:  lineNum + 1,
-				LineContent: line,
-			})
+		if lineNum&1023 == 0 && ctx.Err() != nil {
+			return matches
 		}
+		if !re.MatchString(line) {
+			continue
+		}
+		if len(matches.Matches) >= maxMatchesPerFile {
+			matches.Truncated = true
+			return matches
+		}
+		matches.Matches = append(matches.Matches, &lineMatch{
+			LineNumber:  lineNum + 1,
+			LineContent: line,
+		})
 	}
 	return matches
 }

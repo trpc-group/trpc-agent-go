@@ -11,8 +11,6 @@
 package file
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"path"
 	"path/filepath"
@@ -101,12 +99,13 @@ func (rule ignoreRule) matches(rel, name string) bool {
 
 // parseIgnoreRules reads one .gitignore file that sits in dir (base-relative,
 // "" for the base directory) into rules in file order. Lines git would ignore
-// — blank, comments, patterns that do not parse — produce no rule.
+// — blank, comments, patterns that do not parse — produce no rule. The file is
+// split rather than scanned so a line of any length is read and no rule after
+// it is lost.
 func parseIgnoreRules(dir string, content []byte) []ignoreRule {
 	var rules []ignoreRule
-	sc := bufio.NewScanner(bytes.NewReader(content))
-	for sc.Scan() {
-		if rule, ok := parseIgnoreLine(dir, sc.Text()); ok {
+	for _, line := range strings.Split(string(content), "\n") {
+		if rule, ok := parseIgnoreLine(dir, strings.TrimSuffix(line, "\r")); ok {
 			rules = append(rules, rule)
 		}
 	}

@@ -15,12 +15,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 )
 
 // writeTree creates files under dir from relative path to content.
@@ -115,6 +120,93 @@ func TestSearchContent_AncestorGitignoreAppliesToSubdirectorySearch(t *testing.T
 	}, got)
 }
 
+func TestSearchContent_ExplicitlyTargetedIgnoredDirectoryIsSearched(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		".gitignore":                   "node_modules/\n*.log\n",
+		"src/main.go":                  "needle\n",
+		"node_modules/pkg/index.js":    "needle\n",
+		"node_modules/pkg/debug.log":   "needle\n",
+		"node_modules/pkg/.gitignore":  "dist/\n",
+		"node_modules/pkg/dist/out.js": "needle\n",
+	})
+	f := newSearchToolSet(t, dir)
+	assert.ElementsMatch(t, []string{"src/main.go"},
+		searchContentPaths(t, f, "", "**/*"))
+	assert.ElementsMatch(t, []string{"node_modules/pkg/index.js"},
+		searchContentPaths(t, f, "node_modules", "**/*"),
+		"the target is searched, ancestor and nested rules still prune inside it")
+}
+
+func TestSearchContent_WorkspaceHonoursFileLimit(t *testing.T) {
+	f := newSearchToolSet(t, t.TempDir(), WithSearchMaxFiles(2))
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "out/a.txt", Content: "needle\n", MIMEType: "text/plain"},
+		{Name: "out/b.txt", Content: "needle\n", MIMEType: "text/plain"},
+		{Name: "out/c.txt", Content: "needle\n", MIMEType: "text/plain"},
+	})
+	rsp, err := f.searchContent(ctx, &searchContentRequest{
+		Path:           "workspace://out",
+		FilePattern:    "*.txt",
+		ContentPattern: "needle",
+	})
+	require.Error(t, err)
+	var tooMany *tooManyFilesError
+	assert.ErrorAs(t, err, &tooMany)
+	assert.Contains(t, rsp.Message, "more than 2 entries")
+
+	rsp, err = f.searchContent(ctx, &searchContentRequest{
+		Path:           "workspace://out",
+		FilePattern:    "[ab].txt",
+		ContentPattern: "needle",
+	})
+	require.NoError(t, err)
+	assert.Len(t, rsp.FileMatches, 2)
+
+	_, err = f.searchFile(ctx, &searchFileRequest{
+		Path:    "workspace://out",
+		Pattern: "*.txt",
+	})
+	require.Error(t, err)
+	assert.ErrorAs(t, err, &tooMany)
+	sf, err := f.searchFile(ctx, &searchFileRequest{
+		Path:    "workspace://out",
+		Pattern: "[ab].txt",
+	})
+	require.NoError(t, err)
+	assert.Len(t, sf.Files, 2)
+}
+
+func TestSearchTextContent_BoundedAndCancellable(t *testing.T) {
+	re := regexp.MustCompile("needle")
+	content := strings.Repeat("needle\n", maxMatchesPerFile+5)
+	m := searchTextContent(context.Background(), "p", content, re)
+	assert.Len(t, m.Matches, maxMatchesPerFile)
+	assert.True(t, m.Truncated)
+	assert.Contains(t, fileMatchMessage(m, "p"), "stopped at the first")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m = searchTextContent(ctx, "p", content, re)
+	assert.Empty(t, m.Matches)
+
+	f := newSearchToolSet(t, t.TempDir())
+	inv := agent.NewInvocation()
+	ictx, icancel := context.WithCancel(agent.NewInvocationContext(ctx, inv))
+	icancel()
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "out/a.txt", Content: content, MIMEType: "text/plain"},
+	})
+	_, err := f.searchContent(ictx, &searchContentRequest{
+		Path:           "",
+		FilePattern:    "workspace://out/a.txt",
+		ContentPattern: "needle",
+	})
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestSearchContent_RefusesTooManyFiles(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{}
@@ -196,6 +288,28 @@ func TestSearchContent_CapsTotalMatches(t *testing.T) {
 	assert.Contains(t, rsp.Message, "1 matching file(s) not shown")
 }
 
+func TestSearchContent_FilePatternRef_CappedByMaxMatches(t *testing.T) {
+	f := newSearchToolSet(t, t.TempDir(), WithSearchMaxMatches(2))
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "out/a.txt", Content: "needle\nneedle\nneedle\n", MIMEType: "text/plain"},
+	})
+	rsp, err := f.searchContent(ctx, &searchContentRequest{
+		Path:           "",
+		FilePattern:    "workspace://out/a.txt",
+		ContentPattern: "needle",
+	})
+	require.NoError(t, err)
+	require.Len(t, rsp.FileMatches, 1)
+	assert.Len(t, rsp.FileMatches[0].Matches, 2)
+	assert.True(t, rsp.FileMatches[0].Truncated)
+	assert.Equal(t, 0, rsp.OmittedFiles)
+	assert.Contains(t, rsp.Message, "Found 1 files matching")
+	assert.Contains(t, rsp.Message, "stopped listing at 2 matching lines")
+	assert.NotContains(t, rsp.Message, "not shown")
+}
+
 func TestCapSearchMatches(t *testing.T) {
 	mk := func(path string, n int) *fileMatch {
 		m := &fileMatch{FilePath: path}
@@ -206,18 +320,21 @@ func TestCapSearchMatches(t *testing.T) {
 	}
 	t.Run("no limit leaves input alone", func(t *testing.T) {
 		in := []*fileMatch{mk("b", 2), mk("a", 2)}
-		out, omitted := capSearchMatches(in, 0)
+		out, omitted, capped := capSearchMatches(in, 0)
 		assert.Equal(t, 0, omitted)
+		assert.False(t, capped)
 		assert.Equal(t, "b", out[0].FilePath, "unsorted when uncapped")
 	})
 	t.Run("everything fits", func(t *testing.T) {
-		out, omitted := capSearchMatches([]*fileMatch{mk("b", 2), mk("a", 2)}, 4)
+		out, omitted, capped := capSearchMatches([]*fileMatch{mk("b", 2), mk("a", 2)}, 4)
 		assert.Equal(t, 0, omitted)
+		assert.False(t, capped)
 		assert.Equal(t, []string{"a", "b"}, []string{out[0].FilePath, out[1].FilePath})
 	})
 	t.Run("exact boundary drops the rest whole", func(t *testing.T) {
-		out, omitted := capSearchMatches([]*fileMatch{mk("a", 2), mk("b", 2), mk("c", 1)}, 2)
+		out, omitted, capped := capSearchMatches([]*fileMatch{mk("a", 2), mk("b", 2), mk("c", 1)}, 2)
 		assert.Equal(t, 2, omitted)
+		assert.True(t, capped)
 		require.Len(t, out, 1)
 		assert.False(t, out[0].Truncated)
 	})

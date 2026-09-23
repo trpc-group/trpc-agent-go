@@ -85,6 +85,15 @@ func (f *fileToolSet) searchFile(
 			rsp.Message = fmt.Sprintf("Error: %v", err)
 			return rsp, err
 		}
+		if limit := f.searchFileLimit(); len(files)+len(folders) > limit {
+			err := &tooManyFilesError{
+				pattern: req.Pattern,
+				path:    rsp.Path,
+				limit:   limit,
+			}
+			rsp.Message = fmt.Sprintf("Error: %v", err)
+			return rsp, err
+		}
 		rsp.Files = files
 		rsp.Folders = folders
 		rsp.Message = fmt.Sprintf(

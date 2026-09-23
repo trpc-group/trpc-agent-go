@@ -61,6 +61,11 @@ func (e *tooManyFilesError) Error() string {
 // and the entry excludes when ignore files are honoured, and fails once more
 // than the search file limit has matched, so a pattern that covers a vendored
 // or generated tree is refused up front instead of crawled.
+//
+// Ignore rules apply to what the walk finds, not to the target itself: a
+// search rooted explicitly in an ignored directory looks inside it, the way
+// ripgrep searches a path it is given. That is the only way for a caller to
+// read a vendored tree on purpose, and the file limit still bounds it.
 func (f *fileToolSet) walkMatches(
 	ctx context.Context,
 	target string,

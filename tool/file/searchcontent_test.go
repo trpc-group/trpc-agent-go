@@ -814,7 +814,7 @@ func TestSearchContent_KeepsCarriageReturns(t *testing.T) {
 	assert.Equal(t, "foo\r", rsp.FileMatches[0].Matches[0].LineContent)
 	assert.Equal(t, 1, rsp.FileMatches[0].Matches[0].LineNumber)
 
-	cached := searchTextContent("dos.txt", "foo\r\nbar\r\nfoo", regexp.MustCompile("foo\r$"))
+	cached := searchTextContent(context.Background(), "dos.txt", "foo\r\nbar\r\nfoo", regexp.MustCompile("foo\r$"))
 	assert.Equal(t, rsp.FileMatches[0].Matches, cached.Matches,
 		"the local and cached backends must agree on line content")
 }
