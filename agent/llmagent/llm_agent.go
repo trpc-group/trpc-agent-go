@@ -98,6 +98,20 @@ const invalidOutputSchemaAwaitUserReply = "" +
 	"await_user_reply must be disabled"
 
 // New creates a new LLMAgent with the given options.
+// toolBatchingAnnotators returns the annotator that names the tools that must
+// run alone, so the model can form batches that actually run concurrently. It
+// is only meaningful with parallel tools on, and it annotates the finalized
+// request rather than joining the request processors: before-model callbacks
+// still replace Request.Tools after preprocessing.
+func toolBatchingAnnotators(options *Options) []llmflow.FinalizedRequestAnnotator {
+	if !options.EnableParallelTools {
+		return nil
+	}
+	return []llmflow.FinalizedRequestAnnotator{
+		processor.NewToolBatchingNotice(options.ToolConcurrencyConfig).Annotate,
+	}
+}
+
 func New(name string, opts ...Option) *LLMAgent {
 	options := defaultOptions
 
@@ -287,16 +301,10 @@ func New(name string, opts ...Option) *LLMAgent {
 	if len(options.toolActivationRules) > 0 {
 		flowOpts.ToolActivationApplier = a.applyToolActivation
 	}
-	// Name the tools that must run alone, so the model can form batches that
-	// actually run concurrently. Only meaningful with parallel tools on, and it
-	// annotates the finalized request rather than joining the request processors:
-	// before-model callbacks still replace Request.Tools after preprocessing.
-	if options.EnableParallelTools {
-		flowOpts.FinalizedRequestAnnotators = append(
-			flowOpts.FinalizedRequestAnnotators,
-			processor.NewToolBatchingNotice(options.ToolConcurrencyConfig).Annotate,
-		)
-	}
+	flowOpts.FinalizedRequestAnnotators = append(
+		flowOpts.FinalizedRequestAnnotators,
+		toolBatchingAnnotators(&options)...,
+	)
 
 	a.flow = llmflow.New(
 		requestProcessors, responseProcessors,
