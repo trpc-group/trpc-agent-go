@@ -1554,7 +1554,12 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
-		for range loop.agentEventCh {
+		// A nil agentEventCh (an Agent.Run that returned a nil channel) has no
+		// producer to join and would block the drain forever, so it is treated
+		// as already done and only a real channel is drained.
+		if loop.agentEventCh != nil {
+			for range loop.agentEventCh {
+			}
 		}
 		close(loop.processedEventCh)
 		loop.invocation.CleanupNotice(ctx)

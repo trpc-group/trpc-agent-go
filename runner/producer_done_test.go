@@ -56,6 +56,56 @@ func (p *parkedProducer) FindSubAgent(string) agent.Agent {
 }
 func (p *parkedProducer) release() { p.releaseOnce.Do(func() { close(p.hold) }) }
 
+// nilChannelAgent is an agent.Agent whose Run returns a nil event channel and a
+// nil error, mirroring a contract-violating custom agent. The runner's
+// producer-done drain must not block forever on the nil channel; it must still
+// close the processed stream so callers observe completion.
+type nilChannelAgent struct{}
+
+func (nilChannelAgent) Run(context.Context, *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (nilChannelAgent) Tools() []tool.Tool       { return nil }
+func (nilChannelAgent) Info() agent.Info         { return agent.Info{Name: "nil-channel"} }
+func (nilChannelAgent) SubAgents() []agent.Agent { return nil }
+func (nilChannelAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+// TestRun_NilAgentChannelDoesNotHang guards against the producer-done drain
+// blocking on a nil agent channel: ranging a nil channel never returns, so
+// without a nil check the processed stream would stay open forever after the
+// loop returns on cancellation.
+func TestRun_NilAgentChannelDoesNotHang(t *testing.T) {
+	r := NewRunner(
+		"nil-channel-app",
+		nilChannelAgent{},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	defer func() { _ = r.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out, err := r.Run(ctx, "u", "s-nil-channel", model.NewUserMessage("go"))
+	require.NoError(t, err, "the runner must accept the invocation")
+
+	closed := make(chan struct{})
+	go func() {
+		for range out {
+		}
+		close(closed)
+	}()
+
+	cancel()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processed stream never closed: the producer-done drain blocked on a nil channel")
+	}
+}
+
 // TestRun_ProcessedCloseImpliesProducerDone pins the producer-done completion
 // contract: the processed event stream closing must imply the agent's producer
 // goroutine has exited. Before the fix, runEventLoop returned on ctx.Done and
