@@ -5839,7 +5839,7 @@ cache-safe fork 成功时会直接使用克隆的父请求，摘要在父请求�
   <code>{previous_summary}</code>；对话内容必须保留在 user prompt 中</li>
 </ul>
 <h2 id="token">Token 计数器配置</h2>
-<p>默认情况下，<code>CheckTokenThreshold</code> 使用内置的 <code>SimpleTokenCounter</code> 基于文本长度估算 token 数量。如果需要自定义 token 计数行为，可以使用 <code>summary.SetTokenCounter</code> 设置全局 token 计数器：</p>
+<p>摘要检查默认使用内置的 <code>SimpleTokenCounter</code>。可以通过 <code>summary.SetTokenCounter</code> 设置进程默认计数器，用于摘要检查、摘要请求估算，以及自动摘要和 LLM 调用前摘要触发所需的模型可见请求计数。Agent 显式设置的 <code>WithContextCompactionTokenCounter(...)</code> 对该 agent 的请求计数优先：</p>
 <p><code>SimpleTokenCounter</code> 的 <code>WithApproxRunesPerToken(v)</code> 表示约 <code>v</code> 个 UTF-8 字符对应 1 个 token，估算公式是 <code>estimatedTokens = countedUTF8Runes / v</code>。例如 <code>v=1.5</code> 表示约 <code>1.5</code> 字符/token；不要把它当成 token 乘数。</p>
 <blockquote>
 <p><strong>Token 估算取舍</strong></p>
@@ -5932,8 +5932,10 @@ tokenizer 也会随模型版本演进；如果在每次摘要检查中远程调�
 </span></code></pre></div></td></tr></table></div>
 <p><strong>注意</strong>：</p>
 <ul>
-<li><strong>全局影响</strong>：<code>SetTokenCounter</code> 会影响当前进程中所有的 <code>CheckTokenThreshold</code> 评估，建议在应用初始化时一次性设置</li>
-<li><strong>默认计数器</strong>：如果不设置，将使用默认的 <code>SimpleTokenCounter</code>（约每 token 对应 4 个字符）</li>
+<li><strong>计数器优先级</strong>：模型可见请求计数优先使用 agent 显式设置的 <code>WithContextCompactionTokenCounter(...)</code>，其次是 <code>summary.SetTokenCounter(...)</code> 配置的进程默认值，最后回落到内置 <code>SimpleTokenCounter</code>。LLM 调用前摘要触发和使用最终 request view 的自动摘要检查都遵循此规则。关闭 context compaction 时，自动摘要检查仍遵循此规则。</li>
+<li><strong>更新与重置</strong>：建议在应用初始化时设置进程默认值；后续更新会作用于接下来的评估，已创建的 agent 也会生效。<code>SetTokenCounter(nil)</code> 恢复内置默认值。自定义计数器须支持并发调用。</li>
+<li><strong>独立计数器</strong>：Tool result 压缩和模型层 token tailoring 保留各自的默认值。如需统一估算口径，应为这些路径显式配置相同的计数器。</li>
+<li><strong>默认计数器</strong>：内置 <code>SimpleTokenCounter</code> 按每 token 约 4 个字符估算。</li>
 <li><strong>参数语义</strong>：<code>WithApproxRunesPerToken(v)</code> 中的 <code>v</code> 是字符/token。传入 <code>2.0/3.0</code> 表示约 <code>0.67</code> 字符/token，等价于约 <code>1.5</code> token/字符</li>
 </ul>
 <h2 id="_14">跳过最近事件</h2>
@@ -6498,10 +6500,14 @@ payload。如果 cutoff 正好落在 tool call 和 result 中间，原有的配�
 <ul>
 <li>如果同时开启了 <code>WithAddSessionSummary(true)</code>，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 <code>CreateSessionSummary(...)</code> 并重建 request</li>
 <li>模型层的 token tailoring 仍然作为最后兜底。它按消息轮次裁剪，因此恢复片段应保持足够小，避免在最后的模型请求中被整体挤出</li>
-<li>Context compaction 默认使用 <code>SimpleTokenCounter</code> 估算 token。如果业务使用了针对中文
-  或特定 provider 的自定义 counter，建议同时通过
-  <code>WithContextCompactionTokenCounter(...)</code> 传入同一个 counter，让 Pass 1 判断和
-  Pass 2 截断与模型层 token tailoring 使用一致的估算口径。</li>
+<li>LLM 调用前摘要触发和自动摘要检查的请求计数，优先采用 agent 显式设置的
+  <code>WithContextCompactionTokenCounter(...)</code>，其次是当前
+  <code>summary.SetTokenCounter(...)</code> 进程默认值，最后回落到内置 <code>SimpleTokenCounter</code>。
+  关闭 context compaction 时，自动摘要检查仍遵循此规则。</li>
+<li>Tool result 压缩和模型层 token tailoring 保留独立默认值。如需统一中文或特定
+  provider 的估算口径，应通过 <code>WithContextCompactionTokenCounter(...)</code> 为
+  Pass 1/Pass 2 显式配置计数器，并通过模型的 token-counter 选项为 token tailoring
+  配置相同的计数器。</li>
 </ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-34-2"> 2</a></span>
@@ -7385,7 +7391,7 @@ Info 与 Warn outcome。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月21日 01:27:44 UTC">2026-09-21 01:27:44</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年9月23日 01:56:44 UTC">2026-09-23 01:56:44</span>
   </span>
 
     

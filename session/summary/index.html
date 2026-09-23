@@ -5894,7 +5894,7 @@ conversation payload:</p>
   <code>{previous_summary}</code>; keep conversation content in the user prompt</li>
 </ul>
 <h2 id="token-counter-configuration">Token Counter Configuration</h2>
-<p>By default, <code>CheckTokenThreshold</code> uses a built-in <code>SimpleTokenCounter</code> that estimates token count based on text length. To customize token counting behavior, use <code>summary.SetTokenCounter</code> to set a global token counter:</p>
+<p>Summary checks use a built-in <code>SimpleTokenCounter</code> by default. Use <code>summary.SetTokenCounter</code> to customize the process default for summary checks, summary-request estimates, and model-visible request estimates used by automatic summaries and pre-LLM summary triggers. An agent's explicit <code>WithContextCompactionTokenCounter(...)</code> takes precedence for its request estimates:</p>
 <p>For <code>SimpleTokenCounter</code>, <code>WithApproxRunesPerToken(v)</code> means roughly <code>v</code> UTF-8 characters per token. The formula is <code>estimatedTokens = countedUTF8Runes / v</code>. For example, <code>v=1.5</code> means about <code>1.5</code> characters per token; do not treat it as a token multiplier.</p>
 <blockquote>
 <p><strong>Token estimation trade-off</strong></p>
@@ -5991,8 +5991,10 @@ and install it once during application initialization with
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Notes</strong>:</p>
 <ul>
-<li><strong>Global effect</strong>: <code>SetTokenCounter</code> affects all <code>CheckTokenThreshold</code> evaluations in the current process; set it once during application initialization</li>
-<li><strong>Default counter</strong>: If not set, the default <code>SimpleTokenCounter</code> is used (approximately 4 characters per token)</li>
+<li><strong>Counter precedence</strong>: Model-visible request estimates use the agent's explicit <code>WithContextCompactionTokenCounter(...)</code>, otherwise the process default from <code>summary.SetTokenCounter(...)</code>, otherwise the built-in <code>SimpleTokenCounter</code>. This applies to pre-LLM summary triggers and automatic checks using a finalized request view. Automatic checks follow this rule even when context compaction is disabled.</li>
+<li><strong>Updates and reset</strong>: Set the process default during application initialization. Later updates apply to subsequent evaluations, including for existing agents; <code>SetTokenCounter(nil)</code> restores the built-in default. Custom counters must support concurrent calls.</li>
+<li><strong>Independent counters</strong>: Tool-result compaction and model token tailoring retain their separate defaults. Configure the same counter explicitly for those paths when consistent estimates are needed.</li>
+<li><strong>Default counter</strong>: The built-in <code>SimpleTokenCounter</code> estimates approximately 4 characters per token.</li>
 <li><strong>Parameter meaning</strong>: <code>v</code> in <code>WithApproxRunesPerToken(v)</code> is characters per token. Passing <code>2.0/3.0</code> means about <code>0.67</code> characters per token, which is about <code>1.5</code> tokens per character</li>
 </ul>
 <h2 id="skip-recent-events">Skip Recent Events</h2>
@@ -6572,10 +6574,15 @@ keeps the provider request valid without restoring unrelated covered history.</p
 <ul>
 <li>If <code>WithAddSessionSummary(true)</code> is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous <code>CreateSessionSummary(...)</code> retry before calling the model</li>
 <li>Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request</li>
-<li>Context compaction uses <code>SimpleTokenCounter</code> by default. If your application
-  uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
-  pass the same counter with <code>WithContextCompactionTokenCounter(...)</code> so Pass 1
-  decisions and Pass 2 truncation use the same estimate as token tailoring.</li>
+<li>Request estimates for the pre-LLM summary trigger and automatic summary checks
+  use the agent's explicit <code>WithContextCompactionTokenCounter(...)</code>, otherwise
+  the current <code>summary.SetTokenCounter(...)</code> process default, otherwise the
+  built-in <code>SimpleTokenCounter</code>. Automatic checks follow this rule even when
+  context compaction is disabled.</li>
+<li>Tool-result compaction and model token tailoring retain independent defaults.
+  For consistent CJK or provider-specific estimates, configure the same counter
+  explicitly for Pass 1/Pass 2 with <code>WithContextCompactionTokenCounter(...)</code> and
+  for model token tailoring with the model's token-counter option.</li>
 </ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-34-2"> 2</a></span>
@@ -7498,7 +7505,7 @@ normal Info level only the Info and Warn outcomes listed above are visible.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 21, 2026 01:27:44 UTC">2026-09-21 01:27:44</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 23, 2026 01:56:44 UTC">2026-09-23 01:56:44</span>
   </span>
 
     
