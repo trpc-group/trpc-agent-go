@@ -44,12 +44,12 @@ const (
 )
 
 type config struct {
-	baseDir   string
-	name      string
-	maxLines  int
-	jobTTL    time.Duration
-	baseEnv   map[string]string
-	spawnHook func(*exec.Cmd) error
+	baseDir      string
+	name         string
+	maxLines     int
+	jobTTL       time.Duration
+	baseEnv      map[string]string
+	preStartHook PreStartHook
 }
 
 // Option configures the hostexec tool set.
@@ -97,22 +97,33 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
-// WithSpawnHook sets a function that is called on every command right before
+// PreStartHook prepares a command right before the tool set starts it. The
+// context is the tool call's context and is scoped to this preparation only:
+// it is not the lifetime of the process, which the tool set bounds with its
+// own run timeout and cleans up itself, so a hook must not use it to start or
+// stop the command. The hook may change Path, Args and SysProcAttr to wrap
+// the command, for example in a namespace or under a sandbox; it must not
+// start the command or touch its stdio. An error aborts the call.
+type PreStartHook func(ctx context.Context, cmd *exec.Cmd) error
+
+// WithPreStartHook sets a hook that is called on every command right before
 // it is started, after the tool set has applied its own process attributes
-// and before any pipe or PTY is allocated. The hook may change Path, Args and
-// SysProcAttr to wrap the command, for example in a namespace or under a
-// sandbox; it must not start the command or touch its stdio. The process
-// group attributes the tool set owns (Setsid, Setpgid, Pdeathsig) are
-// reapplied after the hook returns, so replacing SysProcAttr cannot detach
-// the command from the cleanup that signals its process group. An error
-// aborts the call: nothing is started and no session is registered.
+// and before any pipe or PTY is allocated. The hook observes the attributes
+// the command will start with: on Unix, pipe mode sets exactly one of Setsid
+// (foreground) and Setpgid (background), and PTY mode sets Setsid and
+// Setctty. The attributes the tool set owns (Setsid, Setpgid, Setctty,
+// Pdeathsig) are restored after the hook returns, so a hook that replaces
+// SysProcAttr or sets the mutually exclusive counterpart cannot detach the
+// command from the cleanup that signals its process group or stop it from
+// starting. An error from the hook aborts the call: nothing is started and
+// no session is registered.
 //
 // A nil hook keeps the default behaviour. Commands can start concurrently,
 // so the hook may be invoked concurrently and must synchronize any state it
 // shares between calls.
-func WithSpawnHook(hook func(*exec.Cmd) error) Option {
+func WithPreStartHook(hook PreStartHook) Option {
 	return func(c *config) {
-		c.spawnHook = hook
+		c.preStartHook = hook
 	}
 }
 
@@ -147,7 +158,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	if len(cfg.baseEnv) > 0 {
 		mgr.baseEnv = cloneEnvMap(cfg.baseEnv)
 	}
-	mgr.spawnHook = cfg.spawnHook
+	mgr.preStartHook = cfg.preStartHook
 
 	set := &toolSet{
 		name:    strings.TrimSpace(cfg.name),
