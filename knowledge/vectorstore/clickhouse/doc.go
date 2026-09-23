@@ -124,7 +124,10 @@ func marshalMetadata(m map[string]any, embeddingText string) (string, error) {
 // and the persisted embedding text.
 //
 // A value written without the envelope, for example directly by an external
-// writer, is treated as plain caller metadata with no embedding text.
+// writer, is treated as plain caller metadata with no embedding text. That
+// includes external JSON that happens to carry a top-level key named like
+// internalMetadataKey: only a value the store itself could have written is
+// unpacked, so no caller metadata is lost or rejected.
 func unmarshalMetadata(s string) (map[string]any, string, error) {
 	if s == "" {
 		return map[string]any{}, "", nil
@@ -133,25 +136,61 @@ func unmarshalMetadata(s string) (map[string]any, string, error) {
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
 		return nil, "", err
 	}
-	envelope, ok := raw[internalMetadataKey]
-	if !ok {
-		var md map[string]any
-		if err := json.Unmarshal([]byte(s), &md); err != nil {
+	if envelope, ok := storedEnvelope(raw); ok {
+		var stored storedMetadata
+		if err := json.Unmarshal(envelope, &stored); err != nil {
 			return nil, "", err
 		}
-		if md == nil {
-			md = map[string]any{}
+		if stored.Metadata == nil {
+			stored.Metadata = map[string]any{}
 		}
-		return md, "", nil
+		return stored.Metadata, stored.EmbeddingText, nil
 	}
-	var stored storedMetadata
-	if err := json.Unmarshal(envelope, &stored); err != nil {
+	var md map[string]any
+	if err := json.Unmarshal([]byte(s), &md); err != nil {
 		return nil, "", err
 	}
-	if stored.Metadata == nil {
-		stored.Metadata = map[string]any{}
+	if md == nil {
+		md = map[string]any{}
 	}
-	return stored.Metadata, stored.EmbeddingText, nil
+	return md, "", nil
+}
+
+// storedEnvelope returns the envelope payload when the whole column value is
+// one marshalMetadata could have produced, and false otherwise.
+//
+// The store always writes the envelope as the only top-level key, so any other
+// top-level key already rules it out. The payload shape is checked too: a
+// scalar, or an object carrying a field the store never writes, cannot have
+// come from marshalMetadata and is left alone as caller metadata.
+func storedEnvelope(raw map[string]json.RawMessage) (json.RawMessage, bool) {
+	if len(raw) != 1 {
+		return nil, false
+	}
+	envelope, ok := raw[internalMetadataKey]
+	if !ok || len(envelope) == 0 || envelope[0] != '{' {
+		return nil, false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(envelope, &fields); err != nil || fields == nil {
+		return nil, false
+	}
+	for key, value := range fields {
+		switch key {
+		case "metadata":
+			// Nested caller metadata is an object, or null when empty.
+			if len(value) == 0 || (value[0] != '{' && string(value) != "null") {
+				return nil, false
+			}
+		case "embedding_text":
+			if len(value) == 0 || value[0] != '"' {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+	}
+	return envelope, true
 }
 
 // filterFieldValues extracts the declared filter-field values from metadata and

@@ -25,11 +25,16 @@ import (
 // FilterCondition. It reads the matching rows once, applies the field updates in
 // memory, and rewrites every updated version with a single batch INSERT.
 //
-// The returned count is the number of documents rewritten. Because the rewrite
-// is one INSERT, the backend applies it as a unit: the count is either the full
-// number of matches on success, or 0 together with an error. The operation is
-// not divided into per-document commits, so callers never observe a partially
-// applied count.
+// The returned count is the number of documents rewritten. All matches are
+// collected before anything is written, and the rewrite is one INSERT, so the
+// count is either the full number of matches on success or 0 together with an
+// error; the operation is not divided into per-document commits. That guarantee
+// covers the INSERT statement, not the table state a concurrent reader sees:
+// ReplacingMergeTree collapses the superseded versions in the background.
+//
+// Resource use is bounded by WithMaxUpdateRows (default 1000). A wider match is
+// rejected before any write instead of growing the buffered rows, the statement
+// text, and the argument list without limit.
 func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
 	cfg, err := vectorstore.ApplyUpdateByFilterOptions(opts...)
 	if err != nil {
@@ -74,6 +79,12 @@ func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.U
 		if err != nil {
 			return 0, err
 		}
+		// Same dimension invariant as Add and Update. Without it a short vector
+		// would be persisted here and only fail later, inside a similarity
+		// query, where one bad row aborts the whole result set.
+		if err := vs.validateEmbedding(newEmbedding); err != nil {
+			return 0, fmt.Errorf("clickhouse: update by filter: %w", err)
+		}
 		newRow, err := vs.docToRow(newDoc, newEmbedding, now)
 		if err != nil {
 			return 0, err
@@ -88,6 +99,14 @@ func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.U
 		}
 		batchArgs = append(batchArgs, insertArgs...)
 		count++
+		// Stop as soon as the match set is known to exceed the bound, before
+		// buffering another row: the whole batch is held in memory until the
+		// INSERT, so an unbounded filter would grow it without limit.
+		if vs.option.maxUpdateRows > 0 && count > vs.option.maxUpdateRows {
+			return 0, fmt.Errorf(
+				"clickhouse: update by filter: more than %d rows match; narrow the filter or raise the bound with WithMaxUpdateRows",
+				vs.option.maxUpdateRows)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("clickhouse: update by filter: %w", err)

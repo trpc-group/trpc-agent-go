@@ -111,6 +111,17 @@ func (vs *VectorStore) initTable(ctx context.Context) error {
 	return nil
 }
 
+// validateEmbedding reports whether embedding matches the configured vector
+// dimension. Every write path runs it before touching the backend: a vector of
+// the wrong length would otherwise be persisted and only surface later, as a
+// server-side size mismatch that fails the whole similarity query.
+func (vs *VectorStore) validateEmbedding(embedding []float64) error {
+	if len(embedding) != vs.option.vectorDimension {
+		return fmt.Errorf("%w: want=%d got=%d", errVectorDimMismatch, vs.option.vectorDimension, len(embedding))
+	}
+	return nil
+}
+
 // Add writes a document and its embedding. The embedding must match the
 // configured vector dimension.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
@@ -120,8 +131,8 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	if doc.ID == "" {
 		return errDocumentIDRequired
 	}
-	if len(embedding) != vs.option.vectorDimension {
-		return fmt.Errorf("%w: want=%d got=%d", errVectorDimMismatch, vs.option.vectorDimension, len(embedding))
+	if err := vs.validateEmbedding(embedding); err != nil {
+		return err
 	}
 	r, err := vs.docToRow(doc, embedding, time.Now())
 	if err != nil {
@@ -178,8 +189,12 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	if doc.ID == "" {
 		return errDocumentIDRequired
 	}
-	if len(embedding) > 0 && len(embedding) != vs.option.vectorDimension {
-		return fmt.Errorf("%w: want=%d got=%d", errVectorDimMismatch, vs.option.vectorDimension, len(embedding))
+	// An empty embedding means "keep the current vector", so only a supplied
+	// one is checked.
+	if len(embedding) > 0 {
+		if err := vs.validateEmbedding(embedding); err != nil {
+			return err
+		}
 	}
 
 	// Load the existing row to preserve created_at and, when embedding is empty,

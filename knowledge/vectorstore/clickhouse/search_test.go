@@ -415,6 +415,48 @@ func TestUpdateByFilterBatchesEveryMatch(t *testing.T) {
 	assert.Equal(t, matched-1, strings.Count(c.execCalls[0].query, "), ("))
 }
 
+// TestUpdateByFilterRejectsDimensionMismatch asserts that a rewrite carrying an
+// embedding of the wrong length is refused before any statement reaches the
+// backend, so a mismatched vector can never be persisted.
+func TestUpdateByFilterRejectsDimensionMismatch(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	c := &mockClient{}
+	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
+		return newMockRows([][]any{
+			{"doc1", "old", "old", []float64{1, 2, 3}, "{}", now, now},
+		}), nil
+	}
+	vs := vsWithClient(c)
+	_, err := vs.UpdateByFilter(context.Background(),
+		vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1"}),
+		vectorstore.WithUpdateByFilterUpdates(map[string]any{"embedding": []float64{1}}))
+	require.ErrorIs(t, err, errVectorDimMismatch)
+	assert.Empty(t, c.execCalls, "no INSERT may run when the dimension check fails")
+}
+
+// TestUpdateByFilterRespectsMaxUpdateRows asserts that a match set wider than
+// the configured bound is rejected instead of being buffered and rewritten.
+func TestUpdateByFilterRespectsMaxUpdateRows(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	const matched = 3
+	c := &mockClient{}
+	c.queryFunc = func(ctx context.Context, q string, a ...any) (driver.Rows, error) {
+		rows := make([][]any, 0, matched)
+		for i := 0; i < matched; i++ {
+			rows = append(rows, []any{
+				"doc" + string(rune('1'+i)), "old", "old", []float64{1, 2, 3}, "{}", now, now,
+			})
+		}
+		return newMockRows(rows), nil
+	}
+	vs := vsWithClient(c, WithMaxUpdateRows(2))
+	_, err := vs.UpdateByFilter(context.Background(),
+		vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1", "doc2", "doc3"}),
+		vectorstore.WithUpdateByFilterUpdates(map[string]any{"name": "new name"}))
+	require.Error(t, err)
+	assert.Empty(t, c.execCalls, "no INSERT may run when the match set exceeds the bound")
+}
+
 func TestApplyUpdatesToDoc(t *testing.T) {
 	doc := &document.Document{ID: "d", Name: "n", Content: "c", Metadata: map[string]any{"k": "v"}}
 	updates := map[string]any{

@@ -117,6 +117,38 @@ func TestMarshalUnmarshalMetadata(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestUnmarshalMetadataExternalEnvelopeKey asserts that external JSON carrying
+// a top-level key named like the internal envelope is returned as caller
+// metadata instead of being unpacked. Only a value the store writes itself has
+// the envelope shape, so an external writer using that key never breaks Get.
+func TestUnmarshalMetadataExternalEnvelopeKey(t *testing.T) {
+	// A scalar under the reserved key, next to other caller keys.
+	m, text, err := unmarshalMetadata(`{"__clickhouse_v1":"caller value","other":1}`)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", m[internalMetadataKey])
+	assert.Equal(t, float64(1), m["other"])
+	assert.Empty(t, text)
+
+	// The reserved key alone, still a scalar.
+	m, text, err = unmarshalMetadata(`{"__clickhouse_v1":"caller value"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", m[internalMetadataKey])
+	assert.Empty(t, text)
+
+	// An object under the reserved key carrying a field the store never writes.
+	m, _, err = unmarshalMetadata(`{"__clickhouse_v1":{"unknown":1}}`)
+	require.NoError(t, err)
+	assert.Contains(t, m, internalMetadataKey)
+
+	// A real envelope is still unpacked.
+	s, err := marshalMetadata(map[string]any{"a": 1}, "embedded")
+	require.NoError(t, err)
+	m, text, err = unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), m["a"])
+	assert.Equal(t, "embedded", text)
+}
+
 func TestFilterFieldValues(t *testing.T) {
 	vs := &VectorStore{option: defaultOptions}
 	vs.option.filterFields = []FilterFieldSpec{

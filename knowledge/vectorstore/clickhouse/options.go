@@ -21,9 +21,15 @@ const (
 	defaultMaxResults = 10
 	// defaultVectorDimension is the default vector dimension.
 	defaultVectorDimension = 1536
+	// defaultMaxUpdateRows bounds how many rows one UpdateByFilter call may
+	// rewrite. Every match is buffered before the write, so the bound caps the
+	// memory, the statement text, and the argument list of a single INSERT.
+	defaultMaxUpdateRows = 1000
 )
 
-// Default column names. Callers may override them via the With*FieldName options.
+// Default column names. Callers may override them via the WithIDField,
+// WithNameField, WithContentField, WithEmbeddingField, WithMetadataField,
+// WithCreatedAtField, and WithUpdatedAtField options.
 const (
 	defaultIDFieldName        = "id"
 	defaultNameFieldName      = "name"
@@ -165,6 +171,10 @@ type options struct {
 
 	// Operation behavior.
 	maxResults int // Default Search limit.
+
+	// maxUpdateRows bounds a single UpdateByFilter rewrite. Zero or a negative
+	// value removes the bound, which lets a wide filter grow without limit.
+	maxUpdateRows int
 }
 
 // defaultOptions contains values applied before With* options.
@@ -179,6 +189,7 @@ var defaultOptions = options{
 	createdAtFieldName: defaultCreatedAtFieldName,
 	updatedAtFieldName: defaultUpdatedAtFieldName,
 	maxResults:         defaultMaxResults,
+	maxUpdateRows:      defaultMaxUpdateRows,
 	autoCreateTable:    true,
 	syncMutations:      true,
 }
@@ -208,6 +219,16 @@ func WithFilterFields(specs ...FilterFieldSpec) Option {
 func WithAutoCreateTable(enable bool) Option {
 	return func(o *options) { o.autoCreateTable = enable }
 }
+
+// WithMaxUpdateRows bounds how many rows one UpdateByFilter call may rewrite.
+// It defaults to 1000. A call whose filter matches more rows fails before any
+// write instead of buffering them all, which keeps the memory, the statement
+// text, and the argument count of the rewrite bounded.
+//
+// Pass zero or a negative value to remove the bound. Do that only when the
+// caller already controls how wide the filter can be: an unbounded rewrite of a
+// large table is held in memory until the INSERT runs.
+func WithMaxUpdateRows(n int) Option { return func(o *options) { o.maxUpdateRows = n } }
 
 // WithSynchronousMutations controls whether delete mutations wait for
 // completion before Delete, DeleteByFilter, and DeleteAll return. It defaults
