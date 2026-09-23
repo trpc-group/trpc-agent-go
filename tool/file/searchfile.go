@@ -159,20 +159,20 @@ func (f *fileToolSet) searchFile(
 		)
 	}
 	// Find files matching the pattern.
-	matches, err := f.matchFiles(targetPath, req.Pattern, req.CaseSensitive)
+	matches, err := f.walkMatches(ctx, targetPath, req.Pattern, req.CaseSensitive)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
 	// Separate files and folders.
 	for _, match := range matches {
-		fullPath := filepath.Join(targetPath, match)
+		fullPath := filepath.Join(targetPath, filepath.FromSlash(match.rel))
 		stat, err := os.Stat(fullPath)
 		if err != nil {
 			// Skip entries that can't be stat.
 			continue
 		}
-		relativePath := filepath.Join(reqPath, match)
+		relativePath := filepath.Join(reqPath, filepath.FromSlash(match.rel))
 		if stat.IsDir() {
 			rsp.Folders = append(rsp.Folders, relativePath)
 		} else {
@@ -195,8 +195,10 @@ func (f *fileToolSet) searchFileTool() tool.CallableTool {
 		f.searchFile,
 		function.WithName("search_file"),
 		function.WithDescription(
-			"Find files by glob under base_directory. "+
-				"Supports workspace:// paths.",
+			"Find files by glob under base_directory. Skips .git "+
+				"and anything .gitignore excludes, and refuses a "+
+				"pattern that matches too many entries. Supports "+
+				"workspace:// paths.",
 		),
 	)
 }

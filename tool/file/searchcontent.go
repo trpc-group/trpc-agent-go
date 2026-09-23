@@ -20,9 +20,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
@@ -44,7 +47,17 @@ const (
 	// maxSearchLineSize bounds a single scanned line during streaming search;
 	// a line longer than this fails the file's scan rather than the process.
 	maxSearchLineSize = 4 * 1024 * 1024
+	// minSearchConcurrency is the floor for the default scan concurrency.
+	minSearchConcurrency = 4
 )
+
+// defaultSearchConcurrency is how many files a search scans at once when the
+// caller sets nothing: enough to keep the disk busy, few enough that a pattern
+// covering a whole repository cannot pin a blocked-read thread per file and
+// exhaust the runtime's thread limit.
+func defaultSearchConcurrency() int {
+	return max(minSearchConcurrency, 2*runtime.GOMAXPROCS(0))
+}
 
 // searchSizeCap is the largest file search will stream through. It saturates
 // rather than overflows: a read limit large enough that scaling it would wrap
@@ -84,7 +97,10 @@ type searchContentResponse struct {
 	// on a line the scanner cannot hold. Never silent, so a zero-match result
 	// is distinguishable from a file the tool refused.
 	SkippedFiles []string `json:"skipped_files,omitempty"`
-	Message      string   `json:"message"`
+	// OmittedFiles counts files that matched the content pattern but fell
+	// beyond the result cap, so the model knows the listing is partial.
+	OmittedFiles int    `json:"omitted_files,omitempty"`
+	Message      string `json:"message"`
 }
 
 // fileMatch represents all matches within a single file.
@@ -152,18 +168,35 @@ func (f *fileToolSet) searchContent(
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
+	matched := len(matches)
+	matches, omitted := capSearchMatches(matches, f.searchMatchLimit())
 	rsp.Path = path
 	rsp.FileMatches = matches
 	rsp.SkippedFiles = skipped
-	rsp.Message = f.searchResultMessage(len(matches), skipped)
+	rsp.OmittedFiles = omitted
+	rsp.Message = f.searchResultMessage(matched, omitted, skipped)
 	return rsp, nil
 }
 
 // searchResultMessage summarizes a search, naming any file that matched the
 // file pattern but could not be searched — too large, or a scan that failed —
-// so a zero-match result is never mistaken for proof of absence.
-func (f *fileToolSet) searchResultMessage(matched int, skipped []string) string {
+// so a zero-match result is never mistaken for proof of absence, and saying
+// when the listing stopped at the result cap.
+func (f *fileToolSet) searchResultMessage(
+	matched int,
+	omitted int,
+	skipped []string,
+) string {
 	msg := fmt.Sprintf("Found %v files matching", matched)
+	if omitted > 0 {
+		msg += fmt.Sprintf(
+			"; stopped listing at %d matching lines, %d matching file(s) "+
+				"not shown — narrow path, the file pattern or the "+
+				"content pattern",
+			f.searchMatchLimit(),
+			omitted,
+		)
+	}
 	if len(skipped) > 0 {
 		msg += fmt.Sprintf(
 			"; %d file(s) matched the file pattern but were NOT searched "+
@@ -175,6 +208,38 @@ func (f *fileToolSet) searchResultMessage(matched int, skipped []string) string 
 		)
 	}
 	return msg
+}
+
+// capSearchMatches keeps the first files, in path order, whose matching lines
+// fit within limit. The file that crosses the limit is cut to fit and marked
+// truncated; the count of files dropped entirely is returned so the caller can
+// report a partial listing rather than pass it off as complete.
+func capSearchMatches(matches []*fileMatch, limit int) ([]*fileMatch, int) {
+	if limit <= 0 {
+		return matches, 0
+	}
+	slices.SortFunc(matches, func(a, b *fileMatch) int {
+		return strings.Compare(a.FilePath, b.FilePath)
+	})
+	remaining := limit
+	for i, m := range matches {
+		if len(m.Matches) <= remaining {
+			remaining -= len(m.Matches)
+			continue
+		}
+		if remaining == 0 {
+			return matches[:i], len(matches) - i
+		}
+		m.Matches = m.Matches[:remaining]
+		m.Truncated = true
+		m.Message = fmt.Sprintf(
+			"Found %d matches in file '%s' (stopped at the result cap)",
+			len(m.Matches),
+			m.FilePath,
+		)
+		return matches[:i+1], len(matches) - i - 1
+	}
+	return matches, 0
 }
 
 func (f *fileToolSet) searchContentByFilePatternRef(
@@ -295,7 +360,8 @@ func (f *fileToolSet) searchContentLocal(
 		return match, nil, nil
 	}
 
-	files, err := f.matchFiles(
+	entries, err := f.walkMatches(
+		ctx,
 		targetPath,
 		req.FilePattern,
 		req.FileCaseSensitive,
@@ -304,18 +370,25 @@ func (f *fileToolSet) searchContentLocal(
 		return nil, nil, err
 	}
 
+	// Scans run on a bounded pool: each blocks in a file read, which pins an
+	// OS thread, so one goroutine per matched file would let a wide pattern
+	// exhaust the runtime's thread limit and abort the process.
 	var (
-		wg          sync.WaitGroup
+		group       errgroup.Group
 		mu          sync.Mutex
 		fileMatches []*fileMatch
 		skipped     []string
 	)
-	for _, file := range files {
+	group.SetLimit(f.searchWorkers())
+	for _, entry := range entries {
 		if ctx.Err() != nil {
 			break
 		}
-		fullPath := filepath.Join(targetPath, file)
-		relPath := filepath.Join(reqPath, file)
+		if entry.dir {
+			continue
+		}
+		fullPath := filepath.Join(targetPath, filepath.FromSlash(entry.rel))
+		relPath := filepath.Join(reqPath, filepath.FromSlash(entry.rel))
 		stat, err := os.Stat(fullPath)
 		if err != nil {
 			continue
@@ -332,9 +405,7 @@ func (f *fileToolSet) searchContentLocal(
 			continue
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		group.Go(func() error {
 			match, err := searchFileContent(ctx, fullPath, re)
 			if err != nil {
 				// A file the scan could not finish — a line beyond the
@@ -343,19 +414,20 @@ func (f *fileToolSet) searchContentLocal(
 				mu.Lock()
 				skipped = append(skipped, relPath)
 				mu.Unlock()
-				return
+				return nil
 			}
 			if len(match.Matches) == 0 {
-				return
+				return nil
 			}
 			match.FilePath = relPath
 			match.Message = fileMatchMessage(match, relPath)
 			mu.Lock()
 			fileMatches = append(fileMatches, match)
 			mu.Unlock()
-		}()
+			return nil
+		})
 	}
-	wg.Wait()
+	_ = group.Wait()
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -591,8 +663,11 @@ func (f *fileToolSet) searchContentTool() tool.CallableTool {
 		function.WithName("search_content"),
 		function.WithDescription(
 			"Search text files under base_directory for lines that "+
-				"match a regex. Supports workspace:// paths and "+
-				"artifact:// single-file refs.",
+				"match a regex. Skips .git and anything .gitignore "+
+				"excludes; refuses a file pattern that matches too "+
+				"many files and caps the lines returned, so narrow "+
+				"the path or patterns when told to. Supports "+
+				"workspace:// paths and artifact:// single-file refs.",
 		),
 	)
 }
