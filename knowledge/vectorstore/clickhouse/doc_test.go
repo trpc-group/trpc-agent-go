@@ -149,6 +149,35 @@ func TestUnmarshalMetadataExternalEnvelopeKey(t *testing.T) {
 	assert.Equal(t, "embedded", text)
 }
 
+// TestUnmarshalMetadataRejectsShapesMarshalNeverWrites asserts that envelope
+// shapes marshalMetadata cannot produce are returned as caller metadata.
+//
+// Both storedMetadata fields are omitempty, so an empty value is never emitted:
+// these three inputs must come from an external writer and their top-level key
+// must survive the round trip.
+func TestUnmarshalMetadataRejectsShapesMarshalNeverWrites(t *testing.T) {
+	for _, s := range []string{
+		`{"__clickhouse_v1":{"metadata":null}}`,
+		`{"__clickhouse_v1":{"metadata":{}}}`,
+		`{"__clickhouse_v1":{"embedding_text":""}}`,
+	} {
+		m, text, err := unmarshalMetadata(s)
+		require.NoErrorf(t, err, "input %s", s)
+		assert.Containsf(t, m, internalMetadataKey, "input %s must stay caller metadata", s)
+		assert.Emptyf(t, text, "input %s carries no embedding text", s)
+	}
+
+	// Confirm the premise: marshalMetadata never emits those shapes. An empty
+	// document yields the empty envelope, which is the one reserved shape.
+	s, err := marshalMetadata(map[string]any{}, "")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"__clickhouse_v1":{}}`, s)
+	m, text, err := unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Empty(t, m)
+	assert.Empty(t, text)
+}
+
 func TestFilterFieldValues(t *testing.T) {
 	vs := &VectorStore{option: defaultOptions}
 	vs.option.filterFields = []FilterFieldSpec{

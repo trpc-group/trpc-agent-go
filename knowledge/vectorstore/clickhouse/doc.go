@@ -10,6 +10,7 @@
 package clickhouse
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -126,8 +127,13 @@ func marshalMetadata(m map[string]any, embeddingText string) (string, error) {
 // A value written without the envelope, for example directly by an external
 // writer, is treated as plain caller metadata with no embedding text. That
 // includes external JSON that happens to carry a top-level key named like
-// internalMetadataKey: only a value the store itself could have written is
+// internalMetadataKey: only a value marshalMetadata could have produced is
 // unpacked, so no caller metadata is lost or rejected.
+//
+// One shape stays ambiguous: {"__clickhouse_v1":{}} is exactly what this store
+// writes for a document with no metadata and no embedding text, so it is always
+// read back as the empty envelope. That single shape is reserved; every other
+// use of the key is returned to the caller unchanged.
 func unmarshalMetadata(s string) (map[string]any, string, error) {
 	if s == "" {
 		return map[string]any{}, "", nil
@@ -136,11 +142,7 @@ func unmarshalMetadata(s string) (map[string]any, string, error) {
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
 		return nil, "", err
 	}
-	if envelope, ok := storedEnvelope(raw); ok {
-		var stored storedMetadata
-		if err := json.Unmarshal(envelope, &stored); err != nil {
-			return nil, "", err
-		}
+	if stored, ok := storedEnvelope(raw); ok {
 		if stored.Metadata == nil {
 			stored.Metadata = map[string]any{}
 		}
@@ -156,41 +158,43 @@ func unmarshalMetadata(s string) (map[string]any, string, error) {
 	return md, "", nil
 }
 
-// storedEnvelope returns the envelope payload when the whole column value is
-// one marshalMetadata could have produced, and false otherwise.
+// storedEnvelope returns the decoded envelope when the whole column value is one
+// marshalMetadata could have produced, and false otherwise.
 //
 // The store always writes the envelope as the only top-level key, so any other
-// top-level key already rules it out. The payload shape is checked too: a
-// scalar, or an object carrying a field the store never writes, cannot have
-// come from marshalMetadata and is left alone as caller metadata.
-func storedEnvelope(raw map[string]json.RawMessage) (json.RawMessage, bool) {
+// top-level key already rules it out. The payload must decode into
+// storedMetadata without unknown fields, which excludes scalars and objects
+// carrying a field the store never writes.
+//
+// Both storedMetadata fields are omitempty, so marshalMetadata never emits an
+// empty one: {"metadata":null}, {"metadata":{}}, and {"embedding_text":""} are
+// therefore external values, not envelopes, and are left to the caller.
+func storedEnvelope(raw map[string]json.RawMessage) (storedMetadata, bool) {
 	if len(raw) != 1 {
-		return nil, false
+		return storedMetadata{}, false
 	}
 	envelope, ok := raw[internalMetadataKey]
-	if !ok || len(envelope) == 0 || envelope[0] != '{' {
-		return nil, false
+	if !ok {
+		return storedMetadata{}, false
 	}
+	// Reject a scalar or null payload before looking at individual fields.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(envelope, &fields); err != nil || fields == nil {
-		return nil, false
+		return storedMetadata{}, false
 	}
-	for key, value := range fields {
-		switch key {
-		case "metadata":
-			// Nested caller metadata is an object, or null when empty.
-			if len(value) == 0 || (value[0] != '{' && string(value) != "null") {
-				return nil, false
-			}
-		case "embedding_text":
-			if len(value) == 0 || value[0] != '"' {
-				return nil, false
-			}
-		default:
-			return nil, false
-		}
+	var stored storedMetadata
+	dec := json.NewDecoder(bytes.NewReader(envelope))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&stored); err != nil {
+		return storedMetadata{}, false
 	}
-	return envelope, true
+	if _, ok := fields["metadata"]; ok && len(stored.Metadata) == 0 {
+		return storedMetadata{}, false
+	}
+	if _, ok := fields["embedding_text"]; ok && stored.EmbeddingText == "" {
+		return storedMetadata{}, false
+	}
+	return stored, true
 }
 
 // filterFieldValues extracts the declared filter-field values from metadata and

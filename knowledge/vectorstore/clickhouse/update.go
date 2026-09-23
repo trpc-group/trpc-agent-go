@@ -32,9 +32,9 @@ import (
 // covers the INSERT statement, not the table state a concurrent reader sees:
 // ReplacingMergeTree collapses the superseded versions in the background.
 //
-// Resource use is bounded by WithMaxUpdateRows (default 1000). A wider match is
-// rejected before any write instead of growing the buffered rows, the statement
-// text, and the argument list without limit.
+// Resource use is bounded by WithMaxUpdateRecords (default 1000). A wider match
+// is rejected before any write instead of growing the buffered records, the
+// statement text, and the argument list without limit.
 func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateByFilterOption) (int64, error) {
 	cfg, err := vectorstore.ApplyUpdateByFilterOptions(opts...)
 	if err != nil {
@@ -100,12 +100,12 @@ func (vs *VectorStore) UpdateByFilter(ctx context.Context, opts ...vectorstore.U
 		batchArgs = append(batchArgs, insertArgs...)
 		count++
 		// Stop as soon as the match set is known to exceed the bound, before
-		// buffering another row: the whole batch is held in memory until the
+		// buffering another record: the whole batch is held in memory until the
 		// INSERT, so an unbounded filter would grow it without limit.
-		if vs.option.maxUpdateRows > 0 && count > vs.option.maxUpdateRows {
+		if vs.option.maxUpdateRecords > 0 && count > vs.option.maxUpdateRecords {
 			return 0, fmt.Errorf(
-				"clickhouse: update by filter: more than %d rows match; narrow the filter or raise the bound with WithMaxUpdateRows",
-				vs.option.maxUpdateRows)
+				"clickhouse: update by filter: more than %d records match; narrow the filter or raise the bound with WithMaxUpdateRecords",
+				vs.option.maxUpdateRecords)
 		}
 	}
 	if err := rows.Err(); err != nil {

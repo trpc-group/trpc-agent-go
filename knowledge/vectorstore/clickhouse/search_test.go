@@ -434,9 +434,9 @@ func TestUpdateByFilterRejectsDimensionMismatch(t *testing.T) {
 	assert.Empty(t, c.execCalls, "no INSERT may run when the dimension check fails")
 }
 
-// TestUpdateByFilterRespectsMaxUpdateRows asserts that a match set wider than
+// TestUpdateByFilterRespectsMaxUpdateRecords asserts that a match set wider than
 // the configured bound is rejected instead of being buffered and rewritten.
-func TestUpdateByFilterRespectsMaxUpdateRows(t *testing.T) {
+func TestUpdateByFilterRespectsMaxUpdateRecords(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	const matched = 3
 	c := &mockClient{}
@@ -449,7 +449,7 @@ func TestUpdateByFilterRespectsMaxUpdateRows(t *testing.T) {
 		}
 		return newMockRows(rows), nil
 	}
-	vs := vsWithClient(c, WithMaxUpdateRows(2))
+	vs := vsWithClient(c, WithMaxUpdateRecords(2))
 	_, err := vs.UpdateByFilter(context.Background(),
 		vectorstore.WithUpdateByFilterDocumentIDs([]string{"doc1", "doc2", "doc3"}),
 		vectorstore.WithUpdateByFilterUpdates(map[string]any{"name": "new name"}))
