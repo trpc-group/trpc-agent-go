@@ -117,12 +117,15 @@ func (a *chatStreamAccumulator) publishChoice(
 func (a *chatStreamAccumulator) sdkChunk(chunk openaigo.ChatCompletionChunk) openaigo.ChatCompletionChunk {
 	a.scratchChunk = chunk
 	if len(chunk.Choices) == 0 {
+		clear(a.scratchChoices)
+		clear(a.scratchToolCalls)
 		return a.scratchChunk
 	}
 
 	if cap(a.scratchChoices) < len(chunk.Choices) {
 		a.scratchChoices = make([]openaigo.ChatCompletionChunkChoice, len(chunk.Choices))
 	} else {
+		clear(a.scratchChoices[len(chunk.Choices):])
 		a.scratchChoices = a.scratchChoices[:len(chunk.Choices)]
 	}
 	if cap(a.scratchToolCalls) < len(chunk.Choices) {
@@ -131,6 +134,7 @@ func (a *chatStreamAccumulator) sdkChunk(chunk openaigo.ChatCompletionChunk) ope
 			len(chunk.Choices),
 		)
 	} else {
+		clear(a.scratchToolCalls[len(chunk.Choices):])
 		a.scratchToolCalls = a.scratchToolCalls[:len(chunk.Choices)]
 	}
 
@@ -146,14 +150,21 @@ func (a *chatStreamAccumulator) sdkChunk(chunk openaigo.ChatCompletionChunk) ope
 				len(toolCalls),
 			)
 		} else {
+			clear(a.scratchToolCalls[index][len(toolCalls):])
 			a.scratchToolCalls[index] = a.scratchToolCalls[index][:len(toolCalls)]
 		}
 		copy(a.scratchToolCalls[index], toolCalls)
 		for toolIndex := range a.scratchToolCalls[index] {
 			a.scratchToolCalls[index][toolIndex].Function.Name = ""
 			a.scratchToolCalls[index][toolIndex].Function.Arguments = ""
+			a.scratchToolCalls[index][toolIndex].JSON = openaigo.ChatCompletionChunkChoiceDeltaToolCall{}.JSON
+			a.scratchToolCalls[index][toolIndex].Function.JSON = openaigo.ChatCompletionChunkChoiceDeltaToolCallFunction{}.JSON
 		}
 		scratchChoice.Delta.ToolCalls = a.scratchToolCalls[index]
+		scratchChoice.JSON = openaigo.ChatCompletionChunkChoice{}.JSON
+		scratchChoice.Delta.JSON = openaigo.ChatCompletionChunkChoiceDelta{}.JSON
+		scratchChoice.Delta.FunctionCall.JSON = openaigo.ChatCompletionChunkChoiceDeltaFunctionCall{}.JSON
+		scratchChoice.Logprobs.JSON = openaigo.ChatCompletionChunkChoiceLogprobs{}.JSON
 		a.scratchChoices[index] = scratchChoice
 	}
 
