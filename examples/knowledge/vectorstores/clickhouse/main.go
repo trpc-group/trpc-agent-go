@@ -16,7 +16,7 @@
 //
 // Required environment:
 //   - CLICKHOUSE_DSN: (Optional) ClickHouse DSN, defaults to
-//     "clickhouse://default:@localhost:9000/default"
+//     "clickhouse://default:agentgo@localhost:9000/default"
 //   - CLICKHOUSE_TABLE: (Optional) Table name, defaults to "clickhouse_vectorstore_example"
 //
 // Example usage:
@@ -46,7 +46,10 @@ const vectorDim = 3
 func main() {
 	ctx := context.Background()
 
-	dsn := util.GetEnvOrDefault("CLICKHOUSE_DSN", "clickhouse://default:@localhost:9000/default")
+	// The default matches the docker command in README.md: the official image
+	// disables network access for a passwordless "default" user, so the demo
+	// credentials have to be spelled out on both sides.
+	dsn := util.GetEnvOrDefault("CLICKHOUSE_DSN", "clickhouse://default:agentgo@localhost:9000/default")
 	table := util.GetEnvOrDefault("CLICKHOUSE_TABLE", "clickhouse_vectorstore_example")
 
 	fmt.Println("🏠 ClickHouse Vector Store Demo")

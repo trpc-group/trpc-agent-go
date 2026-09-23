@@ -11,12 +11,20 @@ Start ClickHouse:
 ```bash
 docker run -d --name clickhouse \
   -p 9000:9000 \
+  -e CLICKHOUSE_USER=default \
+  -e CLICKHOUSE_PASSWORD=agentgo \
+  -e CLICKHOUSE_DB=default \
   clickhouse/clickhouse-server:latest
 ```
 
+The credentials are required, not cosmetic: with neither `CLICKHOUSE_USER` nor
+`CLICKHOUSE_PASSWORD` set, the image logs `disabling network access for user
+'default'` and the example fails to connect with `Authentication failed`. The
+password above is a throwaway value for local testing only.
+
 Optionally override the connection DSN and table name (defaults are
-`clickhouse://default:@localhost:9000/default` and
-`clickhouse_vectorstore_example`):
+`clickhouse://default:agentgo@localhost:9000/default` and
+`clickhouse_vectorstore_example`, matching the command above):
 
 ```bash
 export CLICKHOUSE_DSN=clickhouse://user:password@host:9000/database
@@ -24,9 +32,10 @@ export CLICKHOUSE_TABLE=clickhouse_vectorstore_example
 ```
 
 > The example creates the table if it does not exist and reuses it otherwise. It
-> upserts `doc1`, `doc2`, and `doc3`, updates `doc1`, then deletes `doc3`, so
-> `doc1` and `doc2` remain in the table after a run. Point `CLICKHOUSE_TABLE` at
-> a throwaway table if you do not want those rows written.
+> upserts `doc1`, `doc2`, and `doc3`, updates `doc1`, deletes `doc3`, then deletes
+> `doc2` through a store configured with `WithSynchronousMutations(false)`, so
+> only `doc1` remains in the table after a run. Point `CLICKHOUSE_TABLE` at a
+> throwaway table if you do not want that row written.
 
 ## Run
 
@@ -36,7 +45,8 @@ go run main.go
 
 The example prints each step (table creation, inserting 3 documents, vector
 search where `[1,0,0]` should rank `doc1` first, filter search, keyword search,
-hybrid search, update, count, delete) and finishes with a verification summary.
+hybrid search, update, count, synchronous delete, asynchronous delete) and
+finishes with a verification summary.
 
 ## Features
 
