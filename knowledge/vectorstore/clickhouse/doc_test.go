@@ -1,0 +1,328 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package clickhouse
+
+import (
+	"encoding/json"
+	"math"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+)
+
+func TestDocToRow(t *testing.T) {
+	vs := &VectorStore{option: defaultOptions}
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	doc := &document.Document{
+		ID:       "doc1",
+		Name:     "Doc",
+		Content:  "hello",
+		Metadata: map[string]any{"category": "news"},
+	}
+	r, err := vs.docToRow(doc, []float64{1, 2, 3}, now)
+	require.NoError(t, err)
+	assert.Equal(t, "doc1", r.id)
+	assert.Equal(t, "Doc", r.name)
+	assert.Equal(t, "hello", r.content)
+	assert.Equal(t, []float64{1, 2, 3}, r.embedding)
+	assert.Equal(t, "news", r.metadata["category"])
+	assert.Equal(t, now, r.createdAt)
+	assert.Equal(t, now, r.updatedAt)
+}
+
+func TestDocToRowErrors(t *testing.T) {
+	vs := &VectorStore{option: defaultOptions}
+	_, err := vs.docToRow(nil, nil, time.Now())
+	require.ErrorIs(t, err, errDocumentRequired)
+
+	_, err = vs.docToRow(&document.Document{}, nil, time.Now())
+	require.ErrorIs(t, err, errDocumentIDRequired)
+}
+
+func TestRowToDoc(t *testing.T) {
+	vs := &VectorStore{option: defaultOptions}
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	r := &row{
+		id:        "doc1",
+		name:      "Doc",
+		content:   "hello",
+		embedding: []float64{1, 2},
+		metadata:  map[string]any{"k": "v"},
+		createdAt: now,
+		updatedAt: now,
+	}
+	doc, emb, err := vs.rowToDoc(r)
+	require.NoError(t, err)
+	assert.Equal(t, "doc1", doc.ID)
+	assert.Equal(t, "Doc", doc.Name)
+	assert.Equal(t, "hello", doc.Content)
+	assert.Equal(t, "v", doc.Metadata["k"])
+	assert.Equal(t, []float64{1, 2}, emb)
+
+	_, _, err = vs.rowToDoc(nil)
+	require.Error(t, err)
+}
+
+func TestMarshalUnmarshalMetadata(t *testing.T) {
+	// nil metadata and no embedding text.
+	s, err := marshalMetadata(nil, "")
+	require.NoError(t, err)
+	m, text, err := unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Empty(t, m)
+	assert.Empty(t, text)
+
+	// populated metadata and embedding text survive together.
+	s, err = marshalMetadata(map[string]any{"a": 1, "b": "x"}, "embedded")
+	require.NoError(t, err)
+	m, text, err = unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), m["a"])
+	assert.Equal(t, "x", m["b"])
+	assert.Equal(t, "embedded", text)
+
+	// A caller key equal to the internal envelope key is preserved, because
+	// caller metadata is nested one level below the envelope.
+	s, err = marshalMetadata(map[string]any{internalMetadataKey: "caller value"}, "embedded")
+	require.NoError(t, err)
+	m, text, err = unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", m[internalMetadataKey])
+	assert.Equal(t, "embedded", text)
+
+	// A value written without the envelope is treated as plain metadata.
+	m, text, err = unmarshalMetadata(`{"a":1}`)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), m["a"])
+	assert.Empty(t, text)
+
+	// empty string.
+	m, _, err = unmarshalMetadata("")
+	require.NoError(t, err)
+	assert.Empty(t, m)
+
+	// invalid JSON.
+	_, _, err = unmarshalMetadata("{invalid")
+	require.Error(t, err)
+}
+
+// TestUnmarshalMetadataExternalEnvelopeKey asserts that external JSON carrying
+// a top-level key named like the internal envelope is returned as caller
+// metadata instead of being unpacked. Only a value the store writes itself has
+// the envelope shape, so an external writer using that key never breaks Get.
+func TestUnmarshalMetadataExternalEnvelopeKey(t *testing.T) {
+	// A scalar under the reserved key, next to other caller keys.
+	m, text, err := unmarshalMetadata(`{"__clickhouse_v1":"caller value","other":1}`)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", m[internalMetadataKey])
+	assert.Equal(t, float64(1), m["other"])
+	assert.Empty(t, text)
+
+	// The reserved key alone, still a scalar.
+	m, text, err = unmarshalMetadata(`{"__clickhouse_v1":"caller value"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "caller value", m[internalMetadataKey])
+	assert.Empty(t, text)
+
+	// An object under the reserved key carrying a field the store never writes.
+	m, _, err = unmarshalMetadata(`{"__clickhouse_v1":{"unknown":1}}`)
+	require.NoError(t, err)
+	assert.Contains(t, m, internalMetadataKey)
+
+	// A real envelope is still unpacked.
+	s, err := marshalMetadata(map[string]any{"a": 1}, "embedded")
+	require.NoError(t, err)
+	m, text, err = unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), m["a"])
+	assert.Equal(t, "embedded", text)
+}
+
+// TestUnmarshalMetadataRejectsShapesMarshalNeverWrites asserts that envelope
+// shapes marshalMetadata cannot produce are returned as caller metadata.
+//
+// Both storedMetadata fields are omitempty, so an empty value is never emitted:
+// these three inputs must come from an external writer and their top-level key
+// must survive the round trip.
+func TestUnmarshalMetadataRejectsShapesMarshalNeverWrites(t *testing.T) {
+	for _, s := range []string{
+		`{"__clickhouse_v1":{"metadata":null}}`,
+		`{"__clickhouse_v1":{"metadata":{}}}`,
+		`{"__clickhouse_v1":{"embedding_text":""}}`,
+	} {
+		m, text, err := unmarshalMetadata(s)
+		require.NoErrorf(t, err, "input %s", s)
+		assert.Containsf(t, m, internalMetadataKey, "input %s must stay caller metadata", s)
+		assert.Emptyf(t, text, "input %s carries no embedding text", s)
+	}
+
+	// Confirm the premise: marshalMetadata never emits those shapes. An empty
+	// document yields the empty envelope, which is the one reserved shape.
+	s, err := marshalMetadata(map[string]any{}, "")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"__clickhouse_v1":{}}`, s)
+	m, text, err := unmarshalMetadata(s)
+	require.NoError(t, err)
+	assert.Empty(t, m)
+	assert.Empty(t, text)
+}
+
+func TestFilterFieldValues(t *testing.T) {
+	vs := &VectorStore{option: defaultOptions}
+	vs.option.filterFields = []FilterFieldSpec{
+		{Name: "category", Type: FilterFieldString},
+		{Name: "count", Type: FilterFieldInt64},
+		{Name: "ratio", Type: FilterFieldFloat64},
+	}
+	vals, err := vs.filterFieldValues(map[string]any{
+		"category": "news",
+		"count":    10,
+		"ratio":    0.5,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "news", vals[0])
+	assert.Equal(t, int64(10), vals[1])
+	assert.Equal(t, float64(0.5), vals[2])
+
+	// Missing fields map to NULL so they stay distinct from explicit zeros.
+	vals, err = vs.filterFieldValues(map[string]any{})
+	require.NoError(t, err)
+	assert.Nil(t, vals[0])
+	assert.Nil(t, vals[1])
+	assert.Nil(t, vals[2])
+
+	// No filter fields.
+	vs2 := &VectorStore{option: defaultOptions}
+	vals, err = vs2.filterFieldValues(map[string]any{"x": 1})
+	require.NoError(t, err)
+	assert.Nil(t, vals)
+}
+
+// TestFilterFieldAbsenceVersusZeroValue asserts that a document without a
+// filter field is stored as SQL NULL, so an equality filter such as
+// "count = 0" cannot match it. Storing the zero value instead would let
+// Search, Count, and DeleteByFilter match documents that never set the field.
+func TestFilterFieldAbsenceVersusZeroValue(t *testing.T) {
+	vs := &VectorStore{option: defaultOptions}
+	vs.option.filterFields = []FilterFieldSpec{{Name: "count", Type: FilterFieldInt64}}
+
+	absent, err := vs.filterFieldValues(map[string]any{})
+	require.NoError(t, err)
+	assert.Nil(t, absent[0], "an unset field must be stored as NULL")
+
+	explicit, err := vs.filterFieldValues(map[string]any{"count": 0})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), explicit[0], "an explicit zero must stay a value")
+
+	// Reading NULL back drops the key, while reading a value back restores the
+	// declared column type instead of the JSON float64.
+	var nullCount *int64
+	md := map[string]any{"count": float64(0)}
+	vs.mergeFilterDests(md, []any{&nullCount})
+	assert.NotContains(t, md, "count")
+
+	storedCount := int64(0)
+	storedPtr := &storedCount
+	md = map[string]any{"count": float64(9)}
+	vs.mergeFilterDests(md, []any{&storedPtr})
+	assert.Equal(t, int64(0), md["count"])
+}
+
+func TestConvertFilterFieldValue(t *testing.T) {
+	// String.
+	v, err := convertFilterFieldValue(FilterFieldString, "x")
+	require.NoError(t, err)
+	assert.Equal(t, "x", v)
+	v, err = convertFilterFieldValue(FilterFieldString, nil)
+	require.NoError(t, err)
+	assert.Nil(t, v)
+	_, err = convertFilterFieldValue(FilterFieldString, 123)
+	require.Error(t, err)
+
+	// Int64.
+	v, err = convertFilterFieldValue(FilterFieldInt64, int64(5))
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), v)
+	v, err = convertFilterFieldValue(FilterFieldInt64, nil)
+	require.NoError(t, err)
+	assert.Nil(t, v)
+
+	// Float64.
+	v, err = convertFilterFieldValue(FilterFieldFloat64, float64(1.5))
+	require.NoError(t, err)
+	assert.Equal(t, float64(1.5), v)
+
+	// Unknown type.
+	_, err = convertFilterFieldValue(FilterFieldType(99), nil)
+	require.Error(t, err)
+}
+
+func TestNumericConversions(t *testing.T) {
+	tests := []struct {
+		in   any
+		want int64
+		ok   bool
+	}{
+		{int(1), 1, true},
+		{int8(2), 2, true},
+		{int16(3), 3, true},
+		{int32(4), 4, true},
+		{int64(5), 5, true},
+		{uint(6), 6, true},
+		{uint8(7), 7, true},
+		{uint16(8), 8, true},
+		{uint32(9), 9, true},
+		{uint64(10), 10, true},
+		{float32(11), 11, true},
+		{float64(12), 12, true},
+		{json.Number("13"), 13, true},
+		{"bad", 0, false},
+	}
+	for _, tt := range tests {
+		got, err := toInt64(tt.in)
+		if !tt.ok {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assert.Equal(t, tt.want, got)
+	}
+
+	// overflow and non-integer floats.
+	_, err := toInt64(uint64(1) << 63)
+	require.Error(t, err)
+	_, err = toInt64(3.14)
+	require.Error(t, err)
+	_, err = toInt64(math.NaN())
+	require.Error(t, err)
+	_, err = toInt64(math.Inf(1))
+	require.Error(t, err)
+	// 2^63 is not representable as int64. Comparing against math.MaxInt64 would
+	// let it through, because that constant rounds up to 2^63 in float64.
+	_, err = toInt64(float64(1) * (1 << 63))
+	require.Error(t, err)
+	_, err = toInt64(-float64(1) * (1 << 63) * 1.5)
+	require.Error(t, err)
+	// -2^63 is exactly representable and must be accepted.
+	got, err := toInt64(-float64(1) * (1 << 63))
+	require.NoError(t, err)
+	assert.Equal(t, int64(math.MinInt64), got)
+
+	// toFloat64.
+	f, err := toFloat64(int64(3))
+	require.NoError(t, err)
+	assert.Equal(t, float64(3), f)
+	_, err = toFloat64("bad")
+	require.Error(t, err)
+}
