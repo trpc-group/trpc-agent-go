@@ -9,7 +9,9 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -604,6 +606,39 @@ func TestGenerateContent_ToolResultBreakpointIsPlacedOnEveryAttempt(t *testing.T
 		assert.Equal(t, 4, countCacheBreakpoints(body), "attempt %d must stay within budget", i+1)
 	}
 	assert.Equal(t, bodies[0], bodies[1], "a retry sends the same body")
+}
+
+// A caller middleware that hashes or signs the body before calling next must
+// authenticate the bytes the transport sends. The marker is placed by the
+// outermost middleware, ahead of any the caller registers on the client or per
+// request, so both see the marked body and their digests match the transport's.
+func TestGenerateContent_CallerMiddlewareSeesTheToolResultMarker(t *testing.T) {
+	// signer stands in for a caller's request signer: it digests the body,
+	// restores it, and passes the request on.
+	signer := func(seen *[sha256.Size]byte) anthropicopt.Middleware {
+		return func(req *http.Request, next anthropicopt.MiddlewareNext) (*http.Response, error) {
+			body, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			*seen = sha256.Sum256(body)
+			return next(req)
+		}
+	}
+	var clientSeen, requestSeen [sha256.Size]byte
+
+	body := captureOutgoingBody(t,
+		&model.Request{Messages: toolResultTurnMessages(), Tools: readTool()},
+		nil,
+		WithCacheMessages(true),
+		WithAnthropicClientOptions(anthropicopt.WithMiddleware(signer(&clientSeen))),
+		WithAnthropicRequestOptions(anthropicopt.WithMiddleware(signer(&requestSeen))),
+	)
+
+	_, marked := cacheControlAt(body, "messages.2.content.1")
+	require.True(t, marked, "precondition: the transport's body carries the tool-result marker")
+	sent := sha256.Sum256(body)
+	assert.Equal(t, sent, clientSeen, "a client-level middleware must digest the bytes the transport sends")
+	assert.Equal(t, sent, requestSeen, "a per-request middleware must digest the bytes the transport sends")
 }
 
 // The placement rule on serialized bodies, case by case.

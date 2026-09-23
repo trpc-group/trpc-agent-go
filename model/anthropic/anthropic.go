@@ -94,6 +94,13 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	var clientOpts []option.RequestOption
+	if o.cacheMessages {
+		// First, so it is the outermost middleware: the SDK runs middleware in
+		// registration order, client options ahead of per-request ones, and any
+		// caller middleware that hashes or signs the body then sees the marked
+		// body the transport sends.
+		clientOpts = append(clientOpts, option.WithMiddleware(toolResultCacheBreakpointMiddleware))
+	}
 	if o.apiKey != "" {
 		clientOpts = append(clientOpts, option.WithAPIKey(o.apiKey))
 	}
@@ -176,20 +183,15 @@ func disableChatRequestTools(request *anthropic.MessageNewParams) {
 }
 
 func (m *Model) requestOptions(ctx context.Context) []option.RequestOption {
+	if !imodelrequest.ToolsDisabled(ctx) {
+		return m.anthropicRequestOptions
+	}
 	opts := append([]option.RequestOption(nil), m.anthropicRequestOptions...)
-	if imodelrequest.ToolsDisabled(ctx) {
-		opts = append(
-			opts,
-			option.WithJSONDel("tools"),
-			option.WithJSONDel("tool_choice"),
-		)
-	}
-	// Last, so it runs innermost and reads the body every option and middleware
-	// ahead of it has finished with.
-	if m.cacheMessages {
-		opts = append(opts, option.WithMiddleware(m.toolResultCacheBreakpointMiddleware()))
-	}
-	return opts
+	return append(
+		opts,
+		option.WithJSONDel("tools"),
+		option.WithJSONDel("tool_choice"),
+	)
 }
 
 func (m *Model) runChatResponseCallback(

@@ -27,35 +27,39 @@ const cacheBreakpointLimit = 4
 const defaultCacheControl = `{"type":"ephemeral"}`
 
 // toolResultCacheBreakpointMiddleware places the tool-result breakpoint on the
-// request body as it goes out.
+// request body as it goes out. It is registered only when message caching is on.
 //
 // The three unconditional breakpoints are set while the typed request is built.
 // This one is conditional on everything that can still change the request after
 // that: the request callback, which may rewrite Messages and set top-level
-// CacheControl; client and per-request options such as WithJSONSet, which the
-// SDK applies to the serialized body, not the typed params; and any middleware
-// registered ahead of this one. The body the SDK is about to send is the only
-// vantage point from which all of those are visible, so the marker is placed and
-// the budget enforced there. The SDK runs middleware on every attempt, from the
-// original body, so a retry is marked the same way.
-func (m *Model) toolResultCacheBreakpointMiddleware() option.Middleware {
-	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-		if !m.cacheMessages || req == nil || req.Body == nil {
-			return next(req)
-		}
-		body, err := io.ReadAll(req.Body)
-		_ = req.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read request body: %w", err)
-		}
-		placed := placeToolResultCacheBreakpoint(body)
-		req.Body = io.NopCloser(bytes.NewReader(placed))
-		req.GetBody = func() (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(placed)), nil
-		}
-		req.ContentLength = int64(len(placed))
+// CacheControl, and client and per-request options such as WithJSONSet, which
+// the SDK applies to the serialized body, not the typed params. The SDK applies
+// every request option to the body before it builds the middleware chain, so
+// the outgoing body is the one vantage point from which all of those are
+// visible, and the marker is placed and the budget enforced there.
+//
+// It is registered as the first client option so that it is the outermost
+// middleware: caller middleware, whether registered on the client or per
+// request, then observes the body the transport sends, and one that hashes or
+// signs the body before calling next authenticates the right bytes. The SDK
+// runs middleware on every attempt, from the original body, so a retry is
+// marked the same way.
+func toolResultCacheBreakpointMiddleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	if req == nil || req.Body == nil {
 		return next(req)
 	}
+	body, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read request body: %w", err)
+	}
+	placed := placeToolResultCacheBreakpoint(body)
+	req.Body = io.NopCloser(bytes.NewReader(placed))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(placed)), nil
+	}
+	req.ContentLength = int64(len(placed))
+	return next(req)
 }
 
 // placeToolResultCacheBreakpoint marks the newest tool-result message of a
