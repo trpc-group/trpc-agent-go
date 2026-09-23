@@ -13,7 +13,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -378,4 +380,117 @@ func TestRunWithPlugins_AfterAgentReceivesResponseError(t *testing.T) {
 	}
 	require.Contains(t, sawError, "test")
 	require.Contains(t, sawError, "boom")
+}
+
+// parkedStreamAgent produces events while ignoring cancellation and parks on a
+// test-owned gate. It records producer-done independently of any downstream
+// consumer, so a test can observe whether a wrapper that forwards its stream
+// closes its own output before this producer has actually exited.
+type parkedStreamAgent struct {
+	started      chan struct{}
+	proceed      chan struct{} // closed by the test after cancelling, releasing the second send
+	hold         chan struct{} // producer parks here (ignoring ctx) until released
+	producerDone atomic.Bool
+	releaseOnce  sync.Once
+}
+
+func (a *parkedStreamAgent) Run(
+	_ context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	out := make(chan *event.Event) // unbuffered: becomes the wrapper's src
+	rsp := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("orig")}},
+	}
+	evt := event.NewResponseEvent(inv.InvocationID, inv.AgentName, rsp)
+	go func() {
+		defer close(out)
+		defer a.producerDone.Store(true)
+		out <- evt // first event: forwarded and read by the test
+		close(a.started)
+		<-a.proceed // wait until the test has cancelled the context
+		out <- evt  // second event: forwarded on a cancelled context -> emit fails
+		<-a.hold    // park, keeping the producer (and src) alive
+	}()
+	return out, nil
+}
+
+func (a *parkedStreamAgent) Tools() []tool.Tool { return nil }
+func (a *parkedStreamAgent) Info() agent.Info {
+	return agent.Info{Name: "parked-stream", Description: "test"}
+}
+func (a *parkedStreamAgent) SubAgents() []agent.Agent        { return nil }
+func (a *parkedStreamAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *parkedStreamAgent) release() {
+	a.releaseOnce.Do(func() { close(a.hold) })
+}
+
+// TestRunWithPlugins_WrapperCloseImpliesProducerDone pins the same producer-done
+// contract the runner relies on, one layer down: when wrapAfterAgentCallbacks
+// stops forwarding on a cancelled emit, it must drain the wrapped agent's stream
+// before closing its own output. Closing output early lets the runner treat the
+// stream as producer-done and free resources while the wrapped agent is still
+// alive (and blocked sending into the abandoned stream).
+func TestRunWithPlugins_WrapperCloseImpliesProducerDone(t *testing.T) {
+	ag := &parkedStreamAgent{
+		started: make(chan struct{}),
+		proceed: make(chan struct{}),
+		hold:    make(chan struct{}),
+	}
+	// An AfterAgent callback forces RunWithPlugins through wrapAfterAgentCallbacks.
+	p := &cbPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterAgent(func(
+				context.Context,
+				*agent.AfterAgentArgs,
+			) (*agent.AfterAgentResult, error) {
+				return nil, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(ag),
+		agent.WithInvocationPlugins(pm),
+	)
+	ctx, cancel := context.WithCancel(
+		agent.NewInvocationContext(context.Background(), inv),
+	)
+	defer cancel()
+
+	out, err := agent.RunWithPlugins(ctx, inv, ag)
+	require.NoError(t, err)
+
+	<-out // read the first forwarded event
+	<-ag.started
+
+	// Cancel, then release the producer's second send so the wrapper's emit for
+	// it fails on a cancelled context.
+	cancel()
+	close(ag.proceed)
+
+	// While the producer is parked, the wrapper stream must NOT close. Without
+	// the drain the failed emit makes the wrapper close(out) immediately.
+	select {
+	case _, ok := <-out:
+		ag.release()
+		require.True(
+			t,
+			ok,
+			"wrapper closed its stream while the producer goroutine was still running",
+		)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Once the producer exits, the stream must close with the producer done.
+	ag.release()
+	for range out {
+	}
+	require.True(
+		t,
+		ag.producerDone.Load(),
+		"producer-done must hold at the moment the wrapper stream closes",
+	)
 }

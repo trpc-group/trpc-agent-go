@@ -83,7 +83,7 @@ func TestRun_ProcessedCloseImpliesProducerDone(t *testing.T) {
 	select {
 	case <-prod.started:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the producer never started — this test would measure nothing")
+		t.Fatal("the producer never started -- this test would measure nothing")
 	}
 
 	closed := make(chan struct{})
@@ -98,11 +98,11 @@ func TestRun_ProcessedCloseImpliesProducerDone(t *testing.T) {
 
 	// THE CONTRACT: while the producer is still parked, the processed stream
 	// must NOT close. On the unfixed runner it closes within microseconds of
-	// cancellation — deterministic red.
+	// cancellation -- deterministic red.
 	select {
 	case <-closed:
 		prod.release()
-		t.Fatal("processed stream closed while the producer goroutine was still running — " +
+		t.Fatal("processed stream closed while the producer goroutine was still running -- " +
 			"stream close must imply producer-done")
 	case <-time.After(300 * time.Millisecond):
 	}

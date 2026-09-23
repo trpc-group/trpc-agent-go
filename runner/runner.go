@@ -1550,10 +1550,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// consumers may treat processedEventCh close as producer-done. On the
 		// normal completion path the channel is already closed and this drain
 		// is a no-op. Drained events are discarded, matching the pre-existing
-		// behavior of a loop that has stopped processing. A well-behaved agent
-		// returns (and closes its channel) once its context is cancelled; an
-		// agent that ignores cancellation and never returns keeps this defer
-		// waiting by the same contract violation that would hang Run itself.
+		// behavior of a loop that has stopped processing.
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
