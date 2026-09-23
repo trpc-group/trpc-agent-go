@@ -11,6 +11,7 @@
 package file
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"math"
@@ -929,4 +930,213 @@ func TestSearchContent_SkippedFilesFromBothPaths(t *testing.T) {
 	assert.Empty(t, rsp.FileMatches)
 	slices.Sort(want)
 	assert.Equal(t, want, rsp.SkippedFiles)
+}
+
+// A workspace directory search applies the same search cap as a local
+// directory search: an entry beyond it is named in skipped_files beside the
+// matches from the entries that were searched, never dropped silently.
+func TestSearchContent_WorkspaceDir_ReportsFilesBeyondSearchCap(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()), WithMaxFileSize(8))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	overCap := strings.Repeat("foo\n", int(fts.searchSizeCap()/4)+1)
+	assert.Greater(t, int64(len(overCap)), fts.searchSizeCap())
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "dir1/a.txt", Content: "foo\n", MIMEType: "text/plain"},
+		{Name: "dir1/huge.txt", Content: overCap, MIMEType: "text/plain"},
+		{Name: "dir1/big.txt", Content: overCap, MIMEType: "text/plain"},
+		{Name: "dir2/huge.txt", Content: overCap, MIMEType: "text/plain"},
+	})
+
+	rsp, err := fts.searchContent(ctx, &searchContentRequest{
+		Path:           "workspace://dir1",
+		FilePattern:    "*.txt",
+		ContentPattern: "foo",
+	})
+	assert.NoError(t, err)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Equal(t, fileref.WorkspaceRef("dir1/a.txt"), rsp.FileMatches[0].FilePath)
+	assert.Equal(t, []string{
+		fileref.WorkspaceRef("dir1/big.txt"),
+		fileref.WorkspaceRef("dir1/huge.txt"),
+	}, rsp.SkippedFiles, "only entries under the searched directory are reported")
+	assert.Contains(t, rsp.Message, "were NOT searched")
+	assert.Contains(t, rsp.Message, fileref.WorkspaceRef("dir1/huge.txt"))
+}
+
+// The streamed local search yields the same logical lines as the in-memory
+// search's strings.Split: a trailing newline ends with an empty line and an
+// empty file is one empty line, so "^$" matches identically on both backends.
+func TestSearchContent_LineSemanticsMatchInMemorySearch(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	cases := map[string]struct {
+		content   string
+		wantLines []int
+	}{
+		"empty.txt":      {content: "", wantLines: []int{1}},
+		"trailing.txt":   {content: "foo\n", wantLines: []int{2}},
+		"unterminated.a": {content: "foo", wantLines: nil},
+		"blank.txt":      {content: "foo\n\nbar\n\n", wantLines: []int{2, 4, 5}},
+		"crlf.txt":       {content: "foo\r\n\r\n", wantLines: []int{3}},
+	}
+	for name, tc := range cases {
+		assert.NoError(t, os.WriteFile(filepath.Join(tempDir, name), []byte(tc.content), 0o644))
+	}
+	re := regexp.MustCompile("^$")
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+				FilePattern:    name,
+				ContentPattern: "^$",
+			})
+			assert.NoError(t, err)
+			assert.Empty(t, rsp.SkippedFiles)
+			var got []int
+			var gotMatches []*lineMatch
+			for _, fm := range rsp.FileMatches {
+				gotMatches = fm.Matches
+				for _, m := range fm.Matches {
+					got = append(got, m.LineNumber)
+				}
+			}
+			assert.Equal(t, tc.wantLines, got)
+
+			cached := searchTextContent(context.Background(), name, tc.content, re)
+			assert.Equal(t, len(tc.wantLines), len(cached.Matches))
+			if len(tc.wantLines) > 0 {
+				assert.Equal(t, cached.Matches, gotMatches,
+					"the local and in-memory backends must agree on lines")
+			}
+
+			streamed, err := searchFileContent(context.Background(), filepath.Join(tempDir, name), re)
+			assert.NoError(t, err)
+			assert.Equal(t, cached.Matches, streamed.Matches)
+		})
+	}
+}
+
+// A line of exactly maxSearchLineSize bytes is searched; one byte longer
+// fails the scan and is reported in skipped_files, from both the single-file
+// and the pattern path.
+func TestSearchContent_LineSizeBoundary(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(maxSearchLineSize))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	exact := "foo" + strings.Repeat("x", maxSearchLineSize-3)
+	assert.Len(t, exact, maxSearchLineSize)
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "exact.txt"),
+		[]byte(exact+"\nbar\n"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "exact-unterminated.txt"),
+		[]byte(exact), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(tempDir, "longer.txt"),
+		[]byte(exact+"x\nbar\n"), 0o644))
+
+	for _, name := range []string{"exact.txt", "exact-unterminated.txt"} {
+		match, err := searchFileContent(context.Background(), filepath.Join(tempDir, name), regexp.MustCompile("foo"))
+		assert.NoError(t, err, name)
+		assert.Len(t, match.Matches, 1, name)
+		assert.Equal(t, exact, match.Matches[0].LineContent, name)
+	}
+	_, err = searchFileContent(context.Background(), filepath.Join(tempDir, "longer.txt"), regexp.MustCompile("foo"))
+	assert.ErrorIs(t, err, bufio.ErrTooLong)
+
+	rsp, err := fts.searchContent(context.Background(), &searchContentRequest{
+		FilePattern:    "*.txt",
+		ContentPattern: "foo",
+	})
+	assert.NoError(t, err)
+	assert.Len(t, rsp.FileMatches, 2)
+	assert.Equal(t, []string{"longer.txt"}, rsp.SkippedFiles)
+
+	rsp, err = fts.searchContent(context.Background(), &searchContentRequest{
+		Path:           "longer.txt",
+		FilePattern:    "*",
+		ContentPattern: "foo",
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, rsp.FileMatches)
+	assert.Equal(t, []string{"longer.txt"}, rsp.SkippedFiles)
+
+	rsp, err = fts.searchContent(context.Background(), &searchContentRequest{
+		Path:           "exact.txt",
+		FilePattern:    "*",
+		ContentPattern: "foo",
+	})
+	assert.NoError(t, err)
+	assert.Len(t, rsp.FileMatches, 1)
+	assert.Empty(t, rsp.SkippedFiles)
+}
+
+// Searches over cached and workspace content stop listing a file's matches at
+// maxMatchesPerFile, exactly like the streamed search of a local file.
+func TestSearchContent_InMemoryMatchesAreCapped(t *testing.T) {
+	set, err := NewToolSet(WithBaseDir(t.TempDir()))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	many := strings.Repeat("foo\n", maxMatchesPerFile+1)
+	direct := searchTextContent(context.Background(), "many.txt", many, regexp.MustCompile("foo"))
+	assert.Len(t, direct.Matches, maxMatchesPerFile)
+	assert.True(t, direct.Truncated)
+	assert.Equal(t, maxMatchesPerFile, direct.Matches[maxMatchesPerFile-1].LineNumber)
+
+	few := searchTextContent(context.Background(), "few.txt", strings.Repeat("foo\n", maxMatchesPerFile-1), regexp.MustCompile("foo"))
+	assert.Len(t, few.Matches, maxMatchesPerFile-1)
+	assert.False(t, few.Truncated)
+
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	toolcache.StoreSkillRunOutputFiles(inv, []codeexecutor.File{
+		{Name: "out/many.txt", Content: many, MIMEType: "text/plain"},
+	})
+	assertCapped := func(t *testing.T, rsp *searchContentResponse, err error) {
+		t.Helper()
+		assert.NoError(t, err)
+		assert.Len(t, rsp.FileMatches, 1)
+		assert.Len(t, rsp.FileMatches[0].Matches, maxMatchesPerFile)
+		assert.True(t, rsp.FileMatches[0].Truncated)
+		assert.Contains(t, rsp.FileMatches[0].Message,
+			fmt.Sprintf("stopped at the first %d", maxMatchesPerFile))
+	}
+
+	t.Run("workspace directory", func(t *testing.T) {
+		rsp, err := fts.searchContent(ctx, &searchContentRequest{
+			Path:           "workspace://out",
+			FilePattern:    "*.txt",
+			ContentPattern: "foo",
+		})
+		assertCapped(t, rsp, err)
+	})
+	t.Run("workspace file ref", func(t *testing.T) {
+		rsp, err := fts.searchContent(ctx, &searchContentRequest{
+			FilePattern:    "workspace://out/many.txt",
+			ContentPattern: "foo",
+		})
+		assertCapped(t, rsp, err)
+	})
+	t.Run("cached path", func(t *testing.T) {
+		rsp, err := fts.searchContent(ctx, &searchContentRequest{
+			Path:           "out/many.txt",
+			FilePattern:    "*",
+			ContentPattern: "foo",
+		})
+		assertCapped(t, rsp, err)
+	})
+	t.Run("cached file pattern", func(t *testing.T) {
+		rsp, err := fts.searchContent(ctx, &searchContentRequest{
+			Path:           "out",
+			FilePattern:    "many.txt",
+			ContentPattern: "foo",
+		})
+		assertCapped(t, rsp, err)
+	})
 }
