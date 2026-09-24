@@ -498,3 +498,66 @@ func TestRunWithPlugins_WrapperCloseImpliesProducerDone(t *testing.T) {
 		"producer-done must hold at the moment the wrapper stream closes",
 	)
 }
+
+// nilStreamAgent is a contract-violating agent whose Run returns a nil event
+// channel and a nil error. When wrapped by AfterAgent callbacks the wrapper
+// must not range the nil source (which blocks forever); it must treat the nil
+// stream as already done and close its output so downstream drains terminate.
+type nilStreamAgent struct{}
+
+func (nilStreamAgent) Run(
+	context.Context,
+	*agent.Invocation,
+) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (nilStreamAgent) Tools() []tool.Tool { return nil }
+func (nilStreamAgent) Info() agent.Info {
+	return agent.Info{Name: "nil-stream", Description: "test"}
+}
+func (nilStreamAgent) SubAgents() []agent.Agent        { return nil }
+func (nilStreamAgent) FindSubAgent(string) agent.Agent { return nil }
+
+// TestRunWithPlugins_NilStreamDoesNotHang guards the plugin-wrapped nil-channel
+// case: an agent returning (nil, nil) with callbacks enabled must not leave the
+// wrapper's output open forever. Ranging the nil src would block, so the wrapper
+// never closes out and the runner's producer-done drain hangs on the non-nil
+// (but never-closing) forwarded channel. Deterministic red without the nil guard.
+func TestRunWithPlugins_NilStreamDoesNotHang(t *testing.T) {
+	ag := nilStreamAgent{}
+	// An AfterAgent callback forces RunWithPlugins through wrapAfterAgentCallbacks.
+	p := &cbPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterAgent(func(
+				context.Context,
+				*agent.AfterAgentArgs,
+			) (*agent.AfterAgentResult, error) {
+				return nil, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(ag),
+		agent.WithInvocationPlugins(pm),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	out, err := agent.RunWithPlugins(ctx, inv, ag)
+	require.NoError(t, err)
+	require.NotNil(t, out, "the wrapper must return a real, closeable channel")
+
+	closed := make(chan struct{})
+	go func() {
+		for range out {
+		}
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wrapper output never closed for a nil agent stream: the drain hung on the nil source")
+	}
+}
