@@ -20,6 +20,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const (
+	structuredOutputParseErrorCode         = "structured_output_parse_error"
+	structuredOutputParseErrorExtensionKey = "trpc_agent.structured_output_parse_error"
+	structuredOutputParseErrorSnippetBytes = 512
+)
+
+type structuredOutputParseErrorExtension struct {
+	Error     string `json:"error"`
+	Snippet   string `json:"snippet,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
 // OutputResponseProcessor processes final responses and handles output_key and output_schema functionality.
 type OutputResponseProcessor struct {
 	outputKey    string
@@ -100,6 +112,7 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 				"Structured output unmarshal failed: %v",
 				err,
 			)
+			p.emitStructuredOutputParseError(ctx, invocation, jsonObject, err, ch)
 			return
 		}
 		typedEvt := event.New(
@@ -124,6 +137,7 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 			"Structured output unmarshal failed: %v",
 			err,
 		)
+		p.emitStructuredOutputParseError(ctx, invocation, jsonObject, err, ch)
 		return
 	}
 	untypedEvt := event.New(
@@ -134,6 +148,43 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 	)
 	log.DebugContext(ctx, "Emitted untyped structured output payload event.")
 	agent.EmitEvent(ctx, invocation, ch, untypedEvt)
+}
+
+func (p *OutputResponseProcessor) emitStructuredOutputParseError(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	jsonObject string,
+	parseErr error,
+	ch chan<- *event.Event,
+) {
+	if invocation == nil || parseErr == nil {
+		return
+	}
+	snippet, truncated := truncateStructuredOutputSnippet(jsonObject)
+	errEvt := event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithObject(model.ObjectTypeStateUpdate),
+		event.WithTag(structuredOutputParseErrorCode),
+		event.WithExtension(
+			structuredOutputParseErrorExtensionKey,
+			structuredOutputParseErrorExtension{
+				Error:     parseErr.Error(),
+				Snippet:   snippet,
+				Truncated: truncated,
+			},
+		),
+	)
+	if err := agent.EmitEvent(ctx, invocation, ch, errEvt); err != nil {
+		log.WarnfContext(ctx, "Failed to emit structured output parse error event: %v", err)
+	}
+}
+
+func truncateStructuredOutputSnippet(s string) (string, bool) {
+	if len(s) <= structuredOutputParseErrorSnippetBytes {
+		return s, false
+	}
+	return s[:structuredOutputParseErrorSnippetBytes], true
 }
 
 // handleOutputKey validates and emits state delta for output_key/output_schema cases.
