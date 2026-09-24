@@ -237,6 +237,17 @@ func TestRun_UnregisterAfterProducerDone(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("processed stream never closed after the producer exited")
 	}
-	_, stillRegistered = managed.RunStatus(requestID)
-	require.False(t, stillRegistered, "the run must be unregistered after producer-done teardown")
+	// The cleanup closes the stream before unregistering, so the release can
+	// lag the observed closure by a moment; wait for it instead of sampling a
+	// single instant, which could race the unregister and flake.
+	require.Eventually(
+		t,
+		func() bool {
+			_, ok := managed.RunStatus(requestID)
+			return !ok
+		},
+		5*time.Second,
+		10*time.Millisecond,
+		"the run must be unregistered after producer-done teardown",
+	)
 }
