@@ -142,22 +142,9 @@ func wrapAfterAgentCallbacks(
 	runCtx := CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(out)
-		// A nil src (an Agent.Run that returned a nil event channel while
-		// callbacks are configured) has no producer to join, and ranging a nil
-		// channel would block forever, so treat it as already done and close out
-		// with no forwarded events. This mirrors the runner's nil-channel guard
-		// so closing the wrapper stream neither hangs nor implies a live producer.
 		if src == nil {
 			return
 		}
-		// A failed emit (the consumer stopped, typically after cancellation)
-		// makes the forwarding loop below return early. Drain src first so out
-		// is never closed while the wrapped agent still has events pending or
-		// is blocked sending into src: closing this wrapper's stream must imply
-		// the producer has finished, which is the contract the runner relies on
-		// to treat its own stream close as producer-done. Registered after
-		// close(out) so it runs first (LIFO defers); a no-op once the loop has
-		// already ranged src to completion.
 		defer func() {
 			for range src {
 			}

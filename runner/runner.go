@@ -1541,32 +1541,14 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		appender.Clear(loop.invocation)
 		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
-		// Producer-done completion contract: ask the agent's producer goroutines
-		// to stop FIRST, then JOIN the agent event stream by draining
-		// agentEventCh until the agent closes it. The agent.Agent contract
-		// closes its event channel when its producing goroutine exits, so once
-		// we reach the close below the producer has actually finished and
-		// consumers may treat processedEventCh close as producer-done. On the
-		// normal completion path the channel is already closed and this drain
-		// is a no-op. Drained events are discarded, matching the pre-existing
-		// behavior of a loop that has stopped processing.
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
-		// A nil agentEventCh (an Agent.Run that returned a nil channel) has no
-		// producer to join and would block the drain forever, so it is treated
-		// as already done and only a real channel is drained.
 		if loop.agentEventCh != nil {
 			for range loop.agentEventCh {
 			}
 		}
 		close(loop.processedEventCh)
-		// Release run identity only after the producer is done and the caller's
-		// stream has closed. Unregistering before the drain would let RunStatus
-		// report the run as finished, and let a new run claim the same request
-		// ID, while the producer is still running underneath the still-open
-		// stream -- exactly the race the producer-done contract removes for
-		// downstream teardown.
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		loop.invocation.CleanupNotice(ctx)
 	}()
