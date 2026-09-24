@@ -75,27 +75,7 @@ func (f *fileToolSet) searchFile(
 	}
 	if ref.Scheme == fileref.SchemeWorkspace {
 		rsp.Path = fileref.WorkspaceRef(ref.Path)
-		files, folders, err := matchWorkspacePaths(
-			ctx,
-			ref.Path,
-			req.Pattern,
-			req.CaseSensitive,
-		)
-		if err != nil {
-			rsp.Message = fmt.Sprintf("Error: %v", err)
-			return rsp, err
-		}
-		rsp.Files = files
-		rsp.Folders = folders
-		rsp.Message = fmt.Sprintf(
-			"Found %d files and %d folders matching pattern "+
-				"'%s' in %s",
-			len(rsp.Files),
-			len(rsp.Folders),
-			req.Pattern,
-			rsp.Path,
-		)
-		return rsp, nil
+		return f.searchWorkspaceFiles(ctx, rsp, ref.Path, req)
 	}
 
 	reqPath := strings.TrimSpace(req.Path)
@@ -117,27 +97,9 @@ func (f *fileToolSet) searchFile(
 					clean = ""
 				}
 				rsp.Path = fileref.WorkspaceRef(clean)
-				files, folders, err := matchWorkspacePaths(
-					ctx,
-					reqPath,
-					req.Pattern,
-					req.CaseSensitive,
-				)
-				if err != nil {
-					rsp.Message = fmt.Sprintf("Error: %v", err)
-					return rsp, err
-				}
-				rsp.Files = files
-				rsp.Folders = folders
-				rsp.Message = fmt.Sprintf(
-					"Found %d files and %d folders matching "+
-						"pattern '%s' in %s",
-					len(rsp.Files),
-					len(rsp.Folders),
-					req.Pattern,
-					rsp.Path,
-				)
-				return rsp, nil
+				// The implicit workspace fallback honours the same file
+				// limit as an explicit workspace:// path.
+				return f.searchWorkspaceFiles(ctx, rsp, reqPath, req)
 			}
 		}
 		rsp.Message = fmt.Sprintf(
@@ -159,20 +121,20 @@ func (f *fileToolSet) searchFile(
 		)
 	}
 	// Find files matching the pattern.
-	matches, err := f.matchFiles(targetPath, req.Pattern, req.CaseSensitive)
+	matches, err := f.walkMatches(ctx, targetPath, req.Pattern, req.CaseSensitive)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return rsp, err
 	}
 	// Separate files and folders.
 	for _, match := range matches {
-		fullPath := filepath.Join(targetPath, match)
+		fullPath := filepath.Join(targetPath, filepath.FromSlash(match.rel))
 		stat, err := os.Stat(fullPath)
 		if err != nil {
 			// Skip entries that can't be stat.
 			continue
 		}
-		relativePath := filepath.Join(reqPath, match)
+		relativePath := filepath.Join(reqPath, filepath.FromSlash(match.rel))
 		if stat.IsDir() {
 			rsp.Folders = append(rsp.Folders, relativePath)
 		} else {
@@ -189,14 +151,61 @@ func (f *fileToolSet) searchFile(
 	return rsp, nil
 }
 
+// searchWorkspaceFiles lists the workspace entries under dir that match the
+// request's pattern into rsp, whose Path the caller has already set to the
+// workspace ref being reported. The file limit applies as it does on disk: a
+// pattern that selects more entries than the limit is refused rather than
+// listed.
+func (f *fileToolSet) searchWorkspaceFiles(
+	ctx context.Context,
+	rsp *searchFileResponse,
+	dir string,
+	req *searchFileRequest,
+) (*searchFileResponse, error) {
+	limit := f.searchFileLimit()
+	files, folders, err := matchWorkspacePaths(
+		ctx,
+		dir,
+		req.Pattern,
+		req.CaseSensitive,
+		limit,
+	)
+	if err != nil {
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	if len(files)+len(folders) > limit {
+		err := &tooManyFilesError{
+			pattern: req.Pattern,
+			path:    rsp.Path,
+			limit:   limit,
+		}
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	rsp.Files = files
+	rsp.Folders = folders
+	rsp.Message = fmt.Sprintf(
+		"Found %d files and %d folders matching pattern "+
+			"'%s' in %s",
+		len(rsp.Files),
+		len(rsp.Folders),
+		req.Pattern,
+		rsp.Path,
+	)
+	return rsp, nil
+}
+
 // searchFileTool returns a callable tool for searching file.
 func (f *fileToolSet) searchFileTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		f.searchFile,
 		function.WithName("search_file"),
 		function.WithDescription(
-			"Find files by glob under base_directory. "+
-				"Supports workspace:// paths.",
+			"Find files by glob under base_directory. Skips .git "+
+				"and anything .gitignore excludes, and refuses a "+
+				"pattern that matches too many entries. Supports "+
+				"workspace:// paths.",
 		),
 	)
 }
