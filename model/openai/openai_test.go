@@ -9732,6 +9732,63 @@ func TestChatStreamAccumulator_ClearsScratchRawJSON(t *testing.T) {
 	assert.Nil(t, acc.scratchToolCalls[0])
 }
 
+func TestChatStreamAccumulator_ScratchSlicesShrinkAndRegrow(t *testing.T) {
+	acc := chatStreamAccumulator{}
+
+	addChunk := func(choiceCount, toolCallCount int) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "stream-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: make([]openai.ChatCompletionChunkChoice, choiceCount),
+		}
+		for choiceIndex := range chunk.Choices {
+			chunk.Choices[choiceIndex].Index = int64(choiceIndex)
+			chunk.Choices[choiceIndex].Delta.ToolCalls = make(
+				[]openai.ChatCompletionChunkChoiceDeltaToolCall,
+				toolCallCount,
+			)
+			for toolCallIndex := range chunk.Choices[choiceIndex].Delta.ToolCalls {
+				chunk.Choices[choiceIndex].Delta.ToolCalls[toolCallIndex] = openai.ChatCompletionChunkChoiceDeltaToolCall{
+					Index: int64(toolCallIndex),
+					ID:    "call",
+					Type:  "function",
+					Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+						Name:      "lookup",
+						Arguments: "{}",
+					},
+				}
+			}
+		}
+		require.True(t, acc.addChunk(chunk))
+	}
+
+	t.Run("tool calls shrink and regrow", func(t *testing.T) {
+		addChunk(1, 2)
+		addChunk(1, 1)
+		addChunk(1, 2)
+		assert.Len(t, acc.scratchToolCalls[0], 2)
+	})
+
+	acc = chatStreamAccumulator{}
+	t.Run("tool calls regrow from empty", func(t *testing.T) {
+		addChunk(1, 1)
+		addChunk(1, 0)
+		addChunk(1, 1)
+		assert.Len(t, acc.scratchToolCalls[0], 1)
+	})
+
+	acc = chatStreamAccumulator{}
+	t.Run("choices shrink and regrow", func(t *testing.T) {
+		addChunk(2, 1)
+		addChunk(1, 1)
+		addChunk(2, 1)
+		assert.Len(t, acc.scratchChoices, 2)
+		assert.Len(t, acc.scratchToolCalls, 2)
+	})
+}
+
 func TestChatStreamAccumulator_ReportsFinishedDecodedFields(t *testing.T) {
 	tests := []struct {
 		name             string

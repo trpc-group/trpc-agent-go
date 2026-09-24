@@ -138,7 +138,9 @@ func (a *chatStreamAccumulator) sdkChunk(chunk openaigo.ChatCompletionChunk) ope
 	if cap(a.scratchChoices) < len(chunk.Choices) {
 		a.scratchChoices = make([]openaigo.ChatCompletionChunkChoice, len(chunk.Choices))
 	} else {
-		clear(a.scratchChoices[len(chunk.Choices):])
+		if len(chunk.Choices) < len(a.scratchChoices) {
+			clear(a.scratchChoices[len(chunk.Choices):])
+		}
 		a.scratchChoices = a.scratchChoices[:len(chunk.Choices)]
 	}
 	if cap(a.scratchToolCalls) < len(chunk.Choices) {
@@ -147,7 +149,9 @@ func (a *chatStreamAccumulator) sdkChunk(chunk openaigo.ChatCompletionChunk) ope
 			len(chunk.Choices),
 		)
 	} else {
-		clear(a.scratchToolCalls[len(chunk.Choices):])
+		if len(chunk.Choices) < len(a.scratchToolCalls) {
+			clear(a.scratchToolCalls[len(chunk.Choices):])
+		}
 		a.scratchToolCalls = a.scratchToolCalls[:len(chunk.Choices)]
 	}
 
@@ -163,7 +167,9 @@ func (a *chatStreamAccumulator) sdkChunk(chunk openaigo.ChatCompletionChunk) ope
 				len(toolCalls),
 			)
 		} else {
-			clear(a.scratchToolCalls[index][len(toolCalls):])
+			if len(toolCalls) < len(a.scratchToolCalls[index]) {
+				clear(a.scratchToolCalls[index][len(toolCalls):])
+			}
 			a.scratchToolCalls[index] = a.scratchToolCalls[index][:len(toolCalls)]
 		}
 		copy(a.scratchToolCalls[index], toolCalls)
