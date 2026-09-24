@@ -167,3 +167,76 @@ func TestRun_ProcessedCloseImpliesProducerDone(t *testing.T) {
 	require.True(t, prod.producerDone.Load(),
 		"producer-done must hold at the moment the processed stream closes")
 }
+
+// TestRun_UnregisterAfterProducerDone pins run-identity reservation across the
+// producer-done drain: while a parked producer keeps the processed stream open
+// after cancellation, the run must remain registered (RunStatus reports it
+// present) so its request ID is not prematurely freed for reuse. Only once the
+// producer exits and the stream closes may the run be unregistered. Before the
+// fix, unregisterRun ran before the drain, so RunStatus returned false while the
+// producer was still live underneath the open stream.
+func TestRun_UnregisterAfterProducerDone(t *testing.T) {
+	requestID := "producer-done-register"
+	prod := &parkedProducer{
+		started: make(chan struct{}),
+		hold:    make(chan struct{}),
+	}
+	r := NewRunner(
+		"producer-done-register-app",
+		prod,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	defer func() { _ = r.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out, err := r.Run(
+		ctx, "u", "s-producer-done-register", model.NewUserMessage("go"),
+		agent.WithRequestID(requestID),
+	)
+	require.NoError(t, err, "the runner must accept the invocation")
+
+	select {
+	case <-prod.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the producer never started -- this test would measure nothing")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		for range out {
+		}
+		close(closed)
+	}()
+
+	// Cancel while the producer is parked (it ignores the context).
+	cancel()
+
+	// Give the event loop time to reach cleanup and park on the drain. During
+	// this window the stream stays open and the run must still be registered.
+	select {
+	case <-closed:
+		prod.release()
+		t.Fatal("processed stream closed while the producer was still parked")
+	case <-time.After(300 * time.Millisecond):
+	}
+	managed, isManaged := r.(ManagedRunner)
+	require.True(t, isManaged, "the runner must expose run-control APIs")
+	_, stillRegistered := managed.RunStatus(requestID)
+	require.True(
+		t,
+		stillRegistered,
+		"run identity must stay reserved until the producer finishes and the stream closes",
+	)
+
+	// Once the producer exits and the stream closes, the run must be released.
+	prod.release()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processed stream never closed after the producer exited")
+	}
+	_, stillRegistered = managed.RunStatus(requestID)
+	require.False(t, stillRegistered, "the run must be unregistered after producer-done teardown")
+}
