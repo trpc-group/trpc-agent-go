@@ -162,6 +162,51 @@ sessionService, err := mysql.NewService(
 // - Queries always include `WHERE deleted_at IS NULL`
 ```
 
+## Trim Recent Conversations
+
+`mysql.Service.TrimConversations` removes recent persisted conversations. A
+conversation contains all events with the same non-empty `RequestID`, including
+user messages, model replies, and tool events. Events with an empty `RequestID`
+are preserved.
+
+```go
+deleted, err := sessionService.TrimConversations(ctx, key, mysql.WithCount(2))
+if err != nil {
+    return err
+}
+// deleted contains all persisted events belonging to the two selected requests.
+```
+
+When switching from Redis, use `mysql.WithCount(n)` instead of `redis.WithCount(n)`.
+The method belongs to the concrete service; `session.Service` is unchanged. For
+a TDSQL distributed instance, configure the service with
+`mysql.WithTDSQLSharding(true)` as usual. The trim queries include `user_id` for
+shard routing and require no additional tables or indexes.
+
+- The default count is one. Zero and negative counts also mean one; the last
+  `WithCount` wins. Counts larger than the available conversations remove all
+  conversations with a non-empty `RequestID`.
+- Recency follows event `Timestamp`, with ties broken by event `ID`, then database
+  row ID. Selected requests are removed completely even when their events are
+  interleaved or span multiple deletion batches. Returned events follow the same
+  order, oldest first.
+- Deletion honors `WithSoftDelete`: soft deletion by default, physical deletion
+  when disabled. Missing, deleted, expired, and empty sessions return `nil, nil`.
+- Only event history changes. State, summaries, tracks, session timestamps, TTLs,
+  and previously loaded `Session` objects are not updated. Reload the session to
+  observe the remaining events. This operation does not provide full state rollback
+  or undo external tool effects. TTL is not refreshed, matching Redis HashIdx;
+  the legacy Redis ZSet path has different TTL refresh behavior.
+- Selection reads all active events in the current session lifecycle, independently
+  of `WithSessionEventLimit`, summary restoration, and read/write hooks. Memory
+  usage and scan cost grow with the session history. Deletion batches share one
+  transaction, coordinated with event writes through the session row lock.
+- Asynchronous persistence queues are not drained, and running requests are not
+  canceled. For a complete trim, ensure the target requests have finished and
+  their events have been persisted. Later writes may add events again. Repeated
+  calls remove further history; do not blindly retry after an ambiguous commit
+  failure.
+
 ## With Summary
 
 ```go
