@@ -412,6 +412,10 @@ func (a *parkedStreamAgent) Run(
 		<-a.proceed // wait until the test has cancelled the context
 		out <- evt  // second event: forwarded on a cancelled context -> emit fails
 		<-a.hold    // park, keeping the producer (and src) alive
+		// A well-behaved agent may still hand off events after cancellation;
+		// only the wrapper's drain can consume them, and the producer must not
+		// close src before the drain has taken this event.
+		out <- evt
 	}()
 	return out, nil
 }
