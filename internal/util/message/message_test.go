@@ -17,6 +17,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+func TestTextContent(t *testing.T) {
+	hello, world, empty := "hello", "world", ""
+	assert.Equal(t, "from-content", TextContent(model.Message{
+		Content: "from-content",
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &hello},
+		},
+	}))
+	assert.Equal(t, "hello\nworld", TextContent(model.Message{
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText},
+			{Type: model.ContentTypeText, Text: &empty},
+			{Type: model.ContentTypeText, Text: &hello},
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+			{Type: model.ContentTypeText, Text: &world},
+		},
+	}))
+	assert.Empty(t, TextContent(model.Message{
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+		},
+	}))
+}
+
 func TestIsEmptyAssistantMessage(t *testing.T) {
 	assert.True(t, IsEmptyAssistantMessage(model.Message{
 		Role: model.RoleAssistant,
