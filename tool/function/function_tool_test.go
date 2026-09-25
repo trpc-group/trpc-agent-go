@@ -1047,3 +1047,53 @@ func TestStreamableFunctionTool_WithBothCustomSchemas(t *testing.T) {
 		t.Errorf("expected output schema type 'object', got %q", decl.OutputSchema.Type)
 	}
 }
+
+// TestFunctionTool_ArrayItemEnumSchema verifies item constraints survive declaration serialization.
+func TestFunctionTool_ArrayItemEnumSchema(t *testing.T) {
+	type args struct {
+		Values []string `json:"values" jsonschema:"enum=foo,enum=bar,enum=baz"`
+		IDs    []uint64 `json:"ids" jsonschema:"enum=18446744073709551615"`
+	}
+	fn := func(_ context.Context, input args) (args, error) { return input, nil }
+	fTool := function.NewFunctionTool(fn, function.WithName("array_enum"))
+	declaration := fTool.Declaration()
+	for _, schema := range []*tool.Schema{declaration.InputSchema, declaration.OutputSchema} {
+		ids, err := json.Marshal(schema.Properties["ids"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var idSchema struct {
+			Items struct {
+				Enum []uint64 `json:"enum"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(ids, &idSchema); err != nil {
+			t.Fatal(err)
+		}
+		if len(idSchema.Items.Enum) != 1 || idSchema.Items.Enum[0] != ^uint64(0) {
+			t.Fatalf("expected exact uint64 maximum item enum, got %s", ids)
+		}
+		encoded, err := json.Marshal(schema.Properties["values"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actual map[string]any
+		if err := json.Unmarshal(encoded, &actual); err != nil {
+			t.Fatal(err)
+		}
+		if actual["type"] != "array" {
+			t.Fatalf("expected array schema, got %s", encoded)
+		}
+		if _, ok := actual["enum"]; ok {
+			t.Fatalf("enum must not constrain the whole array: %s", encoded)
+		}
+		items, ok := actual["items"].(map[string]any)
+		if !ok || items["type"] != "string" {
+			t.Fatalf("expected string items, got %s", encoded)
+		}
+		enums, ok := items["enum"].([]any)
+		if !ok || len(enums) != 3 || enums[0] != "foo" || enums[1] != "bar" || enums[2] != "baz" {
+			t.Fatalf("expected foo/bar/baz item enum, got %s", encoded)
+		}
+	}
+}
