@@ -755,6 +755,71 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 	}
 }
 
+func TestTransformCallLLM_PreservesHostCostDetails(t *testing.T) {
+	costJSON := `{"input":0.023232,"input_cached_tokens":0.00815,"output":0.000192,"output_reasoning_tokens":0.013248,"total":0.044822}`
+	span := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   semconvtrace.KeyGenAIUsageInputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 52367}},
+			},
+			{
+				Key:   semconvtrace.KeyGenAIUsageOutputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 1120}},
+			},
+			{
+				Key:   observationCostDetails,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: costJSON}},
+			},
+		},
+	}
+
+	transformCallLLM(span)
+
+	var gotCost string
+	var costCount int
+	for _, attr := range span.Attributes {
+		if attr.Key == observationCostDetails {
+			gotCost = attr.Value.GetStringValue()
+			costCount++
+		}
+	}
+	require.Equal(t, 1, costCount, "cost_details must appear exactly once")
+	require.Equal(t, costJSON, gotCost)
+
+	var usageJSON string
+	for _, attr := range span.Attributes {
+		if attr.Key == observationUsageDetails {
+			usageJSON = attr.Value.GetStringValue()
+			break
+		}
+	}
+	require.NotEmpty(t, usageJSON, "usage_details should still be written")
+}
+
+func TestTransformCallLLM_OmitsCostDetailsWhenAbsent(t *testing.T) {
+	span := &tracepb.Span{
+		Name: "llm-call",
+		Attributes: []*commonpb.KeyValue{
+			{
+				Key:   semconvtrace.KeyGenAIUsageInputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 10}},
+			},
+			{
+				Key:   semconvtrace.KeyGenAIUsageOutputTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 2}},
+			},
+		},
+	}
+
+	transformCallLLM(span)
+
+	for _, attr := range span.Attributes {
+		assert.NotEqual(t, observationCostDetails, attr.Key)
+	}
+}
+
 func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 	span := &tracepb.Span{
 		Name: "agent-span",
