@@ -15,7 +15,7 @@ var (
 	// ErrEmptyFilename is returned when the filename is empty.
 	ErrEmptyFilename = errors.New("s3 artifact: filename cannot be empty")
 
-	// ErrInvalidFilename is returned when the filename contains invalid characters.
+	// ErrInvalidFilename is returned when the filename is not a safe canonical relative path.
 	ErrInvalidFilename = errors.New("s3 artifact: filename contains invalid characters")
 
 	// ErrNilArtifact is returned when the artifact is nil.
