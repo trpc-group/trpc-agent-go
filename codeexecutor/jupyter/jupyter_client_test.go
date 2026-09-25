@@ -332,7 +332,6 @@ func TestNewClientClosesWebsocketWhenReadyFails(t *testing.T) {
 	}
 }
 
-// TestNewClientTimesOutOnSilentWebsocket verifies that a silent readiness websocket is bounded by the timeout.
 // TestNewClientDeletesKernelWhenWebsocketDialFails verifies cleanup after a websocket dial failure.
 func TestNewClientDeletesKernelWhenWebsocketDialFails(t *testing.T) {
 	const token = "secret"
