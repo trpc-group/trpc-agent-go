@@ -316,6 +316,52 @@ func TestBuildRequestProcessors_AddCurrentTimeToolGuidanceWiring(t *testing.T) {
 	require.True(t, timeProc.AddCurrentTime)
 	require.Equal(t, "environment_context_current_time", timeProc.CurrentTimeToolName)
 	require.True(t, timeProc.CurrentTimeToolAvailable)
+	require.Equal(t, TimePromptPlacementSystem, timeProc.PromptPlacement)
+}
+
+func TestBuildRequestProcessors_TimePromptPlacementUserWiring(t *testing.T) {
+	opts := &Options{}
+	WithAddCurrentTime(true)(opts)
+	WithTimePromptPlacement(TimePromptPlacementUser)(opts)
+
+	var timeProc *processor.TimeRequestProcessor
+	for _, p := range buildRequestProcessors("test-agent", opts) {
+		if v, ok := p.(*processor.TimeRequestProcessor); ok {
+			timeProc = v
+		}
+	}
+	require.NotNil(t, timeProc)
+	require.Equal(t, TimePromptPlacementUser, timeProc.PromptPlacement)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Stable persona and instructions"),
+			model.NewUserMessage("Investigate the alert"),
+		},
+	}
+	timeProc.ProcessRequest(context.Background(), nil, req, nil)
+
+	require.Equal(t, "Stable persona and instructions", req.Messages[0].Content)
+	require.Contains(t, req.Messages[1].Content, "Investigate the alert")
+	require.Contains(t, req.Messages[1].Content, "The current date is:")
+}
+
+func TestWithTimePromptPlacement_NormalizesUnsupportedPlacement(t *testing.T) {
+	for _, placement := range []TimePromptPlacement{"", "assistant"} {
+		opts := &Options{}
+		WithAddCurrentTime(true)(opts)
+		WithTimePromptPlacement(placement)(opts)
+		require.Equal(t, TimePromptPlacementSystem, opts.TimePromptPlacement)
+
+		var timeProc *processor.TimeRequestProcessor
+		for _, p := range buildRequestProcessors("test-agent", opts) {
+			if v, ok := p.(*processor.TimeRequestProcessor); ok {
+				timeProc = v
+			}
+		}
+		require.NotNil(t, timeProc)
+		require.Equal(t, TimePromptPlacementSystem, timeProc.PromptPlacement)
+	}
 }
 
 // Test that buildRequestProcessors wires MaxHistoryRuns into
