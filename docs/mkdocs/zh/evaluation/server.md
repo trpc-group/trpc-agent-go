@@ -148,6 +148,22 @@ if err != nil {
 }
 ```
 
+### Case 并发
+
+Langfuse 远程实验默认串行处理 case。创建 handler 时添加
+`langfuseeval.WithCaseParallelism(8)`，可在每个请求内最多同时处理 8 个 case；
+该参数必须大于 0。
+
+每个 case 保留独立的 trace context、评估调用和 Langfuse 写入。即使执行完成顺序不同，
+响应中的 case 仍按数据集顺序排列。handler 的该选项独立于
+`evaluation.WithEvalCaseParallelism` 及 evaluator 的推理和评估并行开关：
+后者只在一次 `Evaluate` 调用内部生效，而 Langfuse handler 为每个 case 单独调用一次
+`Evaluate`。
+
+开启并发时，传入的 evaluator、runner、callback 和 manager 必须支持并发调用。
+并发上限覆盖每个 case 的评估及 Langfuse 写入，按单个请求生效，不是跨请求的全局上限。
+某个 case 出错或请求被取消时，会取消并等待执行中的 case 结束；已完成的 Langfuse 写入不会回滚。
+
 ### 数据格式
 
 Langfuse 允许用户在平台侧自行组织 dataset item 的内容结构，因此数据项中的 `input`、`expectedOutput`、`metadata` 并不要求遵循固定格式。对 tRPC-Agent-Go 而言，评估执行最终仍然需要落到明确的 `EvalCase` 结构上，因此需要通过 `CaseBuilder` 在两者之间建立一层转换逻辑。
