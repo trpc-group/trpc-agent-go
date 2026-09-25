@@ -55,6 +55,14 @@ denials remain `EPERM`. Other namespace, mount, executable lookup, or policy set
 failures still make managed sandbox startup fail rather than falling back to
 unsandboxed execution.
 
+`NetworkControlled` starts its trusted TCP-to-Unix relay in the outer bwrap
+sandbox, then launches the user workload through a minimal inner bwrap that
+applies seccomp and creates a nested PID namespace. It does not create another
+user namespace. When the outer probe supports fresh procfs, the inner workload
+also receives a fresh `/proc`; in no-proc fallback mode it inherits the outer
+inaccessible `/proc` view. Container policies must therefore allow the
+additional PID/mount namespace operation as well as the outer bwrap setup.
+
 ## Default Docker
 
 Use default Docker only as a baseline. On many hosts it fails before the managed
