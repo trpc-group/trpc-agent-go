@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"regexp"
 	"strings"
 
@@ -30,6 +31,11 @@ const (
 	invalidToolResultTag = "[invalid_tool_result]"
 	orphanToolCallTag    = "[orphan_tool_call]"
 	orphanToolResultTag  = "[orphan_tool_result]"
+
+	// maxJSONNumberTokenLen caps json.Number / schema bound tokens before
+	// big.Rat.SetString so hostile exponent strings cannot exhaust memory
+	// (CVE-2022-23772). Ordinary tool JSON numbers stay far below this.
+	maxJSONNumberTokenLen = 1024
 )
 
 var (
@@ -428,9 +434,9 @@ func validateValueAgainstSchema(value any, schema *tool.Schema, defs map[string]
 	case "boolean":
 		return validateBooleanValueAgainstSchema(value, path)
 	case "integer":
-		return validateIntegerValueAgainstSchema(value, path)
+		return validateIntegerValueAgainstSchema(value, schema, path)
 	case "number":
-		return validateNumberValueAgainstSchema(value, path)
+		return validateNumberValueAgainstSchema(value, schema, path)
 	default:
 		return true, ""
 	}
@@ -497,24 +503,88 @@ func validateBooleanValueAgainstSchema(value any, path string) (bool, string) {
 	return false, fmt.Sprintf("expected boolean at %s", path)
 }
 
-func validateIntegerValueAgainstSchema(value any, path string) (bool, string) {
+func validateIntegerValueAgainstSchema(value any, schema *tool.Schema, path string) (bool, string) {
 	num, ok := value.(json.Number)
 	if !ok {
 		return false, fmt.Sprintf("expected integer at %s", path)
 	}
-	if _, err := num.Int64(); err != nil {
+	rat, ok := parseJSONNumber(num)
+	if !ok || !rat.IsInt() {
 		return false, fmt.Sprintf("expected integer at %s", path)
 	}
-	return true, ""
+	return validateNumericBounds(num, schema, path)
 }
 
-func validateNumberValueAgainstSchema(value any, path string) (bool, string) {
+func validateNumberValueAgainstSchema(value any, schema *tool.Schema, path string) (bool, string) {
 	num, ok := value.(json.Number)
 	if !ok {
 		return false, fmt.Sprintf("expected number at %s", path)
 	}
-	if _, err := num.Float64(); err != nil {
+	if _, ok := parseJSONNumber(num); !ok {
 		return false, fmt.Sprintf("expected number at %s", path)
+	}
+	return validateNumericBounds(num, schema, path)
+}
+
+// parseJSONNumber converts a json.Number into a big.Rat without a float64 round trip.
+// This exists so inclusive and exclusive schema bounds stay exact above 2^53.
+// Without this, encoding/json float64 parsing would round large integer tokens.
+//
+// Token length is capped before Rat.SetString so hostile exponent strings cannot
+// trigger unbounded allocation (CVE-2022-23772 / gosec G113).
+func parseJSONNumber(num json.Number) (*big.Rat, bool) {
+	if num == "" {
+		return nil, false
+	}
+	if len(num) > maxJSONNumberTokenLen {
+		return nil, false
+	}
+	rat, ok := new(big.Rat).SetString(string(num)) //nolint:gosec // G113: length capped by maxJSONNumberTokenLen above
+	if !ok {
+		return nil, false
+	}
+	return rat, true
+}
+
+// compareJSONNumbers compares two JSON number tokens using exact rational math.
+func compareJSONNumbers(a, b json.Number) (int, bool) {
+	ra, ok := parseJSONNumber(a)
+	if !ok {
+		return 0, false
+	}
+	rb, ok := parseJSONNumber(b)
+	if !ok {
+		return 0, false
+	}
+	return ra.Cmp(rb), true
+}
+
+// validateNumericBounds enforces minimum, maximum, exclusiveMinimum, and
+// exclusiveMaximum from the schema against a decoded json.Number value.
+// An unparsable bound is skipped so the remaining bounds still apply.
+func validateNumericBounds(num json.Number, schema *tool.Schema, path string) (bool, string) {
+	if schema == nil {
+		return true, ""
+	}
+	if schema.Minimum != "" {
+		if cmp, ok := compareJSONNumbers(num, schema.Minimum); ok && cmp < 0 {
+			return false, fmt.Sprintf("number at %s is below minimum", path)
+		}
+	}
+	if schema.Maximum != "" {
+		if cmp, ok := compareJSONNumbers(num, schema.Maximum); ok && cmp > 0 {
+			return false, fmt.Sprintf("number at %s is above maximum", path)
+		}
+	}
+	if schema.ExclusiveMinimum != "" {
+		if cmp, ok := compareJSONNumbers(num, schema.ExclusiveMinimum); ok && cmp <= 0 {
+			return false, fmt.Sprintf("number at %s is not above exclusiveMinimum", path)
+		}
+	}
+	if schema.ExclusiveMaximum != "" {
+		if cmp, ok := compareJSONNumbers(num, schema.ExclusiveMaximum); ok && cmp >= 0 {
+			return false, fmt.Sprintf("number at %s is not below exclusiveMaximum", path)
+		}
 	}
 	return true, ""
 }
