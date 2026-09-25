@@ -76,10 +76,51 @@ func TestPrepareCommands(t *testing.T) {
 	require.True(t, detachedCmd.SysProcAttr.Setsid)
 	require.False(t, detachedCmd.SysProcAttr.Setpgid)
 
+	// The PTY child starts in a new session with the PTY as its controlling
+	// terminal; those are the attributes pty.Start sets, established here so
+	// the pre-start hook sees them.
 	ptyCmd := &exec.Cmd{}
 	preparePTYCommand(ptyCmd)
 	require.NotNil(t, ptyCmd.SysProcAttr)
+	require.True(t, ptyCmd.SysProcAttr.Setsid)
+	require.True(t, ptyCmd.SysProcAttr.Setctty)
 	require.False(t, ptyCmd.SysProcAttr.Setpgid)
+
+	// A second call restores the exact state: the counterpart a hook may have
+	// enabled is cleared again rather than left alongside.
+	for _, tc := range []struct {
+		name   string
+		detach bool
+		attrs  *syscall.SysProcAttr
+	}{
+		{"detached-with-setpgid", detachStdin,
+			&syscall.SysProcAttr{Setpgid: true}},
+		{"detached-with-both", detachStdin,
+			&syscall.SysProcAttr{Setsid: true, Setpgid: true}},
+		{"kept-with-setsid", keepStdin,
+			&syscall.SysProcAttr{Setsid: true}},
+		{"kept-with-both", keepStdin,
+			&syscall.SysProcAttr{Setsid: true, Setpgid: true}},
+		// A hook that copied PTY attributes must not leave a pipe child
+		// asking for a controlling terminal it does not have.
+		{"detached-with-ctty", detachStdin,
+			&syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 3}},
+		{"kept-with-ctty", keepStdin,
+			&syscall.SysProcAttr{Setpgid: true, Setctty: true, Ctty: 3}},
+	} {
+		cmd := &exec.Cmd{SysProcAttr: tc.attrs}
+		preparePipeCommand(cmd, tc.detach)
+		require.Equal(t, tc.detach, cmd.SysProcAttr.Setsid, tc.name)
+		require.Equal(t, !tc.detach, cmd.SysProcAttr.Setpgid, tc.name)
+		require.False(t, cmd.SysProcAttr.Setctty, tc.name)
+		require.Zero(t, cmd.SysProcAttr.Ctty, tc.name)
+	}
+	replaced := &exec.Cmd{SysProcAttr: &syscall.SysProcAttr{Setpgid: true, Ctty: 3}}
+	preparePTYCommand(replaced)
+	require.True(t, replaced.SysProcAttr.Setsid)
+	require.True(t, replaced.SysProcAttr.Setctty)
+	require.Zero(t, replaced.SysProcAttr.Ctty)
+	require.False(t, replaced.SysProcAttr.Setpgid)
 }
 
 func TestCommandProcessGroupID(t *testing.T) {
