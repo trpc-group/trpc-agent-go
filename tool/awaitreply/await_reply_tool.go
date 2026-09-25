@@ -60,6 +60,16 @@ func (t *Tool) Declaration() *tool.Declaration {
 	}
 }
 
+// IsConcurrencySafe reports false: await_user_reply must not run on the parallel
+// path.
+//
+// Call stages the resume route with agent.MarkAwaitingUserReply, which writes to
+// the invocation's own state. Parallel execution gives each call a view whose
+// state is cloned and never synced back, so the route lands on a copy that is
+// discarded: the tool reports success and the next user turn does not resume
+// here.
+func (t *Tool) IsConcurrencySafe() bool { return false }
+
 // Call implements tool.CallableTool.
 func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if len(bytes.TrimSpace(jsonArgs)) > 0 {
