@@ -44,6 +44,15 @@ func (c *concurrencyTool) IsConcurrencySafe() bool {
 	return c.safe
 }
 
+type conflictingTool struct {
+	metadata ToolMetadata
+	aware    bool
+}
+
+func (c *conflictingTool) Declaration() *Declaration  { return &Declaration{Name: testToolName} }
+func (c *conflictingTool) ToolMetadata() ToolMetadata { return c.metadata }
+func (c *conflictingTool) IsConcurrencySafe() bool    { return c.aware }
+
 type deferredTool struct {
 	deferTool bool
 }
@@ -87,10 +96,115 @@ func TestMetadataOf_UsesProvider(t *testing.T) {
 	}
 }
 
+// A ConcurrencyAware-only tool is read exactly as its contract says: true is a
+// guarantee that covers running beside itself, so it is ConcurrencySafe; false
+// objects to that too. Nothing else is filled in, and a tool implementing
+// neither interface stays at the zero value rather than being read as safe.
 func TestMetadataOf_UsesConcurrencyAwareFallback(t *testing.T) {
-	got := MetadataOf(&concurrencyTool{safe: true})
-	if !got.ConcurrencySafe {
-		t.Fatalf("expected concurrency-aware tool to be marked safe")
+	tests := []struct {
+		name string
+		tool Tool
+		want ToolMetadata
+	}{
+		{"aware true is the guarantee", &concurrencyTool{safe: true}, ToolMetadata{ConcurrencySafe: true}},
+		{"aware false objects", &concurrencyTool{safe: false}, ToolMetadata{}},
+		{"neither interface publishes nothing", newMockTool(testToolName), ToolMetadata{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MetadataOf(tt.tool); got != tt.want {
+				t.Fatalf("MetadataOf() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Admission is objection-based: only ConcurrencyAware is consulted, everything
+// else is admitted. Reading ToolMetadata.ConcurrencySafe instead cannot work — a
+// zero value is indistinguishable from an unset one, so a lone ReadOnly hint
+// would read as an objection, and an existing true (same-tool reentrancy) would
+// become a promise about arbitrary siblings that no tool ever made.
+func TestIsConcurrencySafe(t *testing.T) {
+	tests := []struct {
+		name string
+		tool Tool
+		want bool
+	}{
+		{"publishes nothing", newMockTool(testToolName), true},
+		{"nil tool", nil, true},
+		{"concurrency-aware true", &concurrencyTool{safe: true}, true},
+		{"concurrency-aware false", &concurrencyTool{safe: false}, false},
+		// Metadata is descriptive and never objects, in either direction. A
+		// provider that wants to stay off the parallel path implements
+		// ConcurrencyAware.
+		{"provider true does not promise more than it means", &metadataTool{
+			metadata: ToolMetadata{ConcurrencySafe: true},
+		}, true},
+		{"provider false does not object", &metadataTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+		}, true},
+		// The regression that matters: a tool publishing an unrelated hint,
+		// having never considered concurrency, keeps today's admission.
+		{"provider of unrelated metadata keeps the default", &metadataTool{
+			metadata: ToolMetadata{ReadOnly: true},
+		}, true},
+		// Publishing both, the narrow interface answers: it is the only one that
+		// can express an objection.
+		{"the narrow interface decides, overriding metadata", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: true},
+			aware:    false,
+		}, false},
+		{"the narrow interface decides when metadata is false", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+			aware:    true,
+		}, true},
+		// Framework wrappers do not answer; the question reaches the tool they
+		// wrap, however deep.
+		{"a wrapper carries the objection", &originalWrapper{
+			inner: &concurrencyTool{safe: false},
+		}, false},
+		{"a wrapper does not manufacture an objection", &originalWrapper{
+			inner: newMockTool(testToolName),
+		}, true},
+		{"nested wrappers resolve to the innermost tool", &originalWrapper{
+			inner: &originalWrapper{inner: &concurrencyTool{safe: false}},
+		}, false},
+		{"a wrapper with no original is asked itself", &originalWrapper{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsConcurrencySafe(tt.tool); got != tt.want {
+				t.Fatalf("IsConcurrencySafe() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// originalWrapper stands in for a framework wrapper: it exposes the tool it
+// wraps through Original() and answers nothing about concurrency itself.
+type originalWrapper struct {
+	inner Tool
+}
+
+func (w *originalWrapper) Declaration() *Declaration { return &Declaration{Name: testToolName} }
+func (w *originalWrapper) Original() Tool            { return w.inner }
+
+// selfReferencingWrapper returns itself from Original(), the shape that would
+// otherwise never terminate.
+type selfReferencingWrapper struct {
+	safe bool
+}
+
+func (w *selfReferencingWrapper) Declaration() *Declaration { return &Declaration{Name: testToolName} }
+func (w *selfReferencingWrapper) Original() Tool            { return w }
+func (w *selfReferencingWrapper) IsConcurrencySafe() bool   { return w.safe }
+
+func TestIsConcurrencySafe_SelfReferencingWrapperTerminates(t *testing.T) {
+	if IsConcurrencySafe(&selfReferencingWrapper{safe: false}) {
+		t.Fatal("a wrapper that is its own original is asked itself")
+	}
+	if !IsConcurrencySafe(&selfReferencingWrapper{safe: true}) {
+		t.Fatal("a wrapper that is its own original is asked itself")
 	}
 }
 

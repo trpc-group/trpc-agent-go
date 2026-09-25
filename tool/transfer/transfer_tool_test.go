@@ -243,3 +243,26 @@ func TestTransferTool_NoToolCallIDLeavesTransferInfoIDEmpty(t *testing.T) {
 			inv.TransferInfo.ToolCallID)
 	}
 }
+
+// A transfer must never be batched. Call records the handoff by assigning
+// Invocation.TransferInfo, which the response processor reads off the base
+// invocation; parallel execution gives each call its own view and never syncs it
+// back, so a batched transfer returns Success: true and hands off to nobody.
+// Asserted through tool.ConcurrencyAware, the way a scheduler resolves it.
+func TestTool_IsConcurrencySafe(t *testing.T) {
+	tl := New([]agent.Info{{Name: "target"}})
+
+	if tl.IsConcurrencySafe() {
+		t.Error("the transfer tool must not run on the parallel path")
+	}
+	aware, ok := tool.Tool(tl).(tool.ConcurrencyAware)
+	if !ok {
+		t.Fatal("the transfer tool must publish tool.ConcurrencyAware")
+	}
+	if aware.IsConcurrencySafe() {
+		t.Error("the objection must resolve through the interface")
+	}
+	if tool.IsConcurrencySafe(tl) {
+		t.Error("tool.IsConcurrencySafe must report the transfer tool as objecting")
+	}
+}
