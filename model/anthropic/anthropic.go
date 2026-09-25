@@ -94,6 +94,13 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	var clientOpts []option.RequestOption
+	if o.cacheMessages {
+		// First, so it is the outermost middleware: the SDK runs middleware in
+		// registration order, client options ahead of per-request ones, and any
+		// caller middleware that hashes or signs the body then sees the marked
+		// body the transport sends.
+		clientOpts = append(clientOpts, option.WithMiddleware(toolResultCacheBreakpointMiddleware))
+	}
 	if o.apiKey != "" {
 		clientOpts = append(clientOpts, option.WithAPIKey(o.apiKey))
 	}
@@ -471,6 +478,10 @@ func modelNameMatches(modelName string, targets ...string) bool {
 //   - System prompt: always cached when cacheSystemPrompt is true (stable across turns)
 //   - Tools: always cached when cacheTools is true (stable across turns)
 //   - Last assistant message: cached when cacheMessages is true (opt-in, benefits multi-turn)
+//
+// A fourth, on the last tool-result message, is placed on the serialized body by
+// toolResultCacheBreakpointMiddleware: it is the only one conditional on what the
+// request callback and the request options leave behind.
 func (m *Model) applyCacheControl(
 	systemPrompts []anthropic.TextBlockParam,
 	tools []anthropic.ToolUnionParam,
