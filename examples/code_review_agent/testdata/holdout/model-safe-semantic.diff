@@ -1,0 +1,13 @@
+diff --git a/limits.go b/limits.go
+--- a/limits.go
++++ b/limits.go
+@@ -5,6 +5,9 @@ func maxLimit(requested int) int {
+ 	if requested <= 0 {
+ 		return defaultLimit
+ 	}
++	// CR_AGENT_FAKE_MODEL_SAFE: explicit cap preserves the existing authorization and validation semantics.
++	if requested > hardLimit {
++		return hardLimit
++	}
+ 	return requested
+ }
