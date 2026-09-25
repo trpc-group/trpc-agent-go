@@ -35,11 +35,16 @@ type sqlSessionConfig struct {
 	TablePref  string `yaml:"table_prefix,omitempty"`
 }
 
+type mysqlSessionConfig struct {
+	sqlSessionConfig    `yaml:",inline"`
+	StateInitialization *bool `yaml:"state_initialization,omitempty"`
+}
+
 func newMySQLSessionBackend(
 	deps registry.SessionDeps,
 	spec registry.SessionBackendSpec,
 ) (session.Service, error) {
-	var cfg sqlSessionConfig
+	var cfg mysqlSessionConfig
 	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
 		return nil, err
 	}
@@ -51,7 +56,7 @@ func newMySQLSessionBackend(
 		)
 	}
 
-	opts := make([]sessionmysql.ServiceOpt, 0, 4)
+	opts := make([]sessionmysql.ServiceOpt, 0, 5)
 	if dsn != "" {
 		opts = append(opts, sessionmysql.WithMySQLClientDSN(dsn))
 	} else {
@@ -62,6 +67,12 @@ func newMySQLSessionBackend(
 	}
 	if cfg.SkipDBInit {
 		opts = append(opts, sessionmysql.WithSkipDBInit(true))
+	}
+	if cfg.StateInitialization != nil {
+		opts = append(
+			opts,
+			sessionmysql.WithStateInitialization(*cfg.StateInitialization),
+		)
 	}
 	if pref := strings.TrimSpace(cfg.TablePref); pref != "" {
 		opts = append(opts, sessionmysql.WithTablePrefix(pref))
