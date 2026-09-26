@@ -40,10 +40,11 @@ const (
 // owns both filesystem and network policy so callers cannot request contradictory
 // combinations such as read-only + disabled enforcement.
 type PermissionProfile struct {
-	typ        permissionProfileType
-	fileSystem fileSystemPolicy
-	network    NetworkPolicy
-	macOS      macOSProfilePolicy
+	typ             permissionProfileType
+	fileSystem      fileSystemPolicy
+	network         NetworkPolicy
+	macOS           macOSProfilePolicy
+	linuxNoHostRoot bool
 }
 
 // macOSProfilePolicy describes macOS Seatbelt-specific controls. It is kept off
@@ -67,10 +68,11 @@ func (p PermissionProfile) enforcement() enforcement {
 }
 
 // ReadOnlyProfile returns a managed profile with read-only host visibility and
-// restricted networking. On Linux, restricted networking denies pathname and
-// abstract AF_UNIX sockets and AF_VSOCK, while leaving anonymous stream and
-// seqpacket socketpairs available; use NetworkEnabled when the command needs
-// pathname or abstract Unix IPC, or AF_VSOCK.
+// restricted networking. On Linux this also masks credential paths and sibling
+// sessions. On Linux, restricted networking denies pathname and abstract
+// AF_UNIX sockets and AF_VSOCK, while leaving anonymous stream and seqpacket
+// socketpairs available; use NetworkEnabled when the command needs pathname or
+// abstract Unix IPC, or AF_VSOCK.
 func ReadOnlyProfile() PermissionProfile {
 	return PermissionProfile{
 		typ: profileManaged,
@@ -88,10 +90,11 @@ func ReadOnlyProfile() PermissionProfile {
 
 // WorkspaceWriteProfile returns the default managed profile: read-only host
 // root, writable session workspace, protected metadata, restricted networking.
-// On Linux, that restricted default denies pathname and abstract AF_UNIX
-// sockets and AF_VSOCK, while leaving anonymous stream and seqpacket
-// socketpairs available; use NetworkEnabled when the command needs pathname or
-// abstract Unix IPC, or AF_VSOCK.
+// On Linux this also masks credential paths and sibling sessions. On Linux,
+// that restricted default denies pathname and abstract AF_UNIX sockets and
+// AF_VSOCK, while leaving anonymous stream and seqpacket socketpairs
+// available; use NetworkEnabled when the command needs pathname or abstract
+// Unix IPC, or AF_VSOCK.
 func WorkspaceWriteProfile() PermissionProfile {
 	p := ReadOnlyProfile()
 	p.fileSystem.Rules = append(p.fileSystem.Rules,
@@ -104,6 +107,18 @@ func WorkspaceWriteProfile() PermissionProfile {
 		fileSystemRule{Kind: ruleSpecial, Access: accessWrite, Special: specialSkills},
 	)
 	return p
+}
+
+func (p PermissionProfile) exposesHostRoot() bool {
+	if p.linuxNoHostRoot {
+		return false
+	}
+	for _, rule := range p.fileSystem.Rules {
+		if rule.Kind == ruleSpecial && rule.Special == specialRoot && rule.Access == accessRead {
+			return true
+		}
+	}
+	return false
 }
 
 // DangerFullAccessProfile intentionally disables sandboxing.
@@ -121,6 +136,14 @@ func ExternalSandboxProfile(network NetworkPolicy) PermissionProfile {
 		network.Mode = NetworkRestricted
 	}
 	return PermissionProfile{typ: profileExternal, network: network}
+}
+
+// WithLinuxNoHostRoot skips the Linux host-root bind. The sandbox then mounts
+// only runtime directories, the session workspace, and explicit grants. It has
+// no effect on macOS.
+func (p PermissionProfile) WithLinuxNoHostRoot() PermissionProfile {
+	p.linuxNoHostRoot = true
+	return p
 }
 
 // WithNetworkPolicy sets network access for the profile.

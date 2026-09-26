@@ -55,10 +55,15 @@ short, `write` includes read access, while `none` means neither readable nor
 writable:
 
 - `ReadOnlyProfile` grants read access to the sandbox root and keeps networking
-  restricted.
+  restricted. On Linux this still bind-mounts the host root read-only.
 - `WorkspaceWriteProfile` is the default managed profile. It starts from
   `ReadOnlyProfile` and grants write access to the session workspace and its
-  well-known working directories.
+  well-known working directories. On Linux it bind-mounts the host root
+  read-only, then masks common credential paths and sibling session directories.
+- `WithLinuxNoHostRoot` skips the Linux host-root bind. Parent grants such as
+  `$HOME` still keep default credential masks; re-open a credential path only
+  with an exact `WithReadPaths` or `WithWritePaths` grant. It has no effect on
+  macOS.
 - `WithReadPaths` and `WithWritePaths` add explicit path grants. Relative paths
   are resolved inside the workspace. Absolute paths are treated as host paths
   and must be granted explicitly before they are mounted into the sandbox.

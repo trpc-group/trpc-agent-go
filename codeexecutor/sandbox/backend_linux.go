@@ -181,15 +181,46 @@ func (r *Runtime) linuxSandboxSetup(
 	args := []string{
 		"--die-with-parent",
 		"--unshare-user",
+		"--cap-drop", "ALL",
 		"--unshare-pid",
 		"--new-session",
-		"--ro-bind", "/", "/",
-		"--dev", "/dev",
 	}
+	exposeHostRoot := profile.exposesHostRoot()
+	if exposeHostRoot {
+		args = append(args, "--ro-bind", "/", "/")
+	} else {
+		args = appendLinuxRuntimeReadOnlyBinds(args)
+	}
+	args = append(args, "--dev", "/dev")
 	if mountProc {
 		args = append(args, "--proc", "/proc")
 	} else {
 		args = appendInaccessibleDirMaskArgs(args, "/proc")
+	}
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return linuxSandboxSetup{}, err
+	}
+	if exposeHostRoot {
+		hideArgs, err := r.linuxSessionHideArgs(wsAbs)
+		if err != nil {
+			return linuxSandboxSetup{}, err
+		}
+		args = append(args, hideArgs...)
+		if len(hideArgs) > 0 {
+			args = append(args, "--ro-bind", wsAbs, wsAbs)
+		}
+	} else {
+		args = append(args, "--tmpfs", "/tmp")
+		seen := map[string]bool{"/": true, "/tmp": true}
+		args = appendLinuxDirAncestors(args, wsAbs, seen)
+		grantDests, err := r.linuxAbsoluteGrantDests(profile, ws)
+		if err != nil {
+			return linuxSandboxSetup{}, err
+		}
+		for _, dest := range grantDests {
+			args = appendLinuxDirAncestors(args, dest, seen)
+		}
 	}
 	needsSeccomp := profile.network.Mode != NetworkEnabled
 	// ExtraFiles descriptors start at 3 and must match the append order in
@@ -219,6 +250,11 @@ func (r *Runtime) linuxSandboxSetup(
 		return linuxSandboxSetup{}, err
 	}
 	args = append(args, readOnlyArgs...)
+	credArgs, err := r.defaultCredentialDenyMaskArgs(profile, ws)
+	if err != nil {
+		return linuxSandboxSetup{}, err
+	}
+	args = append(args, credArgs...)
 	denyReadFD := strconv.Itoa(nextExtraFD)
 	denySetup, err := r.denyReadMaskSetup(profile, ws, denyReadFD)
 	if err != nil {
@@ -508,6 +544,7 @@ func buildBwrapPreflightArgs(mountProc bool) []string {
 	args := []string{
 		"--die-with-parent",
 		"--unshare-user",
+		"--cap-drop", "ALL",
 		"--unshare-pid",
 		"--new-session",
 		"--ro-bind", "/", "/",
@@ -1057,4 +1094,220 @@ func (r *Runtime) workspaceMountTarget(
 	default:
 		return "", false, nil
 	}
+}
+
+var linuxRuntimeReadOnlyBindTries = []string{
+	"/usr",
+	"/bin",
+	"/sbin",
+	"/lib",
+	"/lib64",
+	"/lib32",
+	"/etc",
+}
+
+func appendLinuxRuntimeReadOnlyBinds(args []string) []string {
+	for _, path := range linuxRuntimeReadOnlyBindTries {
+		args = append(args, "--ro-bind-try", path, path)
+	}
+	return args
+}
+
+func appendLinuxDirAncestors(args []string, dest string, seen map[string]bool) []string {
+	dest = filepath.Clean(dest)
+	if dest == "" || dest == string(os.PathSeparator) {
+		return args
+	}
+	var ancestors []string
+	cur := dest
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		ancestors = append([]string{parent}, ancestors...)
+		cur = parent
+	}
+	for _, parent := range ancestors {
+		if parent == string(os.PathSeparator) || seen[parent] {
+			continue
+		}
+		seen[parent] = true
+		args = append(args, "--dir", parent)
+	}
+	return args
+}
+
+func (r *Runtime) linuxSessionHideArgs(wsAbs string) ([]string, error) {
+	rootAbs, err := filepath.Abs(r.root)
+	if err != nil {
+		return nil, err
+	}
+	sessionsRoot := filepath.Join(rootAbs, "sandbox")
+	if !sameOrChild(sessionsRoot, wsAbs) {
+		return nil, nil
+	}
+	return []string{"--tmpfs", sessionsRoot}, nil
+}
+
+func (r *Runtime) linuxAbsoluteGrantDests(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+	var dests []string
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
+			continue
+		}
+		if rule.Access != accessRead && rule.Access != accessWrite {
+			continue
+		}
+		target := filepath.Clean(rule.Path)
+		if sameOrChild(wsAbs, target) {
+			continue
+		}
+		dests = append(dests, target)
+	}
+	return dests, nil
+}
+
+func (r *Runtime) defaultCredentialDenyMaskArgs(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+	grantArgs, err := r.defaultCredentialGrantArgs(profile, ws)
+	if err != nil {
+		return nil, err
+	}
+	home, _ := os.UserHomeDir()
+	var args []string
+	for _, path := range defaultCredentialDenyPaths() {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if skipDefaultCredentialDeny(profile, abs) {
+			continue
+		}
+		if sameOrChild(wsAbs, abs) {
+			continue
+		}
+		if skipIsolatedHomeCredentialMask(profile, home, abs) {
+			continue
+		}
+		maskTarget, info, err := credentialMaskTarget(abs)
+		if err != nil {
+			continue
+		}
+		if sameOrChild(wsAbs, maskTarget) {
+			continue
+		}
+		if info.IsDir() {
+			perms := "000"
+			if hasCredentialChildGrant(grantArgs, abs) {
+				// Traversable but not listable so granted children stay reachable.
+				perms = "0111"
+			}
+			args = append(args, "--perms", perms, "--tmpfs", maskTarget)
+			for i := 0; i+2 < len(grantArgs); i += 3 {
+				if grantArgs[i+2] != abs && sameOrChild(abs, grantArgs[i+2]) {
+					args = append(args, grantArgs[i], grantArgs[i+1], grantArgs[i+2])
+				}
+			}
+			args = append(args, "--remount-ro", maskTarget)
+			continue
+		}
+		args = append(args, "--ro-bind", denyReadMaskSource(ws), maskTarget)
+	}
+	return args, nil
+}
+
+func credentialMaskTarget(path string) (string, os.FileInfo, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", nil, err
+	}
+	return filepath.Clean(resolved), info, nil
+}
+
+func hasCredentialChildGrant(grantArgs []string, parent string) bool {
+	for i := 0; i+2 < len(grantArgs); i += 3 {
+		target := grantArgs[i+2]
+		if target != parent && sameOrChild(parent, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultCredentialGrantArgs rebinds an explicitly granted child after the
+// parent tmpfs and before --remount-ro, without exposing siblings.
+func (r *Runtime) defaultCredentialGrantArgs(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+	home, _ := os.UserHomeDir()
+	seen := map[string]bool{}
+	var args []string
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
+			continue
+		}
+		target := filepath.Clean(rule.Path)
+		parent, ok := credentialDenyParent(target)
+		if sameOrChild(wsAbs, target) || seen[target] || !ok ||
+			skipIsolatedHomeCredentialMask(profile, home, parent) {
+			continue
+		}
+		rel, err := filepath.Rel(wsAbs, target)
+		if err != nil {
+			return nil, err
+		}
+		access, matched, err := r.resolveAccess(profile, ws, rel, target)
+		if err != nil {
+			return nil, err
+		}
+		if !matched || access == accessNone {
+			continue
+		}
+		if _, err := os.Stat(target); err != nil {
+			return nil, deniedf(ErrPathDenied, "grant", target, "external grant target unavailable")
+		}
+		seen[target] = true
+		if access == accessWrite {
+			args = append(args, "--bind", target, target)
+		} else {
+			args = append(args, "--ro-bind", target, target)
+		}
+	}
+	return args, nil
+}
+
+func credentialDenyParent(target string) (string, bool) {
+	for _, path := range defaultCredentialDenyPaths() {
+		cred, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if cred != target && sameOrChild(cred, target) {
+			return cred, true
+		}
+	}
+	return "", false
 }

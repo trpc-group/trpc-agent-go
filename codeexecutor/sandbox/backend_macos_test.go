@@ -104,6 +104,29 @@ func TestMacOSSeatbeltProfileGeneration(t *testing.T) {
 	}
 }
 
+func TestMacOSSeatbeltIgnoresLinuxNoHostRoot(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/no-host-root", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws, sandboxDenialRun{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noHostRoot, err := rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithLinuxNoHostRoot(),
+		ws,
+		sandboxDenialRun{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != noHostRoot {
+		t.Fatal("WithLinuxNoHostRoot must not change the macOS Seatbelt profile")
+	}
+}
+
 func TestMacOSPlatformTempMetadataPolicyOnly(t *testing.T) {
 	for _, root := range macosPlatformDefaultReadRoots() {
 		switch root {
