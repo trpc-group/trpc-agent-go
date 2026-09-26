@@ -34,6 +34,22 @@ type afterRunManager interface {
 	AfterRun(context.Context, *plugin.AfterRunArgs) error
 }
 
+func (c pluginManagerChain) RunBeforeResponseDispatch(
+	ctx context.Context,
+	args *plugin.BeforeResponseDispatchArgs,
+) error {
+	for _, manager := range c {
+		hooks, ok := manager.(plugin.BeforeResponseDispatchManager)
+		if !ok {
+			continue
+		}
+		if err := hooks.RunBeforeResponseDispatch(ctx, args); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func newPluginManagerChain(managers ...agent.PluginManager) agent.PluginManager {
 	filtered := make([]agent.PluginManager, 0, len(managers))
 	for _, manager := range managers {
