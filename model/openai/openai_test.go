@@ -7303,6 +7303,36 @@ func TestCreateFinalResponseGLMReasoningContentFallback(t *testing.T) {
 	require.Equal(t, "收到", resp.Choices[0].Message.ReasoningContent)
 }
 
+func TestCreateFinalResponseGLMReasoningContentFallbackSkipsLength(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "glm50",
+			Choices: []openai.ChatCompletionChoice{{
+				Index:        0,
+				FinishReason: "length",
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(acc, false, nil, "truncated reasoning")
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "truncated reasoning",
+		resp.Choices[0].Message.ReasoningContent)
+	require.NotNil(t, resp.Choices[0].FinishReason)
+	require.Equal(t, "length", *resp.Choices[0].FinishReason)
+}
+
 func TestCreateFinalResponseGLMReasoningContentFallbackSkipsToolCall(
 	t *testing.T,
 ) {
@@ -7314,7 +7344,8 @@ func TestCreateFinalResponseGLMReasoningContentFallbackSkipsToolCall(
 			ID:    "acc-id",
 			Model: "glm50",
 			Choices: []openai.ChatCompletionChoice{{
-				Index: 0,
+				Index:        0,
+				FinishReason: "stop",
 				Message: openai.ChatCompletionMessage{
 					Content: "",
 				},
@@ -7352,7 +7383,8 @@ func TestCreateFinalResponseReasoningContentNoFallbackForOpenAI(
 			ID:    "acc-id",
 			Model: "gpt-5",
 			Choices: []openai.ChatCompletionChoice{{
-				Index: 0,
+				Index:        0,
+				FinishReason: "stop",
 				Message: openai.ChatCompletionMessage{
 					Content: "",
 				},
@@ -7397,6 +7429,39 @@ func TestCreateResponseFromCompletionGLMReasoningContentFallback(
 	require.Equal(t, "收到", resp.Choices[0].Message.ReasoningContent)
 }
 
+func TestCreateResponseFromCompletionGLMReasoningContentFallbackSkipsLength(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var completion openai.ChatCompletion
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "completion-id",
+		"object": "chat.completion",
+		"created": 1699200000,
+		"model": "glm50",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"reasoning_content": "truncated reasoning"
+			},
+			"finish_reason": "length"
+		}]
+	}`), &completion))
+
+	resp := m.createResponseFromCompletion(&completion)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "truncated reasoning",
+		resp.Choices[0].Message.ReasoningContent)
+	require.NotNil(t, resp.Choices[0].FinishReason)
+	require.Equal(t, "length", *resp.Choices[0].FinishReason)
+}
+
 func TestCreateResponseFromCompletionGLMReasoningContentSkipsToolCall(
 	t *testing.T,
 ) {
@@ -7424,7 +7489,7 @@ func TestCreateResponseFromCompletionGLMReasoningContentSkipsToolCall(
 					}
 				}]
 			},
-			"finish_reason": "tool_calls"
+			"finish_reason": "stop"
 		}]
 	}`), &completion))
 
@@ -7451,6 +7516,10 @@ func TestEmitStreamingFinalResponseGLMReasoningContentFallback(
 			ChatCompletion: openai.ChatCompletion{
 				ID:    "acc-id",
 				Model: "glm50",
+				Choices: []openai.ChatCompletionChoice{{
+					Index:        0,
+					FinishReason: "stop",
+				}},
 			},
 		},
 		nil,
@@ -7466,6 +7535,38 @@ func TestEmitStreamingFinalResponseGLMReasoningContentFallback(
 	require.Len(t, got.Choices, 1)
 	require.Equal(t, "收到", got.Choices[0].Message.Content)
 	require.Equal(t, "收到", got.Choices[0].Message.ReasoningContent)
+}
+
+func TestEmitStreamingFinalResponseGLMReasoningContentFallbackSkipsWithoutFinishReason(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var got *model.Response
+	m.emitStreamingFinalResponse(
+		context.Background(),
+		&ssestream.Stream[openai.ChatCompletionChunk]{},
+		openai.ChatCompletionAccumulator{
+			ChatCompletion: openai.ChatCompletion{
+				ID:    "acc-id",
+				Model: "glm50",
+			},
+		},
+		nil,
+		nil,
+		"unfinished reasoning",
+		func(resp *model.Response) bool {
+			got = resp
+			return true
+		},
+	)
+
+	require.NotNil(t, got)
+	require.Len(t, got.Choices, 1)
+	require.Empty(t, got.Choices[0].Message.Content)
+	require.Equal(t, "unfinished reasoning",
+		got.Choices[0].Message.ReasoningContent)
 }
 
 // TestCreateFinalResponseUsageConditional verifies that Usage is only set on the
