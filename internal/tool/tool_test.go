@@ -1128,3 +1128,51 @@ func TestGenerateJSONSchema_DefSchemaIsolation(t *testing.T) {
 	require.Equal(t, "#/$defs/node", defNode.Properties["next"].Ref)
 	require.Contains(t, defNode.Required, "value")
 }
+
+// TestGenerateJSONSchema_ArrayItemEnum verifies enum placement and typed values across containers.
+func TestGenerateJSONSchema_ArrayItemEnum(t *testing.T) {
+	type status string
+	tests := []struct {
+		name      string
+		fieldType reflect.Type
+		tag       string
+		itemType  string
+		want      []any
+		depth     int
+	}{
+		{"strings", reflect.TypeOf([]string{}), "enum=foo,enum=bar,enum=baz", "string", []any{"foo", "bar", "baz"}, 1},
+		{"fixed array", reflect.TypeOf([2]int{}), "enum=1,enum=2", "integer", []any{int64(1), int64(2)}, 1},
+		{"uint64 maximum", reflect.TypeOf([]uint64{}), "enum=18446744073709551615", "integer", []any{uint64(18446744073709551615)}, 1},
+		{"uint8 maximum", reflect.TypeOf([]uint8{}), "enum=255", "integer", []any{uint64(255)}, 1},
+		{"unsigned negative", reflect.TypeOf([]uint64{}), "enum=-1", "integer", []any{}, 1},
+		{"unsigned overflow", reflect.TypeOf([]uint8{}), "enum=256", "integer", []any{}, 1},
+		{"uint64 overflow", reflect.TypeOf([]uint64{}), "enum=18446744073709551616", "integer", []any{}, 1},
+		{"unsigned scalar", reflect.TypeOf(uint64(0)), "enum=18446744073709551615", "integer", []any{uint64(18446744073709551615)}, 0},
+		{"numbers", reflect.TypeOf([]float64{}), "enum=1.5,enum=2.5", "number", []any{1.5, 2.5}, 1},
+		{"booleans", reflect.TypeOf([]bool{}), "enum=true,enum=false", "boolean", []any{true, false}, 1},
+		{"named strings", reflect.TypeOf([]status{}), "enum=foo,enum=bar", "string", []any{"foo", "bar"}, 1},
+		{"pointer elements", reflect.TypeOf([]*string{}), "enum=foo,enum=bar", "string", []any{"foo", "bar"}, 1},
+		{"pointer slice", reflect.TypeOf((*[]string)(nil)), "enum=foo,enum=bar", "string", []any{"foo", "bar"}, 1},
+		{"nested arrays", reflect.TypeOf([][2]string{}), "enum=foo,enum=bar", "string", []any{"foo", "bar"}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			typ := reflect.StructOf([]reflect.StructField{{
+				Name: "Values", Type: tt.fieldType,
+				Tag: reflect.StructTag(`json:"values" jsonschema:"description=Allowed values,required,` + tt.tag + `"`),
+			}})
+			schema := GenerateJSONSchema(typ)
+			require.Contains(t, schema.Required, "values")
+			field := schema.Properties["values"]
+			require.Equal(t, "Allowed values", field.Description)
+			for i := 0; i < tt.depth; i++ {
+				require.Equal(t, "array", field.Type)
+				require.Empty(t, field.Enum, "enum must constrain items rather than the whole array")
+				require.NotNil(t, field.Items)
+				field = field.Items
+			}
+			require.Equal(t, tt.itemType, field.Type)
+			require.Equal(t, tt.want, field.Enum)
+		})
+	}
+}
