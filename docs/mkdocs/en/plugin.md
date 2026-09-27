@@ -310,6 +310,10 @@ Some “after” hooks can override:
   earlier events).
 - **AfterModel** can return a custom response to replace the model response.
 - **AfterTool** can return a custom result to replace the tool result.
+  A non-nil `CustomResult` skips later Agent AfterTool callbacks; empty
+  maps, slices, and strings stored in that field are still replacements.
+  Omitting AfterTool, returning nil, or returning a result without
+  `CustomResult` is a pass-through.
 
 > **Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)**
 >
@@ -372,11 +376,47 @@ the appropriate time in the caller.
 - `BeforeTool`: runs before a tool is called, can modify the tool arguments
   (JavaScript Object Notation (JSON) bytes).
 - `AfterTool`: runs after a tool returns, can replace the result.
+  A non-nil `CustomResult` skips later Agent AfterTool callbacks.
 
 ### Event hook
 
 - `OnEvent`: runs for every event emitted by Runner (including runner completion
   events). You can mutate the event in place or return a replacement event.
+
+### Runner completion hooks
+
+- `Registry.AfterRun`: observes the finalized Runner completion event after its
+  execution trace input and output have been populated. It runs once for the
+  root Runner run, not once per sub-agent invocation. The hook receives a
+  completion-event snapshot, so mutations do not affect Runner output. Hook
+  errors are logged and do not fail the run.
+- `runner.RegisterGlobalAfterRunHook`: registers the same completion hook for
+  every Runner run in the process. This entry point is intended for
+  process-wide infrastructure integrations that cannot add
+  `runner.WithPlugins(...)` to every Runner. Registration is permanent for the
+  process lifetime; names must be unique, hooks must be safe for concurrent
+  use, and Runner does not own or close hook resources. Hooks execute
+  synchronously and should hand blocking export work to their own bounded
+  queue.
+
+Global AfterRun hooks run after Runner-scoped and per-run plugin AfterRun hooks.
+Their context is detached from run cancellation and carries the root
+`invoke_agent` SpanContext when framework tracing captured a recording root
+span. Otherwise, the context contains an invalid SpanContext instead of
+inheriting an unrelated caller span.
+
+```go
+err := runner.RegisterGlobalAfterRunHook(
+	"audit-exporter",
+	func(ctx context.Context, args *plugin.AfterRunArgs) error {
+		// Enqueue the completion snapshot without blocking Runner shutdown.
+		return enqueue(ctx, args.CompletionEvent)
+	},
+)
+if err != nil {
+	return err
+}
+```
 
 ### Graph node hooks (StateGraph / GraphAgent)
 
@@ -635,6 +675,76 @@ The output is one JSON debug message per line, for example:
 request. This is useful for organization-wide policies or shared behavior that
 should apply to all agents managed by a Runner.
 
+### ToolLoopWarning
+
+`toolloopwarning.New()` examines the two complete tool-call rounds at the end
+of each model request. When their tool names, canonical JSON arguments, and
+model-visible results are identical, it appends one temporary user-role
+instruction to that request. It does not append a duplicate while the warning
+is already present in the same request, but it appends the warning to each new
+eligible request while the repeated loop continues. A changed round or an
+intervening non-tool message does not match. The first model request in each
+invocation is deliberately skipped so a repeated tail restored from an earlier
+run cannot trigger a new warning by itself.
+
+Tool-call IDs are used to pair results with calls but are not part of the
+round fingerprint. A complete round requires exactly one trailing tool-result
+message per tool call. An incomplete or malformed round does not match. The
+plugin is opt-in, makes no additional model or tool calls, and does not stop or
+retry the invocation. It must be registered on a `Runner`; direct calls to
+`Agent.Run` do not install Runner plugins.
+
+The instruction's `user` role is a model-protocol shape, not a claim of human
+authorship. The instruction is request-local: it is not appended as a session
+event and is not restored as history on a later run. A standalone session
+summary reads persisted events and therefore does not receive it as source
+content. If cache-safe summary forking is enabled, however, the summarizer
+deliberately reuses the final model request; the instruction can then be part
+of the summarizer input and can indirectly affect the derived summary.
+Execution tracing likewise
+records the final request on the completion artifact rather than in session
+history. The model response produced from the request follows normal session
+behavior.
+
+Detection uses the request view available at `BeforeModel`, so history
+projection, result transformation, summary cutoffs, and context compaction are
+already reflected. If a later callback removes the instruction and the
+callback chain is re-entered on the same request, the plugin adds it again only
+when the trailing rounds still match. A warning already present at the end of
+the same request is not duplicated.
+
+Use `WithExcludedToolNames(...)` for polling or other tools whose repeated
+results are expected. Use `WithWarningMessage(...)` to localize or customize
+the synthetic instruction.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
+)
+defer runnerInstance.Close()
+```
+
+For a complete, deterministic example that runs without an API key, see
+[examples/plugin/toolloopwarning](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/toolloopwarning).
+The example uses a deterministic scripted model to produce two identical tool
+rounds while exercising the normal Runner, LLMAgent, tool, plugin, and session
+paths.
+
 ### ToolCallID
 
 `toolcallid.New()` from `plugin/toolcallid` rewrites the final `ToolCall.ID`
@@ -781,6 +891,19 @@ Full example: [examples/plugin/messagemerger](https://github.com/trpc-group/trpc
 `errormessage.New(opts...)` from `plugin/errormessage` rewrites the assistant-visible content of error events before Runner persists them into the session.
 
 When an event carries `Response.Error` but no `Choices[].Message.Content` — for example, the `stop_agent_error` event produced by `llmflow` for `agent.StopError`, or any raw `event.NewErrorEvent(...)` — Runner falls back to a generic English message: `"An error occurred during execution. Please contact the service provider."`. This plugin runs in `OnEvent` before that fallback and fills the content itself, so callers can surface a customised, localised, or tenant-specific message to end users. The structured `Response.Error` is left intact, so debugging and downstream consumers still see the original reason.
+
+Runner and this plugin mark such content as framework-synthesised. By default,
+`LLMAgent` keeps the content in emitted and persisted events but omits it from
+subsequent model requests, preventing presentation-only failure text from being
+repeated as if the model had produced it. If the omission makes two user
+messages adjacent, the request projection merges them locally to preserve a
+provider-valid sequence. Sessions written before the marker was introduced are
+covered by a best-effort legacy signature: the structured error, Runner's exact
+fallback text and `"error"` finish reason, and no other message payload. A real
+response with that complete marker-free signature is indistinguishable. To
+restore the previous model-context behavior, configure LLMAgent with
+`llmagent.WithIncludeSyntheticErrorMessages(true)` or GraphAgent with
+`graphagent.WithIncludeSyntheticErrorMessages(true)`.
 
 The plugin only rewrites events where no valid content exists yet, so a partial assistant message produced before the failure is never overwritten.
 
@@ -1136,10 +1259,10 @@ The example includes verified scenarios for:
 - A defensive analysis request that is allowed
 
 The repository currently includes Logging, DebugLog, GlobalInstruction,
-ToolCallID, ToolError, MessageMerger, ErrorMessage, and Guardrail as built-in
-plugins. Tool Approval, Prompt Injection, and Unsafe Intent are currently
-built-in capabilities under the Guardrail plugin. Additional plugins can be
-implemented as custom plugins.
+ToolCallID, ToolError, ToolLoopWarning, MessageMerger, ErrorMessage, and
+Guardrail as built-in plugins. Tool Approval, Prompt Injection, and Unsafe
+Intent are currently built-in capabilities under the Guardrail plugin.
+Additional plugins can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 

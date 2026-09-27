@@ -77,10 +77,11 @@ type SandboxInfo struct {
 // Sandbox is a running E2B sandbox with code-interpreter capabilities.
 type Sandbox struct {
 	sync.RWMutex
-	id       string
-	clientID string
-	template string
-	envdPort int
+	id          string
+	clientID    string
+	template    string
+	envdPort    int
+	envdVersion string
 	// sandboxDomain is the domain that the sandbox actually lives on, as
 	// returned by the E2B management API when creating or fetching the
 	// sandbox. When empty we fall back to connection.Domain.
@@ -98,12 +99,6 @@ func (s *Sandbox) cachedSandboxDomain() string {
 	s.RLock()
 	defer s.RUnlock()
 	return s.sandboxDomain
-}
-
-func (s *Sandbox) setCachedSandboxDomain(d string) {
-	s.Lock()
-	s.sandboxDomain = d
-	s.Unlock()
 }
 
 func (s *Sandbox) hostID(sandboxDomain string) string {
@@ -130,6 +125,13 @@ func (s *Sandbox) jupyterURL() string {
 		scheme = "http"
 	}
 	return fmt.Sprintf("%s://%s", scheme, s.getHost(JupyterPort))
+}
+
+// sandboxResponse retains data-plane metadata without extending SandboxInfo.
+type sandboxResponse struct {
+	SandboxInfo
+	EnvdPort    int    `json:"envdPort"`
+	EnvdVersion string `json:"envdVersion"`
 }
 
 // Create starts a new sandbox. `opts` may be nil, in which case sensible
@@ -176,15 +178,7 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 		body["envVars"] = opts.EnvVars
 	}
 
-	var out struct {
-		SandboxID          string `json:"sandboxID"`
-		ClientID           string `json:"clientID"`
-		TemplateID         string `json:"templateID"`
-		EnvdPort           int    `json:"envdPort"`
-		Domain             string `json:"domain,omitempty"`
-		EnvdAccessToken    string `json:"envdAccessToken,omitempty"`
-		TrafficAccessToken string `json:"trafficAccessToken,omitempty"`
-	}
+	var out sandboxResponse
 	if err := cfg.do(ctx, "POST", "/sandboxes", body, &out); err != nil {
 		return nil, err
 	}
@@ -201,6 +195,7 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 		clientID:      out.ClientID,
 		template:      out.TemplateID,
 		envdPort:      out.EnvdPort,
+		envdVersion:   out.EnvdVersion,
 		sandboxDomain: out.Domain,
 		connection:    cfg,
 	}, nil
@@ -238,7 +233,7 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 
 	body := map[string]any{"timeout": timeoutSec}
 
-	var info SandboxInfo
+	var info sandboxResponse
 	if err := cfg.do(ctx, "POST", "/sandboxes/"+sandboxID+"/connect", body, &info); err != nil {
 		return nil, err
 	}
@@ -254,6 +249,8 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 		id:            info.SandboxID,
 		clientID:      info.ClientID,
 		template:      info.TemplateID,
+		envdPort:      info.EnvdPort,
+		envdVersion:   info.EnvdVersion,
 		sandboxDomain: info.Domain,
 		connection:    cfg,
 	}, nil
@@ -320,17 +317,22 @@ func List(ctx context.Context, opts *SandboxOpts) ([]SandboxInfo, error) {
 // GetInfo returns information about this sandbox, including metadata and
 // start/end times.
 func (s *Sandbox) GetInfo(ctx context.Context) (*SandboxInfo, error) {
-	var info SandboxInfo
+	var info sandboxResponse
 	if err := s.connection.do(ctx, "GET", "/sandboxes/"+s.id, nil, &info); err != nil {
 		return nil, err
 	}
-	// Refresh the cached sandbox domain with whatever the API reports —
-	// this keeps the jupyter/envd URLs correct even if the sandbox was
-	// relocated to a different host.
+	s.Lock()
 	if info.Domain != "" {
-		s.setCachedSandboxDomain(info.Domain)
+		s.sandboxDomain = info.Domain
 	}
-	return &info, nil
+	if info.EnvdPort != 0 {
+		s.envdPort = info.EnvdPort
+	}
+	if info.EnvdVersion != "" {
+		s.envdVersion = info.EnvdVersion
+	}
+	s.Unlock()
+	return &info.SandboxInfo, nil
 }
 
 // GetHost returns a routable hostname for a port exposed by the sandbox. This

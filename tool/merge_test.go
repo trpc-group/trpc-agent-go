@@ -596,6 +596,110 @@ func TestMerge_NilHandling(t *testing.T) {
 	}
 }
 
+func TestMerge_NilInterfaceElement(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input []any
+		want  any
+	}{
+		{name: "leading nil", input: []any{nil, "str"}, want: nil},
+		{name: "trailing nil", input: []any{"str", nil}, want: "str"},
+		{name: "all nil", input: []any{nil, nil}, want: nil},
+		{name: "int with trailing nil", input: []any{1, nil}, want: 1},
+		{name: "int with middle nil", input: []any{1, nil, 2}, want: 3},
+		{name: "int with leading nil", input: []any{nil, 1}, want: nil},
+		{name: "float with trailing nil", input: []any{1.5, nil}, want: 1.5},
+		{name: "uint with trailing nil", input: []any{uint(7), nil}, want: uint(7)},
+		{name: "slice with trailing nil", input: []any{[]int{1}, nil}, want: []int{1}},
+		{name: "map with trailing nil", input: []any{map[string]int{"a": 1}, nil}, want: map[string]int{"a": 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got any
+			require.NotPanics(t, func() {
+				got = Merge(tt.input)
+			}, "Merge should not panic on a nil interface element")
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMerge_Structs_NilInterfaceField(t *testing.T) {
+	type structWithAny struct {
+		Meta  any
+		Score int
+	}
+
+	structs := []structWithAny{
+		{Meta: nil, Score: 10},
+		{Meta: "second", Score: 20},
+	}
+
+	var result structWithAny
+	require.NotPanics(t, func() {
+		result = Merge(structs)
+	}, "Merge should not panic on a nil interface field")
+
+	if result.Score != 30 {
+		t.Errorf("Score: Expected 30, got %d", result.Score)
+	}
+	// Consistent with TestMerge_Structs_PointerField: the first value is kept.
+	if result.Meta != nil {
+		t.Errorf("Interface field: Expected nil (first value retained), got %+v", result.Meta)
+	}
+}
+
+// TestMerge_Structs_NumericThenNilInterfaceField covers the reversed order of
+// TestMerge_Structs_NilInterfaceField: a numeric any field followed by nil must
+// not panic inside numeric reflection and must merge the non-nil values only.
+func TestMerge_Structs_NumericThenNilInterfaceField(t *testing.T) {
+	type structWithAny struct {
+		Meta  any
+		Score int
+	}
+
+	for _, tt := range []struct {
+		name      string
+		structs   []structWithAny
+		wantMeta  any
+		wantScore int
+	}{
+		{
+			name:      "int field then nil field",
+			structs:   []structWithAny{{Meta: 1, Score: 10}, {Meta: nil, Score: 20}},
+			wantMeta:  1,
+			wantScore: 30,
+		},
+		{
+			name:      "float field then nil field",
+			structs:   []structWithAny{{Meta: 1.5, Score: 10}, {Meta: nil, Score: 20}},
+			wantMeta:  1.5,
+			wantScore: 30,
+		},
+		{
+			name:      "uint field then nil field",
+			structs:   []structWithAny{{Meta: uint(7), Score: 10}, {Meta: nil, Score: 20}},
+			wantMeta:  uint(7),
+			wantScore: 30,
+		},
+		{
+			name:      "int field, nil field, int field",
+			structs:   []structWithAny{{Meta: 1, Score: 10}, {Meta: nil, Score: 20}, {Meta: 2, Score: 30}},
+			wantMeta:  3,
+			wantScore: 60,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var result structWithAny
+			require.NotPanics(t, func() {
+				result = Merge(tt.structs)
+			}, "Merge should not panic when a numeric any field is followed by nil")
+
+			require.Equal(t, tt.wantMeta, result.Meta)
+			require.Equal(t, tt.wantScore, result.Score)
+		})
+	}
+}
+
 // Helper function for floating point comparison
 func abs64(x float64) float64 {
 	if x < 0 {

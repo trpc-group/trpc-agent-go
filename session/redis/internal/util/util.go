@@ -30,6 +30,47 @@ const (
 	StorageTypeZset = "zset"
 )
 
+// SummaryWriteResult classifies a set-if-newer Lua reply for diagnostics.
+// A recognized or unrecognized reply after a successful script execution is
+// not a CreateSessionSummary failure; only the script/marshal/expire error
+// is returned to callers.
+type SummaryWriteResult string
+
+const (
+	// SummaryWriteApplied means the script replied int64(1).
+	SummaryWriteApplied SummaryWriteResult = "stored"
+	// SummaryWriteStale means the script replied int64(0).
+	SummaryWriteStale SummaryWriteResult = "stale"
+	// SummaryWriteUnknown means the script returned a reply that is neither
+	// int64 0 nor 1. Callers must not guess stored or stale.
+	SummaryWriteUnknown SummaryWriteResult = "unknown"
+)
+
+// Applied reports whether the write is known to have been stored.
+func (r SummaryWriteResult) Applied() bool {
+	return r == SummaryWriteApplied
+}
+
+// ParseSummaryWriteResult classifies a set-if-newer summary script reply.
+// Both storage layouts reply int64(1) when the write was applied and
+// int64(0) when the stored summary is newer and was deliberately kept.
+// Any other type or value is unknown: the original Redis contract does not
+// turn a successful script execution into a caller-visible error.
+func ParseSummaryWriteResult(result any) SummaryWriteResult {
+	value, ok := result.(int64)
+	if !ok {
+		return SummaryWriteUnknown
+	}
+	switch value {
+	case 1:
+		return SummaryWriteApplied
+	case 0:
+		return SummaryWriteStale
+	default:
+		return SummaryWriteUnknown
+	}
+}
+
 // ProcessStateCmd processes a HGetAll command result into a StateMap.
 func ProcessStateCmd(cmd *redis.MapStringStringCmd) (session.StateMap, error) {
 	bytes, err := cmd.Result()

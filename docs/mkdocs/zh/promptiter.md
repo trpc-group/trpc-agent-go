@@ -1145,17 +1145,20 @@ type StopPolicy struct {
 	MaxRoundsWithoutAcceptance int
 	// TargetScore 是达到后即可停止的目标验证分数，nil 表示不启用。
 	TargetScore                *float64
+	// StopOnNoTrainLosses 在训练集评估未提取出 loss 时停止。
+	StopOnNoTrainLosses        bool
 }
 ```
 
 停止判定按以下顺序执行。
 
-1. 当前轮数达到 `MaxRounds`，停止
-2. 连续未接受轮数达到 `MaxRoundsWithoutAcceptance`，停止
-3. 当前基准的验证分数达到 `TargetScore`，停止
-4. 否则继续下一轮
+1. 启用 `StopOnNoTrainLosses` 且本轮训练集评估未提取出 loss，在 Backward 前停止
+2. 当前轮数达到 `MaxRounds`，停止
+3. 连续未接受轮数达到 `MaxRoundsWithoutAcceptance`，停止
+4. 当前基准的验证分数达到 `TargetScore`，停止
+5. 否则继续下一轮
 
-`MaxRounds` 本身是 `RunRequest` 的必填约束，必须大于 0。`TargetScore` 为 `nil` 时不会触发目标分数停止条件。
+`MaxRounds` 本身是 `RunRequest` 的必填约束，必须大于 0。`TargetScore` 为 `nil` 时不会触发目标分数停止条件。`StopOnNoTrainLosses` 默认为 `false`，保持空 loss 轮次继续执行 no-op 候选验证的历史行为。
 
 ### RunRequest
 
@@ -1265,6 +1268,8 @@ type OptimizerOptions struct {
 ```
 
 `RunRequest` 首先指定训练集和验证集。`Train` 用于产生优化信号，`Validation` 用于接受判定，二者均不能为空。每个 `EvalSetInput` 可以指向完整评估集，也可以通过 `EvalCaseIDs` 只运行其中部分评估用例。`LossHints` 和 `LossTargets` 只服务于训练集，分别用于补充业务侧已知的问题原因，以及指定失败指标 loss 开始反向传播的 trace 节点。
+
+`StopPolicy.StopOnNoTrainLosses` 用于在训练集评估已经没有可用优化信号时提前结束。触发时，本轮结果会保留 `Train`、`Losses` 和 `Stop`，但不会写入 `Backward`、`Aggregation`、`Patches`、`OutputProfile`、`Validation` 或 `Acceptance`。
 
 `InitialProfile` 用于指定本次迭代的起始 Profile。未传入时，PromptIter 使用结构快照中的原始 surface 值作为起始基线。传入 `InitialProfile` 时，如果 `StructureID` 非空，需要与当前结构快照 ID 一致。
 

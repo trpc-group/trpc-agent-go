@@ -226,6 +226,12 @@ func TestWithMessagesSnapshotSessionPageResolver(t *testing.T) {
 	assert.Equal(t, &aguirunner.MessagesSnapshotPageRequest{Cursor: "cursor", EventLimit: 3}, req)
 }
 
+func TestWithMessagesSnapshotBestEffortEnabled(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotBestEffortEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.MessagesSnapshotBestEffortEnabled)
+}
+
 func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)

@@ -276,6 +276,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
 			result.Inferences = inferenceResult.Invocations
 			result.ExecutionTraces = inferenceResult.ExecutionTraces
+			result.InferenceStats = inferenceResult.InferenceStats
 		}
 		attachContextMessages(expectedInferences, evalCase.ContextMessages)
 		result.ExpectedInferences = expectedInferences
@@ -317,6 +318,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	)
 	if inferenceResult != nil {
 		result.ExecutionTraces = inferenceResult.ExecutionTraces
+		result.InferenceStats = inferenceResult.InferenceStats
 		attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
 		result.Inferences = inferenceResult.Invocations
 	}
@@ -448,9 +450,13 @@ func traceExpectedRunnerInputs(actuals, expecteds []*evalset.Invocation) []*eval
 		}
 		input := &evalset.Invocation{
 			InvocationID: actual.InvocationID,
+			MetricNames:  append([]string(nil), actual.MetricNames...),
 			UserContent:  actual.UserContent,
 		}
 		if expecteds[i] != nil {
+			if len(expecteds[i].MetricNames) != 0 {
+				input.MetricNames = append([]string(nil), expecteds[i].MetricNames...)
+			}
 			input.ToolMock = expecteds[i].ToolMock
 		}
 		inputs[i] = input
@@ -517,7 +523,7 @@ func (s *local) inferScenarioConversation(
 			runOptions,
 		)
 		if err != nil {
-			return nil, nil, err
+			return inferenceResult, nil, err
 		}
 		if !evalCase.ExpectedRunnerEnabled {
 			return inferenceResult, nil, nil

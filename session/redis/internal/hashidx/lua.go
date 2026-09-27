@@ -163,25 +163,23 @@ end
 return 1
 `)
 
-// luaLoadEvents loads events by time range.
+// luaLoadEvents loads one bounded batch of events in reverse chronological order.
 // KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
-// ARGV[1] = offset, ARGV[2] = limit, ARGV[3] = reverse (1=latest first, 0=oldest first)
+// ARGV[1] = minScore, ARGV[2] = offset, ARGV[3] = batch size
+// The first returned element is the number of indexed IDs scanned. The remaining
+// elements are event JSON payloads; missing Hash fields are skipped.
 var luaLoadEvents = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
-local offset = tonumber(ARGV[1])
-local limit = tonumber(ARGV[2])
-local reverse = tonumber(ARGV[3]) == 1
+local minScore = ARGV[1]
+local offset = tonumber(ARGV[2])
+local batchSize = math.min(tonumber(ARGV[3]), 512)
 
-local endIdx = limit < 0 and -1 or offset + limit - 1
-local eventIDs
-if reverse then
-    eventIDs = redis.call('ZREVRANGE', evtTimeKey, offset, endIdx)
-else
-    eventIDs = redis.call('ZRANGE', evtTimeKey, offset, endIdx)
-end
-
-local result = {}
+local eventIDs = redis.call(
+    'ZREVRANGEBYSCORE', evtTimeKey, '+inf', minScore,
+    'LIMIT', offset, batchSize
+)
+local result = {tostring(#eventIDs)}
 if #eventIDs > 0 then
     local dataList = redis.call('HMGET', evtDataKey, unpack(eventIDs))
     for _, data in ipairs(dataList) do
@@ -351,51 +349,33 @@ end
 return 0
 `)
 
-// luaLoadSessionData loads core session data in a single Lua call (except appState and tracks).
-// Tracks are loaded separately via pipeline (RT2) to avoid cjson empty-array quirks.
+// luaLoadSessionData loads user state and summary in a single Lua call.
+// Events are loaded separately in bounded batches, and tracks use their own loader.
 //
 // KEYS layout (all {userID}-scoped, same Redis Cluster slot):
 //
-//	KEYS[1] = evtdata key (HASH)
-//	KEYS[2] = evtidx:time key (ZSET)
-//	KEYS[3] = sessionMeta key (STRING)
-//	KEYS[4] = summaryKey (STRING, JSON map of filterKey -> Summary)
-//	KEYS[5] = userStateKey (HASH)
+//	KEYS[1] = summaryKey (STRING, JSON map of filterKey -> Summary)
+//	KEYS[2] = userStateKey (HASH)
 //
 // Returns: cjson-encoded table:
 //
 //	{
-//	  "events": [eventJSON, ...],                       -- all events in chronological order
 //	  "summary": "..." or nil,                          -- raw summary JSON string (entire map)
 //	  "userState": {"key": "value", ...} or nil,        -- user state map
 //	}
 var luaLoadSessionData = redis.NewScript(`
-local evtDataKey = KEYS[1]
-local evtTimeKey = KEYS[2]
-local sessionMetaKey = KEYS[3]
-local summaryKey = KEYS[4]
-local userStateKey = KEYS[5]
+local summaryKey = KEYS[1]
+local userStateKey = KEYS[2]
 
-local result = {}
+local result = {loaded = true}
 
--- 1. Load events (chronological order)
-local eventIDs = redis.call('ZRANGE', evtTimeKey, 0, -1)
-local events = {}
-if #eventIDs > 0 then
-    local dataList = redis.call('HMGET', evtDataKey, unpack(eventIDs))
-    for _, data in ipairs(dataList) do
-        if data then table.insert(events, data) end
-    end
-end
-result['events'] = events
-
--- 2. Load summary (String key containing entire JSON map)
+-- 1. Load summary (String key containing entire JSON map)
 local sumData = redis.call('GET', summaryKey)
 if sumData then
     result['summary'] = sumData
 end
 
--- 3. Load user state
+-- 2. Load user state
 local userState = redis.call('HGETALL', userStateKey)
 if #userState > 0 then
     local us = {}
@@ -611,10 +591,18 @@ end
 
 local result = {}
 if #eventIDs > 0 then
-    local dataList = redis.call('HMGET', dataKey, unpack(eventIDs))
-    for _, data in ipairs(dataList) do
-        if data then
-            table.insert(result, data)
+    local batchSize = 512
+    for startIdx = 1, #eventIDs, batchSize do
+        local batchIDs = {}
+        local endIdx = math.min(startIdx + batchSize - 1, #eventIDs)
+        for i = startIdx, endIdx do
+            table.insert(batchIDs, eventIDs[i])
+        end
+        local dataList = redis.call('HMGET', dataKey, unpack(batchIDs))
+        for _, data in ipairs(dataList) do
+            if data then
+                table.insert(result, data)
+            end
         end
     end
 end

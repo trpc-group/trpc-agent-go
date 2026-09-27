@@ -298,6 +298,7 @@ func TestService_SessionEventLimit_TrimsOldest(t *testing.T) {
 	service, err := NewService(
 		WithRedisClientURL(redisURL),
 		WithSessionEventLimit(limit),
+		WithCompatMode(CompatModeNone),
 	)
 	require.NoError(t, err)
 	defer service.Close()

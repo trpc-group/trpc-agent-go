@@ -16,8 +16,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -69,6 +71,35 @@ func (m *benchIterModel) GenerateContentIter(ctx context.Context, request *model
 
 func (m *benchIterModel) Info() model.Info {
 	return model.Info{Name: "benchIterModel"}
+}
+
+type benchTailoringIterModel struct {
+	record *imodelrequest.TokenTailoringRecord
+}
+
+func (m *benchTailoringIterModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *benchTailoringIterModel) GenerateContentIter(
+	ctx context.Context,
+	_ *model.Request,
+) (model.Seq[*model.Response], error) {
+	if m.record != nil {
+		imodelrequest.RecordTokenTailoring(ctx, *m.record)
+	}
+	return func(yield func(*model.Response) bool) {
+		yield(&model.Response{Done: true})
+	}, nil
+}
+
+func (m *benchTailoringIterModel) Info() model.Info {
+	return model.Info{Name: "benchTailoringIterModel"}
 }
 
 func makeBenchResponses(n int) []*model.Response {
@@ -185,5 +216,78 @@ func BenchmarkStreamingResponseProcessorUpdateMetricsState(b *testing.B) {
 				processor.updateMetricsState()
 			}
 		})
+	}
+}
+
+func BenchmarkCallLLMTokenTailoringDiagnostics(b *testing.B) {
+	oldDebugfContext := log.DebugfContext
+	oldInfofContext := log.InfofContext
+	oldWarnfContext := log.WarnfContext
+	log.DebugfContext = func(context.Context, string, ...any) {}
+	log.InfofContext = func(context.Context, string, ...any) {}
+	log.WarnfContext = func(context.Context, string, ...any) {}
+	b.Cleanup(func() {
+		log.DebugfContext = oldDebugfContext
+		log.InfofContext = oldInfofContext
+		log.WarnfContext = oldWarnfContext
+	})
+
+	for _, messageCount := range []int{16, 256} {
+		messages := make([]model.Message, messageCount)
+		items := make([]summaryview.Item, 0, messageCount-2)
+		for i := range messages {
+			messages[i] = model.NewUserMessage("benchmark model-visible history")
+			if i > 0 && i < messageCount-1 {
+				items = append(items, summaryview.Item{
+					Message:      messages[i],
+					RequestIndex: i,
+				})
+			}
+		}
+		request := &model.Request{Messages: messages}
+
+		for _, tc := range []struct {
+			name   string
+			record *imodelrequest.TokenTailoringRecord
+		}{
+			{name: "Unchanged"},
+			{
+				name: "Collapsed",
+				record: &imodelrequest.TokenTailoringRecord{
+					Provider:       "bench.Model",
+					MaxInputTokens: 1024,
+					BeforeMessages: messageCount,
+					AfterMessages:  2,
+				},
+			},
+		} {
+			b.Run(fmt.Sprintf("%s/Messages=%d", tc.name, messageCount), func(b *testing.B) {
+				ctx := context.Background()
+				callModel := &benchTailoringIterModel{record: tc.record}
+				invocation := agent.NewInvocation(
+					agent.WithInvocationModel(callModel),
+				)
+				summaryview.AttachProjection(invocation, &summaryview.View{
+					ContentRequestLength: len(messages),
+					Items:                items,
+				})
+				f := new(Flow)
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_, seq, _, err := f.callLLM(
+						ctx,
+						invocation,
+						request,
+						callModel,
+					)
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchCountSink, benchRespSink = consumeSeq(seq)
+				}
+			})
+		}
 	}
 }

@@ -26,9 +26,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
@@ -228,7 +230,9 @@ type ContentRequestProcessor struct {
 	SummaryFormatter func(summary string) string
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector           EventMessageProjector
+	syntheticErrorUserMergeObserver func(*agent.Invocation, event.Event, model.Message)
+	includeSyntheticErrorMessages   bool
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -483,6 +487,28 @@ func WithEventMessageProjector(
 	}
 }
 
+// WithSyntheticErrorUserMergeObserver sets an internal observer called when
+// omission of synthetic error content merges a user message into the preceding
+// user message.
+func WithSyntheticErrorUserMergeObserver(
+	observer func(*agent.Invocation, event.Event, model.Message),
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.syntheticErrorUserMergeObserver = observer
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether presentation content
+// synthesized for error events is included in model requests. False is the
+// default: synthesized error content is omitted, and adjacent user messages
+// exposed by the omission may be merged. True includes the synthesized content
+// and preserves the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.includeSyntheticErrorMessages = include
+	}
+}
+
 // WithEnableContextCompaction toggles prompt-side context compaction during
 // history projection. Historical oversized tool results can be compacted
 // regardless of whether AddSessionSummary is enabled.
@@ -669,6 +695,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 	summaryview.Clear(invocation)
+	summaryinject.Clear(invocation)
 
 	cfg := p.runtimeConfigFromInvocation(invocation)
 	skipHistory := cfg.includeMode == "none"
@@ -758,14 +785,16 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	}
 
 	var userContextBlocks []string
-	summaryText, summaryCutoff := p.sessionSummaryForRequest(invocation, skipHistory)
+	summarySelection := p.sessionSummaryForRequest(invocation, skipHistory)
+	summaryText := summarySelection.text
+	summaryCutoff := summarySelection.cutoff
 	userContextBlocks = p.appendPreloadMemoryContext(
 		ctx,
 		invocation,
 		req,
 		userContextBlocks,
 	)
-	userContextBlocks = p.appendSummaryContext(
+	userContextBlocks, summarySelection.block = p.appendSummaryContext(
 		invocation,
 		req,
 		summaryText,
@@ -794,6 +823,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	// turn. If no such message exists, fall back to a trailing user message in
 	// req.Messages (for example, injected context) to avoid creating an extra
 	// adjacent user block.
+	summarySelection.historyMessages = len(messages)
 	if len(userContextBlocks) > 0 {
 		messages = prependUserContextMessage(
 			strings.Join(userContextBlocks, mergedUserSeparator),
@@ -804,6 +834,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	messageStart := len(req.Messages)
 	req.Messages = append(req.Messages, messages...)
+	summarySelection.record(invocation)
 	view := modelVisibleHistoryView(
 		invocation,
 		history,
@@ -858,18 +889,69 @@ func modelVisibleHistoryView(
 	}
 }
 
+// requestSummarySelection is the per-request session summary selection and the
+// diagnostics needed to explain it at the final request boundary.
+type requestSummarySelection struct {
+	enabled         bool
+	text            string
+	cutoff          summaryHistoryCutoff
+	diagnostics     summarySelectionDiagnostics
+	block           string
+	historyMessages int
+	sessionEvents   int
+}
+
+// record publishes the selection so the final request boundary can report
+// whether the selected summary reached the model. Requests that do not use
+// session summaries publish nothing and stay silent.
+func (s requestSummarySelection) record(invocation *agent.Invocation) {
+	if !s.enabled {
+		return
+	}
+	summaryinject.Record(invocation, summaryinject.Selection{
+		LookupStrategy:     s.diagnostics.strategy,
+		LookupResult:       s.diagnostics.result,
+		Selected:           s.text != "",
+		BoundaryPresent:    !s.cutoff.IsZero(),
+		StoredSummaries:    s.diagnostics.storedSummaries,
+		MatchingCandidates: s.diagnostics.matchingCandidates,
+		FullSessionPresent: s.diagnostics.fullSessionPresent,
+		ScopedRequest:      s.diagnostics.scopedRequest,
+		SessionEvents:      s.sessionEvents,
+		HistoryMessages:    s.historyMessages,
+		Block:              s.block,
+	})
+}
+
 func (p *ContentRequestProcessor) sessionSummaryForRequest(
 	invocation *agent.Invocation,
 	skipHistory bool,
-) (string, summaryHistoryCutoff) {
+) requestSummarySelection {
 	// Skip session summary when include_contents=none, but still get current
 	// invocation's events (tool calls/results) to maintain ReAct loop context.
 	if skipHistory || !p.AddSessionSummary || p.TimelineFilterMode != TimelineFilterAll {
-		return "", summaryHistoryCutoff{}
+		return requestSummarySelection{}
 	}
 	// Fetch session summary early so we can insert it after other semi-stable
 	// system blocks (for example, preloaded memories).
-	return p.getSessionSummaryText(invocation)
+	text, cutoff, diagnostics := p.lookUpSessionSummary(invocation)
+	return requestSummarySelection{
+		enabled:       true,
+		text:          text,
+		cutoff:        cutoff,
+		diagnostics:   diagnostics,
+		sessionEvents: sessionEventCount(invocation),
+	}
+}
+
+// sessionEventCount reports how many events the session currently stores.
+func sessionEventCount(invocation *agent.Invocation) int {
+	if invocation == nil || invocation.Session == nil {
+		return 0
+	}
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	return len(invocation.Session.Events)
 }
 
 func (p *ContentRequestProcessor) appendPreloadMemoryContext(
@@ -893,28 +975,28 @@ func (p *ContentRequestProcessor) appendPreloadMemoryContext(
 	return userContextBlocks
 }
 
+// appendSummaryContext injects the selected summary and returns the formatted
+// block that was written into the request.
 func (p *ContentRequestProcessor) appendSummaryContext(
 	invocation *agent.Invocation,
 	req *model.Request,
 	summaryText string,
 	userContextBlocks []string,
-) []string {
+) ([]string, string) {
 	if summaryText == "" {
-		return userContextBlocks
+		return userContextBlocks, ""
 	}
 	invocation.SetState(contentHasSessionSummaryStateKey, true)
 	if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-		return appendUserContextBlock(
-			userContextBlocks,
-			p.formatSummaryForUser(summaryText),
-		)
+		block := p.formatSummaryForUser(summaryText)
+		return appendUserContextBlock(userContextBlocks, block), block
 	}
 	summaryMsg := model.Message{
 		Role:    model.RoleSystem,
 		Content: p.formatSummary(summaryText),
 	}
 	p.injectSystemContextMessage(req, summaryMsg)
-	return userContextBlocks
+	return userContextBlocks, summaryMsg.Content
 }
 
 func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
@@ -1113,8 +1195,33 @@ func (c eventHistoryCutoff) excludesEvent(index int, evt event.Event) bool {
 // cutoff for the current branch. It does not format or assign
 // a role — callers decide how to inject the text into the request.
 func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (string, summaryHistoryCutoff) {
+	text, cutoff, _ := p.lookUpSessionSummary(inv)
+	return text, cutoff
+}
+
+// summarySelectionDiagnostics reports how a stored summary lookup resolved. It
+// separates the configured scope from what that scope found, and carries only
+// counts and stable enum values, never summary text or filter keys.
+type summarySelectionDiagnostics struct {
+	strategy           string
+	result             string
+	storedSummaries    int
+	matchingCandidates int
+	fullSessionPresent bool
+	scopedRequest      bool
+}
+
+// lookUpSessionSummary selects the stored summary for the current request and
+// reports how the lookup resolved.
+func (p *ContentRequestProcessor) lookUpSessionSummary(
+	inv *agent.Invocation,
+) (string, summaryHistoryCutoff, summarySelectionDiagnostics) {
+	diagnostics := summarySelectionDiagnostics{
+		strategy: p.summaryLookupStrategy(),
+		result:   summaryinject.LookupResultNone,
+	}
 	if inv.Session == nil {
-		return "", summaryHistoryCutoff{}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 
 	// Acquire read lock to protect Summaries access.
@@ -1122,25 +1229,99 @@ func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (
 	defer inv.Session.SummariesMu.RUnlock()
 
 	if inv.Session.Summaries == nil {
-		return "", summaryHistoryCutoff{}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 	filter := inv.GetEventFilterKey()
 	// For BranchFilterModeAll, prefer the full-session summary under empty filter key.
 	if p.BranchFilterMode == BranchFilterModeAll {
 		filter = ""
 	}
+	diagnostics.scopedRequest = filter != ""
+	diagnostics.storedSummaries = countStoredSummaries(inv.Session.Summaries)
+	diagnostics.matchingCandidates = p.countMatchingSummaries(
+		inv.Session.Summaries, filter,
+	)
+	diagnostics.fullSessionPresent = hasStoredSummary(
+		inv.Session.Summaries, session.SummaryFilterKeyAllContents,
+	)
 
 	// Try exact match first.
 	sum := inv.Session.Summaries[filter]
 	if sum != nil && sum.Summary != "" {
-		return sum.Summary, summaryHistoryCutoffFromBoundary(sum.CutoffBoundary())
+		diagnostics.result = summaryinject.LookupResultExact
+		return sum.Summary,
+			summaryHistoryCutoffFromBoundary(sum.CutoffBoundary()),
+			diagnostics
 	}
 
 	// For BranchFilterModePrefix, aggregate summaries with matching prefix.
 	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
-		return p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		text, cutoff := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		if text != "" {
+			diagnostics.result = summaryinject.LookupResultPrefix
+		}
+		return text, cutoff, diagnostics
 	}
-	return "", summaryHistoryCutoff{}
+	return "", summaryHistoryCutoff{}, diagnostics
+}
+
+// summaryLookupStrategy reports the summary scope this processor searches.
+// Subtree and exact branch modes both look up only the request's own key.
+func (p *ContentRequestProcessor) summaryLookupStrategy() string {
+	switch p.BranchFilterMode {
+	case BranchFilterModeAll:
+		return summaryinject.LookupStrategyAll
+	case BranchFilterModePrefix:
+		return summaryinject.LookupStrategyPrefix
+	default:
+		return summaryinject.LookupStrategyExact
+	}
+}
+
+// countMatchingSummaries counts the non-empty summaries inside the configured
+// lookup scope. Callers must hold the session summaries read lock.
+func (p *ContentRequestProcessor) countMatchingSummaries(
+	summaries map[string]*session.Summary,
+	filter string,
+) int {
+	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
+		count := 0
+		for key, sum := range summaries {
+			if sum == nil || sum.Summary == "" {
+				continue
+			}
+			if session.SummaryFilterKeyMatchesPrefix(key, filter) {
+				count++
+			}
+		}
+		return count
+	}
+	if hasStoredSummary(summaries, filter) {
+		return 1
+	}
+	return 0
+}
+
+// hasStoredSummary reports whether a non-empty summary is stored under key.
+// Callers must hold the session summaries read lock.
+func hasStoredSummary(
+	summaries map[string]*session.Summary,
+	key string,
+) bool {
+	sum := summaries[key]
+	return sum != nil && sum.Summary != ""
+}
+
+// countStoredSummaries counts non-empty summaries across all filter keys.
+// Callers must hold the session summaries read lock.
+func countStoredSummaries(summaries map[string]*session.Summary) int {
+	count := 0
+	for _, sum := range summaries {
+		if sum != nil && sum.Summary != "" {
+			count++
+		}
+	}
+	return count
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -1375,6 +1556,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.applyToolTranscriptMode(events, inv)
 	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
@@ -1405,6 +1587,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		inv,
 		filter,
 		eventCutoff,
+		assistantToolCallPairs,
 	)
 
 	history = p.mergeProjectedUserMessages(history)
@@ -1545,6 +1728,7 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	inv *agent.Invocation,
 	filter string,
 	cutoff eventHistoryCutoff,
+	assistantToolCallPairs map[string]string,
 ) projectedHistory {
 	// Decide whether a turn needs its covered user anchor only after projection.
 	// A projector may remove or rewrite the retained assistant or tool message.
@@ -1569,31 +1753,57 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	}
 
 	var history projectedHistory
-	appendEvent := func(evt event.Event, boundary summaryview.Boundary) {
-		for _, msg := range p.projectMessagesForEvent(
-			inv,
-			evt,
-			currentRequestID,
-			toolCallRequestIDs,
-		) {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
-	}
-	seenTurns := make(map[historyTurnKey]struct{})
-	for _, evt := range retained {
+	appendEvent := func(
+		evt event.Event,
+		boundary summaryview.Boundary,
+		mergeFirstUser bool,
+	) {
 		projected := p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
 		)
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeFirstUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+	}
+	projectedByEvent := make([][]model.Message, len(retained))
+	for i, evt := range retained {
+		projectedByEvent[i] = p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		)
+	}
+
+	seenTurns := make(map[historyTurnKey]struct{})
+	mergeNextUser := false
+	for i := 0; i < len(retained); i++ {
+		evt := retained[i]
+		projected := projectedByEvent[i]
+		pairedEventID, paired := assistantToolCallPairs[evt.ID]
+		if i+1 < len(retained) && paired &&
+			pairedEventID == retained[i+1].ID {
+			if merged, ok := mergeProjectedAssistantToolCallMessages(
+				projected,
+				projectedByEvent[i+1],
+			); ok {
+				evt = retained[i+1]
+				projected = []model.Message{merged}
+				i++
+			}
+		}
 		if len(projected) == 0 {
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
 			continue
 		}
 		key, hasKey := historyTurnKeyForEvent(evt)
@@ -1605,21 +1815,99 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 			if userEvt, ok := coveredUsers[key]; ok &&
 				(role == model.RoleAssistant || role == model.RoleTool) {
-				appendEvent(userEvt, summaryview.Boundary{})
+				appendEvent(
+					userEvt,
+					summaryview.Boundary{},
+					mergeNextUser,
+				)
+				mergeNextUser = false
 			}
 		}
 		boundary := eligibleBoundaries[evt.ID]
-		for _, msg := range projected {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeNextUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+		mergeNextUser = false
 	}
 	return history
+}
+
+func appendProjectedHistory(
+	history *projectedHistory,
+	evt event.Event,
+	boundary summaryview.Boundary,
+	messages []model.Message,
+	mergeFirstUser bool,
+) (model.Message, bool) {
+	var mergedCurrentUser model.Message
+	var merged bool
+	for i, msg := range messages {
+		if i == 0 && mergeFirstUser &&
+			mergeLastProjectedUser(history, msg, boundary) {
+			mergedCurrentUser = msg
+			merged = true
+			continue
+		}
+		history.messages = append(history.messages, msg)
+		history.items = append(history.items, summaryview.Item{
+			Message:        msg,
+			EffectiveEvent: effectiveEventForMessage(evt, msg),
+			Boundary:       boundary,
+		})
+	}
+	return mergedCurrentUser, merged
+}
+
+func (p *ContentRequestProcessor) observeSyntheticErrorUserMerge(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+	merged bool,
+) {
+	if !merged || p == nil || p.syntheticErrorUserMergeObserver == nil {
+		return
+	}
+	p.syntheticErrorUserMergeObserver(inv, evt, msg)
+}
+
+func mergeLastProjectedUser(
+	history *projectedHistory,
+	next model.Message,
+	boundary summaryview.Boundary,
+) bool {
+	if history == nil || len(history.messages) == 0 ||
+		len(history.messages) != len(history.items) ||
+		next.Role != model.RoleUser {
+		return false
+	}
+	lastIndex := len(history.messages) - 1
+	if history.messages[lastIndex].Role != model.RoleUser {
+		return false
+	}
+	last := &history.messages[lastIndex]
+	if next.Content != "" {
+		if last.Content == "" {
+			last.Content = next.Content
+		} else {
+			last.Content += mergedUserSeparator + next.Content
+		}
+	}
+	last.ContentParts = append(last.ContentParts, next.ContentParts...)
+	item := &history.items[lastIndex]
+	item.Message = *last
+	item.EffectiveEvent = effectiveEventForMessage(
+		item.EffectiveEvent,
+		*last,
+	)
+	if !boundary.IsZero() {
+		item.Boundary = boundary
+	}
+	return true
 }
 
 func effectiveEventForMessage(
@@ -2385,25 +2673,52 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	currentRequestID := inv.RunOptions.RequestID
 	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
-	var history projectedHistory
-	for _, evt := range resultEvents {
-		for _, msg := range p.projectMessagesForEvent(
+	projectedByEvent := make([][]model.Message, len(resultEvents))
+	for i, evt := range resultEvents {
+		projectedByEvent[i] = p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
-		) {
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effectiveEventForMessage(evt, msg),
-				Boundary:       persistedBoundaries[evt.ID],
-			})
+		)
+	}
+	var history projectedHistory
+	mergeNextUser := false
+	for i := 0; i < len(resultEvents); i++ {
+		evt := resultEvents[i]
+		projected := projectedByEvent[i]
+		pairedEventID, paired := assistantToolCallPairs[evt.ID]
+		if i+1 < len(resultEvents) && paired &&
+			pairedEventID == resultEvents[i+1].ID {
+			if merged, ok := mergeProjectedAssistantToolCallMessages(
+				projected,
+				projectedByEvent[i+1],
+			); ok {
+				evt = resultEvents[i+1]
+				projected = []model.Message{merged}
+				i++
+			}
 		}
+		if len(projected) == 0 {
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
+			continue
+		}
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			persistedBoundaries[evt.ID],
+			projected,
+			mergeNextUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+		mergeNextUser = false
 	}
 	history = p.mergeProjectedUserMessages(history)
 	if len(history.items) != len(history.messages) {
@@ -2483,12 +2798,139 @@ func containsInvocationMessage(
 	return false
 }
 
+// nonTerminalAssistantToolCallPairs records adjacent raw events that may form
+// one assistant model turn. Session events remain unchanged; the pair is only
+// normalized after both events have passed through message projection.
+func nonTerminalAssistantToolCallPairs(
+	inv *agent.Invocation,
+	events []event.Event,
+) map[string]string {
+	pairs := make(map[string]string)
+	for i := 0; i+1 < len(events); i++ {
+		textEvent := events[i]
+		toolCallEvent := events[i+1]
+		if !sameAssistantTurnIdentity(textEvent, toolCallEvent) ||
+			!sameAssistantTurnContext(textEvent, toolCallEvent) ||
+			!mergeableAssistantEventShape(textEvent, toolCallEvent) ||
+			!sameAssistantEventOrigin(inv, textEvent, toolCallEvent) {
+			continue
+		}
+		if _, ok := mergeProjectedAssistantToolCallMessages(
+			[]model.Message{textEvent.Choices[0].Message},
+			[]model.Message{toolCallEvent.Choices[0].Message},
+		); !ok {
+			continue
+		}
+		pairs[textEvent.ID] = toolCallEvent.ID
+	}
+	return pairs
+}
+
+func sameAssistantTurnIdentity(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.ID != "" && toolCallEvent.ID != "" &&
+		textEvent.Response != nil && toolCallEvent.Response != nil &&
+		textEvent.Response.ID != "" && toolCallEvent.Response.ID != "" &&
+		textEvent.RequestID != "" &&
+		textEvent.RequestID == toolCallEvent.RequestID &&
+		textEvent.InvocationID != "" &&
+		textEvent.InvocationID == toolCallEvent.InvocationID
+}
+
+func sameAssistantTurnContext(textEvent, toolCallEvent event.Event) bool {
+	if textEvent.ParentInvocationID != toolCallEvent.ParentInvocationID ||
+		textEvent.Author != toolCallEvent.Author ||
+		textEvent.Branch != toolCallEvent.Branch ||
+		textEvent.FilterKey != toolCallEvent.FilterKey {
+		return false
+	}
+	if (textEvent.ParentMetadata == nil) !=
+		(toolCallEvent.ParentMetadata == nil) {
+		return false
+	}
+	return textEvent.ParentMetadata == nil ||
+		*textEvent.ParentMetadata == *toolCallEvent.ParentMetadata
+}
+
+func mergeableAssistantEventShape(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.Error == nil && toolCallEvent.Error == nil &&
+		!textEvent.IsPartial && !toolCallEvent.IsPartial &&
+		!textEvent.Done && !toolCallEvent.Done &&
+		len(textEvent.Choices) == 1 && len(toolCallEvent.Choices) == 1 &&
+		mergeableAssistantObject(textEvent.Object) &&
+		mergeableAssistantObject(toolCallEvent.Object)
+}
+
+func mergeableAssistantObject(object string) bool {
+	return object == "" || object == model.ObjectTypeChatCompletion
+}
+
+func sameAssistantEventOrigin(
+	inv *agent.Invocation,
+	textEvent event.Event,
+	toolCallEvent event.Event,
+) bool {
+	return messageorigin.IsSeedHistory(inv, textEvent.ID) ==
+		messageorigin.IsSeedHistory(inv, toolCallEvent.ID) &&
+		messageorigin.IsCurrentTurn(inv, textEvent.ID) ==
+			messageorigin.IsCurrentTurn(inv, toolCallEvent.ID)
+}
+
+// mergeProjectedAssistantToolCallMessages combines one assistant text event
+// with its following assistant tool-call event for model-facing history. Any
+// text on the tool-call event is appended verbatim because event content owns
+// its whitespace; the processor must not invent a separator. Rich fields that
+// cannot be combined without changing provider semantics cause rejection.
+func mergeProjectedAssistantToolCallMessages(
+	textMessages []model.Message,
+	toolCallMessages []model.Message,
+) (model.Message, bool) {
+	if len(textMessages) != 1 || len(toolCallMessages) != 1 {
+		return model.Message{}, false
+	}
+	text := textMessages[0]
+	toolCall := toolCallMessages[0]
+	if !mergeableAssistantTextMessage(text) ||
+		!mergeableAssistantToolCallMessage(toolCall) ||
+		!mergeableAssistantToolCalls(toolCall.ToolCalls) {
+		return model.Message{}, false
+	}
+	combined := toolCall
+	combined.Content = text.Content + toolCall.Content
+	return combined, true
+}
+
+func mergeableAssistantTextMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && message.Content != "" &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" && message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCallMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCalls(toolCalls []model.ToolCall) bool {
+	for _, call := range toolCalls {
+		if call.Index != nil || len(call.ExtraFields) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *ContentRequestProcessor) projectMessagesForEvent(
 	inv *agent.Invocation,
 	evt event.Event,
 	currentRequestID string,
 	toolCallRequestIDs map[string]struct{},
 ) []model.Message {
+	if p.omitsSyntheticErrorEvent(&evt) {
+		return nil
+	}
 	ev := evt
 	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
 		ev = p.convertForeignEvent(&ev)
@@ -2513,6 +2955,13 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) omitsSyntheticErrorEvent(
+	evt *event.Event,
+) bool {
+	return p != nil && !p.includeSyntheticErrorMessages &&
+		errorcontent.IsSynthetic(evt)
 }
 
 func requestIDsWithToolCalls(events []event.Event) map[string]struct{} {

@@ -287,20 +287,24 @@ func (e *engine) run(
 		if err != nil {
 			return nil, err
 		}
-		if roundResult.Acceptance.Accepted {
-			acceptedProfile = roundResult.OutputProfile
-			acceptedValidationScore = effectiveScore
-			roundsWithoutAcceptance = 0
-		} else {
-			roundsWithoutAcceptance++
+		if roundResult.Acceptance != nil {
+			if roundResult.Acceptance.Accepted {
+				acceptedProfile = roundResult.OutputProfile
+				acceptedValidationScore = effectiveScore
+				roundsWithoutAcceptance = 0
+			} else {
+				roundsWithoutAcceptance++
+			}
 		}
-		roundResult.Stop = e.stop(
-			roundNumber,
-			request.MaxRounds,
-			request.StopPolicy,
-			roundsWithoutAcceptance,
-			effectiveScore,
-		)
+		if roundResult.Stop == nil {
+			roundResult.Stop = e.stop(
+				roundNumber,
+				request.MaxRounds,
+				request.StopPolicy,
+				roundsWithoutAcceptance,
+				effectiveScore,
+			)
+		}
 		accepted := roundResult.Acceptance != nil && roundResult.Acceptance.Accepted
 		acceptanceReason := ""
 		scoreDelta := 0.0
@@ -430,6 +434,10 @@ func (e *engine) executeRound(
 	roundResult.Losses = losses
 	if err := appendRunEvent(ctx, observer, EventKindRoundLosses, roundNumber, losses); err != nil {
 		return nil, 0, err
+	}
+	if decision := stopOnNoTrainLosses(request.StopPolicy, len(losses)); decision != nil {
+		roundResult.Stop = decision
+		return roundResult, acceptedValidationScore, nil
 	}
 	backwardResult, err := e.backward(
 		ctx,

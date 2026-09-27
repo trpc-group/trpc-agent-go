@@ -150,10 +150,14 @@ func (o *observer) applyRoundCompleted(event *engine.Event) error {
 		return invalidEventPayloadError(event.Kind)
 	}
 	round := o.ensureRound(event.Round)
-	round.Acceptance = &engine.AcceptanceDecision{
-		Accepted:   payload.Accepted,
-		ScoreDelta: payload.ScoreDelta,
-		Reason:     payload.AcceptanceReason,
+	if roundCompletedHasAcceptance(round, payload) {
+		round.Acceptance = &engine.AcceptanceDecision{
+			Accepted:   payload.Accepted,
+			ScoreDelta: payload.ScoreDelta,
+			Reason:     payload.AcceptanceReason,
+		}
+	} else {
+		round.Acceptance = nil
 	}
 	round.Stop = &engine.StopDecision{
 		ShouldStop: payload.ShouldStop,
@@ -163,6 +167,13 @@ func (o *observer) applyRoundCompleted(event *engine.Event) error {
 		o.run.AcceptedProfile = round.OutputProfile
 	}
 	return nil
+}
+
+func roundCompletedHasAcceptance(round *engine.RoundResult, payload *engine.RoundCompleted) bool {
+	return round != nil && (round.OutputProfile != nil || round.Validation != nil) ||
+		payload.Accepted ||
+		payload.AcceptanceReason != "" ||
+		payload.ScoreDelta != 0
 }
 
 func invalidEventPayloadError(kind engine.EventKind) error {

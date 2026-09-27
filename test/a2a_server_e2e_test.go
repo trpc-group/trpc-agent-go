@@ -223,31 +223,32 @@ func TestA2AProtocolVersionMatrixE2E(t *testing.T) {
 			)
 
 			v1Method := "SendMessage"
-			v0Method := "message/send"
 			if streaming {
 				v1Method = "SendStreamingMessage"
-				v0Method = "message/stream"
 			}
 			failureCases := []struct {
 				name           string
 				client         a2aProtocolGeneration
 				serverURL      string
 				serverCall     *a2aE2ERunner
-				expectedMethod string
+				expectedError  string
+				expectedDetail string
 			}{
 				{
 					name:           "v1_client_to_v0_server",
 					client:         a2aProtocolV1,
 					serverURL:      legacyServer.URL,
 					serverCall:     legacyBackend,
-					expectedMethod: v1Method,
+					expectedError:  "Method not found",
+					expectedDetail: v1Method,
 				},
 				{
 					name:           "v0_client_to_v1_server_without_compatibility",
 					client:         a2aProtocolV0,
 					serverURL:      v1OnlyServer.URL,
 					serverCall:     v1OnlyBackend,
-					expectedMethod: v0Method,
+					expectedError:  "Version not supported",
+					expectedDetail: "0.3",
 				},
 			}
 			for _, test := range failureCases {
@@ -259,8 +260,8 @@ func TestA2AProtocolVersionMatrixE2E(t *testing.T) {
 						streaming,
 						mode+"-"+test.name,
 					)
-					require.ErrorContains(t, err, "Method not found")
-					require.ErrorContains(t, err, test.expectedMethod)
+					require.ErrorContains(t, err, test.expectedError)
+					require.ErrorContains(t, err, test.expectedDetail)
 					require.Len(t, test.serverCall.Calls(), callsBefore)
 				})
 			}

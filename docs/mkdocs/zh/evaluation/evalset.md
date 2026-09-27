@@ -62,6 +62,7 @@ type ConversationScenario struct {
 // Invocation 表示对话中的一轮交互
 type Invocation struct {
 	InvocationID          string               // InvocationID 是本轮标识，可选
+	MetricNames           []string             // MetricNames 指定本轮使用的评估指标
 	ContextMessages       []*model.Message     // ContextMessages 是本轮上下文消息，可选
 	UserContent           *model.Message       // UserContent 是本轮用户输入，必填
 	FinalResponse         *model.Message       // FinalResponse 是最终响应，可选

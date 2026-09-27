@@ -98,6 +98,9 @@ const (
 type Invocation struct {
 	// InvocationID uniquely identifies this invocation.
 	InvocationID string `json:"invocationId,omitempty"`
+	// MetricNames selects the evaluation metrics for this invocation. When empty,
+	// metrics that do not require explicit selection apply.
+	MetricNames []string `json:"metricNames,omitempty"`
 	// ContextMessages contains per-case context messages for this invocation.
 	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// UserContent represents the user's input.

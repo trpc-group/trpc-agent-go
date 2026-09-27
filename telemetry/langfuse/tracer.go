@@ -16,11 +16,11 @@ import (
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -78,13 +78,7 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	}
 	processor := newSpanProcessor(exp)
 	if provider == nil {
-		res, err := resource.New(ctx,
-			resource.WithAttributes(
-				semconv.ServiceNamespace(semconvtrace.ResourceServiceNamespace),
-				semconv.ServiceName(semconvtrace.ResourceServiceName),
-				semconv.ServiceVersion(semconvtrace.ResourceServiceVersion),
-			),
-		)
+		res, err := newResource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
@@ -98,8 +92,23 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 		provider.RegisterSpanProcessor(processor)
 	}
 
-	atrace.Tracer = provider.Tracer(itelemetry.InstrumentName)
+	atrace.Tracer = provider.Tracer(
+		itelemetry.InstrumentName,
+		trace.WithInstrumentationVersion(identity.InstrumentationVersion()),
+	)
 	return provider.Shutdown, nil
+}
+
+func newResource(ctx context.Context) (*resource.Resource, error) {
+	detected, err := resource.New(ctx,
+		resource.WithFromEnv(),
+		resource.WithHost(),
+		resource.WithTelemetrySDK(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(resource.Default(), detected)
 }
 
 // encodeAuth encodes the public and secret keys for basic authentication.

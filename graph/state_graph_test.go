@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -4106,6 +4107,114 @@ func (m *recordingModel) GenerateContent(
 
 func (m *recordingModel) Info() model.Info {
 	return model.Info{Name: "recording"}
+}
+
+func TestLLMRunner_ResolvesProjectedCurrentUser(t *testing.T) {
+	tests := []struct {
+		name               string
+		withProjection     bool
+		withExecutionCtx   bool
+		historyContent     string
+		userInput          string
+		wantRequestContent string
+		wantRequestParts   int
+	}{
+		{
+			name:               "unchanged input keeps final projection",
+			withProjection:     true,
+			withExecutionCtx:   true,
+			historyContent:     "first\n\nsecond",
+			userInput:          "second",
+			wantRequestContent: "first\n\nsecond",
+			wantRequestParts:   1,
+		},
+		{
+			name:               "rewritten input keeps projected history",
+			withProjection:     true,
+			withExecutionCtx:   true,
+			historyContent:     "first\n\nsecond",
+			userInput:          "SECOND",
+			wantRequestContent: "first\n\nSECOND",
+			wantRequestParts:   1,
+		},
+		{
+			name:               "mismatched message uses prior replacement",
+			withProjection:     true,
+			withExecutionCtx:   true,
+			historyContent:     "different projection",
+			userInput:          "SECOND",
+			wantRequestContent: "SECOND",
+		},
+		{
+			name:               "missing execution context uses prior replacement",
+			historyContent:     "first\n\nsecond",
+			userInput:          "second",
+			wantRequestContent: "second",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := agent.NewInvocation(
+				agent.WithInvocationMessage(
+					model.NewUserMessage("second"),
+				),
+			)
+			projected := model.NewUserMessage("second")
+			merged := model.NewUserMessage("first\n\nsecond")
+			merged.AddFileData(
+				"context.txt",
+				[]byte("context"),
+				"text/plain",
+			)
+			if tt.withProjection {
+				messageprojection.SetCurrentUser(inv, projected, merged)
+			}
+
+			history := merged
+			history.Content = tt.historyContent
+			state := State{
+				StateKeyMessages: []model.Message{history},
+			}
+			if tt.withExecutionCtx {
+				state[StateKeyExecContext] = &ExecutionContext{
+					Invocation: inv,
+				}
+			}
+
+			recording := &recordingModel{}
+			runner := &llmRunner{
+				llmModel: recording,
+				nodeID:   "llm",
+			}
+			tracer := oteltrace.NewNoopTracerProvider().Tracer("test")
+			_, span := tracer.Start(context.Background(), "test")
+			defer span.End()
+
+			result, err := runner.executeUserInputStage(
+				context.Background(),
+				state,
+				StateKeyUserInput,
+				tt.userInput,
+				span,
+			)
+			require.NoError(t, err)
+			require.NotEmpty(t, recording.lastMessages)
+			lastIndex := len(recording.lastMessages) - 1
+			requestUser := recording.lastMessages[lastIndex]
+			require.Equal(t, tt.wantRequestContent, requestUser.Content)
+			require.Len(t, requestUser.ContentParts, tt.wantRequestParts)
+
+			update := result.(State)
+			durable := MessageReducer(
+				[]model.Message{history},
+				update[StateKeyMessages],
+			).([]model.Message)
+			require.Len(t, durable, 2)
+			require.Equal(t, tt.wantRequestContent, durable[0].Content)
+			require.Len(t, durable[0].ContentParts, 1)
+		})
+	}
 }
 
 type deltaModel struct {

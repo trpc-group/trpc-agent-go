@@ -23,7 +23,7 @@ type RunAgentInput struct {
 	RunID          string          // 本次运行 ID，用于关联运行生命周期事件。
 	ParentRunID    *string         // 父运行 ID，可选。
 	State          any             // 任意状态；对象类型的值默认会合并到 RuntimeState。
-	Messages       []Message       // 消息列表，用于传递本次用户输入或外部工具结果。
+	Messages       []Message       // 消息列表，用于传递本次用户输入、外部工具结果或框架下发的 assistant 消息。
 	Tools          []Tool          // 工具定义列表，协议字段，可选。
 	Context        []Context       // 上下文列表，协议字段，可选。
 	ForwardedProps any             // 任意透传字段，通常用于携带业务自定义参数。
@@ -156,6 +156,12 @@ DATA 请求体示例：
 ```
 
 每条 `role=tool` 消息对应一个工具调用结果。`toolCallId` 用于关联上一轮事件流中的工具调用，`name` 表示工具名，`content` 使用字符串承载工具执行结果；`id` 会作为返回 `TOOL_CALL_RESULT` 事件时的 message id。
+
+### 框架下发的 Assistant 消息
+
+后台已经生成最终回复、无需再次调用大模型时，可以把 `messages` 尾部消息设为 `role=assistant`，并使用非空字符串 `content`。Runner 会将该消息追加到已有且包含真实 `role=user` 消息的会话，写入 session transcript 和 AG-UI track，不会调用底层 Agent。成功时 SSE 只返回 `RUN_STARTED` 和 `RUN_FINISHED`；持久化失败时返回 `RUN_STARTED` 和 `RUN_ERROR`。
+
+assistant-only 的新会话会失败，不会伪造 user 消息；因此 history 的起点逻辑仍然从真实 user 消息开始。
 
 ## RunAgentInput Hook
 

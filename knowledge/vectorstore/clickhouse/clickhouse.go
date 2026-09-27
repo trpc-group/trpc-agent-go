@@ -1,0 +1,453 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package clickhouse provides a vector store implementation backed by ClickHouse.
+//
+// It implements knowledge/vectorstore.VectorStore by mapping its operations to
+// ClickHouse SQL statements over a ReplacingMergeTree table. Documents are stored
+// as rows whose embedding lives in an Array(Float64) column and whose metadata is
+// JSON-encoded in a String column. Filter fields declared through WithFilterFields
+// are additionally materialized as dedicated typed columns for efficient filtering.
+package clickhouse
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
+)
+
+// Errors returned by vector store operations.
+var (
+	errDocumentRequired   = errors.New("clickhouse: document is required")
+	errDocumentIDRequired = errors.New("clickhouse: document ID is required")
+	errTableNameRequired  = errors.New("clickhouse: table name is required")
+	errVectorDimMismatch  = errors.New("clickhouse: embedding dimension mismatch")
+	errNotFound           = errors.New("clickhouse: document not found")
+)
+
+// VectorStore implements vectorstore.VectorStore with a ClickHouse backend.
+type VectorStore struct {
+	client storage.Client
+	option options
+}
+
+// Ensure VectorStore implements vectorstore.VectorStore.
+var _ vectorstore.VectorStore = (*VectorStore)(nil)
+
+// New constructs a VectorStore and, when autoCreateTable is enabled, ensures the
+// backing table exists.
+//
+// Choose WithDSN or WithInstanceName. WithDSN takes precedence.
+func New(opts ...Option) (*VectorStore, error) {
+	opt := defaultOptions
+	for _, o := range opts {
+		o(&opt)
+	}
+	if err := validateOptions(&opt); err != nil {
+		return nil, err
+	}
+
+	vs := &VectorStore{option: opt}
+
+	// Resolve the client: DSN first, then a named instance.
+	var builderOpts []storage.ClientBuilderOpt
+	if opt.dsn != "" {
+		builderOpts = append(builderOpts, storage.WithClientBuilderDSN(opt.dsn))
+	} else if opt.instanceName != "" {
+		bo, ok := storage.GetClickHouseInstance(opt.instanceName)
+		if !ok {
+			return nil, fmt.Errorf("clickhouse: instance %q not registered", opt.instanceName)
+		}
+		// Copy so appending cannot mutate the registered instance options.
+		builderOpts = append(builderOpts, bo...)
+	} else {
+		return nil, errors.New("clickhouse: must specify one of WithDSN / WithInstanceName")
+	}
+	if len(opt.extraOptions) > 0 {
+		builderOpts = append(builderOpts, storage.WithExtraOptions(opt.extraOptions...))
+	}
+
+	c, err := storage.GetClientBuilder()(builderOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("clickhouse: build client: %w", err)
+	}
+	vs.client = c
+
+	if opt.autoCreateTable {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := vs.initTable(ctx); err != nil {
+			if closeErr := vs.Close(); closeErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("clickhouse close client after init failure: %w", closeErr))
+			}
+			return nil, err
+		}
+	}
+	return vs, nil
+}
+
+// initTable creates the backing table when it does not exist. The statement is
+// idempotent (CREATE TABLE IF NOT EXISTS) so it never rebuilds an existing table.
+func (vs *VectorStore) initTable(ctx context.Context) error {
+	if err := vs.client.Exec(ctx, vs.buildCreateTableSQL()); err != nil {
+		return fmt.Errorf("clickhouse: create table %s: %w", vs.option.tableName, err)
+	}
+	return nil
+}
+
+// validateEmbedding reports whether embedding matches the configured vector
+// dimension. Every write path runs it before touching the backend: a vector of
+// the wrong length would otherwise be persisted and only surface later, as a
+// server-side size mismatch that fails the whole similarity query.
+func (vs *VectorStore) validateEmbedding(embedding []float64) error {
+	if len(embedding) != vs.option.vectorDimension {
+		return fmt.Errorf("%w: want=%d got=%d", errVectorDimMismatch, vs.option.vectorDimension, len(embedding))
+	}
+	return nil
+}
+
+// Add writes a document and its embedding. The embedding must match the
+// configured vector dimension.
+func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
+	if doc == nil {
+		return errDocumentRequired
+	}
+	if doc.ID == "" {
+		return errDocumentIDRequired
+	}
+	if err := vs.validateEmbedding(embedding); err != nil {
+		return err
+	}
+	r, err := vs.docToRow(doc, embedding, time.Now())
+	if err != nil {
+		return err
+	}
+	args, err := vs.insertArgs(r)
+	if err != nil {
+		return err
+	}
+	if err := vs.client.Exec(ctx, vs.buildInsertSQL(), args...); err != nil {
+		return fmt.Errorf("clickhouse: insert: %w", err)
+	}
+	return nil
+}
+
+// Get returns a document and its embedding by ID.
+func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
+	if id == "" {
+		return nil, nil, errDocumentIDRequired
+	}
+	sql := fmt.Sprintf("%s WHERE %s = ? LIMIT 1", vs.buildSelectSQL(), vs.option.idFieldName)
+	rows, err := vs.client.Query(ctx, sql, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("clickhouse: get: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		// Distinguish a genuine miss from a row-stream iteration error: the
+		// latter must not be reported as not-found.
+		if err := rows.Err(); err != nil {
+			return nil, nil, fmt.Errorf("clickhouse: get: %w", err)
+		}
+		return nil, nil, errNotFound
+	}
+	r, err := vs.scanRow(rows, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if r == nil || r.id == "" {
+		return nil, nil, errNotFound
+	}
+	return vs.rowToDoc(r)
+}
+
+// Update replaces an existing document. It loads the current row to preserve
+// created_at, then re-inserts a new version with a fresh updated_at so that the
+// ReplacingMergeTree engine collapses the old row.
+//
+// When embedding is empty, the existing vector is preserved.
+func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
+	if doc == nil {
+		return errDocumentRequired
+	}
+	if doc.ID == "" {
+		return errDocumentIDRequired
+	}
+	// An empty embedding means "keep the current vector", so only a supplied
+	// one is checked.
+	if len(embedding) > 0 {
+		if err := vs.validateEmbedding(embedding); err != nil {
+			return err
+		}
+	}
+
+	// Load the existing row to preserve created_at and, when embedding is empty,
+	// the existing vector.
+	existing, existingEmbedding, err := vs.Get(ctx, doc.ID)
+	if err != nil {
+		return err
+	}
+	if len(embedding) == 0 {
+		embedding = existingEmbedding
+	}
+	now := time.Now()
+	r, err := vs.docToRow(doc, embedding, now)
+	if err != nil {
+		return err
+	}
+	if !existing.CreatedAt.IsZero() {
+		r.createdAt = existing.CreatedAt
+	}
+	args, err := vs.insertArgs(r)
+	if err != nil {
+		return err
+	}
+	if err := vs.client.Exec(ctx, vs.buildInsertSQL(), args...); err != nil {
+		return fmt.Errorf("clickhouse: update: %w", err)
+	}
+	return nil
+}
+
+// mutationSettings returns the ClickHouse settings that make an ALTER TABLE
+// mutation wait for completion before the statement returns, or nil when
+// mutations are allowed to stay asynchronous.
+//
+// ClickHouse queues mutations asynchronously by default, so without
+// mutations_sync a delete can return successfully while a following Get,
+// Search, or Count still observes the deleted row, and a mutation that fails
+// later cannot be reported through the returned error.
+func (vs *VectorStore) mutationSettings() clickhouse.Settings {
+	if !vs.option.syncMutations {
+		return nil
+	}
+	return clickhouse.Settings{"mutations_sync": 1}
+}
+
+// mutationContext returns ctx annotated with mutationSettings. Delete paths run
+// their statements with this context so the mutation is visible, and any
+// cancellation, once it returns.
+func (vs *VectorStore) mutationContext(ctx context.Context) context.Context {
+	settings := vs.mutationSettings()
+	if len(settings) == 0 {
+		return ctx
+	}
+	return clickhouse.Context(ctx, clickhouse.WithSettings(settings))
+}
+
+// Delete removes one document by ID using an ALTER TABLE DELETE mutation.
+//
+// The mutation is synchronous unless WithSynchronousMutations(false) was set,
+// so the document is no longer visible to Get, Search, or Count once Delete
+// returns nil. A canceled or expired ctx aborts the wait and is reported as an
+// error.
+func (vs *VectorStore) Delete(ctx context.Context, id string) error {
+	if id == "" {
+		return errDocumentIDRequired
+	}
+	sql := fmt.Sprintf("ALTER TABLE %s DELETE WHERE %s = ?", vs.option.tableName, vs.option.idFieldName)
+	if err := vs.client.Exec(vs.mutationContext(ctx), sql, id); err != nil {
+		return fmt.Errorf("clickhouse: delete: %w", err)
+	}
+	return nil
+}
+
+// Close delegates cleanup to the storage client.
+func (vs *VectorStore) Close() error {
+	if vs.client == nil {
+		return nil
+	}
+	return vs.client.Close()
+}
+
+// buildCreateTableSQL builds the idempotent CREATE TABLE statement, including
+// dedicated columns for every declared filter field.
+func (vs *VectorStore) buildCreateTableSQL() string {
+	o := vs.option
+	var sb strings.Builder
+	sb.WriteString("CREATE TABLE IF NOT EXISTS ")
+	sb.WriteString(o.tableName)
+	sb.WriteString(" (\n")
+	sb.WriteString(fmt.Sprintf("    %s String,\n", o.idFieldName))
+	sb.WriteString(fmt.Sprintf("    %s String,\n", o.nameFieldName))
+	sb.WriteString(fmt.Sprintf("    %s String,\n", o.contentFieldName))
+	sb.WriteString(fmt.Sprintf("    %s Array(Float64),\n", o.embeddingFieldName))
+	sb.WriteString(fmt.Sprintf("    %s String,\n", o.metadataFieldName))
+	sb.WriteString(fmt.Sprintf("    %s DateTime64(6),\n", o.createdAtFieldName))
+	sb.WriteString(fmt.Sprintf("    %s DateTime64(6)", o.updatedAtFieldName))
+	for _, spec := range o.filterFields {
+		sb.WriteString(fmt.Sprintf(",\n    %s %s", spec.Name, spec.Type.clickhouseType()))
+	}
+	sb.WriteString("\n) ENGINE = ReplacingMergeTree(")
+	sb.WriteString(o.updatedAtFieldName)
+	sb.WriteString(")\nORDER BY ")
+	sb.WriteString(o.idFieldName)
+	return sb.String()
+}
+
+// selectColumns returns the ordered column list used by SELECT statements.
+func (vs *VectorStore) selectColumns() []string {
+	o := vs.option
+	cols := []string{
+		o.idFieldName,
+		o.nameFieldName,
+		o.contentFieldName,
+		o.embeddingFieldName,
+		o.metadataFieldName,
+		o.createdAtFieldName,
+		o.updatedAtFieldName,
+	}
+	for _, spec := range o.filterFields {
+		cols = append(cols, spec.Name)
+	}
+	return cols
+}
+
+// buildSelectSQL builds "SELECT <cols> FROM <table> FINAL".
+func (vs *VectorStore) buildSelectSQL() string {
+	return fmt.Sprintf("SELECT %s FROM %s FINAL", strings.Join(vs.selectColumns(), ", "), vs.option.tableName)
+}
+
+// buildInsertSQL builds "INSERT INTO <table> (<cols>) VALUES (?, ?, ...)" for a
+// single row.
+func (vs *VectorStore) buildInsertSQL() string {
+	return vs.buildInsertSQLRows(1)
+}
+
+// buildInsertSQLRows builds an INSERT statement carrying rowCount value groups,
+// so several rows can be written with one round trip. rowCount below one is
+// treated as one.
+func (vs *VectorStore) buildInsertSQLRows(rowCount int) string {
+	if rowCount < 1 {
+		rowCount = 1
+	}
+	cols := vs.selectColumns()
+	placeholders := make([]string, len(cols))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	group := "(" + strings.Join(placeholders, ", ") + ")"
+	groups := make([]string, rowCount)
+	for i := range groups {
+		groups[i] = group
+	}
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+		vs.option.tableName, strings.Join(cols, ", "), strings.Join(groups, ", "))
+}
+
+// insertArgs builds the ordered argument list for buildInsertSQL from a row.
+func (vs *VectorStore) insertArgs(r *row) ([]any, error) {
+	metadataJSON, err := marshalMetadata(r.metadata, r.embeddingText)
+	if err != nil {
+		return nil, fmt.Errorf("clickhouse: marshal metadata: %w", err)
+	}
+	args := []any{r.id, r.name, r.content, r.embedding, metadataJSON, r.createdAt, r.updatedAt}
+	filterVals, err := vs.filterFieldValues(r.metadata)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, filterVals...)
+	return args, nil
+}
+
+// newFilterDests allocates one scan destination per declared filter field,
+// typed according to the column type in the table schema. The ClickHouse driver
+// rejects *interface{} destinations, so concrete pointers are required.
+//
+// Filter columns are Nullable, so each destination is a pointer to a pointer:
+// the driver leaves the inner pointer nil when the column is NULL.
+func (vs *VectorStore) newFilterDests() []any {
+	dests := make([]any, len(vs.option.filterFields))
+	for i, spec := range vs.option.filterFields {
+		switch spec.Type {
+		case FilterFieldInt64:
+			dests[i] = new(*int64)
+		case FilterFieldFloat64:
+			dests[i] = new(*float64)
+		default:
+			dests[i] = new(*string)
+		}
+	}
+	return dests
+}
+
+// mergeFilterDests reconciles the decoded metadata with the materialized filter
+// columns.
+//
+// JSON decoding turns every number into float64, so a Nullable(Int64) column
+// would otherwise come back as float64. A NULL column means the document never
+// carried the field, so the key is removed instead of being reported as the
+// type's zero value.
+func (vs *VectorStore) mergeFilterDests(md map[string]any, dests []any) {
+	if md == nil {
+		return
+	}
+	for i, spec := range vs.option.filterFields {
+		if i >= len(dests) {
+			return
+		}
+		switch dest := dests[i].(type) {
+		case **string:
+			if *dest == nil {
+				delete(md, spec.Name)
+				continue
+			}
+			md[spec.Name] = **dest
+		case **int64:
+			if *dest == nil {
+				delete(md, spec.Name)
+				continue
+			}
+			md[spec.Name] = **dest
+		case **float64:
+			if *dest == nil {
+				delete(md, spec.Name)
+				continue
+			}
+			md[spec.Name] = **dest
+		}
+	}
+}
+
+// scanRow scans the current driver.Rows row into an internal row, decoding the
+// JSON metadata and merging the declared filter-field columns back into it.
+//
+// When scorePtr is non-nil, an additional trailing Float64 column (the vector
+// distance/product) is scanned into it. This is used by vector search, which
+// appends the distance expression as the final SELECT column.
+func (vs *VectorStore) scanRow(rows driver.Rows, scorePtr *float64) (*row, error) {
+	r := &row{}
+	var metadataStr string
+	filterDests := vs.newFilterDests()
+	targets := []any{&r.id, &r.name, &r.content, &r.embedding, &metadataStr, &r.createdAt, &r.updatedAt}
+	targets = append(targets, filterDests...)
+	if scorePtr != nil {
+		targets = append(targets, scorePtr)
+	}
+	if err := rows.Scan(targets...); err != nil {
+		return nil, fmt.Errorf("clickhouse: scan row: %w", err)
+	}
+	md, embeddingText, err := unmarshalMetadata(metadataStr)
+	if err != nil {
+		return nil, fmt.Errorf("clickhouse: decode metadata: %w", err)
+	}
+	r.metadata = md
+	r.embeddingText = embeddingText
+	vs.mergeFilterDests(r.metadata, filterDests)
+	return r, nil
+}

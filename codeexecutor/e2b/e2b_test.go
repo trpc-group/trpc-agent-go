@@ -260,45 +260,6 @@ func TestExtractBetween(t *testing.T) {
 	assert.Equal(t, "only-begin", extractBetween(s2, "BEGIN", "END"))
 }
 
-func TestParseFramedOutput(t *testing.T) {
-	rawStdout := strings.Join([]string{
-		"__E2B_STDOUT_BEGIN__",
-		"hello",
-		"__E2B_STDOUT_END__",
-		"__E2B_EXITCODE__=7",
-		"",
-	}, "\n")
-	rawStderr := strings.Join([]string{
-		"__E2B_STDERR_BEGIN__",
-		"bad",
-		"__E2B_STDERR_END__",
-		"",
-	}, "\n")
-	stdout, stderr, exit := parseFramedOutput(rawStdout, rawStderr)
-	assert.Equal(t, "hello", stdout)
-	assert.Equal(t, "bad", stderr)
-	assert.Equal(t, 7, exit)
-
-	stdout, stderr, exit = parseFramedOutput("", "")
-	assert.Empty(t, stdout)
-	assert.Empty(t, stderr)
-	assert.Equal(t, 0, exit)
-}
-
-func TestBuildRunWrapperContainsSentinels(t *testing.T) {
-	script := buildRunWrapper("echo hi")
-	for _, sub := range []string{
-		sentinelStdoutBegin,
-		sentinelStdoutEnd,
-		sentinelExitPrefix,
-		sentinelStderrBegin,
-		sentinelStderrEnd,
-		"echo hi",
-	} {
-		assert.Contains(t, script, sub)
-	}
-}
-
 func TestTarGzFromFilesRoundTrip(t *testing.T) {
 	files := []codeexecutor.PutFile{
 		{Path: "dir/a.txt", Content: []byte("A"), Mode: 0o644},
@@ -334,13 +295,6 @@ func TestTarGzFromDir(t *testing.T) {
 	assert.Contains(t, names, "sub/x.bin")
 	assert.Equal(t, "hello", contents["hello.txt"])
 	assert.Equal(t, string([]byte{1, 2, 3}), contents["sub/x.bin"])
-}
-
-func TestIsTimeoutErr(t *testing.T) {
-	assert.False(t, isTimeoutErr(nil))
-	assert.True(t, isTimeoutErr(assertErr("request Timeout")))
-	assert.True(t, isTimeoutErr(assertErr("execution timeout")))
-	assert.False(t, isTimeoutErr(assertErr("other error")))
 }
 
 type strError string

@@ -218,7 +218,9 @@ type ContextCompactionConfig struct {
 	// is configured. 0 disables it regardless of Enabled.
 	OversizedToolResultMaxTokens int
 	// TokenCounter estimates request and tool-result size for compaction decisions.
-	// When nil, SimpleTokenCounter is used.
+	// When nil, llmflow resolves model-visible request estimates using the current
+	// process default configured by summary.SetTokenCounter. Tool-result compaction
+	// uses an independent SimpleTokenCounter in its normalized local config copy.
 	TokenCounter model.TokenCounter
 	// SkipRecentFunc returns how many tail events should be treated as recent
 	// and protected from historical tool-result compaction.
@@ -247,6 +249,9 @@ type toolResultCompactionRules struct {
 	keepToolNames       map[string]struct{}
 }
 
+// normalizeContextCompactionConfig returns a copy for tool-result compaction.
+// Keep the original processor config unchanged so a nil request counter can
+// resolve the current summary default at evaluation time in llmflow.
 func normalizeContextCompactionConfig(
 	cfg ContextCompactionConfig,
 ) ContextCompactionConfig {

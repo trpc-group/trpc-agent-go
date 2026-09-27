@@ -1060,6 +1060,7 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable"),
 		model.NewUserMessage("history"),
+		model.NewUserMessage("current"),
 	}}
 	summaryview.AttachProjection(inv, &summaryview.View{
 		ContentRequestLength: len(req.Messages),
@@ -1084,6 +1085,31 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	require.False(t, view.Bound)
 	_, ok = summaryfork.Request(inv)
 	require.False(t, ok)
+}
+
+func TestTokenTailoringCollapsedHistory(t *testing.T) {
+	tests := []struct {
+		name   string
+		before int
+		after  int
+		want   bool
+	}{
+		{name: "many messages collapse to two", before: 16, after: 2, want: true},
+		{name: "many messages collapse to one", before: 16, after: 1, want: true},
+		{name: "three messages collapse to two", before: 3, after: 2, want: true},
+		{name: "two messages remain one", before: 2, after: 1, want: false},
+		{name: "history remains", before: 16, after: 3, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := imodelrequest.TokenTailoringRecord{
+				BeforeMessages: tt.before,
+				AfterMessages:  tt.after,
+			}
+			require.Equal(t, tt.want, tokenTailoringCollapsedHistory(record))
+		})
+	}
 }
 
 func TestCallLLM_LazyTokenTailoringFinalizesDiagnosticsAfterIteration(

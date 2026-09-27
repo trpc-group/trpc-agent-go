@@ -15,6 +15,8 @@ type StopPolicy struct {
 	MaxRoundsWithoutAcceptance int
 	// TargetScore, when set, stops the run after this score is reached or exceeded.
 	TargetScore *float64
+	// StopOnNoTrainLosses stops after train evaluation produces no extracted losses.
+	StopOnNoTrainLosses bool
 }
 
 // StopDecision records whether the engine should terminate and why.
@@ -49,4 +51,14 @@ func (e *engine) stop(
 		decision.Reason = "continue optimization"
 	}
 	return decision
+}
+
+func stopOnNoTrainLosses(policy StopPolicy, lossCount int) *StopDecision {
+	if !policy.StopOnNoTrainLosses || lossCount > 0 {
+		return nil
+	}
+	return &StopDecision{
+		ShouldStop: true,
+		Reason:     "no train losses extracted",
+	}
 }

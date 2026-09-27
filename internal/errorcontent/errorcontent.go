@@ -1,0 +1,76 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+// Package errorcontent contains internal contracts for assistant content
+// synthesized to make error events persistable and user-visible.
+package errorcontent
+
+import (
+	"encoding/json"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+	syntheticExtensionKey = "trpc_agent.error.synthetic_content"
+
+	// FallbackMessage is the assistant content Runner synthesizes for an error
+	// event that otherwise has no persistable content.
+	FallbackMessage = "An error occurred during execution. Please contact the service provider."
+)
+
+// MarkSynthetic marks an event whose assistant content was synthesized for
+// presentation and persistence rather than produced by the model. It owns a
+// copy of the extension map before mutating it because callers commonly clone
+// events shallowly.
+func MarkSynthetic(evt *event.Event) {
+	if evt == nil {
+		return
+	}
+	extensions := make(map[string]json.RawMessage, len(evt.Extensions)+1)
+	for key, raw := range evt.Extensions {
+		extensions[key] = append(json.RawMessage(nil), raw...)
+	}
+	evt.Extensions = extensions
+	_ = event.SetExtension(evt, syntheticExtensionKey, true)
+}
+
+// IsSynthetic reports whether an error event carries assistant content that
+// was synthesized for presentation and persistence. The fallback comparison
+// best-effort recognizes events persisted before the extension marker was
+// introduced by matching the shape Runner produced. Marker-free events cannot
+// carry definitive provenance, so a real response with the complete legacy
+// Runner shape is indistinguishable and is also reported as synthetic.
+func IsSynthetic(evt *event.Event) bool {
+	marked, ok, err := event.GetExtension[bool](evt, syntheticExtensionKey)
+	if err != nil {
+		return false
+	}
+	if ok {
+		return marked
+	}
+	if evt == nil || evt.Response == nil || evt.Response.Error == nil ||
+		len(evt.Response.Choices) == 0 {
+		return false
+	}
+	choice := evt.Response.Choices[0]
+	if choice.Message.Content != FallbackMessage ||
+		choice.FinishReason == nil || *choice.FinishReason != "error" {
+		return false
+	}
+
+	// Runner only injected the legacy fallback when the response had no valid
+	// payload. Reversing that injection avoids matching real responses that
+	// carry the same text alongside another payload.
+	response := *evt.Response
+	response.Choices = append([]model.Choice(nil), evt.Response.Choices...)
+	response.Choices[0].Message.Content = ""
+	return !response.IsValidContent()
+}

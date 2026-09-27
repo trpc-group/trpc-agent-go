@@ -275,6 +275,53 @@ func TestReduceReturnsMessagesOnReduceError(t *testing.T) {
 	assert.Equal(t, "hello", content)
 }
 
+func TestReduceBestEffortSkipsMalformedEvents(t *testing.T) {
+	t.Run("text event without start", func(t *testing.T) {
+		events := trackEventsFrom(
+			aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+			aguievents.NewTextMessageContentEvent("user-1", "hello"),
+			aguievents.NewTextMessageEndEvent("user-1"),
+			aguievents.NewTextMessageContentEvent("user-1", "!"),
+			aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+			aguievents.NewTextMessageContentEvent("assistant-1", "after"),
+			aguievents.NewTextMessageEndEvent("assistant-1"),
+		)
+
+		msgs, err := Reduce(testAppName, testUserID, events, WithBestEffort(true))
+
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+		content, ok := msgs[0].ContentString()
+		require.True(t, ok)
+		assert.Equal(t, "hello", content)
+		content, ok = msgs[1].ContentString()
+		require.True(t, ok)
+		assert.Equal(t, "after", content)
+	})
+
+	t.Run("tool result without completed call", func(t *testing.T) {
+		events := trackEventsFrom(
+			aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+			aguievents.NewTextMessageContentEvent("user-1", "hello"),
+			aguievents.NewTextMessageEndEvent("user-1"),
+			aguievents.NewToolCallResultEvent("tool-msg-1", "missing-call", "orphan"),
+			aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+			aguievents.NewTextMessageContentEvent("assistant-1", "after"),
+			aguievents.NewTextMessageEndEvent("assistant-1"),
+		)
+
+		msgs, err := Reduce(testAppName, testUserID, events, WithBestEffort(true))
+
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, types.RoleUser, msgs[0].Role)
+		assert.Equal(t, types.RoleAssistant, msgs[1].Role)
+		content, ok := msgs[1].ContentString()
+		require.True(t, ok)
+		assert.Equal(t, "after", content)
+	})
+}
+
 func TestReduceAllowsUnclosedTextMessage(t *testing.T) {
 	events := trackEventsFrom(
 		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),

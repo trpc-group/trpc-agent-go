@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">tRPC-Agent-Go Built-in Memory Configuration Choices</title>
+  <desc id="desc">The diagram centers on memory.Service. The left side shows application code, Agentic, and Auto Memory write paths; the right side shows recent reads, relevant search, tools, and preload; the bottom shows keyword and vector backends. Policy, Assistant Episode, and background-job settings apply only to Auto Memory.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#D9E6F2" stroke-width="1" opacity="0.38"/>
+    </pattern>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#3478F6"/>
+    </marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#21A179"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#E3A73A"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#F8FBFE"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+
+  <g font-family="Inter, Arial, sans-serif">
+    <text x="72" y="72" fill="#102E4A" font-size="38" font-weight="500">Built-in Memory Choices: Write, Store, and Retrieve</text>
+    <text x="72" y="114" fill="#647B91" font-size="21">Agent and Runner wiring stays the same; replace the Service or adjust Options on the relevant path</text>
+
+    <!-- Column headings -->
+    <path d="M80 166H116" stroke="#3478F6" stroke-width="6" stroke-linecap="round"/>
+    <text x="132" y="174" fill="#174A7C" font-size="24" font-weight="500">How to write</text>
+
+    <path d="M670 166H706" stroke="#21A179" stroke-width="6" stroke-linecap="round"/>
+    <text x="722" y="174" fill="#176A50" font-size="24" font-weight="500">One Service</text>
+
+    <path d="M1010 166H1046" stroke="#3478F6" stroke-width="6" stroke-linecap="round"/>
+    <text x="1062" y="174" fill="#174A7C" font-size="24" font-weight="500">How to retrieve</text>
+
+    <!-- Write path: direct -->
+    <circle cx="104" cy="238" r="24" fill="#DCEBFF" stroke="#3478F6" stroke-width="3"/>
+    <path d="M94 238h20M104 228v20" stroke="#3478F6" stroke-width="3" stroke-linecap="round"/>
+    <text x="146" y="233" fill="#174A7C" font-size="21" font-weight="500">Application code</text>
+    <text x="146" y="261" fill="#657D92" font-size="16">App owns content and errors</text>
+    <path d="M390 238H656" fill="none" stroke="#3478F6" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <text x="520" y="222" fill="#3D6388" font-size="16" text-anchor="middle">Add / Update / Delete</text>
+
+    <!-- Write path: agentic -->
+    <circle cx="104" cy="332" r="24" fill="#DCEBFF" stroke="#3478F6" stroke-width="3"/>
+    <path d="M94 326h20M94 338h14" stroke="#3478F6" stroke-width="3" stroke-linecap="round"/>
+    <text x="146" y="327" fill="#174A7C" font-size="21" font-weight="500">Agentic</text>
+    <text x="146" y="355" fill="#657D92" font-size="16">Model decides whether to call</text>
+    <path d="M390 332H656" fill="none" stroke="#3478F6" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <text x="520" y="316" fill="#3D6388" font-size="16" text-anchor="middle">memory_* Tool</text>
+
+    <!-- Write path: auto -->
+    <circle cx="104" cy="426" r="24" fill="#FFF2D9" stroke="#E3A73A" stroke-width="3"/>
+    <path d="M93 426l7 7 15-17" fill="none" stroke="#C98713" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="146" y="421" fill="#7A5313" font-size="21" font-weight="500">Auto Memory</text>
+    <text x="146" y="449" fill="#7A6746" font-size="16">Processes after response</text>
+    <path d="M336 426H380" fill="none" stroke="#E3A73A" stroke-width="4" marker-end="url(#arrow-orange)"/>
+
+    <rect x="394" y="398" width="104" height="56" rx="28" fill="#FFFFFF" stroke="#E3A73A" stroke-width="3"/>
+    <text x="446" y="434" fill="#7A5313" font-size="18" font-weight="500" text-anchor="middle">Checker</text>
+    <path d="M498 426H524" fill="none" stroke="#E3A73A" stroke-width="4" marker-end="url(#arrow-orange)"/>
+    <path d="M538 396H628L612 426l16 30H538Z" fill="#FFF7E8" stroke="#E3A73A" stroke-width="3"/>
+    <text x="580" y="433" fill="#7A5313" font-size="17" font-weight="500" text-anchor="middle">Extractor</text>
+    <path d="M628 426H656" fill="none" stroke="#E3A73A" stroke-width="4" marker-end="url(#arrow-orange)"/>
+
+    <!-- Auto-only settings -->
+    <path d="M394 480H628" stroke="#D9B66D" stroke-width="2"/>
+    <path d="M446 454V480M580 456V480" stroke="#D9B66D" stroke-width="2"/>
+    <g fill="#7A6746" font-size="15" text-anchor="middle">
+      <text x="511" y="505">Policy</text>
+      <text x="511" y="530">Assistant Episode</text>
+      <text x="511" y="555">worker / queue / timeout</text>
+    </g>
+    <text x="511" y="582" fill="#9B6F20" font-size="15" text-anchor="middle">Only affects the automatic extraction path</text>
+
+    <!-- memory.Service -->
+    <g transform="translate(670 222)">
+      <ellipse cx="130" cy="26" rx="130" ry="26" fill="#CFEEDF" stroke="#45A982" stroke-width="3"/>
+      <path d="M0 26v245c0 15 58 28 130 28s130-13 130-28V26" fill="#E1F5ED" stroke="#45A982" stroke-width="3"/>
+      <path d="M0 96c0 15 58 28 130 28s130-13 130-28" fill="none" stroke="#87C9AF" stroke-width="2"/>
+      <text x="130" y="82" fill="#176A50" font-size="26" font-weight="500" text-anchor="middle">memory.Service</text>
+      <text x="130" y="164" fill="#365E50" font-size="19" font-weight="500" text-anchor="middle">Manages Entry collection</text>
+      <path d="M53 186H207" stroke="#A5D6C4" stroke-width="2"/>
+      <text x="130" y="222" fill="#527969" font-size="17" text-anchor="middle">Scope</text>
+      <text x="130" y="250" fill="#176A50" font-size="18" font-weight="500" text-anchor="middle">AppName + UserID</text>
+      <text x="130" y="284" fill="#527969" font-size="15" text-anchor="middle">Call Close() when the app exits</text>
+    </g>
+
+    <!-- Read and search paths -->
+    <path d="M930 276H1018" fill="none" stroke="#3478F6" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <text x="1036" y="271" fill="#174A7C" font-size="20" font-weight="500">ReadMemories</text>
+    <text x="1036" y="299" fill="#657D92" font-size="16">Recent Entries</text>
+    <path d="M1212 276H1284" fill="none" stroke="#3478F6" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <rect x="1298" y="248" width="190" height="56" rx="28" fill="#EAF2FF" stroke="#82ACEF" stroke-width="2"/>
+    <text x="1393" y="283" fill="#174A7C" font-size="18" font-weight="500" text-anchor="middle">memory_load</text>
+
+    <path d="M930 380H1018" fill="none" stroke="#3478F6" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <text x="1036" y="375" fill="#174A7C" font-size="20" font-weight="500">SearchMemories</text>
+    <text x="1036" y="403" fill="#657D92" font-size="16">Relevant Entries</text>
+    <path d="M1212 380H1284" fill="none" stroke="#3478F6" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <rect x="1298" y="352" width="190" height="56" rx="28" fill="#EAF2FF" stroke="#82ACEF" stroke-width="2"/>
+    <text x="1393" y="387" fill="#174A7C" font-size="18" font-weight="500" text-anchor="middle">memory_search</text>
+
+    <text x="1393" y="224" fill="#597188" font-size="16" text-anchor="middle">Model calls as needed</text>
+
+    <!-- Preload gathers from Read/Search without crossing labels -->
+    <path d="M1250 276V468H1284" fill="none" stroke="#21A179" stroke-width="3" stroke-dasharray="8 7" marker-end="url(#arrow-teal)"/>
+    <path d="M1270 380V468H1284" fill="none" stroke="#21A179" stroke-width="3" stroke-dasharray="8 7" marker-end="url(#arrow-teal)"/>
+    <rect x="1298" y="438" width="190" height="60" rx="30" fill="#E4F6F0" stroke="#70BEA0" stroke-width="2"/>
+    <text x="1393" y="476" fill="#176A50" font-size="19" font-weight="500" text-anchor="middle">preload</text>
+    <text x="1393" y="526" fill="#527969" font-size="15" text-anchor="middle">0 off · N budget · -1 all</text>
+    <text x="1393" y="551" fill="#527969" font-size="15" text-anchor="middle">Inject into system or user/history</text>
+
+    <!-- Storage selection -->
+    <path d="M800 521V601" fill="none" stroke="#21A179" stroke-width="5" marker-end="url(#arrow-teal)"/>
+    <text x="72" y="620" fill="#102E4A" font-size="24" font-weight="500">Storage backends determine placement and available search paths</text>
+    <text x="1518" y="620" fill="#657D92" font-size="16" text-anchor="end">Replace the Service constructor; Agent and Runner wiring stays unchanged</text>
+
+    <path d="M104 690H1498" stroke="#9AB0C2" stroke-width="3"/>
+    <circle cx="104" cy="690" r="10" fill="#3478F6"/>
+    <text x="104" y="666" fill="#174A7C" font-size="18" font-weight="500">Keyword search</text>
+    <g fill="#425D73" font-size="18" font-weight="500" text-anchor="middle">
+      <text x="370" y="682">InMemory</text>
+      <text x="590" y="682">SQLite</text>
+      <text x="810" y="682">Redis</text>
+      <text x="1030" y="682">MySQL</text>
+      <text x="1270" y="682">PostgreSQL</text>
+    </g>
+    <g fill="#7A8998">
+      <circle cx="370" cy="690" r="7"/>
+      <circle cx="590" cy="690" r="7"/>
+      <circle cx="810" cy="690" r="7"/>
+      <circle cx="1030" cy="690" r="7"/>
+      <circle cx="1270" cy="690" r="7"/>
+    </g>
+    <text x="1498" y="717" fill="#657D92" font-size="15" text-anchor="end">Best for exact terms, code names, and versions</text>
+
+    <path d="M104 778H1498" stroke="#69B99A" stroke-width="3"/>
+    <circle cx="104" cy="778" r="10" fill="#21A179"/>
+    <text x="104" y="754" fill="#176A50" font-size="18" font-weight="500">Vector search, optionally fused with keyword results</text>
+    <g fill="#365E50" font-size="18" font-weight="500" text-anchor="middle">
+      <text x="420" y="770">SQLiteVec</text>
+      <text x="700" y="770">MySQLVec</text>
+      <text x="980" y="770">pgvector</text>
+      <text x="1260" y="770">ChromaDB</text>
+    </g>
+    <g fill="#45A982">
+      <circle cx="420" cy="778" r="7"/>
+      <circle cx="700" cy="778" r="7"/>
+      <circle cx="980" cy="778" r="7"/>
+      <circle cx="1260" cy="778" r="7"/>
+    </g>
+    <text x="1498" y="805" fill="#527969" font-size="15" text-anchor="end">Requires an Embedder with dimensions matching the index</text>
+
+    <path d="M72 846H1528" stroke="#D4E0EA" stroke-width="2"/>
+    <text x="72" y="876" fill="#657D92" font-size="16">Tool visibility follows exposed settings; delete and clear still require server-side authorization and application auditing.</text>
+  </g>
+</svg>

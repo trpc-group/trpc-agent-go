@@ -1079,8 +1079,9 @@ func TestSummary(t *testing.T) {
 			Summary:   "test summary",
 			UpdatedAt: time.Now().UTC(),
 		}
-		err := c.CreateSummary(ctx, key, "all", sum, time.Hour)
+		applied, err := c.CreateSummary(ctx, key, "all", sum, time.Hour)
 		require.NoError(t, err)
+		assert.True(t, applied.Applied(), "a first write must report applied")
 
 		summaries, err := c.GetSummary(ctx, key)
 		require.NoError(t, err)
@@ -1093,15 +1094,17 @@ func TestSummary(t *testing.T) {
 			Summary:   "old",
 			UpdatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		}
-		err := c.CreateSummary(ctx, key, "filter1", oldSum, 0)
+		applied, err := c.CreateSummary(ctx, key, "filter1", oldSum, 0)
 		require.NoError(t, err)
+		assert.True(t, applied.Applied())
 
 		newSum := &session.Summary{
 			Summary:   "new",
 			UpdatedAt: time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 		}
-		err = c.CreateSummary(ctx, key, "filter1", newSum, 0)
+		applied, err = c.CreateSummary(ctx, key, "filter1", newSum, 0)
 		require.NoError(t, err)
+		assert.True(t, applied.Applied(), "a newer summary must report applied")
 
 		summaries, err := c.GetSummary(ctx, key)
 		require.NoError(t, err)
@@ -1113,15 +1116,18 @@ func TestSummary(t *testing.T) {
 			Summary:   "newer",
 			UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		}
-		err := c.CreateSummary(ctx, key, "filter2", newSum, 0)
+		applied, err := c.CreateSummary(ctx, key, "filter2", newSum, 0)
 		require.NoError(t, err)
+		assert.True(t, applied.Applied())
 
 		oldSum := &session.Summary{
 			Summary:   "older",
 			UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		}
-		err = c.CreateSummary(ctx, key, "filter2", oldSum, 0)
+		applied, err = c.CreateSummary(ctx, key, "filter2", oldSum, 0)
 		require.NoError(t, err)
+		assert.False(t, applied.Applied(),
+			"a skipped stale write must not report applied")
 
 		summaries, err := c.GetSummary(ctx, key)
 		require.NoError(t, err)
@@ -1133,8 +1139,10 @@ func TestSummary(t *testing.T) {
 		sum1 := &session.Summary{Summary: "sum-all", UpdatedAt: time.Now().UTC()}
 		sum2 := &session.Summary{Summary: "sum-branch", UpdatedAt: time.Now().UTC()}
 
-		require.NoError(t, c.CreateSummary(ctx, key2, "all", sum1, 0))
-		require.NoError(t, c.CreateSummary(ctx, key2, "branch1", sum2, 0))
+		_, err := c.CreateSummary(ctx, key2, "all", sum1, 0)
+		require.NoError(t, err)
+		_, err = c.CreateSummary(ctx, key2, "branch1", sum2, 0)
+		require.NoError(t, err)
 
 		summaries, err := c.GetSummary(ctx, key2)
 		require.NoError(t, err)
@@ -1444,7 +1452,7 @@ func TestClient_CreateSummary_Error(t *testing.T) {
 	mr.Close()
 
 	sum := &session.Summary{Summary: "test", UpdatedAt: time.Now().UTC()}
-	err := c.CreateSummary(ctx, key, "", sum, time.Hour)
+	_, err := c.CreateSummary(ctx, key, "", sum, time.Hour)
 	require.Error(t, err)
 }
 
@@ -1459,12 +1467,120 @@ func TestClient_CreateSummary_NoTTL(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "u1", SessionID: "sum-nottl"}
 
 	sum := &session.Summary{Summary: "test", UpdatedAt: time.Now().UTC()}
-	require.NoError(t, c.CreateSummary(ctx, key, "", sum, 0))
+	applied, err := c.CreateSummary(ctx, key, "", sum, 0)
+	require.NoError(t, err)
+	assert.True(t, applied.Applied())
 
 	summaries, err := c.GetSummary(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, summaries)
 	assert.Equal(t, "test", summaries[""].Summary)
+}
+
+// TestClient_CreateSummary_LuaReplyContract restores the original Redis
+// contract: a successful script execution is never turned into a caller-visible
+// error just because the reply is unrecognized. Unknown replies still refresh
+// TTL, matching the pre-diagnostics Expire-after-script-success path.
+func TestClient_CreateSummary_LuaReplyContract(t *testing.T) {
+	orig := luaSummariesSetIfNewer
+	t.Cleanup(func() { luaSummariesSetIfNewer = orig })
+
+	sum := &session.Summary{Summary: "reply-contract", UpdatedAt: time.Now().UTC()}
+
+	t.Run("int64 1 is stored", func(t *testing.T) {
+		luaSummariesSetIfNewer = orig
+		_, rdb := setupMiniredis(t)
+		c := NewClient(rdb, defaultConfig())
+		write, err := c.CreateSummary(
+			context.Background(),
+			session.Key{AppName: "app", UserID: "u1", SessionID: "lua-1"},
+			"all", sum, 0,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, util.SummaryWriteApplied, write)
+	})
+
+	t.Run("int64 0 is stale", func(t *testing.T) {
+		luaSummariesSetIfNewer = orig
+		_, rdb := setupMiniredis(t)
+		c := NewClient(rdb, defaultConfig())
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "u1", SessionID: "lua-0"}
+		_, err := c.CreateSummary(ctx, key, "filter1", &session.Summary{
+			Summary:   "kept",
+			UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}, 0)
+		require.NoError(t, err)
+		write, err := c.CreateSummary(ctx, key, "filter1", &session.Summary{
+			Summary:   "older",
+			UpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		}, 0)
+		require.NoError(t, err)
+		assert.Equal(t, util.SummaryWriteStale, write)
+	})
+
+	t.Run("unknown type does not add a business error", func(t *testing.T) {
+		luaSummariesSetIfNewer = redis.NewScript(`return "1"`)
+		_, rdb := setupMiniredis(t)
+		c := NewClient(rdb, defaultConfig())
+		write, err := c.CreateSummary(
+			context.Background(),
+			session.Key{AppName: "app", UserID: "u1", SessionID: "lua-type"},
+			"all", sum, 0,
+		)
+		require.NoError(t, err, "script err=nil must stay a nil CreateSummary error")
+		assert.Equal(t, util.SummaryWriteUnknown, write)
+		assert.False(t, write.Applied())
+	})
+
+	t.Run("unknown value does not add a business error", func(t *testing.T) {
+		luaSummariesSetIfNewer = redis.NewScript(`return 2`)
+		_, rdb := setupMiniredis(t)
+		c := NewClient(rdb, defaultConfig())
+		write, err := c.CreateSummary(
+			context.Background(),
+			session.Key{AppName: "app", UserID: "u1", SessionID: "lua-value"},
+			"all", sum, 0,
+		)
+		require.NoError(t, err, "script err=nil must stay a nil CreateSummary error")
+		assert.Equal(t, util.SummaryWriteUnknown, write)
+		assert.False(t, write.Applied())
+	})
+
+	t.Run("script error remains a store-summary error", func(t *testing.T) {
+		luaSummariesSetIfNewer = redis.NewScript(`return redis.error_reply("boom")`)
+		_, rdb := setupMiniredis(t)
+		c := NewClient(rdb, defaultConfig())
+		write, err := c.CreateSummary(
+			context.Background(),
+			session.Key{AppName: "app", UserID: "u1", SessionID: "lua-err"},
+			"all", sum, time.Hour,
+		)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "store summary (lua) failed")
+		assert.False(t, write.Applied())
+	})
+
+	t.Run("unknown reply still refreshes TTL", func(t *testing.T) {
+		luaSummariesSetIfNewer = orig
+		mr, rdb := setupMiniredis(t)
+		c := NewClient(rdb, defaultConfig())
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "u1", SessionID: "lua-ttl"}
+		_, err := c.CreateSummary(ctx, key, "all", sum, 10*time.Second)
+		require.NoError(t, err)
+		sumKey := c.sessionSummaryKey(key)
+		require.Equal(t, 10*time.Second, mr.TTL(sumKey))
+		mr.FastForward(4 * time.Second)
+		require.Equal(t, 6*time.Second, mr.TTL(sumKey))
+
+		luaSummariesSetIfNewer = redis.NewScript(`return "1"`)
+		write, err := c.CreateSummary(ctx, key, "all", sum, 10*time.Second)
+		require.NoError(t, err)
+		assert.Equal(t, util.SummaryWriteUnknown, write)
+		assert.Equal(t, 10*time.Second, mr.TTL(sumKey),
+			"TTL must refresh whenever the script itself succeeds")
+	})
 }
 
 // =============================================================================

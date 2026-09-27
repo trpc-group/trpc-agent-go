@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	protocolserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -154,6 +156,180 @@ func TestNewDiscoversCardFromPathPrefixWithLegacyFallback(t *testing.T) {
 		requestPaths[0] != wantPaths[0] ||
 		requestPaths[1] != wantPaths[1] {
 		t.Fatalf("request paths = %#v, want %#v", requestPaths, wantPaths)
+	}
+}
+
+func TestNewUsesPrimaryInterfaceBindingAndTenant(t *testing.T) {
+	requestErrCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var requestErr error
+		defer func() { requestErrCh <- requestErr }()
+		if r.URL.EscapedPath() != "/tenant-a/message:send" {
+			requestErr = fmt.Errorf("path = %s", r.URL.EscapedPath())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			requestErr = err
+		}
+		if body["tenant"] != "tenant-a" {
+			requestErr = fmt.Errorf("tenant = %v", body["tenant"])
+		}
+		w.Header().Set("Content-Type", protocol.MediaTypeA2AJSON)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": body["message"]})
+	}))
+	defer server.Close()
+
+	remote, err := New(WithAgentCard(&protocolserver.AgentCard{
+		Name: "remote",
+		SupportedInterfaces: []protocolserver.AgentInterface{{
+			URL:             server.URL,
+			ProtocolBinding: protocol.ProtocolBindingHTTPJSON,
+			ProtocolVersion: protocol.ProtocolVersionV1,
+			Tenant:          "tenant-a",
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hello")},
+	)
+	if _, err := remote.a2aClient.SendMessage(context.Background(), protocol.SendMessageParams{
+		Message: message,
+	}); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	if err := <-requestErrCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewSelectsFirstSupportedInterface(t *testing.T) {
+	requestErrCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var requestErr error
+		defer func() { requestErrCh <- requestErr }()
+		var request struct {
+			ID     any            `json:"id"`
+			Params map[string]any `json:"params"`
+		}
+		if r.URL.EscapedPath() != "/jsonrpc" {
+			requestErr = fmt.Errorf("path = %s", r.URL.EscapedPath())
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			requestErr = err
+			return
+		}
+		if request.Params["tenant"] != "json-tenant" {
+			requestErr = fmt.Errorf("tenant = %v", request.Params["tenant"])
+			return
+		}
+		message := protocol.NewMessage(
+			protocol.MessageRoleAgent,
+			[]*protocol.Part{protocol.NewTextPart("ok")},
+		)
+		result, err := json.Marshal(protocol.NewSendMessageResponseMessage(&message))
+		if err != nil {
+			requestErr = err
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  json.RawMessage(result),
+		})
+	}))
+	defer server.Close()
+
+	remote, err := New(WithAgentCard(&protocolserver.AgentCard{
+		Name: "remote",
+		SupportedInterfaces: []protocolserver.AgentInterface{
+			{
+				URL:             server.URL + "/grpc",
+				ProtocolBinding: "GRPC",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+				Tenant:          "grpc-tenant",
+			},
+			{
+				URL:             server.URL + "/legacy-jsonrpc",
+				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+				ProtocolVersion: "0.3",
+				Tenant:          "legacy-tenant",
+			},
+			{
+				URL:             server.URL + "/jsonrpc",
+				ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+				ProtocolVersion: protocol.ProtocolVersionV1 + ".7",
+				Tenant:          "json-tenant",
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hello")},
+	)
+	if _, err := remote.a2aClient.SendMessage(context.Background(), protocol.SendMessageParams{
+		Message: message,
+	}); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	if err := <-requestErrCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewExplicitClientOptionsOverrideAgentCardBinding(t *testing.T) {
+	_, err := New(
+		WithAgentCard(&protocolserver.AgentCard{
+			Name: "remote",
+			SupportedInterfaces: []protocolserver.AgentInterface{{
+				URL:             "http://localhost:8080",
+				ProtocolBinding: "unsupported",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			}},
+		}),
+		WithA2AClientExtraOptions(client.WithProtocolBinding(protocol.ProtocolBindingJSONRPC)),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+}
+
+func TestNewRejectsIncompatibleProtocolVersions(t *testing.T) {
+	_, err := New(WithAgentCard(&protocolserver.AgentCard{
+		Name: "remote",
+		SupportedInterfaces: []protocolserver.AgentInterface{{
+			URL:             "http://localhost:8080",
+			ProtocolBinding: protocol.ProtocolBindingJSONRPC,
+			ProtocolVersion: "0.3",
+		}},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "no interface compatible with A2A protocol 1.0") {
+		t.Fatalf("New error = %v, want incompatible protocol version", err)
+	}
+}
+
+func TestCompatibleProtocolVersion(t *testing.T) {
+	tests := map[string]bool{
+		"":        true,
+		"1.0":     true,
+		"1.0.0":   true,
+		"1.0.7":   true,
+		"0.3":     false,
+		"1.1":     false,
+		"1.0.x":   false,
+		"1.0.0.0": false,
+	}
+	for version, want := range tests {
+		if got := isCompatibleProtocolVersion(version); got != want {
+			t.Errorf("isCompatibleProtocolVersion(%q) = %v, want %v", version, got, want)
+		}
 	}
 }
 
@@ -367,6 +543,354 @@ func TestProcessStreamingEventsFlushesAndStopsOnTerminalError(t *testing.T) {
 	}
 }
 
+func TestProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) {
+	partialText := func(responseID, content string) *model.Response {
+		return &model.Response{
+			ID:        responseID,
+			IsPartial: true,
+			Choices: []model.Choice{{Delta: model.Message{
+				Content: content,
+			}}},
+		}
+	}
+	toolCall := func(responseID, callID string) *model.Response {
+		return &model.Response{
+			ID: responseID,
+			Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: callID,
+				}},
+			}}},
+		}
+	}
+	tests := []struct {
+		name             string
+		responses        []*model.Response
+		wantResponseID   string
+		wantFlushedIDs   []string
+		wantToolEventIDs []string
+	}{
+		{
+			name: "preserves buffered response ID",
+			responses: []*model.Response{
+				partialText("resp-text", "buffered"),
+				toolCall("resp-tool", "call-1"),
+			},
+			wantResponseID:   "resp-tool",
+			wantFlushedIDs:   []string{"resp-text"},
+			wantToolEventIDs: []string{"resp-tool"},
+		},
+		{
+			name: "falls back to triggering response ID",
+			responses: []*model.Response{
+				partialText("", "buffered"),
+				toolCall("resp-tool", "call-1"),
+			},
+			wantResponseID:   "resp-tool",
+			wantFlushedIDs:   []string{"resp-tool"},
+			wantToolEventIDs: []string{"resp-tool"},
+		},
+		{
+			name: "resets buffered response ID after each flush",
+			responses: []*model.Response{
+				partialText("resp-text-1", "first"),
+				toolCall("resp-tool-1", "call-1"),
+				partialText("resp-text-2", "second"),
+				toolCall("resp-tool-2", "call-2"),
+			},
+			wantResponseID:   "resp-tool-2",
+			wantFlushedIDs:   []string{"resp-text-1", "resp-text-2"},
+			wantToolEventIDs: []string{"resp-tool-1", "resp-tool-2"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			call := 0
+			converter := &responseConverterFunc{stream: func(
+				protocol.StreamResponse,
+				string,
+				*agent.Invocation,
+			) ([]*event.Event, error) {
+				response := tt.responses[call].Clone()
+				call++
+				return []*event.Event{event.New(
+					"invocation",
+					"remote",
+					event.WithResponse(response),
+				)}, nil
+			}}
+			remote := &A2AAgent{name: "remote", eventConverter: converter}
+			stream := make(chan protocol.StreamResponse, len(tt.responses))
+			message := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+			for range tt.responses {
+				stream <- protocol.NewStreamResponseMessage(&message)
+			}
+			close(stream)
+			out := make(chan *event.Event, len(tt.responses)*2)
+
+			result := remote.processStreamingEvents(
+				context.Background(),
+				&agent.Invocation{InvocationID: "invocation"},
+				out,
+				stream,
+			)
+			close(out)
+
+			if result.terminalError != nil || result.responseID != tt.wantResponseID {
+				t.Fatalf("stream result = %#v", result)
+			}
+			var flushedResponseIDs []string
+			var toolEventResponseIDs []string
+			for evt := range out {
+				if evt == nil || evt.Response == nil || evt.Response.IsPartial ||
+					len(evt.Response.Choices) == 0 {
+					continue
+				}
+				message := evt.Response.Choices[0].Message
+				if message.Content != "" && len(message.ToolCalls) == 0 {
+					flushedResponseIDs = append(flushedResponseIDs, evt.Response.ID)
+				}
+				if len(message.ToolCalls) > 0 {
+					toolEventResponseIDs = append(toolEventResponseIDs, evt.Response.ID)
+				}
+			}
+			if strings.Join(flushedResponseIDs, ",") != strings.Join(tt.wantFlushedIDs, ",") {
+				t.Fatalf("flushed response IDs = %v, want %v", flushedResponseIDs, tt.wantFlushedIDs)
+			}
+			if strings.Join(toolEventResponseIDs, ",") != strings.Join(tt.wantToolEventIDs, ",") {
+				t.Fatalf("tool event response IDs = %v, want %v", toolEventResponseIDs, tt.wantToolEventIDs)
+			}
+		})
+	}
+}
+
+func TestProcessStreamingEventsFlushesV1ArtifactSnapshot(t *testing.T) {
+	responses := []*model.Response{
+		{
+			ID:        "text-response",
+			IsPartial: true,
+			Choices: []model.Choice{{Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "stale",
+			}}},
+		},
+		{
+			ID:        "text-response",
+			IsPartial: true,
+			Choices: []model.Choice{{Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "replacement",
+			}}},
+		},
+		{
+			ID: "tool-response",
+			Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			}}},
+		},
+	}
+	call := 0
+	remote := &A2AAgent{
+		name: "remote",
+		eventConverter: &responseConverterFunc{stream: func(
+			protocol.StreamResponse,
+			string,
+			*agent.Invocation,
+		) ([]*event.Event, error) {
+			if call == len(responses) {
+				return nil, nil
+			}
+			response := responses[call].Clone()
+			call++
+			return []*event.Event{event.New(
+				"invocation",
+				"remote",
+				event.WithResponse(response),
+			)}, nil
+		}},
+	}
+	stream := make(chan protocol.StreamResponse, 4)
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("stale")},
+			},
+		},
+	)
+	appendChunk := false
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("replacement")},
+			},
+			Append: &appendChunk,
+		},
+	)
+	message := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+	stream <- protocol.NewStreamResponseMessage(&message)
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	out := make(chan *event.Event, 4)
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		out,
+		stream,
+	)
+	close(out)
+	if result.terminalError != nil || result.responseID != "tool-response" {
+		t.Fatalf("stream result = %#v", result)
+	}
+
+	var flushed *model.Response
+	for evt := range out {
+		if evt == nil || evt.Response == nil || evt.Response.IsPartial ||
+			len(evt.Response.Choices) == 0 {
+			continue
+		}
+		message := evt.Response.Choices[0].Message
+		if message.Content != "" && len(message.ToolCalls) == 0 {
+			flushed = evt.Response
+		}
+	}
+	if flushed == nil || flushed.ID != "text-response" ||
+		flushed.Choices[0].Message.Content != "replacement" {
+		t.Fatalf("flushed response = %#v", flushed)
+	}
+}
+
+func TestProcessStreamingEventsSnapshotToolCallOwnsText(t *testing.T) {
+	call := 0
+	remote := &A2AAgent{
+		name: "remote",
+		eventConverter: &responseConverterFunc{stream: func(
+			protocol.StreamResponse,
+			string,
+			*agent.Invocation,
+		) ([]*event.Event, error) {
+			call++
+			switch call {
+			case 1:
+				return []*event.Event{event.New(
+					"invocation",
+					"remote",
+					event.WithResponse(&model.Response{
+						ID:        "text-response",
+						IsPartial: true,
+						Choices: []model.Choice{{Delta: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "stale",
+						}}},
+					}),
+				)}, nil
+			case 2:
+				return []*event.Event{event.New(
+					"invocation",
+					"remote",
+					event.WithResponse(&model.Response{
+						ID: "text-response",
+						Choices: []model.Choice{{Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "replacement",
+							ToolCalls: []model.ToolCall{{
+								ID:   "call-1",
+								Type: "function",
+							}},
+						}}},
+					}),
+				)}, nil
+			default:
+				return nil, nil
+			}
+		}},
+	}
+	appendChunk := true
+	replaceChunk := false
+	stream := make(chan protocol.StreamResponse, 3)
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("stale")},
+			},
+			Append: &appendChunk,
+		},
+	)
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("replacement")},
+			},
+			Append: &replaceChunk,
+		},
+	)
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	out := make(chan *event.Event, 4)
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		out,
+		stream,
+	)
+	close(out)
+	if result.terminalError != nil {
+		t.Fatalf("terminal error = %v, want nil", result.terminalError)
+	}
+
+	var standaloneText []string
+	var toolCallMessage *model.Message
+	for evt := range out {
+		if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		choice := evt.Response.Choices[0]
+		if !evt.Response.IsPartial && len(choice.Message.ToolCalls) == 0 &&
+			choice.Message.Content != "" {
+			standaloneText = append(standaloneText, choice.Message.Content)
+		}
+		if len(choice.Message.ToolCalls) > 0 {
+			message := choice.Message
+			toolCallMessage = &message
+		}
+	}
+	if len(standaloneText) != 0 {
+		t.Fatalf("standalone text events = %v, want none", standaloneText)
+	}
+	if toolCallMessage == nil || toolCallMessage.Content != "replacement" ||
+		len(toolCallMessage.ToolCalls) != 1 {
+		t.Fatalf(
+			"tool call message = %#v, want replacement text with one tool call",
+			toolCallMessage,
+		)
+	}
+}
+
 func TestProcessStreamingEventsConverterErrorAndCancellation(t *testing.T) {
 	wantErr := errors.New("convert")
 	remote := &A2AAgent{
@@ -446,7 +970,8 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 	}
 
 	out := make(chan *event.Event, 1)
-	builder.WriteString("buffered")
+	var contentBuffer ia2a.StreamingTextBuffer
+	contentBuffer.Append("response", "buffered")
 	anchor := time.Now()
 	remote.flushBufferedContent(
 		context.Background(),
@@ -454,7 +979,7 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 		out,
 		"response",
 		anchor,
-		builder,
+		&contentBuffer,
 	)
 	flushed := <-out
 	if flushed.Response.Choices[0].Message.Content != "buffered" ||
@@ -470,32 +995,4 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 		nil,
 	)
 
-	artifactContent := make(map[string]string)
-	artifactParts := make(map[string][]model.ContentPart)
-	var artifactOrder []string
-	recordArtifactChunk(
-		&protocol.TaskArtifactUpdateEvent{
-			Artifact: protocol.Artifact{ArtifactID: "artifact"},
-		},
-		"one",
-		nil,
-		artifactContent,
-		artifactParts,
-		&artifactOrder,
-	)
-	appendChunk := true
-	recordArtifactChunk(
-		&protocol.TaskArtifactUpdateEvent{
-			Artifact: protocol.Artifact{ArtifactID: "artifact"},
-			Append:   &appendChunk,
-		},
-		"two",
-		nil,
-		artifactContent,
-		artifactParts,
-		&artifactOrder,
-	)
-	if artifactContent["artifact"] != "onetwo" || len(artifactOrder) != 1 {
-		t.Fatalf("appended artifact = %#v, order = %#v", artifactContent, artifactOrder)
-	}
 }

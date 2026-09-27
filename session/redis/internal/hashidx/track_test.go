@@ -12,6 +12,7 @@ package hashidx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -216,6 +217,50 @@ func TestClient_GetTrackEvents(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, result["nonexistent"])
 	})
+}
+
+func TestClient_GetTrackEvents_BeyondLuaStackLimit(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "large-track"}
+	track := session.Track("beta")
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	const eventCount = 8200
+	baseTime := time.Unix(1_700_000_000, 0)
+	pipe := rdb.Pipeline()
+	for i := 0; i < eventCount; i++ {
+		id := fmt.Sprintf("e%05d", i)
+		trackEvent := session.TrackEvent{
+			Track:     track,
+			Payload:   json.RawMessage(fmt.Sprintf(`%d`, i)),
+			Timestamp: baseTime.Add(time.Duration(i) * time.Second),
+		}
+		eventJSON, err := json.Marshal(trackEvent)
+		require.NoError(t, err)
+		pipe.HSet(ctx, c.keys.TrackDataKey(key, track), id, eventJSON)
+		pipe.ZAdd(ctx, c.keys.TrackTimeIndexKey(key, track), redis.Z{
+			Score:  float64(trackEvent.Timestamp.UnixNano()),
+			Member: id,
+		})
+	}
+	_, err = pipe.Exec(ctx)
+	require.NoError(t, err)
+
+	result, err := c.GetTrackEvents(ctx, key, []session.Track{track}, 200, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result[track], 200)
+	assert.JSONEq(t, `8000`, string(result[track][0].Payload))
+	assert.JSONEq(t, `8199`, string(result[track][199].Payload))
+
+	result, err = c.GetTrackEvents(ctx, key, []session.Track{track}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result[track], eventCount)
+	assert.JSONEq(t, `0`, string(result[track][0].Payload))
+	assert.JSONEq(t, `8199`, string(result[track][eventCount-1].Payload))
 }
 
 func TestClient_ListTracksForSession(t *testing.T) {

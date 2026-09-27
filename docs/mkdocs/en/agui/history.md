@@ -293,6 +293,8 @@ A non-nil page request makes the snapshot response one-shot. Even when message s
 
 ```go
 import (
+	"context"
+
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -348,3 +350,27 @@ The returned `cursor` should be sent with the next snapshot request to load olde
 `hasMore=true` means the client has not received all older history yet. This can be because the session store still has older events, or because the AG-UI layer trimmed part of the fetched page before returning it. The trimming is intentional: message snapshots are returned from a user-message boundary, so the frontend does not receive the trailing half of an earlier turn.
 
 If the fetched page does not contain a user-message boundary, `/history` returns an empty `messages` array, keeps the requested cursor in `rawEvent.page.cursor`, and sets `hasMore=true`. The client can then retry with the same cursor and a larger `EventLimit` to ask the session service for a wider event window.
+
+## Best-Effort History Loading
+
+By default, messages snapshots strictly validate pairing relationships between persisted AG-UI events. For example, `TEXT_MESSAGE_CONTENT` must be preceded by `TEXT_MESSAGE_START` for the same message, and `TOOL_CALL_RESULT` must match a tool call whose argument stream has completed. If historical data contains missing, out-of-order, or duplicate events, the snapshot route tries to return the `MESSAGES_SNAPSHOT` restored before the failure point, and then returns `RUN_ERROR`.
+
+If production history data may contain a small number of incomplete events because of connection interruptions, frontend tool-call fallback, storage write failures, or version switches, enable best-effort loading:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotBestEffortEnabled(true),
+)
+```
+
+After this is enabled, messages snapshots skip individual AG-UI events that cannot be decoded or paired while restoring history, and continue processing subsequent events. Skipped events are only written to warn logs and do not make the current `/history` request return `RUN_ERROR`. If later events can still form complete messages, they continue to appear in `MESSAGES_SNAPSHOT.messages`. This mode only affects history snapshot restoration. It does not change the real-time conversation route execution behavior, and it cannot restore historical event content that has already been lost.
+
+Best-effort loading only handles cases where event content can be read but cannot be restored as a valid message. If session storage reads fail, `SessionService` returns an error, or the messages snapshot route cannot locate the session, the server still returns `RUN_ERROR`.

@@ -286,6 +286,15 @@ func TestWithEventMessageProjector(t *testing.T) {
 	require.Equal(t, "projected", got.Content)
 }
 
+func TestWithIncludeSyntheticErrorMessages(t *testing.T) {
+	opts := &Options{}
+	WithIncludeSyntheticErrorMessages(true)(opts)
+	require.True(t, opts.includeSyntheticErrorMessages)
+
+	WithIncludeSyntheticErrorMessages(false)(opts)
+	require.False(t, opts.includeSyntheticErrorMessages)
+}
+
 func TestWithPreserveForeignMessages(t *testing.T) {
 	opts := &Options{}
 	WithPreserveForeignMessages(true)(opts)

@@ -11,6 +11,7 @@ package mcpbroker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -166,6 +167,84 @@ func canonicalizeHeaders(headers map[string]string) map[string]string {
 	return result
 }
 
+// resolveOperationError lets the host intercept the underlying error, then
+// hides endpoint details for custom-scheme named servers by default.
+// The top-level error text stays endpoint-neutral while the cause remains
+// available to host code through errors.Is, errors.As, and errors.Unwrap.
+func (b *Broker) resolveOperationError(
+	ctx context.Context,
+	target resolvedTarget,
+	meta operationMetadata,
+	err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	handled, resolved := interceptHTTPOperationError(ctx, b, target, meta, err)
+	if handled {
+		return resolved
+	}
+	if isNamedCustomSchemeTarget(target) && !isModelRequestError(err) {
+		return newNamedServerOperationError(target.Name, err)
+	}
+	return resolved
+}
+
+// modelRequestError marks a safe error about the model's own request so it
+// remains available for self-correction after endpoint redaction.
+type modelRequestError struct {
+	err error
+}
+
+func (e *modelRequestError) Error() string { return e.err.Error() }
+
+func (e *modelRequestError) Unwrap() error { return e.err }
+
+// newModelRequestError marks err as describing the model's request.
+func newModelRequestError(err error) error {
+	return &modelRequestError{err: err}
+}
+
+// isModelRequestError reports whether err was raised about the model's request.
+func isModelRequestError(err error) bool {
+	var marker *modelRequestError
+	return errors.As(err, &marker)
+}
+
+// isNamedCustomSchemeTarget reports whether target is a code-configured HTTP
+// server whose endpoint uses a scheme only a host-supplied handler can resolve.
+func isNamedCustomSchemeTarget(target resolvedTarget) bool {
+	return target.Origin == OriginCode &&
+		target.TargetType == targetTypeHTTP &&
+		hasCustomEndpointScheme(target.Config.ServerURL)
+}
+
+// namedServerOperationError is an endpoint-neutral error for a named
+// custom-scheme server. Its Error text omits endpoint details while Unwrap
+// preserves the original cause for host-side classification.
+type namedServerOperationError struct {
+	msg   string
+	cause error
+}
+
+func (e *namedServerOperationError) Error() string { return e.msg }
+
+func (e *namedServerOperationError) Unwrap() error { return e.cause }
+
+// newNamedServerOperationError returns an endpoint-neutral error whose text
+// names only the server while preserving cause for host-side classification.
+func newNamedServerOperationError(serverName string, cause error) error {
+	serverName = strings.TrimSpace(serverName)
+	msg := "MCP server request failed; failure details are withheld"
+	if serverName != "" {
+		msg = fmt.Sprintf("MCP server %q request failed; failure details are withheld", serverName)
+	}
+	return &namedServerOperationError{
+		msg:   msg,
+		cause: cause,
+	}
+}
+
 func interceptHTTPOperationError(
 	ctx context.Context,
 	b *Broker,
@@ -283,13 +362,22 @@ func filterNilStdioClientOptions(opts []tmcp.StdioClientOption) []tmcp.StdioClie
 	return result
 }
 
-func createClient(cfg mcpcfg.ConnectionConfig, extraHTTP []tmcp.ClientOption, extraStdio []tmcp.StdioClientOption) (tmcp.Connector, error) {
+// createClient revalidates cfg before building the underlying MCP client. adHoc
+// must describe the origin the config was resolved from so this second pass
+// applies the same scheme policy as resolution: ad-hoc URLs stay restricted to
+// http and https, while named servers may use custom schemes.
+func createClient(
+	cfg mcpcfg.ConnectionConfig,
+	adHoc bool,
+	extraHTTP []tmcp.ClientOption,
+	extraStdio []tmcp.StdioClientOption,
+) (tmcp.Connector, error) {
 	clientInfo := cfg.ClientInfo
 	if clientInfo.Name == "" {
 		clientInfo = defaultClientInfo
 	}
 
-	_, kind, err := normalizeConnectionConfig(cfg, false)
+	_, kind, err := normalizeConnectionConfig(cfg, adHoc)
 	if err != nil {
 		return nil, err
 	}
@@ -308,9 +396,7 @@ func createClient(cfg mcpcfg.ConnectionConfig, extraHTTP []tmcp.ClientOption, ex
 		opts = append(opts, extraHTTP...)
 		return tmcp.NewSSEClient(cfg.ServerURL, clientInfo, opts...)
 	case transportStreamable:
-		opts := httpHeaderOptions(cfg.Headers)
-		opts = append(opts, extraHTTP...)
-		return tmcp.NewClient(cfg.ServerURL, clientInfo, opts...)
+		return tmcp.NewClient(cfg.ServerURL, clientInfo, streamableClientOptions(cfg, adHoc, extraHTTP)...)
 	default:
 		return nil, fmt.Errorf("unsupported transport: %s", cfg.Transport)
 	}
@@ -332,6 +418,25 @@ func httpHeaderOptions(headers map[string]string) []tmcp.ClientOption {
 	return []tmcp.ClientOption{tmcp.WithHTTPHeaders(httpHeaders)}
 }
 
+// streamableClientOptions builds the option list for a streamable client.
+//
+// Existing named HTTP/HTTPS and ad-hoc HTTP/HTTPS targets keep the
+// trpc-mcp-go GET-SSE default. Code-configured named custom-scheme targets
+// disable the background GET stream because broker operations use single-use
+// clients and do not consume server-initiated messages. Host options are
+// applied last so an internal host can opt back in.
+func streamableClientOptions(
+	cfg mcpcfg.ConnectionConfig,
+	adHoc bool,
+	extraHTTP []tmcp.ClientOption,
+) []tmcp.ClientOption {
+	opts := httpHeaderOptions(cfg.Headers)
+	if !adHoc && hasCustomEndpointScheme(cfg.ServerURL) {
+		opts = append(opts, tmcp.WithClientGetSSEEnabled(false))
+	}
+	return append(opts, extraHTTP...)
+}
+
 func withTimeoutContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		return ctx, func() {}
@@ -346,6 +451,7 @@ func withTimeoutContext(ctx context.Context, timeout time.Duration) (context.Con
 func withOneShotClient[T any](
 	ctx context.Context,
 	cfg mcpcfg.ConnectionConfig,
+	adHoc bool,
 	extraHTTP []tmcp.ClientOption,
 	extraStdio []tmcp.StdioClientOption,
 	fn func(context.Context, tmcp.Connector) (T, error),
@@ -359,15 +465,70 @@ func withOneShotClient[T any](
 	ctx, cancel := withTimeoutContext(ctx, cfg.Timeout)
 	defer cancel()
 
-	client, err := createClient(cfg, extraHTTP, extraStdio)
+	client, err := createClient(cfg, adHoc, extraHTTP, extraStdio)
 	if err != nil {
 		return zero, err
 	}
 	defer client.Close()
+	preserveContextIdentity := !adHoc && hasCustomEndpointScheme(cfg.ServerURL)
 
 	if _, err := client.Initialize(ctx, &tmcp.InitializeRequest{}); err != nil {
-		return zero, fmt.Errorf("initialize MCP client: %w", err)
+		err = fmt.Errorf("initialize MCP client: %w", err)
+		if preserveContextIdentity {
+			err = preserveOperationContextError(ctx, err)
+		}
+		return zero, err
 	}
 
-	return fn(ctx, client)
+	result, err := fn(ctx, client)
+	if preserveContextIdentity {
+		err = preserveOperationContextError(ctx, err)
+	}
+	return result, err
+}
+
+// operationContextError keeps the original error text and unwrap chain while
+// restoring cancellation or deadline identity from the active operation
+// context. trpc-mcp-go formats some HTTPReqHandler failures with %v, which
+// otherwise drops errors.Is matches for those sentinels.
+type operationContextError struct {
+	err      error
+	canceled bool
+	deadline bool
+}
+
+func (e *operationContextError) Error() string { return e.err.Error() }
+
+func (e *operationContextError) Unwrap() error { return e.err }
+
+func (e *operationContextError) Is(target error) bool {
+	return (e.canceled && target == context.Canceled) ||
+		(e.deadline && target == context.DeadlineExceeded)
+}
+
+// preserveOperationContextError records the operation context's cancellation
+// or deadline identity when Initialize or the operation callback fails and
+// that context is already done. The original error text is unchanged.
+func preserveOperationContextError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return err
+	}
+	canceled := errors.Is(ctxErr, context.Canceled)
+	deadline := errors.Is(ctxErr, context.DeadlineExceeded)
+	if !canceled && !deadline {
+		return err
+	}
+	if (!canceled || errors.Is(err, context.Canceled)) &&
+		(!deadline || errors.Is(err, context.DeadlineExceeded)) {
+		return err
+	}
+	return &operationContextError{
+		err:      err,
+		canceled: canceled,
+		deadline: deadline,
+	}
 }

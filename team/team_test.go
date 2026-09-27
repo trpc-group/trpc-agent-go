@@ -13,6 +13,7 @@ package team
 import (
 	"context"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"sync"
@@ -860,7 +861,7 @@ func TestTeam_RunCoordinator_PreservesCustomInvocationState(t *testing.T) {
 	require.Equal(t, "value", value)
 }
 
-func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T) {
+func TestTeam_RunCoordinator_MemberToolSeparatesTraceAndSurfaceRoots(t *testing.T) {
 	member := &traceRecordingAgent{name: testMemberNameOne}
 	coordinator := &testCoordinator{name: testCoordinatorName}
 	coordinator.runFunc = func(
@@ -885,6 +886,53 @@ func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(tm),
 		agent.WithInvocationSession(session.NewSession(testAppName, testUserID, testSessionID)),
+		agent.WithInvocationTraceNodeID("workflow/trace/team"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			CustomAgentConfigs: surfacepatch.WithRootNodeID(
+				nil,
+				"workflow/surface/team",
+			),
+		}),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, "workflow/trace/team", coordinator.gotTraceNodeID)
+	require.Equal(t, "workflow/surface/team/coordinator", coordinator.gotSurfaceRootNodeID)
+	require.Equal(t, "workflow/trace/team/member_one", member.gotTraceNodeID)
+	require.Equal(t, "workflow/surface/team/member_one", member.gotSurfaceRootNodeID)
+}
+
+func TestTeam_RunCoordinator_DoesNotMountOrdinaryAgentToolAsMember(t *testing.T) {
+	member := &traceRecordingAgent{name: testMemberNameOne}
+	helper := &traceRecordingAgent{name: "helper"}
+	helperTool := agenttool.NewTool(helper)
+	coordinator := &testCoordinator{name: testCoordinatorName}
+	coordinator.runFunc = func(
+		ctx context.Context,
+		_ *agent.Invocation,
+		toolSets []tool.ToolSet,
+	) (<-chan *event.Event, error) {
+		_, err := helperTool.Call(ctx, []byte(testToolArgs))
+		require.NoError(t, err)
+		tools := itool.NewNamedToolSet(toolSets[0]).Tools(ctx)
+		_, err = tools[0].(tool.CallableTool).Call(ctx, []byte(testToolArgs))
+		require.NoError(t, err)
+		ch := make(chan *event.Event, 1)
+		go func() {
+			defer close(ch)
+			ch <- event.New("done", coordinator.name)
+		}()
+		return ch, nil
+	}
+	tm, err := New(coordinator, []agent.Agent{member})
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(session.NewSession(testAppName, testUserID, testSessionID)),
 		agent.WithInvocationTraceNodeID("workflow/team"),
 		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
 	)
@@ -893,10 +941,8 @@ func TestTeam_RunCoordinator_MemberToolUsesMemberSurfaceRootNodeID(t *testing.T)
 	require.NoError(t, err)
 	for range ch {
 	}
-	require.Equal(t, "workflow/team", coordinator.gotTraceNodeID)
-	require.Equal(t, "workflow/team/coordinator", coordinator.gotSurfaceRootNodeID)
-	require.Equal(t, testMemberNameOne, member.gotTraceNodeID)
-	require.Equal(t, "workflow/team/member_one", member.gotSurfaceRootNodeID)
+	require.Equal(t, "helper", helper.gotTraceNodeID)
+	require.Equal(t, "workflow/team/member_one", member.gotTraceNodeID)
 }
 
 func TestTeam_RunCoordinator_ClearsMountedRootsOnCoordinatorError(t *testing.T) {
@@ -908,6 +954,7 @@ func TestTeam_RunCoordinator_ClearsMountedRootsOnCoordinatorError(t *testing.T) 
 	) (<-chan *event.Event, error) {
 		require.Equal(t, "workflow/team/coordinator", agent.InvocationSurfaceRootNodeID(inv))
 		require.Equal(t, "workflow/team", teamtrace.MemberTraceRootForInvocation(inv))
+		require.Equal(t, "workflow/team", teamtrace.MemberSurfaceRootForInvocation(inv))
 		return nil, errors.New("coordinator failed")
 	}
 	tm, err := New(coordinator, []agent.Agent{testAgent{name: testMemberNameOne}})
@@ -923,6 +970,7 @@ func TestTeam_RunCoordinator_ClearsMountedRootsOnCoordinatorError(t *testing.T) 
 	require.EqualError(t, err, "coordinator failed")
 	require.Equal(t, "workflow/team", agent.InvocationSurfaceRootNodeID(inv))
 	require.Empty(t, teamtrace.MemberTraceRootForInvocation(inv))
+	require.Empty(t, teamtrace.MemberSurfaceRootForInvocation(inv))
 }
 
 func TestWrapCoordinatorInvocationState_Guards(t *testing.T) {
@@ -930,6 +978,72 @@ func TestWrapCoordinatorInvocationState_Guards(t *testing.T) {
 	var recvOnly <-chan *event.Event = src
 	require.Equal(t, recvOnly, wrapCoordinatorInvocationState(nil, src))
 	require.Nil(t, wrapCoordinatorInvocationState(agent.NewInvocation(), nil))
+}
+
+func TestMountedMemberTool_MemberMountGuards(t *testing.T) {
+	member := testAgent{name: testMemberNameOne}
+	wrapped := &mountedMemberTool{
+		memberIndex: 0,
+		members:     []agent.Agent{member},
+	}
+	ctx := wrapped.mountContext(nil)
+	require.NotNil(t, ctx)
+	_, ok := teamtrace.MemberMountFromContext(ctx)
+	require.False(t, ok)
+	parent := agent.NewInvocation()
+	ctx = agent.NewInvocationContext(context.Background(), parent)
+	_, ok = wrapped.memberMount(ctx)
+	require.False(t, ok)
+	teamtrace.SetMemberTraceRootForInvocation(parent, "trace/team")
+	_, ok = wrapped.memberMount(ctx)
+	require.False(t, ok)
+	teamtrace.SetMemberSurfaceRootForInvocation(parent, "surface/team")
+	mount, ok := wrapped.memberMount(ctx)
+	require.True(t, ok)
+	require.Equal(t, "trace/team/member_one", mount.TraceNodeID)
+	require.Equal(t, "surface/team/member_one", mount.SurfaceRootNodeID)
+	outOfRange := &mountedMemberTool{
+		memberIndex: 1,
+		members:     []agent.Agent{member},
+	}
+	_, ok = outOfRange.memberMount(ctx)
+	require.False(t, ok)
+	negative := &mountedMemberTool{
+		memberIndex: -1,
+		members:     []agent.Agent{member},
+	}
+	_, ok = negative.memberMount(ctx)
+	require.False(t, ok)
+}
+
+func TestMountedMemberTool_StreamableCallAppliesMemberMount(t *testing.T) {
+	member := &traceRecordingAgent{name: testMemberNameOne}
+	wrapped := &mountedMemberTool{
+		Tool: agenttool.NewTool(
+			member,
+			agenttool.WithStreamInner(true),
+		),
+		memberIndex: 0,
+		members:     []agent.Agent{member},
+	}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession(testAppName, testUserID, testSessionID)),
+	)
+	teamtrace.SetMemberTraceRootForInvocation(parent, "trace/team")
+	teamtrace.SetMemberSurfaceRootForInvocation(parent, "surface/team")
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := wrapped.StreamableCall(ctx, []byte(testToolArgs))
+	require.NoError(t, err)
+	defer reader.Close()
+	for {
+		_, err = reader.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+	}
+	require.Equal(t, "trace/team/member_one", member.gotTraceNodeID)
+	require.Equal(t, "surface/team/member_one", member.gotSurfaceRootNodeID)
 }
 
 func TestTeam_RunSwarm_PreservesRunStructuredOutput(t *testing.T) {
@@ -2182,6 +2296,7 @@ func TestRunnerRun_WithSurfacePatchForNode_AppliesCoordinatorAndMemberPatches(
 		"user-team",
 		"session-team",
 		model.NewUserMessage("team input"),
+		agent.WithExecutionTraceEnabled(true),
 		agent.WithSurfacePatchForNode(coordinatorNodeID, coordinatorPatch),
 		agent.WithSurfacePatchForNode(memberNodeID, memberPatch),
 	)
@@ -2202,6 +2317,21 @@ func TestRunnerRun_WithSurfacePatchForNode_AppliesCoordinatorAndMemberPatches(
 		t,
 		teamFirstSystemMessageContent(memberPatched.LatestRequest().messages),
 		"member patched instruction",
+	)
+	require.NotNil(t, completion.ExecutionTrace)
+	var memberStepSurfaces []string
+	for _, step := range completion.ExecutionTrace.Steps {
+		if step.NodeID != memberNodeID {
+			continue
+		}
+		memberStepSurfaces = step.AppliedSurfaceIDs
+		break
+	}
+	require.NotNil(t, memberStepSurfaces)
+	require.Contains(
+		t,
+		memberStepSurfaces,
+		structure.SurfaceID(memberNodeID, structure.SurfaceTypeInstruction),
 	)
 }
 

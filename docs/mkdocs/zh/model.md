@@ -588,6 +588,29 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### 流式工具调用索引兼容
+
+OpenAI-compatible adapter 会在累积前修正负数 `tool_calls[].index`，无需
+升级 SDK。单个工具调用的 `-1` 索引会归零，与新版 OpenAI Go SDK 的兼容
+逻辑一致。混合或冲突索引会被分配到不同的非负索引，并通过服务方原始索引
+到累积索引的映射跟踪后续分片。因此，即使合法索引晚于负索引出现，省略 ID
+的续片也能归属到正确的工具调用。映射按 choice 隔离；合法索引不与已分配
+索引冲突时会保留。
+因负索引调用而发生重映射的调用，会在后续冲突中保留这一来源信息，避免将
+其他服务方索引的新调用误并入已有调用。
+已知 ID 可以在不同索引上建立别名。若新的 ID 随后使用该别名索引声明调用，
+新调用会接管该别名；原调用保留已分配索引，仍可通过 ID 续接。
+别名索引上的分片若携带函数名但没有 ID，会按原始显式索引回退处理，避免将
+先于 ID 到达的名称拼到别名所属的旧调用中；后续 ID 和参数续片沿用新映射。
+仅携带参数的续片在别名被其他调用接管前，仍可沿别名续接。
+缺失或为 null 的索引不会建立服务方索引映射。适配器优先匹配已知 ID；否则，
+若只有一个身份兼容的已有调用，续片会归入该调用，即使其索引不为零；无法
+唯一匹配时仍回退到零。对于显式索引，没有对应映射时，身份兼容的元数据或
+参数续片仍可沿用已分配的非负索引，包括延迟到达的名称、ID 和分片传输的
+函数名。
+对于交错的多个工具调用，服务方仍需提供能明确区分调用的索引或 ID；缺失 ID
+且索引缺失或由多个调用共用时，没有足够信息从多个候选中还原分片所属调用。
+
 ##### 自定义流式 Usage 聚合
 
 OpenAI-compatible adapter 默认会请求流式 usage，并聚合服务方返回的
@@ -1745,15 +1768,23 @@ counter := model.NewSimpleTokenCounter(
     model.WithApproxRunesPerToken(1.6),  // 中文场景推荐值
 )
 
-// 2. 设置为全局计数器（影响所有摘要触发）
+// 2. 设置进程默认计数器；agent 显式配置的请求计数器优先
 summary.SetTokenCounter(counter)
 
 // 3. 创建摘要器
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithTokenThreshold(4000),  // 使用自定义计数器评估
+    summary.WithTokenThreshold(4000),  // 阈值单位为估算 token 数
 )
 ```
+
+`summary.SetTokenCounter(...)` 配置摘要检查和摘要请求估算的进程默认计数器，
+同时作为模型可见 request view 计数和 LLM 调用前摘要触发的默认值。Agent 显式
+设置的 `WithContextCompactionTokenCounter(...)` 对该 agent 的请求计数优先，
+关闭 context compaction 时也适用。进程默认值在每次评估时读取，因此后续更新
+会影响已创建的 agent；`SetTokenCounter(nil)` 恢复内置 `SimpleTokenCounter`。
+自定义计数器须支持并发调用。Tool result 压缩和模型层 token tailoring 保留独立
+默认值，如需相同的估算口径，应为这些路径显式配置计数器。
 
 #### 7. Token 裁剪（Token Tailoring）
 

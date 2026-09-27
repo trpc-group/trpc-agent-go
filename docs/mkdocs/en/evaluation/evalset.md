@@ -62,6 +62,7 @@ type ConversationScenario struct {
 // Invocation represents one turn in a conversation.
 type Invocation struct {
 	InvocationID          string               // InvocationID is the turn identifier, optional.
+	MetricNames           []string             // MetricNames selects the metrics for this turn.
 	ContextMessages       []*model.Message     // ContextMessages are per-turn context messages, optional.
 	UserContent           *model.Message       // UserContent is the user input for this turn, required.
 	FinalResponse         *model.Message       // FinalResponse is the final response, optional.

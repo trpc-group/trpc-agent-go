@@ -11,12 +11,12 @@ package summary
 import (
 	"context"
 	"strings"
-	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytoken"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -37,37 +37,24 @@ type ContextChecker func(context.Context, *session.Session) bool
 
 type checkEvaluator func(context.Context, *session.Session) Check
 
-var (
-	defaultTokenCounterMu sync.RWMutex
-	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
-)
-
 const tokenThresholdConversationTextStateKey = session.StateTempPrefix +
 	"summary:token_threshold_conversation_text"
 const tokenThresholdReasoningContentStateKey = session.StateTempPrefix +
 	"summary:token_threshold_reasoning_content"
 
 func getTokenCounter() model.TokenCounter {
-	defaultTokenCounterMu.RLock()
-	counter := defaultTokenCounter
-	defaultTokenCounterMu.RUnlock()
-
-	if counter == nil {
-		return model.NewSimpleTokenCounter()
-	}
-	return counter
+	return summarytoken.Get()
 }
 
-// SetTokenCounter sets the default TokenCounter used by summary checkers.
-// This affects all future CheckTokenThreshold evaluations in this process.
+// SetTokenCounter sets the process-wide default counter for summary checks and
+// summary requests. Model-visible request estimates and pre-LLM summary triggers
+// also use this default unless the agent has an explicit context compaction
+// counter. Changes apply to subsequent evaluations, including existing agents.
+// Nil restores the built-in SimpleTokenCounter. Custom counters must support
+// concurrent counting calls. Tool-result compaction and model token tailoring
+// retain their separately configured counters.
 func SetTokenCounter(counter model.TokenCounter) {
-	if counter == nil {
-		counter = model.NewSimpleTokenCounter()
-	}
-
-	defaultTokenCounterMu.Lock()
-	defaultTokenCounter = counter
-	defaultTokenCounterMu.Unlock()
+	summarytoken.Set(counter)
 }
 
 // filterDeltaEvents returns events after the last summarized boundary stored

@@ -285,7 +285,7 @@ server, err := agui.New(
 
 分页能力由 session 层提供。AG-UI 服务端不会额外定义顶层 cursor 字段，也不约定固定的请求参数名称；resolver 会拿到 `RunAgentInput` 和已经解析出的 `session.Key`，再返回一次 session 分页请求。业务可以自行决定 cursor 和 limit 的来源，例如从 `forwardedProps`、网关映射后的请求元数据，或其它业务输入中读取。
 
-resolver 返回 `*aguirunner.MessagesSnapshotPageRequest`。`Cursor` 是上一页返回的 opaque cursor，空 cursor 表示读取最新一页。`EventLimit` 表示从会话存储中读取的 AG-UI track event 数量；它限制的是事件数，不是消息数或对话轮数，因为一条最终展示的消息可能由多条已持久化 AG-UI 事件还原而来。
+resolver 返回 `*aguirunner.MessagesSnapshotPageRequest`。`Cursor` 是上一页返回的 opaque cursor，空 cursor 表示读取最新一页。`EventLimit` 表示从会话存储中读取的 AG-UI track event 数量；它限制事件数，不代表消息数或对话轮数，因为一条最终展示的消息可能由多条已持久化 AG-UI 事件还原而来。
 
 只有配置的 session service 实现了 `session.TrackEventPageService` 时，消息快照路由才会使用分页读取。若当前 session service 不支持该能力，`/history` 会保持原有的全量快照行为。
 
@@ -293,6 +293,8 @@ resolver 返回 `*aguirunner.MessagesSnapshotPageRequest`。`Cursor` 是上一�
 
 ```go
 import (
+	"context"
+
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -348,3 +350,27 @@ server, err := agui.New(
 `hasMore=true` 表示客户端还没有收到全部更早历史。原因可能是 session 存储中仍有更早事件，也可能是 AG-UI 层在返回前裁剪了当前页。这个裁剪是有意的：消息快照会从 user message 边界开始返回，避免前端收到上一轮对话的后半段。
 
 如果本次读取到的事件页中找不到 user message 边界，`/history` 会返回空 `messages`，并在 `rawEvent.page.cursor` 中保留本次请求传入的 cursor，同时设置 `hasMore=true`。客户端可以使用同一个 cursor，并调大 `EventLimit` 后重试，从 session 层请求更大的事件窗口。
+
+## 尽力加载历史
+
+默认情况下，消息快照会严格校验已持久化 AG-UI 事件之间的配对关系。比如 `TEXT_MESSAGE_CONTENT` 需要先看到同一条消息的 `TEXT_MESSAGE_START`，`TOOL_CALL_RESULT` 需要匹配已经完成参数流的工具调用。如果历史数据中存在缺失、乱序或重复事件，快照路由会尽量返回出错位置之前已经还原出的 `MESSAGES_SNAPSHOT`，随后返回 `RUN_ERROR`。
+
+如果线上历史数据可能因为连接中断、前端工具调用降级、存储写入失败或版本切换而出现少量不完整事件，可以开启尽力加载模式：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotBestEffortEnabled(true),
+)
+```
+
+开启后，消息快照在还原历史时会跳过无法识别或无法配对的单条 AG-UI event，并继续处理后续事件。被跳过的事件只会写入 warn 日志，不会让本次 `/history` 请求返回 `RUN_ERROR`；如果后续事件仍然能组成完整消息，它们会继续出现在 `MESSAGES_SNAPSHOT.messages` 中。该模式只影响历史快照还原，不改变实时对话路由的执行行为，也不会修复已经缺失的历史事件内容。
+
+尽力加载只处理事件内容可读取但无法还原为合法消息的情况。如果会话存储读取失败、`SessionService` 返回错误，或者消息快照路由无法定位会话，服务端仍会返回 `RUN_ERROR`。

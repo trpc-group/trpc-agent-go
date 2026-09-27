@@ -8539,8 +8539,8 @@ func TestBuildThinkingOption(t *testing.T) {
 // calls when the provider returns all indices as 0.
 func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 	t.Run("fix indices for parallel tool calls with same index 0", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First tool call chunk with ID "call_1" and index 0.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8561,10 +8561,10 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
 		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
-		assert.Equal(t, 0, idToIndexMap["call_1"])
-		assert.Equal(t, 1, nextIndex)
+		assert.Equal(t, 0, state.idToIndexMap["call_1"])
+		assert.Equal(t, 1, state.nextIndex)
 
 		// Second tool call chunk with ID "call_2" and index 0 (should be fixed to 1).
 		chunk2 := openai.ChatCompletionChunk{
@@ -8585,16 +8585,16 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
 		assert.Equal(t, int64(1), fixed2.Choices[0].Delta.ToolCalls[0].Index)
-		assert.Equal(t, 1, idToIndexMap["call_2"])
-		assert.Equal(t, 2, nextIndex)
+		assert.Equal(t, 1, state.idToIndexMap["call_2"])
+		assert.Equal(t, 2, state.nextIndex)
 	})
 
 	t.Run("fix indices for repeated chunks of the same tool call ID", func(t *testing.T) {
 		// This test covers providers that keep returning index 0 for subsequent chunks of a later tool call, which would otherwise corrupt the accumulator state.
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 		// Prepare streaming chunks.
 		chunk1 := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8671,17 +8671,17 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 		// Apply index fixing per chunk.
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
-		fixed3 := fixToolCallIndices(chunk3, idToIndexMap, &nextIndex)
-		fixed4 := fixToolCallIndices(chunk4, idToIndexMap, &nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
+		fixed2 := fixToolCallIndices(chunk2, states)
+		fixed3 := fixToolCallIndices(chunk3, states)
+		fixed4 := fixToolCallIndices(chunk4, states)
 		// Verify fixed indices and mapping.
 		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(1), fixed3.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(1), fixed4.Choices[0].Delta.ToolCalls[0].Index)
-		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
-		assert.Equal(t, 2, nextIndex)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, state.idToIndexMap)
+		assert.Equal(t, 2, state.nextIndex)
 		// Feed fixed chunks into the accumulator.
 		acc := openai.ChatCompletionAccumulator{}
 		acc.AddChunk(fixed1)
@@ -8701,8 +8701,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 
 	t.Run("fix indices for multiple tool calls in a single chunk with same index 0", func(t *testing.T) {
 		// This test covers providers that emit multiple tool calls in a single chunk with all indices set to 0.
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 		// Prepare a chunk containing two tool calls.
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8733,11 +8733,11 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 		// Apply index fixing and verify mapping.
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		assert.Equal(t, int64(0), fixed.Choices[0].Delta.ToolCalls[0].Index)
 		assert.Equal(t, int64(1), fixed.Choices[0].Delta.ToolCalls[1].Index)
-		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, idToIndexMap)
-		assert.Equal(t, 2, nextIndex)
+		assert.Equal(t, map[string]int{"call_1": 0, "call_2": 1}, state.idToIndexMap)
+		assert.Equal(t, 2, state.nextIndex)
 		// Verify accumulator output.
 		acc := openai.ChatCompletionAccumulator{}
 		acc.AddChunk(fixed)
@@ -8753,8 +8753,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 
 	t.Run("fix indices for multiple tool calls in a single chunk with colliding non-zero index", func(t *testing.T) {
 		// This test covers providers that emit multiple tool calls sharing a non-zero index in the same chunk.
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 		// Prepare a chunk containing two tool calls that both claim the same non-zero index.
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8785,12 +8785,12 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 		// Apply index fixing and verify both tool calls end up with distinct indices.
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		idx1 := int(fixed.Choices[0].Delta.ToolCalls[0].Index)
 		idx2 := int(fixed.Choices[0].Delta.ToolCalls[1].Index)
 		require.NotEqual(t, idx1, idx2)
-		assert.Equal(t, idx1, idToIndexMap["call_1"])
-		assert.Equal(t, idx2, idToIndexMap["call_2"])
+		assert.Equal(t, idx1, state.idToIndexMap["call_1"])
+		assert.Equal(t, idx2, state.idToIndexMap["call_2"])
 		// Verify accumulator output uses separate slots for both tool calls.
 		acc := openai.ChatCompletionAccumulator{}
 		acc.AddChunk(fixed)
@@ -8809,8 +8809,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 	})
 
 	t.Run("preserve correct indices when provider sets them properly", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First tool call with correct index 0.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8831,7 +8831,7 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
 		assert.Equal(t, int64(0), fixed1.Choices[0].Delta.ToolCalls[0].Index)
 
 		// Second tool call with correct index 1.
@@ -8853,14 +8853,14 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
 		// Should preserve the original index 1.
 		assert.Equal(t, int64(1), fixed2.Choices[0].Delta.ToolCalls[0].Index)
 	})
 
 	t.Run("handle continuation chunks without ID", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First chunk with ID.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8881,7 +8881,7 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
+		fixToolCallIndices(chunk1, states)
 
 		// Continuation chunk without ID (arguments streaming).
 		chunk2 := openai.ChatCompletionChunk{
@@ -8902,26 +8902,26 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
 		// Should preserve index 0 for continuation.
 		assert.Equal(t, int64(0), fixed2.Choices[0].Delta.ToolCalls[0].Index)
 	})
 
 	t.Run("empty choices returns unchanged chunk", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{},
 		}
 
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		assert.Equal(t, chunk, fixed)
 	})
 
 	t.Run("no tool calls returns unchanged chunk", func(t *testing.T) {
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		chunk := openai.ChatCompletionChunk{
 			Choices: []openai.ChatCompletionChunkChoice{
@@ -8933,7 +8933,7 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 			},
 		}
 
-		fixed := fixToolCallIndices(chunk, idToIndexMap, &nextIndex)
+		fixed := fixToolCallIndices(chunk, states)
 		assert.Equal(t, "Hello", fixed.Choices[0].Delta.Content)
 	})
 }
@@ -8943,8 +8943,8 @@ func TestFixToolCallIndices_ParallelToolCallsWithZeroIndex(t *testing.T) {
 func TestAccumulatorWithFixedIndices(t *testing.T) {
 	t.Run("accumulator separates tool calls with different indices", func(t *testing.T) {
 		acc := openai.ChatCompletionAccumulator{}
-		idToIndexMap := make(map[string]int)
-		nextIndex := 0
+		state := newToolCallIndexState()
+		states := map[int64]*toolCallIndexState{0: state}
 
 		// First tool call chunk with ID "call_1" and index 0.
 		chunk1 := openai.ChatCompletionChunk{
@@ -8967,8 +8967,8 @@ func TestAccumulatorWithFixedIndices(t *testing.T) {
 			},
 		}
 
-		fixed1 := fixToolCallIndices(chunk1, idToIndexMap, &nextIndex)
-		t.Logf("fixed1 index: %d, nextIndex: %d", fixed1.Choices[0].Delta.ToolCalls[0].Index, nextIndex)
+		fixed1 := fixToolCallIndices(chunk1, states)
+		t.Logf("fixed1 index: %d, nextIndex: %d", fixed1.Choices[0].Delta.ToolCalls[0].Index, state.nextIndex)
 		acc.AddChunk(fixed1)
 
 		// Second tool call chunk with ID "call_2" and index 0 (should be fixed to 1).
@@ -8992,8 +8992,8 @@ func TestAccumulatorWithFixedIndices(t *testing.T) {
 			},
 		}
 
-		fixed2 := fixToolCallIndices(chunk2, idToIndexMap, &nextIndex)
-		t.Logf("fixed2 index: %d, nextIndex: %d", fixed2.Choices[0].Delta.ToolCalls[0].Index, nextIndex)
+		fixed2 := fixToolCallIndices(chunk2, states)
+		t.Logf("fixed2 index: %d, nextIndex: %d", fixed2.Choices[0].Delta.ToolCalls[0].Index, state.nextIndex)
 		acc.AddChunk(fixed2)
 
 		// Verify accumulator has two separate tool calls.
@@ -9461,12 +9461,12 @@ func TestModel_accumulateChunk(t *testing.T) {
 				},
 			},
 		}
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		assert.NotEmpty(t, acc.Choices)
+		assert.NotEmpty(t, acc.acc.Choices)
 		assert.Equal(t, "", reasoningBuf.String())
 	})
 
@@ -9483,13 +9483,13 @@ func TestModel_accumulateChunk(t *testing.T) {
 				}
 			}]
 		}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
 		assert.Equal(t, "First reasoning", reasoningBuf.String())
-		assert.Empty(t, acc.Choices)
+		assert.Empty(t, acc.acc.Choices)
 	})
 
 	t.Run("accumulate chunk with reasoning and content", func(t *testing.T) {
@@ -9506,13 +9506,13 @@ func TestModel_accumulateChunk(t *testing.T) {
 					}
 				}]
 			}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		require.Len(t, acc.Choices, 1)
-		assert.Equal(t, "Hello", acc.Choices[0].Message.Content)
+		require.Len(t, acc.acc.Choices, 1)
+		assert.Equal(t, "Hello", acc.acc.Choices[0].Message.Content)
 		assert.Equal(t, "plan", reasoningBuf.String())
 	})
 
@@ -9538,22 +9538,22 @@ func TestModel_accumulateChunk(t *testing.T) {
 					}
 				}]
 			}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		require.Len(t, acc.Choices, 1)
-		require.Len(t, acc.Choices[0].Message.ToolCalls, 1)
+		require.Len(t, acc.acc.Choices, 1)
+		require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 1)
 		assert.Equal(
 			t,
 			"lookup_weather",
-			acc.Choices[0].Message.ToolCalls[0].Function.Name,
+			acc.acc.Choices[0].Message.ToolCalls[0].Function.Name,
 		)
 		assert.Equal(
 			t,
 			`{"city":"Shenzhen"}`,
-			acc.Choices[0].Message.ToolCalls[0].Function.Arguments,
+			acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments,
 		)
 		assert.Equal(t, "tool planning", reasoningBuf.String())
 	})
@@ -9572,13 +9572,13 @@ func TestModel_accumulateChunk(t *testing.T) {
 					"finish_reason": "stop"
 				}]
 			}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		require.Len(t, acc.Choices, 1)
-		assert.Equal(t, "stop", acc.Choices[0].FinishReason)
+		require.Len(t, acc.acc.Choices, 1)
+		assert.Equal(t, "stop", acc.acc.Choices[0].FinishReason)
 		assert.Equal(t, "final step", reasoningBuf.String())
 	})
 
@@ -9611,14 +9611,293 @@ func TestModel_accumulateChunk(t *testing.T) {
 				TotalTokens:      15,
 			},
 		}
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		assert.Equal(t, int64(20), acc.Usage.PromptTokens)
-		assert.Equal(t, int64(10), acc.Usage.CompletionTokens)
+		assert.Equal(t, int64(20), acc.acc.Usage.PromptTokens)
+		assert.Equal(t, int64(10), acc.acc.Usage.CompletionTokens)
 	})
+}
+
+func TestChatStreamAccumulator_PreservesLongFields(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+	const (
+		chunkCount   = 2048
+		contentPart  = "content-"
+		refusalPart  = "refusal-"
+		argumentPart = `{"city":"shenzhen"}`
+	)
+
+	acc := chatStreamAccumulator{}
+	var reasoningBuf bytes.Buffer
+	for i := 0; i < chunkCount; i++ {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "stream-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{{
+				Index: 0,
+				Delta: openai.ChatCompletionChunkChoiceDelta{
+					Content: contentPart,
+					Refusal: refusalPart,
+					ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{{
+						Index: 0,
+						ID: func() string {
+							if i == 0 {
+								return "call-1"
+							}
+							return ""
+						}(),
+						Type: func() string {
+							if i == 0 {
+								return "function"
+							}
+							return ""
+						}(),
+						Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+							Name: func() string {
+								if i == 0 {
+									return "lookup_"
+								}
+								if i == 1 {
+									return "weather"
+								}
+								return ""
+							}(),
+							Arguments: argumentPart,
+						},
+					}},
+				},
+			}},
+		}
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+	}
+
+	require.Len(t, acc.acc.Choices, 1)
+	require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 1)
+	assert.Equal(t, strings.Repeat(contentPart, chunkCount), acc.acc.Choices[0].Message.Content)
+	assert.Equal(t, strings.Repeat(refusalPart, chunkCount), acc.acc.Choices[0].Message.Refusal)
+	assert.Equal(t, "lookup_weather", acc.acc.Choices[0].Message.ToolCalls[0].Function.Name)
+	assert.Equal(t, strings.Repeat(argumentPart, chunkCount), acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+}
+
+func TestChatStreamAccumulator_ClearsScratchRawJSON(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+	largeRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"tool_calls":[{"index":0,"id":"call-0","type":"function","function":{"name":"first","arguments":"` + strings.Repeat("a", 1<<20) + `"}},{"index":1,"id":"call-1","type":"function","function":{"name":"second","arguments":"` + strings.Repeat("b", 1<<20) + `"}}]}}]}`
+	var first openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(largeRaw), &first))
+	require.Equal(t, largeRaw, first.RawJSON())
+
+	acc := chatStreamAccumulator{}
+	var reasoningBuf bytes.Buffer
+	m.accumulateChunk(first, &acc, &reasoningBuf)
+	require.Len(t, acc.acc.Choices, 1)
+	require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 2)
+
+	smallRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"tool_calls":[{"index":0,"function":{"arguments":"tail"}}]}}]}`
+	var second openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(smallRaw), &second))
+	m.accumulateChunk(second, &acc, &reasoningBuf)
+
+	assert.Equal(t, "first", acc.acc.Choices[0].Message.ToolCalls[0].Function.Name)
+	assert.Equal(t, strings.Repeat("a", 1<<20)+"tail", acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+	assert.Equal(t, "second", acc.acc.Choices[0].Message.ToolCalls[1].Function.Name)
+	assert.Equal(t, strings.Repeat("b", 1<<20), acc.acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	assert.Empty(t, acc.scratchToolCalls[0][0].RawJSON())
+	assert.Empty(t, acc.scratchToolCalls[0][0].Function.RawJSON())
+	assert.Empty(t, acc.scratchChoices[0].RawJSON())
+
+	choiceRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"content":"last"}},{"index":1,"finish_reason":"","delta":{"content":"second"}}]}`
+	var third openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(choiceRaw), &third))
+	m.accumulateChunk(third, &acc, &reasoningBuf)
+	choicesRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"content":"only"}}]}`
+	var fourth openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(choicesRaw), &fourth))
+	m.accumulateChunk(fourth, &acc, &reasoningBuf)
+	assert.Len(t, acc.scratchChoices, 1)
+	assert.Empty(t, acc.scratchChoices[0].RawJSON())
+	assert.Empty(t, acc.scratchChoices[0].Delta.RawJSON())
+
+	var emptyChoices openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[]}`), &emptyChoices))
+	m.accumulateChunk(emptyChoices, &acc, &reasoningBuf)
+	assert.Empty(t, acc.scratchChoices[0].RawJSON())
+	assert.Empty(t, acc.scratchChoices[0].Delta.RawJSON())
+	assert.Nil(t, acc.scratchChoices[0].Delta.ToolCalls)
+	assert.Nil(t, acc.scratchToolCalls[0])
+}
+
+func TestChatStreamAccumulator_ScratchSlicesShrinkAndRegrow(t *testing.T) {
+	acc := chatStreamAccumulator{}
+
+	addChunk := func(choiceCount, toolCallCount int) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "stream-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: make([]openai.ChatCompletionChunkChoice, choiceCount),
+		}
+		for choiceIndex := range chunk.Choices {
+			chunk.Choices[choiceIndex].Index = int64(choiceIndex)
+			chunk.Choices[choiceIndex].Delta.ToolCalls = make(
+				[]openai.ChatCompletionChunkChoiceDeltaToolCall,
+				toolCallCount,
+			)
+			for toolCallIndex := range chunk.Choices[choiceIndex].Delta.ToolCalls {
+				chunk.Choices[choiceIndex].Delta.ToolCalls[toolCallIndex] = openai.ChatCompletionChunkChoiceDeltaToolCall{
+					Index: int64(toolCallIndex),
+					ID:    "call",
+					Type:  "function",
+					Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+						Name:      "lookup",
+						Arguments: "{}",
+					},
+				}
+			}
+		}
+		require.True(t, acc.addChunk(chunk))
+	}
+
+	t.Run("tool calls shrink and regrow", func(t *testing.T) {
+		addChunk(1, 2)
+		addChunk(1, 1)
+		addChunk(1, 2)
+		assert.Len(t, acc.scratchToolCalls[0], 2)
+	})
+
+	acc = chatStreamAccumulator{}
+	t.Run("tool calls regrow from empty", func(t *testing.T) {
+		addChunk(1, 1)
+		addChunk(1, 0)
+		addChunk(1, 1)
+		assert.Len(t, acc.scratchToolCalls[0], 1)
+	})
+
+	acc = chatStreamAccumulator{}
+	t.Run("choices shrink and regrow", func(t *testing.T) {
+		addChunk(2, 1)
+		addChunk(1, 1)
+		addChunk(2, 1)
+		assert.Len(t, acc.scratchChoices, 2)
+		assert.Len(t, acc.scratchToolCalls, 2)
+	})
+}
+
+func TestChatStreamAccumulator_ReportsFinishedDecodedFields(t *testing.T) {
+	tests := []struct {
+		name             string
+		firstChunk       string
+		secondChunk      string
+		wantContent      string
+		wantRefusal      string
+		wantToolCallName string
+		wantToolCallArgs string
+	}{
+		{
+			name:        "content",
+			firstChunk:  `{"id":"stream-id","choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+			secondChunk: `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantContent: "answer",
+		},
+		{
+			name:        "refusal",
+			firstChunk:  `{"id":"stream-id","choices":[{"index":0,"delta":{"refusal":"cannot help"}}]}`,
+			secondChunk: `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantRefusal: "cannot help",
+		},
+		{
+			name:             "tool call",
+			firstChunk:       `{"id":"stream-id","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+			secondChunk:      `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantToolCallName: "lookup",
+			wantToolCallArgs: "{}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New("test-model", WithAPIKey("test-key"))
+			acc := chatStreamAccumulator{}
+			var reasoningBuf bytes.Buffer
+
+			m.accumulateChunk(parseChunkWithExtraFields(t, tt.firstChunk), &acc, &reasoningBuf)
+			m.accumulateChunk(parseChunkWithExtraFields(t, tt.secondChunk), &acc, &reasoningBuf)
+
+			if tt.wantContent != "" {
+				content, ok := acc.acc.JustFinishedContent()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantContent, content)
+			}
+			if tt.wantRefusal != "" {
+				refusal, ok := acc.acc.JustFinishedRefusal()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantRefusal, refusal)
+			}
+			if tt.wantToolCallName != "" {
+				toolCall, ok := acc.acc.JustFinishedToolCall()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantToolCallName, toolCall.Name)
+				assert.Equal(t, tt.wantToolCallArgs, toolCall.Arguments)
+			}
+		})
+	}
+}
+func TestChatStreamAccumulator_AllocationGrowth(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+	chunk := openai.ChatCompletionChunk{
+		ID:      "stream-id",
+		Object:  "chat.completion.chunk",
+		Created: 1699200000,
+		Model:   "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{{
+			Index: 0,
+			Delta: openai.ChatCompletionChunkChoiceDelta{Content: strings.Repeat("x", 64)},
+		}},
+	}
+	measure := func(chunkCount int) float64 {
+		return testing.AllocsPerRun(5, func() {
+			acc := chatStreamAccumulator{}
+			var reasoningBuf bytes.Buffer
+			for i := 0; i < chunkCount; i++ {
+				m.accumulateChunk(chunk, &acc, &reasoningBuf)
+			}
+			if len(acc.acc.Choices) != 1 || len(acc.acc.Choices[0].Message.Content) != chunkCount*64 {
+				t.Fatalf("unexpected accumulated content")
+			}
+		})
+	}
+
+	small := measure(256)
+	large := measure(2048)
+	assert.Less(t, large, small*2.5, "allocation growth should remain sub-quadratic")
+}
+
+func BenchmarkChatStreamAccumulatorLongContent(b *testing.B) {
+	m := New("test-model", WithAPIKey("test-key"))
+	chunk := openai.ChatCompletionChunk{
+		ID:      "stream-id",
+		Object:  "chat.completion.chunk",
+		Created: 1699200000,
+		Model:   "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{{
+			Index: 0,
+			Delta: openai.ChatCompletionChunkChoiceDelta{Content: strings.Repeat("x", 64)},
+		}},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		acc := chatStreamAccumulator{}
+		var reasoningBuf bytes.Buffer
+		for j := 0; j < 2048; j++ {
+			m.accumulateChunk(chunk, &acc, &reasoningBuf)
+		}
+	}
 }
 
 // TestModel_sendPartialResponse tests the sendPartialResponse method.

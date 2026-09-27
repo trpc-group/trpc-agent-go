@@ -46,7 +46,11 @@ func (s *Service) CreateSessionSummary(
 		return nil
 	}
 
+	ctx, att := isummary.BeginAttempt(ctx, sess, filterKey)
+	defer att.Report()
+
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	att.Summarized(updated, err)
 	if err != nil || !updated {
 		return err
 	}
@@ -54,30 +58,42 @@ func (s *Service) CreateSessionSummary(
 	sess.SummariesMu.RLock()
 	sum := sess.Summaries[filterKey]
 	sess.SummariesMu.RUnlock()
-
 	if sum == nil {
+		att.Persisted(isummary.PersistNoSummary)
 		return nil
 	}
 
 	summaryBytes, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return att.RecordWrite(fmt.Errorf("marshal summary failed: %w", err))
 	}
-
-	return s.upsertSessionSummary(ctx, key, filterKey, summaryBytes, sum.UpdatedAt)
+	result, err := s.upsertSessionSummary(
+		ctx,
+		key,
+		filterKey,
+		summaryBytes,
+		sum.UpdatedAt,
+	)
+	if err != nil {
+		return att.RecordWrite(err)
+	}
+	att.Persisted(result)
+	return nil
 }
 
 // upsertSessionSummary serializes summary persistence through the parent
 // session row. This keeps writes correct for both the current four-column
 // unique index and legacy schemas whose nullable deleted_at column does not
-// prevent duplicate active summaries.
+// prevent duplicate active summaries. It reports whether the write was
+// applied or deliberately skipped as stale.
 func (s *Service) upsertSessionSummary(
 	ctx context.Context,
 	key session.Key,
 	filterKey string,
 	summaryBytes []byte,
 	updatedAt time.Time,
-) error {
+) (isummary.PersistResult, error) {
+	result := isummary.PersistStored
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
 		if err := s.lockActiveSessionForSummary(ctx, tx, key); err != nil {
 			return err
@@ -95,6 +111,7 @@ func (s *Service) upsertSessionSummary(
 			// committed summary. Equal cutoffs remain last-write-wins so callers
 			// can force regeneration for the same summarized history.
 			if persistedUpdatedAt.After(updatedAt) {
+				result = isummary.PersistStale
 				return nil
 			}
 
@@ -134,9 +151,9 @@ func (s *Service) upsertSessionSummary(
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("upsert summary failed: %w", err)
+		return isummary.PersistError, fmt.Errorf("upsert summary failed: %w", err)
 	}
-	return nil
+	return result, nil
 }
 
 func (s *Service) lockActiveSessionForSummary(

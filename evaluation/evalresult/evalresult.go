@@ -12,12 +12,14 @@ package evalresult
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalSetResult represents the evaluation result for an entire eval set.
@@ -34,6 +36,15 @@ type EvalSetResult struct {
 	Summary *EvalSetResultSummary `json:"summary,omitempty"`
 	// CreationTimestamp when this result was created.
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
+}
+
+// InferenceStats contains resource measurements for the actual agent
+// inference that produced an evaluation result.
+type InferenceStats struct {
+	// Duration is the total time spent executing the actual agent.
+	Duration time.Duration `json:"duration,omitempty"`
+	// TokenUsage is the total token usage reported by the actual agent.
+	TokenUsage *model.Usage `json:"tokenUsage,omitempty"`
 }
 
 // EvalCaseResult represents the result of a single evaluation case.
@@ -58,6 +69,8 @@ type EvalCaseResult struct {
 	SessionID string `json:"sessionId,omitempty"`
 	// UserID is the user id used during inferencing stage of the eval.
 	UserID string `json:"userId,omitempty"`
+	// InferenceStats contains resource measurements for the actual agent for this eval case run.
+	InferenceStats *InferenceStats `json:"inferenceStats,omitempty"`
 }
 
 // EvalMetricResult represents the result of a single metric evaluation.

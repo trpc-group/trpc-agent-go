@@ -12,6 +12,8 @@ package mongodb
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +24,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
 
@@ -341,4 +345,75 @@ func TestNewService_WithSummarizerStartsAsyncWorker(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s.asyncWorker)
 	require.NoError(t, s.Close())
+}
+
+func TestMongoPersistResultClassification(t *testing.T) {
+	require.Equal(t, isummary.PersistUnknown, mongoPersistResult(nil))
+	require.Equal(t, isummary.PersistUnknown, mongoPersistResult(&mongo.UpdateResult{}))
+	require.Equal(t, isummary.PersistStored, mongoPersistResult(&mongo.UpdateResult{MatchedCount: 1}))
+	require.Equal(t, isummary.PersistStored, mongoPersistResult(&mongo.UpdateResult{UpsertedCount: 1}))
+}
+
+func TestCreateSessionSummary_ReportsUnknownPersistOnNilResult(t *testing.T) {
+	line := persistResultFromCreate(t, nil, nil)
+	require.Contains(t, line, "persist_result=unknown")
+}
+
+func TestCreateSessionSummary_ReportsUnknownPersistOnEmptyResult(t *testing.T) {
+	line := persistResultFromCreate(t, &mongo.UpdateResult{}, nil)
+	require.Contains(t, line, "persist_result=unknown")
+}
+
+func TestCreateSessionSummary_ReportsStoredOnMatchedUpdate(t *testing.T) {
+	line := persistResultFromCreate(t, &mongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}, nil)
+	require.Contains(t, line, "persist_result=stored")
+}
+
+func TestCreateSessionSummary_ReportsStoredOnUpsertInsert(t *testing.T) {
+	line := persistResultFromCreate(t, &mongo.UpdateResult{UpsertedCount: 1}, nil)
+	require.Contains(t, line, "persist_result=stored")
+}
+
+func TestCreateSessionSummary_ReportsStaleOnDuplicateKey(t *testing.T) {
+	line := persistResultFromCreate(t, nil, mongo.WriteException{
+		WriteErrors: []mongo.WriteError{{Code: 11000}},
+	})
+	require.Contains(t, line, "persist_result=stale")
+}
+
+func persistResultFromCreate(
+	t *testing.T,
+	result *mongo.UpdateResult,
+	err error,
+) string {
+	t.Helper()
+	var logged []string
+	oldDebug, oldInfo, oldWarn :=
+		log.DebugfContext, log.InfofContext, log.WarnfContext
+	capture := func(_ context.Context, format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	log.DebugfContext, log.InfofContext, log.WarnfContext = capture, capture, capture
+	t.Cleanup(func() {
+		log.DebugfContext, log.InfofContext, log.WarnfContext = oldDebug, oldInfo, oldWarn
+	})
+
+	mc := &mockClient{
+		updateOneFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return result, err
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
+		o.summarizer = &stubSummarizer{text: "hello"}
+	})
+	sess := newSessionForTest("app", "u", "s")
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", true))
+
+	for _, line := range logged {
+		if strings.Contains(line, "Session summary result:") {
+			return line
+		}
+	}
+	t.Fatalf("no session summary record in %q", logged)
+	return ""
 }

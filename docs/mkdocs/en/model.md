@@ -592,6 +592,35 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### Streaming Tool-Call Index Compatibility
+
+The OpenAI-compatible adapter normalizes negative `tool_calls[].index` values
+before accumulation, without upgrading the SDK. A single tool call with index
+`-1` uses zero, following the newer OpenAI Go SDK's fallback. For mixed or
+conflicting indices, the adapter assigns separate non-negative indices and
+retains provider-to-accumulator mappings for subsequent chunks. This keeps
+continuation chunks that omit IDs attached to the correct tool call, even when
+a valid index arrives after a negative one. Mappings are scoped to each choice.
+Valid indices are preserved when they do not conflict with an assigned index.
+Calls displaced by a negative-index call retain that distinction through later
+collisions, so subsequent declarations at distinct provider indices stay separate.
+A known ID can introduce an alias at a different index. If a new ID later
+declares a call at that alias, the new call takes over the alias. The original
+call keeps its assigned index and can still continue by ID.
+At an alias, a function-name delta without an ID uses the original explicit-index
+fallback. This keeps names that arrive before their IDs out of the alias owner's
+call; later IDs and argument chunks follow the new mapping. Argument-only deltas
+can still follow an alias until another call claims it.
+An omitted or null index does not establish a provider index mapping. After
+matching a known ID, the adapter attaches such a delta to the unique compatible
+call, even at a nonzero index; otherwise, it retains the zero fallback. For an
+explicit index with no provider mapping, compatible metadata or argument
+continuations can still use an already assigned non-negative index. This
+includes delayed names and IDs and function names split across chunks.
+Providers must still supply an unambiguous index or ID to distinguish
+interleaved calls; a missing ID combined with a missing or shared index does not
+contain enough information to recover the intended call among multiple candidates.
+
 ##### Custom Streaming Usage Aggregation
 
 The OpenAI-compatible adapter requests streaming usage and accumulates the
@@ -1770,15 +1799,26 @@ counter := model.NewSimpleTokenCounter(
     model.WithApproxRunesPerToken(1.6),  // Recommended value for Chinese scenarios
 )
 
-// 2. Set as global counter (affects all summary triggers)
+// 2. Set the process default; explicit agent request counters take precedence
 summary.SetTokenCounter(counter)
 
 // 3. Create summarizer
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithTokenThreshold(4000),  // Uses your custom counter for evaluation
+    summary.WithTokenThreshold(4000),  // Threshold in estimated tokens
 )
 ```
+
+`summary.SetTokenCounter(...)` configures the process default for summary checks
+and summary-request estimates. It also supplies the default for model-visible
+request-view estimates and pre-LLM summary triggers. An agent's explicit
+`WithContextCompactionTokenCounter(...)` takes precedence for its request
+estimates, including when context compaction is disabled. The process default
+is read at evaluation time, so later updates affect existing agents;
+`SetTokenCounter(nil)` restores the built-in `SimpleTokenCounter`. Custom
+counters must support concurrent calls. Tool-result compaction and model token
+tailoring keep their independent defaults; configure those paths explicitly
+when the same estimates are needed.
 
 #### 7. Token Tailoring
 

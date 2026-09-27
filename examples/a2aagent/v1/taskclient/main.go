@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 )
 
-const defaultUserID = "example-user"
+const taskAuthHeader = "X-API-Key"
 
 var (
 	serverURL = flag.String(
@@ -54,11 +55,15 @@ var (
 
 func main() {
 	flag.Parse()
+	apiKey := os.Getenv("A2A_TASK_API_KEY")
 	if *pollInterval <= 0 {
 		log.Fatal("poll-interval must be greater than zero")
 	}
 	if *timeout <= 0 {
 		log.Fatal("timeout must be greater than zero")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		log.Fatal("A2A_TASK_API_KEY is required")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
@@ -68,7 +73,10 @@ func main() {
 	if ctxID == "" {
 		ctxID = protocol.GenerateContextID()
 	}
-	a2aClient, err := client.NewA2AClient(*serverURL)
+	a2aClient, err := client.NewA2AClient(
+		*serverURL,
+		client.WithAPIKeyAuth(apiKey, taskAuthHeader),
+	)
 	if err != nil {
 		log.Fatalf("create A2A client: %v", err)
 	}
@@ -87,7 +95,6 @@ func main() {
 				ReturnImmediately: &returnImmediately,
 			},
 		},
-		client.WithRequestHeader("X-User-ID", defaultUserID),
 	)
 	if err != nil {
 		log.Fatalf("send message (start the server with -retain-tasks): %v", err)
@@ -114,7 +121,6 @@ func main() {
 	tasks, err := a2aClient.ListTasks(
 		ctx,
 		protocol.ListTasksParams{ContextID: ctxID},
-		client.WithRequestHeader("X-User-ID", defaultUserID),
 	)
 	if err != nil {
 		log.Fatalf("list tasks: %v", err)
@@ -135,7 +141,6 @@ func waitForTask(
 		stored, err := a2aClient.GetTasks(
 			ctx,
 			protocol.TaskQueryParams{ID: task.ID},
-			client.WithRequestHeader("X-User-ID", defaultUserID),
 		)
 		if err != nil {
 			return nil, err

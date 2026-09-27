@@ -11,6 +11,7 @@ package evaluation
 
 import (
 	"errors"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -18,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
@@ -53,6 +55,8 @@ type options struct {
 	runDetailsEnabled                 bool
 	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
+	inferenceStats                    *evalresult.InferenceStats
+	inferenceStatsMu                  sync.Mutex
 }
 
 // newOptions creates a new options with the default values.
@@ -257,4 +261,32 @@ func (o *options) validate(requireEvalService bool) error {
 		return errors.New("eval service is nil")
 	}
 	return nil
+}
+
+func (o *options) addInferenceStats(stats *evalresult.InferenceStats) {
+	if o == nil || stats == nil || (stats.Duration <= 0 && stats.TokenUsage == nil) {
+		return
+	}
+	o.inferenceStatsMu.Lock()
+	defer o.inferenceStatsMu.Unlock()
+	if o.inferenceStats == nil {
+		o.inferenceStats = &evalresult.InferenceStats{}
+	}
+	o.inferenceStats.Duration += stats.Duration
+	o.inferenceStats.TokenUsage = tokenusage.Add(o.inferenceStats.TokenUsage, stats.TokenUsage)
+}
+
+func (o *options) inferenceStatsValue() *evalresult.InferenceStats {
+	if o == nil {
+		return nil
+	}
+	o.inferenceStatsMu.Lock()
+	defer o.inferenceStatsMu.Unlock()
+	if o.inferenceStats == nil {
+		return nil
+	}
+	return &evalresult.InferenceStats{
+		Duration:   o.inferenceStats.Duration,
+		TokenUsage: tokenusage.Clone(o.inferenceStats.TokenUsage),
+	}
 }

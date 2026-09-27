@@ -31,12 +31,34 @@ const (
 	// defaultConnectionTimeout is the default timeout for Redis connection test.
 	defaultConnectionTimeout = 5 * time.Second
 
+	addMemoryResultSuccess = 0
+
 	updateMemoryResultNotFound = 0
 	updateMemoryResultSuccess  = 1
 	updateMemoryResultConflict = 2
 )
 
 var _ memory.Service = (*Service)(nil)
+
+// luaAddMemory atomically enforces the per-user limit for new memory IDs while
+// allowing an existing ID to be overwritten idempotently. A positive result is
+// the current memory count when the limit has been reached.
+var luaAddMemory = redis.NewScript(`
+local key = KEYS[1]
+local memoryID = ARGV[1]
+local entryJSON = ARGV[2]
+local memoryLimit = tonumber(ARGV[3])
+
+if redis.call('HEXISTS', key, memoryID) == 0 then
+    local count = redis.call('HLEN', key)
+    if count >= memoryLimit then
+        return count
+    end
+end
+
+redis.call('HSET', key, memoryID, entryJSON)
+return 0
+`)
 
 // luaUpdateMemory atomically updates a memory hash field and, when its
 // canonical ID changes, rejects an existing target before rotating the field.
@@ -156,17 +178,6 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	}
 	key := s.getUserMemKey(userKey)
 
-	if s.opts.memoryLimit > 0 {
-		count, err := s.redisClient.HLen(ctx, key).Result()
-		if err != nil && err != redis.Nil {
-			return fmt.Errorf("redis memory service check memory count failed: %w", err)
-		}
-		if int(count) >= s.opts.memoryLimit {
-			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
-				userKey.UserID, s.opts.memoryLimit, count)
-		}
-	}
-
 	now := time.Now()
 	mem := &memory.Memory{
 		Memory:      memoryStr,
@@ -186,6 +197,28 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	bytes, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal memory entry failed: %w", err)
+	}
+	if s.opts.memoryLimit > 0 {
+		scriptResult, err := luaAddMemory.Run(
+			ctx,
+			s.redisClient,
+			[]string{key},
+			entry.ID,
+			string(bytes),
+			s.opts.memoryLimit,
+		).Int()
+		if err != nil {
+			return fmt.Errorf("store memory entry failed: %w", err)
+		}
+		switch {
+		case scriptResult == addMemoryResultSuccess:
+			return nil
+		case scriptResult > addMemoryResultSuccess:
+			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
+				userKey.UserID, s.opts.memoryLimit, scriptResult)
+		default:
+			return fmt.Errorf("add memory entry returned unexpected result %d", scriptResult)
+		}
 	}
 	if err := s.redisClient.HSet(ctx, key, entry.ID, bytes).Err(); err != nil {
 		return fmt.Errorf("store memory entry failed: %w", err)

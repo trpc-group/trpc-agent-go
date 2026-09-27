@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1269,6 +1270,10 @@ func TestResolveTargetValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, OriginAdhoc, target.Origin)
 	require.Equal(t, targetTypeHTTP, target.TargetType)
+
+	_, err = New(WithAllowAdHocHTTP(true)).resolveTarget(targetInput{URL: "custom://service/mcp"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires http or https")
 }
 
 func TestSplitNamedToolSelectorBranches(t *testing.T) {
@@ -1383,6 +1388,328 @@ func TestErrorInterceptorBranches(t *testing.T) {
 	require.Contains(t, err.Error(), "returned no wrapped error")
 }
 
+const internalEndpointURL = "internal-scheme://svc-account:s3cr3t-pass@mcp.internal.corp:8443/private/tenant-42/mcp?token=tok-abc123"
+
+var internalEndpointSecrets = []string{
+	"internal-scheme",
+	"svc-account",
+	"s3cr3t-pass",
+	"mcp.internal.corp",
+	"8443",
+	"private",
+	"tenant-42",
+	"token",
+	"tok-abc123",
+}
+
+func requireEndpointNeutralError(t *testing.T, err error, serverName string) {
+	t.Helper()
+	require.Error(t, err)
+	message := err.Error()
+	for _, secret := range internalEndpointSecrets {
+		require.NotContains(t, message, secret, "model-visible error leaked endpoint detail")
+	}
+	require.Contains(t, message, serverName)
+	require.Error(t, errors.Unwrap(err))
+}
+
+func TestNamedCustomSchemeError_IsEndpointNeutral(t *testing.T) {
+	broker := New(WithServers(map[string]legacymcp.ConnectionConfig{
+		"internal_named": {
+			ServerURL: internalEndpointURL,
+			Transport: "streamable_http",
+			Timeout:   5 * time.Second,
+		},
+	}))
+	ctx := context.Background()
+
+	_, err := broker.listTools(ctx, listToolsInput{Selector: "internal_named"})
+	requireEndpointNeutralError(t, err, "internal_named")
+
+	_, err = broker.inspectTools(ctx, inspectToolsInput{
+		Selector: "internal_named",
+		Tools:    []string{"echo"},
+	})
+	requireEndpointNeutralError(t, err, "internal_named")
+
+	_, err = broker.callTool(ctx, callToolInput{
+		Selector:  "internal_named.echo",
+		Arguments: map[string]any{"text": "hello"},
+	})
+	requireEndpointNeutralError(t, err, "internal_named")
+}
+
+func TestNamedCustomSchemeError_PreservesTypedCause(t *testing.T) {
+	cause := &url.Error{
+		Op:  http.MethodPost,
+		URL: internalEndpointURL,
+		Err: context.DeadlineExceeded,
+	}
+	err := newNamedServerOperationError("internal_named", cause)
+
+	requireEndpointNeutralError(t, err, "internal_named")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	var urlErr *url.Error
+	require.ErrorAs(t, err, &urlErr)
+	require.Same(t, cause, urlErr)
+}
+
+func TestNamedCustomSchemeError_InterceptorSeesRawError(t *testing.T) {
+	var (
+		calls   int
+		rawErr  error
+		baseURL string
+		isAdHoc bool
+	)
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"internal_named": {
+				ServerURL: internalEndpointURL,
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
+			calls++
+			rawErr = req.Err
+			baseURL = req.BaseURL
+			isAdHoc = req.IsAdHoc
+			return &BrokerErrorDecision{Handled: false}, nil
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: "internal_named"})
+	requireEndpointNeutralError(t, err, "internal_named")
+
+	require.Equal(t, 1, calls)
+	require.False(t, isAdHoc)
+	require.Equal(t, internalEndpointURL, baseURL)
+	require.Error(t, rawErr)
+	require.Contains(t, rawErr.Error(), "mcp.internal.corp")
+}
+
+func TestNamedCustomSchemeError_InterceptorDecisionWins(t *testing.T) {
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"internal_named": {
+				ServerURL: internalEndpointURL,
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
+			return &BrokerErrorDecision{
+				Handled:   true,
+				WrapError: fmt.Errorf("ask the host to enable this provider"),
+			}, nil
+		}),
+	)
+
+	_, err := broker.listTools(context.Background(), listToolsInput{Selector: "internal_named"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ask the host to enable this provider")
+}
+
+func TestNamedCustomSchemeError_KeepsModelRequestErrors(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	handler := &rewriteHTTPReqHandler{dest: server.URL}
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"custom_named": {
+				ServerURL: "custom://service/mcp",
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{tmcp.WithHTTPReqHandler(handler)},
+			}, nil
+		}),
+	)
+	ctx := context.Background()
+
+	_, err := broker.callTool(ctx, callToolInput{
+		Selector:  "custom_named.echo",
+		Arguments: map[string]any{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing required arguments")
+	require.Contains(t, err.Error(), "text")
+
+	_, err = broker.callTool(ctx, callToolInput{
+		Selector:  "custom_named.absent_tool",
+		Arguments: map[string]any{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `MCP tool "absent_tool" not found`)
+}
+
+func TestNamedCustomSchemeError_PreservesOperationContextIdentity(t *testing.T) {
+	t.Run("caller_cancel", func(t *testing.T) {
+		handler := &waitForContextHandler{started: make(chan struct{})}
+		var rawErr error
+		var baseURL string
+		broker := newNamedCustomSchemeWaitBroker(t, 0, handler, &rawErr, &baseURL)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := broker.listTools(ctx, listToolsInput{Selector: "internal_named"})
+			errCh <- err
+		}()
+
+		select {
+		case <-handler.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("HTTPReqHandler did not start")
+		}
+		cancel()
+
+		select {
+		case err := <-errCh:
+			requireNamedCustomSchemeContextError(t, err, rawErr, context.Canceled, context.DeadlineExceeded)
+			require.Equal(t, internalEndpointURL, baseURL)
+		case <-time.After(2 * time.Second):
+			t.Fatal("listTools did not return after cancellation")
+		}
+	})
+
+	t.Run("broker_deadline", func(t *testing.T) {
+		handler := &waitForContextHandler{}
+		var rawErr error
+		var baseURL string
+		broker := newNamedCustomSchemeWaitBroker(t, 25*time.Millisecond, handler, &rawErr, &baseURL)
+
+		_, err := broker.listTools(context.Background(), listToolsInput{Selector: "internal_named"})
+		requireNamedCustomSchemeContextError(t, err, rawErr, context.DeadlineExceeded, context.Canceled)
+		require.Equal(t, internalEndpointURL, baseURL)
+	})
+}
+
+func newNamedCustomSchemeWaitBroker(
+	t *testing.T,
+	timeout time.Duration,
+	handler tmcp.HTTPReqHandler,
+	rawErr *error,
+	baseURL *string,
+) *Broker {
+	t.Helper()
+	return New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"internal_named": {
+				ServerURL: internalEndpointURL,
+				Transport: "streamable_http",
+				Timeout:   timeout,
+			},
+		}),
+		WithErrorInterceptor(func(ctx context.Context, req *BrokerErrorRequest) (*BrokerErrorDecision, error) {
+			*rawErr = req.Err
+			*baseURL = req.BaseURL
+			return &BrokerErrorDecision{Handled: false}, nil
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{tmcp.WithHTTPReqHandler(handler)},
+			}, nil
+		}),
+	)
+}
+
+func requireNamedCustomSchemeContextError(t *testing.T, err, rawErr, sentinel, other error) {
+	t.Helper()
+	requireEndpointNeutralError(t, err, "internal_named")
+	require.True(t, errors.Is(err, sentinel))
+	require.False(t, errors.Is(err, other))
+	require.True(t, errors.Is(err, tmcp.ErrHTTPRequestFailed))
+
+	var operationErr *operationContextError
+	require.True(t, errors.As(err, &operationErr))
+	require.NotNil(t, operationErr)
+
+	require.Error(t, rawErr)
+	require.NotEqual(t, err.Error(), rawErr.Error())
+	require.Equal(t, rawErr, errors.Unwrap(err))
+	require.Contains(t, rawErr.Error(), "HTTP request failed")
+	require.True(t, errors.Is(rawErr, tmcp.ErrHTTPRequestFailed))
+	require.True(t, errors.Is(rawErr, sentinel))
+}
+
+func TestStreamableClientOptions_DisablesGetSSEOnlyForNamedCustomScheme(t *testing.T) {
+	require.Empty(t, streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "https://example.com/mcp",
+	}, false, nil))
+
+	require.Empty(t, streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "http://example.com/mcp",
+	}, true, nil))
+
+	namedCustom := streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, false, nil)
+	require.Len(t, namedCustom, 1)
+
+	var hostCalls int
+	hostOpt := func(*tmcp.Client) { hostCalls++ }
+	opts := streamableClientOptions(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, false, []tmcp.ClientOption{hostOpt})
+	require.Len(t, opts, 2)
+
+	client := &tmcp.Client{}
+	hostWasLast := false
+	for _, opt := range opts {
+		before := hostCalls
+		opt(client)
+		hostWasLast = hostCalls > before
+	}
+	require.Equal(t, 1, hostCalls)
+	require.True(t, hostWasLast)
+}
+
+func TestNamedHTTPError_KeepsUnderlyingDetail(t *testing.T) {
+	server := startBrokerHTTPServerWithOptions(t, brokerHTTPServerOptions{
+		RequiredAuth: "Bearer missing-token",
+	})
+	defer server.Close()
+
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"http_named": {
+				ServerURL: server.URL,
+				Timeout:   5 * time.Second,
+			},
+		}),
+	)
+	ctx := context.Background()
+
+	_, err := broker.listTools(ctx, listToolsInput{Selector: "http_named"})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "failure details are withheld")
+
+	_, err = broker.listTools(ctx, listToolsInput{Selector: server.URL})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "failure details are withheld")
+}
+
+func TestHasCustomEndpointScheme(t *testing.T) {
+	require.False(t, hasCustomEndpointScheme("http://example.com/mcp"))
+	require.False(t, hasCustomEndpointScheme(" https://example.com/mcp "))
+	require.False(t, hasCustomEndpointScheme("HTTP://example.com/mcp"))
+	require.False(t, hasCustomEndpointScheme("HTTPS://example.com/mcp"))
+	require.True(t, hasCustomEndpointScheme("internal-scheme://service/mcp"))
+	// A URL without a scheme cannot be a custom-scheme endpoint, while one that
+	// does not parse is treated as custom so no endpoint is disclosed.
+	require.False(t, hasCustomEndpointScheme(""))
+	require.False(t, hasCustomEndpointScheme("example.com/mcp"))
+	require.True(t, hasCustomEndpointScheme("http://exa mple.com/\x7f"))
+}
+
 func TestSchemaHelpers(t *testing.T) {
 	require.Equal(t, "unknown", schemaTypeName(nil))
 	require.Equal(t, "unknown", schemaTypeName(map[string]any{}))
@@ -1458,9 +1785,29 @@ func TestNormalizeConnectionConfigValidation(t *testing.T) {
 
 	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
 		ServerURL: "ftp://example.com/mcp",
-	}, false)
+	}, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires http or https")
+
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "example.com/mcp",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "absolute server_url")
+
+	// "host:port/path" parses as an opaque URL, so it must be reported as a
+	// missing absolute URL rather than as a missing host.
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "localhost:3000/mcp",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "absolute server_url")
+
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "custom:///mcp",
+	}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires URL host")
 
 	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
 		ServerURL: "https://example.com/mcp",
@@ -1485,6 +1832,181 @@ func TestNormalizeConnectionConfigValidation(t *testing.T) {
 	}, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ad-hoc MCP only supports HTTP")
+}
+
+func TestNormalizeNamedServerAllowsCustomScheme(t *testing.T) {
+	cfg, kind, err := normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, false)
+	require.NoError(t, err)
+	require.Equal(t, transportStreamable, kind)
+	// The endpoint must reach the transport verbatim: re-serializing it could
+	// rewrite a scheme that only the host-supplied handler understands.
+	require.Equal(t, "custom://service/mcp", cfg.ServerURL)
+
+	server, err := normalizeNamedServer("custom_named", legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+		Transport: "sse",
+	}, originCode)
+	require.NoError(t, err)
+	require.Equal(t, targetTypeHTTP, server.TargetType)
+	require.Equal(t, "sse", server.Config.Transport)
+	require.Equal(t, "custom://service/mcp", server.Config.ServerURL)
+
+	// The same URL stays rejected for model-supplied ad-hoc targets.
+	_, _, err = normalizeConnectionConfig(legacymcp.ConnectionConfig{
+		ServerURL: "custom://service/mcp",
+	}, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires http or https")
+}
+
+// TestCreateClientRevalidatesOriginScheme covers the defensive revalidation in
+// createClient: it must keep applying the scheme policy of the origin the
+// config was resolved from, so a custom scheme cannot reach the transport on
+// behalf of an ad-hoc target.
+func TestCreateClientRevalidatesOriginScheme(t *testing.T) {
+	cfg := legacymcp.ConnectionConfig{
+		Transport: "streamable",
+		ServerURL: "custom://service/mcp",
+	}
+
+	client, err := createClient(cfg, false, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	require.NoError(t, client.Close())
+
+	_, err = createClient(cfg, true, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires http or https")
+}
+
+// waitForContextHandler blocks until the request context is done and then
+// returns ctx.Err. It is used to exercise cancellation and deadline identity
+// through the real trpc-mcp-go HTTPReqHandler path.
+type waitForContextHandler struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (h *waitForContextHandler) Handle(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	h.once.Do(func() {
+		if h.started != nil {
+			close(h.started)
+		}
+	})
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// rewriteHTTPReqHandler resolves a custom endpoint scheme by redirecting the
+// request to a real HTTP test server. trpc-mcp-go can invoke Handle from
+// background goroutines (for example the GET SSE stream), so the recorded
+// requests are mutex-guarded.
+type rewriteHTTPReqHandler struct {
+	dest string
+
+	mu      sync.Mutex
+	schemes []string
+	methods []string
+}
+
+func (h *rewriteHTTPReqHandler) Handle(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	h.mu.Lock()
+	h.schemes = append(h.schemes, req.URL.Scheme)
+	h.methods = append(h.methods, req.Method)
+	h.mu.Unlock()
+
+	dest, err := url.Parse(h.dest)
+	if err != nil {
+		return nil, err
+	}
+	clone := req.Clone(ctx)
+	clone.URL = dest
+	clone.Host = dest.Host
+	clone.RequestURI = ""
+	return client.Do(clone)
+}
+
+func (h *rewriteHTTPReqHandler) Schemes() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.schemes...)
+}
+
+func (h *rewriteHTTPReqHandler) Methods() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.methods...)
+}
+
+func TestNamedServerCustomScheme_ReachesHTTPReqHandler(t *testing.T) {
+	server := startBrokerHTTPServer(t)
+	defer server.Close()
+
+	handler := &rewriteHTTPReqHandler{dest: server.URL}
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"custom_named": {
+				ServerURL: "custom://service/mcp",
+				Transport: "streamable_http",
+				Timeout:   5 * time.Second,
+			},
+		}),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			require.Equal(t, "custom://service/mcp", req.BaseURL)
+			return &ClientOptions{
+				HTTP: []tmcp.ClientOption{tmcp.WithHTTPReqHandler(handler)},
+			}, nil
+		}),
+	)
+
+	output, err := broker.listTools(context.Background(), listToolsInput{Selector: "custom_named"})
+	require.NoError(t, err)
+	require.Len(t, output.Tools, 2)
+	require.Contains(t, handler.Schemes(), "custom")
+	// Named custom-scheme streamable clients disable GET-SSE unless the host
+	// opts back in after the broker default.
+	methods := handler.Methods()
+	require.NotEmpty(t, methods)
+	require.NotContains(t, methods, http.MethodGet)
+}
+
+// TestAdHocSelectorRejectsCustomScheme pins the model-facing half of the trust
+// boundary: only http and https selectors may become ad-hoc targets, so a
+// custom scheme must never open a connection even when ad-hoc HTTP is enabled.
+func TestAdHocSelectorRejectsCustomScheme(t *testing.T) {
+	providerCalls := 0
+	broker := New(
+		WithAllowAdHocHTTP(true),
+		WithClientOptionsProvider(func(ctx context.Context, req *ClientOptionsRequest) (*ClientOptions, error) {
+			providerCalls++
+			return nil, nil
+		}),
+	)
+
+	for _, selector := range []string{"custom://service/mcp", "ftp://example.com/mcp"} {
+		_, err := broker.listTools(context.Background(), listToolsInput{Selector: selector})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown MCP server")
+
+		_, err = broker.inspectTools(context.Background(), inspectToolsInput{
+			Selector: selector,
+			Tools:    []string{"echo"},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown MCP server")
+
+		_, err = broker.callTool(context.Background(), callToolInput{
+			Selector:  selector + ".echo",
+			Arguments: map[string]any{},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown MCP server")
+	}
+
+	// Resolution must fail before any client is built for these selectors.
+	require.Zero(t, providerCalls)
 }
 
 // =============================================================================

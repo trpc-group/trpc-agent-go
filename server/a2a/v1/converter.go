@@ -500,6 +500,8 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
 		},
 		false,
 	)
+	appendChunk := evt.Response.IsPartial
+	taskArtifact.Append = &appendChunk
 	taskArtifact.Metadata = metadata
 	return &taskArtifact
 }

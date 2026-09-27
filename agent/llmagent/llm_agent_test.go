@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -513,6 +514,90 @@ func TestBuildRequestProcessors_EventMessageProjectorWiring(
 		model.NewUserMessage("hello"),
 	)
 	require.Equal(t, "projected", got.Content)
+}
+
+func TestBuildRequestProcessors_IncludeSyntheticErrorMessagesWiring(
+	t *testing.T,
+) {
+	newMessageEvent := func(author string, msg model.Message) event.Event {
+		return event.Event{
+			Author: author,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	newInvocation := func() *agent.Invocation {
+		errorEvent := event.NewErrorEvent(
+			"inv",
+			"tester",
+			"flow_error",
+			"boom",
+		)
+		errorEvent.Response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+		}}
+		errorcontent.MarkSynthetic(errorEvent)
+		return &agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{Events: []event.Event{
+				newMessageEvent("user", model.NewUserMessage("first")),
+				*errorEvent,
+				newMessageEvent("user", model.NewUserMessage("second")),
+			}},
+		}
+	}
+	tests := []struct {
+		name        string
+		configure   func(*Options)
+		wantContent []string
+	}{
+		{
+			name:        "default omits",
+			configure:   func(*Options) {},
+			wantContent: []string{"first\n\nsecond"},
+		},
+		{
+			name: "compatibility mode includes",
+			configure: func(opts *Options) {
+				WithIncludeSyntheticErrorMessages(true)(opts)
+			},
+			wantContent: []string{
+				"first",
+				errorcontent.FallbackMessage,
+				"second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{}
+			tt.configure(opts)
+			procs := buildRequestProcessors("tester", opts)
+			var contentProcessor *processor.ContentRequestProcessor
+			for _, requestProcessor := range procs {
+				if candidate, ok := requestProcessor.(*processor.ContentRequestProcessor); ok {
+					contentProcessor = candidate
+				}
+			}
+			require.NotNil(t, contentProcessor)
+			req := &model.Request{}
+
+			contentProcessor.ProcessRequest(
+				context.Background(),
+				newInvocation(),
+				req,
+				nil,
+			)
+
+			require.Len(t, req.Messages, len(tt.wantContent))
+			for i, content := range tt.wantContent {
+				require.Equal(t, content, req.Messages[i].Content)
+			}
+		})
+	}
 }
 
 func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {

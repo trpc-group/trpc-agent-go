@@ -1807,6 +1807,60 @@ func TestSessionSummarizer_WithSkipRecent(t *testing.T) {
 	})
 }
 
+func TestSessionSummarizer_WithSkipRecentContext(t *testing.T) {
+	var gotTraceID string
+	var legacyCalled bool
+	var contextCalls int
+
+	s := NewSummarizer(
+		nil,
+		WithSkipRecent(func([]event.Event) int {
+			legacyCalled = true
+			return 0
+		}),
+		WithSkipRecentContext(func(ctx context.Context, _ []event.Event) int {
+			contextCalls++
+			gotTraceID, _ = ctx.Value("trace_id").(string)
+			return 0
+		}),
+	)
+
+	sess := &session.Session{Events: []event.Event{{
+		Author: "user",
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Content: "hello"},
+		}}},
+	}}}
+	ctx := context.WithValue(context.Background(), "trace_id", "trace-123")
+	shouldSummarize := s.(ContextAwareSummarizer).ShouldSummarizeWithContext(ctx, sess)
+
+	assert.True(t, shouldSummarize)
+	assert.Equal(t, "trace-123", gotTraceID)
+	assert.Equal(t, 2, contextCalls)
+	assert.False(t, legacyCalled)
+}
+
+func TestSessionSummarizer_SkipRecentOptionOrder(t *testing.T) {
+	var contextCalled bool
+	var legacyCalled bool
+
+	s := NewSummarizer(
+		nil,
+		WithSkipRecentContext(func(context.Context, []event.Event) int {
+			contextCalled = true
+			return 0
+		}),
+		WithSkipRecent(func([]event.Event) int {
+			legacyCalled = true
+			return 0
+		}),
+	)
+	s.(*sessionSummarizer).filterEventsForSummary(context.Background(), nil)
+
+	assert.False(t, contextCalled)
+	assert.True(t, legacyCalled)
+}
+
 func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 	s := &sessionSummarizer{}
 
@@ -1815,7 +1869,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "msg1"}}}}},
 			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "msg2"}}}}},
 		}
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		assert.Equal(t, events, filtered)
 	})
 
@@ -1825,7 +1879,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "msg1"}}}}},
 			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "msg2"}}}}},
 		}
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		assert.Empty(t, filtered)
 	})
 
@@ -1839,7 +1893,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent1"}}}}},           // should be skipped
 			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "recent2"}}}}}, // should be skipped
 		}
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		// Should keep events 0-3 (up to and including the last user message before recent events)
 		expected := events[:4]
 		assert.Equal(t, expected, filtered)
@@ -1892,7 +1946,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			},
 		}
 
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		expected := events[:3]
 		assert.Equal(t, expected, filtered)
 		assert.Len(t, filtered, 3)
@@ -1938,7 +1992,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			},
 		}
 
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		assert.Empty(t, filtered)
 	})
 
@@ -1978,7 +2032,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			},
 		}
 
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		assert.Empty(t, filtered)
 	})
 
@@ -1988,7 +2042,7 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant1"}}}}},
 			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user1"}}}}}, // will be skipped
 		}
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		assert.Empty(t, filtered)
 	})
 
@@ -2004,13 +2058,35 @@ func TestSessionSummarizer_FilterEventsForSummary(t *testing.T) {
 			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent2"}}}}},           // skipped
 			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "recent3"}}}}}, // skipped
 		}
-		filtered := s.filterEventsForSummary(events)
+		filtered := s.filterEventsForSummary(context.Background(), events)
 		// Should keep events 0-4 (up to and including the last user message before recent events)
 		expected := events[:5]
 		assert.Equal(t, expected, filtered)
 		assert.Len(t, filtered, 5)
 	})
 
+	t.Run("unsafe prefix does not attribute extra drops to skip-recent", func(t *testing.T) {
+		s := &sessionSummarizer{skipRecentFunc: func(_ []event.Event) int { return 1 }}
+		events := []event.Event{
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "a1"}}}}},
+			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "a2"}}}}},
+			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "recent"}}}}},
+		}
+		filtered, decision := s.filterEventsForSummaryObserved(context.Background(), events)
+		assert.Empty(t, filtered)
+		assert.Equal(t, 3, decision.eligible)
+		assert.Equal(t, 1, decision.requested)
+		assert.Equal(t, 1, decision.applied)
+		assert.Equal(t, isummarycontext.ReasonUnsafePrefix, decision.reason)
+	})
+}
+
+func TestSkipRecentApplied(t *testing.T) {
+	assert.Equal(t, 0, skipRecentApplied(-3, 5))
+	assert.Equal(t, 0, skipRecentApplied(0, 5))
+	assert.Equal(t, 1, skipRecentApplied(1, 3))
+	assert.Equal(t, 3, skipRecentApplied(5, 3))
+	assert.Equal(t, 0, skipRecentApplied(1, 0))
 }
 
 func TestSummaryEventHelpers(t *testing.T) {
@@ -2411,7 +2487,7 @@ func TestSessionSummarizer_RecordLastIncludedBoundary_NoStateOrEvents(t *testing
 func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 	t.Run("returns nil for nil session", func(t *testing.T) {
 		s := &sessionSummarizer{}
-		assert.Nil(t, s.buildCheckSession(nil))
+		assert.Nil(t, s.buildCheckSession(context.Background(), nil))
 	})
 
 	t.Run("injects token text without summary input formatter", func(t *testing.T) {
@@ -2435,7 +2511,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 			},
 		}
 
-		checkSess := s.buildCheckSession(sess)
+		checkSess := s.buildCheckSession(context.Background(), sess)
 		require.NotNil(t, checkSess)
 
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
@@ -2461,7 +2537,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 			},
 		}
 
-		checkSess := s.buildCheckSession(sess)
+		checkSess := s.buildCheckSession(context.Background(), sess)
 		require.NotNil(t, checkSess)
 
 		raw, ok := checkSess.GetState(tokenThresholdReasoningContentStateKey)
@@ -2502,7 +2578,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		}
 		isummaryscope.SetScopeFilterKey(sess, "app/sub")
 
-		checkSess := s.buildCheckSession(sess)
+		checkSess := s.buildCheckSession(context.Background(), sess)
 		require.NotNil(t, checkSess)
 
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
