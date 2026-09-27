@@ -65,11 +65,13 @@ Goal 不改变 streaming 配置。是否流式输出仍由 `LLMAgent` 的生成�
 继续推进；这段输出不等于 goal 已经完成。真正的运行结束仍以 `runner.completion`
 为准。
 
-Goal 工具需要串行语义。不要在安装 Goal 扩展的同一个 `LLMAgent` 上启用
-`llmagent.WithEnableParallelTools(true)`。模型不应在同一个 parallel tool batch 中同时调用
-`create_goal` 和 `update_goal`，因为并行工具执行会为每个工具调用使用隔离的
-invocation/session 视图。如果业务工具需要并行执行，建议让 Goal 继续由串行的 owner agent
-管理，或把并行业务工作放到另一个 agent 中。
+Goal 工具需要串行语义，而且会写状态的那两个工具会自行保证这一点。`create_goal`
+和 `update_goal` 是对 session 的“读-改-写”状态迁移，而并行执行会在所有调用开始之前
+为每个工具调用克隆一份隔离的 invocation/session 视图，因此它们实现了
+`tool.ConcurrencyAware` 并拒绝与其他调用同轮执行。启用
+`llmagent.WithEnableParallelTools(true)` 后，只要一轮中包含其中任何一个，该轮的所有
+调用都会顺序执行；只由其他工具组成的一轮仍保持并行。`get_goal` 只读，不拒绝。
+参见 [拒绝与其他调用同轮执行](tool.md#拒绝与其他调用同轮执行)。
 
 ## 边界
 

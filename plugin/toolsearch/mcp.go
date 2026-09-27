@@ -345,6 +345,11 @@ func (t *renamedTool) Declaration() *tool.Declaration {
 }
 
 // Original returns the wrapped tool so framework unwrapping can reach it.
+//
+// That is also how the wrapped tool's concurrency declaration reaches the
+// schedulers: tool.IsConcurrencySafe resolves Original() before asking, so a
+// renamed tool keeps its objection, and one that declared nothing is not
+// answered for.
 func (t *renamedTool) Original() tool.Tool { return t.original }
 
 // Call delegates to the original tool. If the original tool is only a
