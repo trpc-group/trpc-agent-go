@@ -340,14 +340,27 @@ func WithCacheTools(cache bool) Option {
 }
 
 // WithCacheMessages controls whether to cache messages for multi-turn conversations.
-// When enabled, cache control will be applied to the last assistant message
-// to maximize cache reuse in subsequent turns. Cached content receives a 90% discount
-// on input token pricing.
+// When enabled, cache control is applied to the last assistant message and to the
+// newest tool results after it, to maximize cache reuse in subsequent turns. Cached
+// content receives a 90% discount on input token pricing.
 //
 // This implements the optimal caching strategy for multi-turn conversations:
-// - The cache breakpoint is dynamically moved to the latest assistant message
-// - Each new turn reuses the cached prefix (system + tools + previous messages)
-// - Only the new user message needs to be processed
+//   - The cache breakpoint is dynamically moved to the latest assistant message
+//   - Each new turn reuses the cached prefix (system + tools + previous messages)
+//   - Only the messages added since that breakpoint need to be processed
+//
+// A second, conditional breakpoint covers tool output. When the request carries a
+// turn's tool results, the newest tool-result message is marked in that same
+// request, so the results are written to the cache as they are sent rather than
+// when the last-assistant breakpoint moves past them in the next request. The
+// marker is placed on the serialized request body, after the request callback and
+// any client or request options (such as option.WithJSONSet) have been applied,
+// and only when a slot remains within Anthropic's budget of four cache_control
+// markers counted on that body; when the caller has spent the last slot, the
+// tool results are simply cached one request later. A marker already on that
+// block, placed through the callback or a request option, is left untouched, TTL
+// included. The middleware that places it runs ahead of any the caller registers,
+// so caller middleware observes the final body.
 //
 // Note: Each turn incurs a 25% cache creation cost for the newly added messages.
 // This is beneficial when conversations span 3+ turns, as the cache read savings (90%)

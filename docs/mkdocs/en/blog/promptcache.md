@@ -514,6 +514,8 @@ tRPC-Agent-Go's Anthropic adapter provides related options:
 - `anthropic.WithCacheTools(true)`
 - `anthropic.WithCacheMessages(true)`
 
+`WithCacheMessages(true)` marks the last assistant message and, when a turn runs tools, the newest tool results in the request that carries them, so tool output is written to the cache as it is sent rather than one request later. The tool-result marker is added on the serialized request body only when one of Anthropic's four `cache_control` slots is still free after the request callback and request options are applied, and a marker already on that block is left untouched.
+
 `examples/promptcache/anthropic` can be used as an appendix experiment:
 
 | Phase | Configuration | Observation |

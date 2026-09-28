@@ -530,6 +530,8 @@ tRPC-Agent-Go 的 Anthropic adapter 提供了三个对应选项：
 - `anthropic.WithCacheTools(true)`
 - `anthropic.WithCacheMessages(true)`
 
+`WithCacheMessages(true)` 会标记最后一条 assistant 消息；当某一轮调用了工具时，还会在携带工具结果的那个请求中标记最新的 tool results，使工具输出在发送时即写入缓存，而不是推迟到下一个请求。tool-result 标记是在序列化后的请求体上添加的，只有在 request callback 和 request options 应用之后、Anthropic 的四个 `cache_control` 槽位仍有空余时才会添加；该块上已有的标记会原样保留。
+
 `examples/promptcache/anthropic` 可以作为附录实验：
 
 | 阶段 | 配置 | 观察重点 |
