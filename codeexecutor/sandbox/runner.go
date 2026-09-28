@@ -12,6 +12,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,7 +107,15 @@ func (r *Runtime) runProgram(
 	stdout := newLimitedBuffer(r.outputMaxBytes)
 	stderr := newLimitedBuffer(r.outputMaxBytes)
 	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	var stderrMarkers *controlledEgressMarkerTracker
+	if prep.profile.network.Mode == NetworkControlled {
+		stderrMarkers = newControlledEgressMarkerTracker(
+			controlledEgressSetupToken(cmd.Args),
+		)
+		cmd.Stderr = io.MultiWriter(stderr, stderrMarkers)
+	} else {
+		cmd.Stderr = stderr
+	}
 	if spec.Stdin != "" {
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	} else {
@@ -151,6 +160,13 @@ func (r *Runtime) runProgram(
 			Backend: backendName,
 			Err:     context.DeadlineExceeded,
 		}
+	}
+	if err := mapControlledEgressSetupExit(
+		prep.profile,
+		exitCode,
+		stderrMarkers.setupMarkerSeen(),
+	); err != nil {
+		return result, err
 	}
 	return result, nil
 }

@@ -41,6 +41,9 @@ host network access:
   sockets and AF_VSOCK through seccomp; anonymous stream and seqpacket
   socketpairs remain available. Pathname or abstract Unix IPC, or AF_VSOCK,
   requires `NetworkEnabled`.
+- `NetworkControlled` keeps that Linux isolation and allows HTTP/HTTPS only
+  through a caller-owned host proxy. A trusted loopback relay starts before the
+  user workload receives the AF_UNIX seccomp filter.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation and without
   the AF_UNIX/AF_VSOCK seccomp filter. On macOS this means the generated Seatbelt
