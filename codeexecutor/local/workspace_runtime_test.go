@@ -280,6 +280,28 @@ func TestRuntime_PutDirectory_And_Collect(t *testing.T) {
 		"dst/img.bin")
 }
 
+func TestRuntime_Collect_GlobMatchesCrossPlatform(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-cross-platform", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	name := filepath.Join(codeexecutor.DirOut, "nested", "result.txt")
+	outPath := filepath.Join(ws.Path, name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(outPath), 0o755))
+	require.NoError(t, os.WriteFile(outPath, []byte("ok"), 0o644))
+
+	files, err := rt.Collect(ctx, ws, []string{
+		filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "**", "*.txt")),
+	})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "out/nested/result.txt", files[0].Name)
+}
+
 func TestRuntime_PutSkill_ReadOnly(t *testing.T) {
 	const short = 5 * time.Second
 
@@ -1340,6 +1362,31 @@ func TestRuntime_CollectOutputs_MatchesWorkspaceRoot(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, mf.Files)
+}
+
+func TestRuntime_CollectOutputs_GlobMatchesCrossPlatform(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-collect-outputs-cross-platform", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	name := filepath.Join(codeexecutor.DirOut, "nested", "result.txt")
+	outPath := filepath.Join(ws.Path, name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(outPath), 0o755))
+	require.NoError(t, os.WriteFile(outPath, []byte("ok"), 0o644))
+
+	manifest, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs: []string{
+			filepath.ToSlash(filepath.Join(codeexecutor.DirOut, "**", "*.txt")),
+		},
+		Inline: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, manifest.Files, 1)
+	require.Equal(t, "out/nested/result.txt", manifest.Files[0].Name)
 }
 
 func TestRuntime_CollectOutputs_TraversalOutsideFiltered(t *testing.T) {

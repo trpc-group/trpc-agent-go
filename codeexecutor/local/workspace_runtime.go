@@ -423,15 +423,12 @@ func (r *Runtime) Collect(
 	for _, p := range patterns {
 		// Use doublestar to support ** patterns.
 		abs := filepath.Join(root, p)
-		// Doublestar on os.DirFS("/") expects patterns relative to "/".
-		pattern := strings.TrimPrefix(abs, "/")
-		matches, err := ds.Glob(os.DirFS("/"), pattern)
+		matches, err := globHost(abs)
 		if err != nil {
 			return nil, err
 		}
 		for _, m := range matches {
-			// Convert match back to absolute path.
-			mAbs := "/" + strings.TrimPrefix(m, "/")
+			mAbs := m
 			// Ensure it is within root.
 			if !strings.HasPrefix(
 				mAbs, root+string(os.PathSeparator),
@@ -449,9 +446,9 @@ func (r *Runtime) Collect(
 			) && realp != realRoot {
 				continue
 			}
-			name := strings.TrimPrefix(
+			name := filepath.ToSlash(strings.TrimPrefix(
 				realp, realRoot+string(os.PathSeparator),
-			)
+			))
 			if codeexecutor.IsRootMetadataTempPath(name) {
 				continue
 			}
@@ -694,8 +691,7 @@ func (r *Runtime) CollectOutputs(
 	count := 0
 	for _, g := range globs {
 		abs := filepath.Join(ws.Path, g)
-		pattern := strings.TrimPrefix(abs, "/")
-		matches, err := ds.Glob(os.DirFS("/"), pattern)
+		matches, err := globHost(abs)
 		if err != nil {
 			return codeexecutor.OutputManifest{}, err
 		}
@@ -707,7 +703,7 @@ func (r *Runtime) CollectOutputs(
 			ref, consumed, skip, err := collectOutputMatch(
 				ctx,
 				ws.Path,
-				"/"+strings.TrimPrefix(m, "/"),
+				m,
 				spec,
 				maxFileBytes,
 				leftTotal,
@@ -775,9 +771,9 @@ func collectOutputMatch(
 	if !withinWorkspacePath(wsPath, absPath) {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
-	name := strings.TrimPrefix(
+	name := filepath.ToSlash(strings.TrimPrefix(
 		absPath, wsPath+string(os.PathSeparator),
-	)
+	))
 	if codeexecutor.IsRootMetadataTempPath(name) {
 		return codeexecutor.FileRef{}, 0, true, nil
 	}
@@ -827,6 +823,31 @@ func collectOutputMatch(
 		ref.Version = ver
 	}
 	return ref, int64(len(data)), false, nil
+}
+
+// globHost matches an absolute host path with slash-separated patterns while
+// rooting the filesystem at the host's volume root. On Windows this uses the
+// workspace drive or UNC share instead of the invalid POSIX root "/".
+func globHost(absPattern string) ([]string, error) {
+	absPattern, err := filepath.Abs(absPattern)
+	if err != nil {
+		return nil, err
+	}
+	absPattern = filepath.Clean(absPattern)
+	volumeRoot := filepath.VolumeName(absPattern) + string(os.PathSeparator)
+	relPattern := strings.TrimPrefix(filepath.Clean(absPattern), volumeRoot)
+	if relPattern == "" {
+		relPattern = "."
+	}
+	matches, err := ds.Glob(os.DirFS(volumeRoot), filepath.ToSlash(relPattern))
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(matches))
+	for _, match := range matches {
+		paths = append(paths, filepath.Join(volumeRoot, filepath.FromSlash(match)))
+	}
+	return paths, nil
 }
 
 func withinWorkspacePath(wsPath string, absPath string) bool {
