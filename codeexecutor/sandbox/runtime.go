@@ -123,7 +123,9 @@ func (r *Runtime) Describe() codeexecutor.Capabilities {
 }
 
 // CreateWorkspace creates or opens the deterministic directory for an
-// execution/session id.
+// execution/session id. Nested ids form child scopes inside their parent
+// workspace, so a parent scope can access its descendants. Use non-overlapping
+// ids for scopes that must be isolated from each other.
 func (r *Runtime) CreateWorkspace(
 	ctx context.Context,
 	execID string,
@@ -157,6 +159,7 @@ func (r *Runtime) CreateWorkspace(
 
 // Cleanup releases workspace resources. Session-persistent workspaces keep files
 // by default so later turns in the same session can observe prior file changes.
+// When cleanup removes a parent workspace, it also removes its child scopes.
 func (r *Runtime) Cleanup(ctx context.Context, ws codeexecutor.Workspace) error {
 	_ = ctx
 	if r.sessionPolicy.Persistence == SessionPersistencePerSession {

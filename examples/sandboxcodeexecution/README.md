@@ -139,7 +139,33 @@ When `-scenario all` is used, scenarios that do not apply to the current
 -require-os-sandbox=true
 ```
 
-On Linux, the managed sandbox requires `bwrap` and user namespace support. On
+On Linux, the managed sandbox requires `bwrap` and user namespace support.
+`WorkspaceWriteProfile` bind-mounts the host root read-only, then masks
+common credential paths and sibling session directories. Use
+`WithLinuxNoHostRoot` when commands must not see the host root at all. On
 macOS, the managed sandbox requires `/usr/bin/sandbox-exec` and host permission
 to apply Seatbelt profiles. If the OS sandbox cannot be set up, the example
 reports the typed setup/backend error and does not fall back to local execution.
+
+For stricter Linux deployments, configure file visibility and environment
+inheritance together:
+
+```go
+rt := sandbox.NewRuntime(
+    sandbox.WithPermissionProfile(
+        sandbox.WorkspaceWriteProfile().WithLinuxNoHostRoot(),
+    ),
+    sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
+        Inherit: sandbox.ShellEnvironmentPolicyInheritNone,
+    }),
+)
+```
+
+This mode shares selected public runtime files under `/etc`, not the whole
+host configuration directory. Use `ReadOnlyProfile().WithLinuxNoHostRoot()`
+for a read-only workspace. The default profile remains compatible with host
+installed tools; its fixed credential denylist does not cover arbitrary `.env`,
+`*.pem`, and `*.key` files. Nested IDs such as `app` and `app/user/session`
+represent parent and child scopes: the parent can access its descendants.
+Use non-overlapping IDs for mutually isolated sessions, and coordinate parent
+cleanup with the lifetime of its children.
