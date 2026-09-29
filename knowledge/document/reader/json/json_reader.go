@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	ijson "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/json"
 	itransform "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/transform"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
@@ -194,7 +195,7 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 // jsonToText converts JSON content to a readable text format.
 func (r *Reader) jsonToText(jsonContent string) (string, error) {
 	var data any
-	if err := json.Unmarshal([]byte(jsonContent), &data); err != nil {
+	if err := ijson.Unmarshal([]byte(jsonContent), &data); err != nil {
 		return "", err
 	}
 
