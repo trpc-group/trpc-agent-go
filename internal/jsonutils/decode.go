@@ -12,7 +12,6 @@
 package jsonutils
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -76,17 +75,4 @@ func DecodeFlexibleJSON(raw string, dest any) error {
 		return err
 	}
 	return decodeWithRepair(raw[start:], dest)
-}
-
-// UnmarshalUseNumber decodes a single JSON value, preserving numbers in interface
-// values as json.Number. Like json.Unmarshal, it rejects trailing non-whitespace
-// content before decoding into dest.
-func UnmarshalUseNumber(raw []byte, dest any) error {
-	var value json.RawMessage
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.UseNumber()
-	return decoder.Decode(dest)
 }

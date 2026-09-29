@@ -19,8 +19,8 @@ import (
 	"strconv"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	ijson "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/json"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
@@ -67,7 +67,7 @@ func NewJSONChunking(opts ...JSONOption) *JSONChunking {
 func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
 	// Parse JSON content.
 	var jsonData any
-	if err := jsonutils.UnmarshalUseNumber([]byte(doc.Content), &jsonData); err != nil {
+	if err := ijson.Unmarshal([]byte(doc.Content), &jsonData); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
@@ -525,7 +525,7 @@ func (j *JSONChunking) SplitJSON(data map[string]any, convertLists bool) ([]stri
 // SplitJSONString splits a JSON string into chunks.
 func (j *JSONChunking) SplitJSONString(jsonStr string, convertLists bool) ([]string, error) {
 	var data map[string]any
-	if err := jsonutils.UnmarshalUseNumber([]byte(jsonStr), &data); err != nil {
+	if err := ijson.Unmarshal([]byte(jsonStr), &data); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON string: %w", err)
 	}
 
