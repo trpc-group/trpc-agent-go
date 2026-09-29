@@ -95,8 +95,12 @@ The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
   more-specific denial remains effective. Existing credential symlinks are
   resolved before the mask is mounted.
 - `WithLinuxNoHostRoot` uses `--ro-bind-try` for runtime directories
-  (`/usr`, `/bin`, `/lib`, `/etc`, ...) instead of binding `/`. It still masks
-  `/etc/shadow` and `/etc/gshadow` when those files exist. Home credential
+  (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/lib32`) instead of binding `/`.
+  It shares selected `/etc` files for dynamic loading, user/group lookup, DNS,
+  time zones, and public CA certificates; it does not mount the entire `/etc`.
+  Application configuration and `/etc/ssl/private` require explicit grants.
+  The workspace is mounted read-only before any permitted writable mounts, so
+  this option also works with `ReadOnlyProfile()`. Home credential
   masks are omitted unless an explicit absolute grant makes that subtree
   visible, such as `WithReadPaths($HOME)`. A parent grant still does not
   re-open the credential directory; only an exact path grant does.
@@ -115,6 +119,31 @@ host-root profile remains a live read-only bind of the host filesystem, so a
 credential path created later by another host process is outside this
 startup-time denylist guarantee. Use `WithLinuxNoHostRoot` without a
 parent home grant when this race is unacceptable.
+
+The default denylist covers fixed credential locations, not arbitrary `.env`,
+`*.pem`, or `*.key` files elsewhere on the host. It does not recursively scan
+host directories or dynamically filter file names. In the stricter mode, files
+under the host home are inaccessible because that directory is not mounted;
+secrets inside shared runtime directories, the workspace, or explicit grants
+still need their own policy. `WithNoAccessGlobs` only applies to the workspace
+and is rejected when it overlaps Linux writable mounts.
+
+File visibility and environment inheritance are separate. For untrusted Linux
+commands, configure both explicitly:
+
+```go
+rt := sandbox.NewRuntime(
+    sandbox.WithPermissionProfile(
+        sandbox.WorkspaceWriteProfile().WithLinuxNoHostRoot(),
+    ),
+    sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
+        Inherit: sandbox.ShellEnvironmentPolicyInheritNone,
+    }),
+)
+```
+
+Use `ReadOnlyProfile().WithLinuxNoHostRoot()` when commands only need to read
+the workspace. Grant additional toolchain or configuration paths individually.
 
 The Go-level file APIs and Linux mount setup both derive from the same
 no-access denials so a path denied by `Collect`, `PutFiles`, or `StageInputs` is
@@ -222,16 +251,25 @@ workspace root:
 The default workspace root is `${TMPDIR}/trpc-agent-go-sandbox`, and callers can
 override it with `WithWorkspaceRoot`.
 
-Different session ids map to different workspace directories, so files written in
-one session are not visible through another session's workspace APIs. Host
+Non-overlapping session ids map to separate workspace directory trees, so files
+written in one are not visible through another session's workspace APIs. Host
 processes can still read those directories. Guest isolation is separate: Linux
 host-root profiles tmpfs-mask the sessions parent so a guest cannot `ls` sibling
 session directories through the read-only host root, and macOS Seatbelt only
 grants the current workspace. The runtime sanitizes path components in the
 session id before constructing the workspace path, so an id cannot escape the
-configured workspace root. Nested session IDs such as `app` and
-`app/user/session` share an ancestor directory; the parent workspace can see
-that subtree.
+configured workspace root. Nested IDs such as `app` and `app/user/session`
+are valid parent and child scopes. The parent owns the full subtree and can
+access the child's files according to its profile. A child scope does not gain
+access to files outside its own workspace, including parent and sibling files.
+Use non-overlapping IDs for mutually isolated tenants or sessions; nested IDs
+intentionally share the parent's scope.
+
+The existing directory layout and same-ID reuse are preserved. Parent and child
+workspaces can be created in either order and reopened by another Runtime.
+When per-turn cleanup removes a parent workspace, its child workspaces are also
+removed. Callers own scheduling and lifecycle coordination between related
+scopes; per-workspace run locks do not serialize a parent against its children.
 
 This boundary is directory isolation, not a separate storage backend. If a
 profile grants read or write access to an absolute host path outside the

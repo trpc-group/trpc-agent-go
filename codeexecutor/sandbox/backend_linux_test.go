@@ -2911,3 +2911,111 @@ func TestRunBwrapSeccompPreflightProbeTimeout(t *testing.T) {
 		t.Fatalf("err=%v, want deadline/kill from CommandContext", err)
 	}
 }
+
+func TestLinuxNoHostRootReadOnlyWorkspace(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "readonly-isolated", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := ReadOnlyProfile().WithLinuxNoHostRoot()
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil, codeexecutor.RunProgramSpec{Cmd: "/bin/true"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(args, "--ro-bind", ws.Path, ws.Path) {
+		t.Fatalf("missing read-only workspace: %v", args)
+	}
+	if hasArgTriple(args, "--bind", ws.Path, ws.Path) {
+		t.Fatalf("read-only workspace became writable: %v", args)
+	}
+	if hasArgTriple(args, "--ro-bind-try", "/etc", "/etc") {
+		t.Fatalf("entire /etc is exposed: %v", args)
+	}
+	for _, path := range []string{"/etc/passwd", "/etc/ssl/certs"} {
+		if !hasArgTriple(args, "--ro-bind-try", path, path) {
+			t.Fatalf("missing runtime path %s", path)
+		}
+	}
+}
+
+func TestLinuxBwrapNoHostRootReadOnlyIsolation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, name := range []string{".env", "server.pem", "server.key"} {
+		if err := os.WriteFile(filepath.Join(home, name), []byte("HOST_SECRET"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()), WithPermissionProfile(ReadOnlyProfile().WithLinuxNoHostRoot()))
+	if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
+		t.Skipf("bubblewrap unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "readonly", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "input.txt"), []byte("WORKSPACE_INPUT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `set -eu
+cat input.txt
+if touch output.txt 2>/dev/null; then exit 21; fi
+for name in .env server.pem server.key; do
+  if cat "$1/$name" 2>/dev/null; then exit 22; fi
+done
+if cat /etc/shadow >/dev/null 2>&1; then exit 23; fi
+if test -e /etc/hostname; then exit 24; fi
+cat /etc/passwd >/dev/null
+printf '\nISOLATION_OK\n'
+`
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{Cmd: "/bin/sh", Args: []string{"-c", script, "test", home}})
+	if err != nil || res.ExitCode != 0 || !strings.Contains(res.Stdout, "WORKSPACE_INPUT") || !strings.Contains(res.Stdout, "ISOLATION_OK") {
+		t.Fatalf("isolated read-only run: result=%#v error=%v", res, err)
+	}
+}
+
+func TestLinuxBwrapNestedSessionScopes(t *testing.T) {
+	profiles := map[string]PermissionProfile{
+		"host-root":    WorkspaceWriteProfile(),
+		"no-host-root": WorkspaceWriteProfile().WithLinuxNoHostRoot(),
+	}
+	for name, profile := range profiles {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			rt := NewRuntime(WithWorkspaceRoot(t.TempDir()), WithPermissionProfile(profile))
+			if _, _, err := rt.linuxPreflight(ctx); err != nil {
+				t.Skipf("bubblewrap unavailable: %v", err)
+			}
+			workspaces := make([]codeexecutor.Workspace, 0, 3)
+			for _, id := range []string{"app", "app/user/first", "app/user/second"} {
+				ws, err := rt.CreateWorkspace(ctx, id, codeexecutor.WorkspacePolicy{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{Path: "work/data.txt", Content: []byte(id)}}); err != nil {
+					t.Fatal(err)
+				}
+				workspaces = append(workspaces, ws)
+			}
+			parentFile := filepath.Join(workspaces[0].Path, "work", "data.txt")
+			childFile := filepath.Join(workspaces[1].Path, "work", "data.txt")
+			siblingFile := filepath.Join(workspaces[2].Path, "work", "data.txt")
+			res, err := rt.RunProgram(ctx, workspaces[0], codeexecutor.RunProgramSpec{
+				Cmd: "/bin/sh", Args: []string{"-c", `test -r "$1" && test -r "$2" && printf '%s' parent-update > "$1"`, "test", childFile, siblingFile},
+			})
+			if err != nil || res.ExitCode != 0 {
+				t.Fatalf("parent access: %#v, %v", res, err)
+			}
+			res, err = rt.RunProgram(ctx, workspaces[1], codeexecutor.RunProgramSpec{
+				Cmd: "/bin/sh", Args: []string{"-c", `test ! -r "$1" && test ! -r "$2" && cat data.txt`, "test", parentFile, siblingFile},
+			})
+			if err != nil || res.ExitCode != 0 || res.Stdout != "parent-update" {
+				t.Fatalf("child isolation: %#v, %v", res, err)
+			}
+		})
+	}
+}

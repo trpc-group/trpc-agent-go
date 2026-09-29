@@ -263,7 +263,7 @@ Linux 后端在宿主根可见的 profile 下，会从只读根开始：
 --ro-bind / /
 ```
 
-然后再隐藏同机其他 session 目录、屏蔽常见凭证路径，并把 workspace 里允许写的路径重新以可写方式挂载，把受保护路径屏蔽掉。这个模型很重要：不是“默认都能写，再禁止一部分”，而是“默认只读，再显式开放写路径”。`WithLinuxNoHostRoot` 不会 bind `/`，只挂载运行时目录和当前 session workspace。
+然后再隐藏同机其他 session 目录、屏蔽常见凭证路径，并把 workspace 里允许写的路径重新以可写方式挂载，把受保护路径屏蔽掉。这个模型很重要：不是“默认都能写，再禁止一部分”，而是“默认只读，再显式开放写路径”。`WithLinuxNoHostRoot` 不会 bind `/`，只挂载运行时目录和当前 session workspace。它只开放 `/etc` 中选定的公共运行时文件，不挂载整个 `/etc`，并支持与 `ReadOnlyProfile()` 组合使用。还应通过 `WithShellEnvironmentPolicy` 设置 `ShellEnvironmentPolicyInheritNone`，避免宿主秘密通过环境变量传入。默认凭证名单不会匹配宿主各处的 `.env`、`*.pem`、`*.key`。`app` 与 `app/user/session` 是合法的父子作用域：父作用域可以访问子作用域，子作用域的访问范围仍限于自身 workspace。需要相互隔离的会话应使用互不包含的 ID。
 
 ### 2. 网络：默认限制，显式开启
 

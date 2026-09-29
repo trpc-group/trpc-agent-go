@@ -63,12 +63,23 @@ writable:
 - `WithLinuxNoHostRoot` skips the Linux host-root bind. Parent grants such as
   `$HOME` still keep default credential masks; re-open a credential path only
   with an exact `WithReadPaths` or `WithWritePaths` grant. It has no effect on
-  macOS.
+  macOS. It shares selected public `/etc` runtime files rather than the whole
+  directory, and supports both read-only and writable workspaces.
 - `WithReadPaths` and `WithWritePaths` add explicit path grants. Relative paths
   are resolved inside the workspace. Absolute paths are treated as host paths
   and must be granted explicitly before they are mounted into the sandbox.
 - `WithNoAccessPaths` and `WithNoAccessGlobs` create `none` rules. Matching
   paths are neither readable nor writable.
+
+The default credential masks are a fixed startup-time denylist. They do not
+block arbitrary `.env`, `*.pem`, or `*.key` files throughout the host. For
+stricter Linux deployments, combine `WithLinuxNoHostRoot()` with
+`WithShellEnvironmentPolicy(ShellEnvironmentPolicy{Inherit: ShellEnvironmentPolicyInheritNone})`.
+See the [file system policy](FILE_SYSTEM_POLICY.md) for a complete example.
+
+Nested IDs such as `app` and `app/user/session` are valid parent and child
+scopes: the parent can access its descendants, while the child remains scoped
+to its own workspace. Use non-overlapping IDs for mutually isolated sessions.
 
 ## Shell Environment
 

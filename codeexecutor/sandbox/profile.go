@@ -139,8 +139,12 @@ func ExternalSandboxProfile(network NetworkPolicy) PermissionProfile {
 }
 
 // WithLinuxNoHostRoot skips the Linux host-root bind. The sandbox then mounts
-// only runtime directories, the session workspace, and explicit grants. It has
-// no effect on macOS.
+// only runtime directories (/usr, /bin, /sbin and library directories), selected
+// public /etc runtime files and certificate directories, the session workspace,
+// and explicit grants. The workspace retains the profile's read/write policy.
+// Host home directories and application configuration under /etc are absent
+// unless explicitly granted. Environment inheritance is configured separately
+// with WithShellEnvironmentPolicy. WithLinuxNoHostRoot has no effect on macOS.
 func (p PermissionProfile) WithLinuxNoHostRoot() PermissionProfile {
 	p.linuxNoHostRoot = true
 	return p

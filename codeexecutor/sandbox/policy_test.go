@@ -990,3 +990,42 @@ func containsSpecialRule(profile PermissionProfile, access fileSystemAccess, spe
 	}
 	return false
 }
+
+func TestNestedSessionScopesAcrossRuntimes(t *testing.T) {
+	for _, firstID := range []string{"app", "app/user/session"} {
+		t.Run(firstID, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			first := NewRuntime(WithWorkspaceRoot(root))
+			if _, err := first.CreateWorkspace(ctx, firstID, codeexecutor.WorkspacePolicy{}); err != nil {
+				t.Fatal(err)
+			}
+			rt := NewRuntime(WithWorkspaceRoot(root))
+			parent, err := rt.CreateWorkspace(ctx, "app", codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := rt.CreateWorkspace(ctx, "app/user/session", codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := rt.PutFiles(ctx, child, []codeexecutor.PutFile{{Path: "work/child.txt", Content: []byte("child data")}}); err != nil {
+				t.Fatal(err)
+			}
+			files, err := rt.Collect(ctx, parent, []string{"user/session/work/child.txt"})
+			if err != nil || len(files) != 1 || files[0].Content != "child data" {
+				t.Fatalf("parent read = %#v, %v", files, err)
+			}
+			if err := rt.PutFiles(ctx, parent, []codeexecutor.PutFile{{Path: "user/session/work/child.txt", Content: []byte("parent update")}}); err != nil {
+				t.Fatal(err)
+			}
+			files, err = rt.Collect(ctx, child, []string{"work/child.txt"})
+			if err != nil || len(files) != 1 || files[0].Content != "parent update" {
+				t.Fatalf("child read = %#v, %v", files, err)
+			}
+			if err := rt.PutFiles(ctx, child, []codeexecutor.PutFile{{Path: filepath.Join(parent.Path, "work", "parent.txt"), Content: []byte("escape")}}); !isKind(err, ErrPathDenied) {
+				t.Fatalf("child write outside its scope = %v", err)
+			}
+		})
+	}
+}

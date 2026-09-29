@@ -221,6 +221,11 @@ func (r *Runtime) linuxSandboxSetup(
 		for _, dest := range grantDests {
 			args = appendLinuxDirAncestors(args, dest, seen)
 		}
+		baseArgs, err := r.workspaceRootReadOnlyMountArgs(profile, ws)
+		if err != nil {
+			return linuxSandboxSetup{}, err
+		}
+		args = append(args, baseArgs...)
 	}
 	needsSeccomp := profile.network.Mode != NetworkEnabled
 	// ExtraFiles descriptors start at 3 and must match the append order in
@@ -937,37 +942,52 @@ func workspaceRelativeMounts(wsAbs string, targets []string) []string {
 	return rels
 }
 
-func (r *Runtime) externalGrantArgs(
-	profile PermissionProfile,
-	ws codeexecutor.Workspace,
-) ([]string, error) {
+// linuxExternalRules normalizes external path rules for mount destinations,
+// external binds, and credential child restoration.
+func linuxExternalRules(profile PermissionProfile, ws codeexecutor.Workspace) ([]fileSystemRule, error) {
 	wsAbs, err := filepath.Abs(ws.Path)
 	if err != nil {
 		return nil, err
 	}
-	var args []string
+	var grants []fileSystemRule
 	for _, rule := range profile.fileSystem.Rules {
-		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
+		if rule.Kind != rulePath || !filepath.IsAbs(rule.Path) {
 			continue
 		}
-		target, err := filepath.Abs(rule.Path)
-		if err != nil {
-			return nil, err
+		rule.Path = filepath.Clean(rule.Path)
+		if !sameOrChild(wsAbs, rule.Path) {
+			grants = append(grants, rule)
 		}
-		if sameOrChild(wsAbs, target) {
-			continue
+	}
+	return grants, nil
+}
+
+func (r *Runtime) externalGrantArgs(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	grants, err := linuxExternalRules(profile, ws)
+	if err != nil {
+		return nil, err
+	}
+	var args []string
+	for _, grant := range grants {
+		if _, err := os.Stat(grant.Path); err != nil {
+			return nil, deniedf(ErrPathDenied, "grant", grant.Path, "external grant target unavailable")
 		}
-		if _, err := os.Stat(target); err != nil {
-			return nil, deniedf(ErrPathDenied, "grant", target, "external grant target unavailable")
-		}
-		switch rule.Access {
-		case accessRead:
-			args = append(args, "--ro-bind", target, target)
-		case accessWrite:
-			args = append(args, "--bind", target, target)
+		if grant.Access == accessRead || grant.Access == accessWrite {
+			args = appendLinuxGrant(args, grant)
 		}
 	}
 	return args, nil
+}
+
+func appendLinuxGrant(args []string, grant fileSystemRule) []string {
+	bind := "--ro-bind"
+	if grant.Access == accessWrite {
+		bind = "--bind"
+	}
+	return append(args, bind, grant.Path, grant.Path)
 }
 
 func (r *Runtime) workspaceWriteMountArgs(
@@ -986,6 +1006,20 @@ func (r *Runtime) workspaceWriteMountArgs(
 		args = append(args, "--bind", target, target)
 	}
 	return args, nil
+}
+
+// workspaceRootReadOnlyMountArgs establishes the workspace baseline when the
+// host root is absent. Writable mounts and read-only carve-outs are added later.
+func (r *Runtime) workspaceRootReadOnlyMountArgs(profile PermissionProfile, ws codeexecutor.Workspace) ([]string, error) {
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+	access, _, err := r.resolveAccess(profile, ws, ".", wsAbs)
+	if err != nil || !accessCanRead(access) {
+		return nil, err
+	}
+	return []string{"--ro-bind", wsAbs, wsAbs}, nil
 }
 
 func (r *Runtime) workspaceReadOnlyMountArgs(
@@ -1103,7 +1137,20 @@ var linuxRuntimeReadOnlyBindTries = []string{
 	"/lib",
 	"/lib64",
 	"/lib32",
-	"/etc",
+	// Only public runtime configuration is shared. In particular, do not
+	// expose /etc/ssl/private, application configuration, or host credentials.
+	"/etc/ld.so.cache",
+	"/etc/ld.so.conf",
+	"/etc/ld.so.conf.d",
+	"/etc/passwd",
+	"/etc/group",
+	"/etc/nsswitch.conf",
+	"/etc/hosts",
+	"/etc/resolv.conf",
+	"/etc/localtime",
+	"/etc/ssl/certs",
+	"/etc/pki/tls/certs",
+	"/etc/pki/ca-trust/extracted",
 }
 
 func appendLinuxRuntimeReadOnlyBinds(args []string) []string {
@@ -1154,23 +1201,15 @@ func (r *Runtime) linuxAbsoluteGrantDests(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
 ) ([]string, error) {
-	wsAbs, err := filepath.Abs(ws.Path)
+	grants, err := linuxExternalRules(profile, ws)
 	if err != nil {
 		return nil, err
 	}
 	var dests []string
-	for _, rule := range profile.fileSystem.Rules {
-		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
-			continue
+	for _, grant := range grants {
+		if grant.Access == accessRead || grant.Access == accessWrite {
+			dests = append(dests, grant.Path)
 		}
-		if rule.Access != accessRead && rule.Access != accessWrite {
-			continue
-		}
-		target := filepath.Clean(rule.Path)
-		if sameOrChild(wsAbs, target) {
-			continue
-		}
-		dests = append(dests, target)
 	}
 	return dests, nil
 }
@@ -1262,16 +1301,17 @@ func (r *Runtime) defaultCredentialGrantArgs(
 	if err != nil {
 		return nil, err
 	}
+	grants, err := linuxExternalRules(profile, ws)
+	if err != nil {
+		return nil, err
+	}
 	home, _ := os.UserHomeDir()
 	seen := map[string]bool{}
 	var args []string
-	for _, rule := range profile.fileSystem.Rules {
-		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
-			continue
-		}
-		target := filepath.Clean(rule.Path)
+	for _, rule := range grants {
+		target := rule.Path
 		parent, ok := credentialDenyParent(target)
-		if sameOrChild(wsAbs, target) || seen[target] || !ok ||
+		if seen[target] || !ok ||
 			skipIsolatedHomeCredentialMask(profile, home, parent) {
 			continue
 		}
@@ -1290,11 +1330,8 @@ func (r *Runtime) defaultCredentialGrantArgs(
 			return nil, deniedf(ErrPathDenied, "grant", target, "external grant target unavailable")
 		}
 		seen[target] = true
-		if access == accessWrite {
-			args = append(args, "--bind", target, target)
-		} else {
-			args = append(args, "--ro-bind", target, target)
-		}
+		rule.Access = access
+		args = appendLinuxGrant(args, rule)
 	}
 	return args, nil
 }

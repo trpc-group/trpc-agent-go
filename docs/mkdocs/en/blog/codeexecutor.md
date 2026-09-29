@@ -259,7 +259,7 @@ On Linux, host-root profiles start from a read-only root:
 --ro-bind / /
 ```
 
-They then hide sibling session directories, mask common credential paths, remount allowed workspace paths as writable, and hide protected paths. The model is important: it is not "everything writable, then deny some paths." It is "read-only by default, then explicitly open writable paths." `WithLinuxNoHostRoot` skips the host-root bind and only mounts runtime directories plus the session workspace.
+They then hide sibling session directories, mask common credential paths, remount allowed workspace paths as writable, and hide protected paths. The model is important: it is not "everything writable, then deny some paths." It is "read-only by default, then explicitly open writable paths." `WithLinuxNoHostRoot` skips the host-root bind and only mounts runtime directories plus the session workspace. It shares selected public `/etc` runtime files rather than the entire directory and also supports `ReadOnlyProfile()`. Configure `WithShellEnvironmentPolicy` with `ShellEnvironmentPolicyInheritNone` to avoid inheriting host secrets through environment variables. The default credential denylist does not match arbitrary `.env`, `*.pem`, or `*.key` files. Nested IDs such as `app` and `app/user/session` are valid parent and child scopes: the parent can access its descendants, while the child remains scoped to its own workspace. Use non-overlapping IDs for mutually isolated sessions.
 
 ### Network: Restricted by Default, Enabled Explicitly
 
