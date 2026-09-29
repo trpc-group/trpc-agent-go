@@ -19,11 +19,13 @@ import (
 	"strconv"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // JSONChunking implements a chunking strategy optimized for JSON documents.
+// JSON text inputs retain their numeric literals without float64 conversion.
 type JSONChunking struct {
 	maxChunkSize int
 	minChunkSize int
@@ -65,7 +67,7 @@ func NewJSONChunking(opts ...JSONOption) *JSONChunking {
 func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
 	// Parse JSON content.
 	var jsonData any
-	if err := json.Unmarshal([]byte(doc.Content), &jsonData); err != nil {
+	if err := jsonutils.UnmarshalUseNumber([]byte(doc.Content), &jsonData); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
@@ -523,7 +525,7 @@ func (j *JSONChunking) SplitJSON(data map[string]any, convertLists bool) ([]stri
 // SplitJSONString splits a JSON string into chunks.
 func (j *JSONChunking) SplitJSONString(jsonStr string, convertLists bool) ([]string, error) {
 	var data map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+	if err := jsonutils.UnmarshalUseNumber([]byte(jsonStr), &data); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON string: %w", err)
 	}
 

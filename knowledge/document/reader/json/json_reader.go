@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
@@ -194,7 +195,7 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 // jsonToText converts JSON content to a readable text format.
 func (r *Reader) jsonToText(jsonContent string) (string, error) {
 	var data any
-	if err := json.Unmarshal([]byte(jsonContent), &data); err != nil {
+	if err := jsonutils.UnmarshalUseNumber([]byte(jsonContent), &data); err != nil {
 		return "", err
 	}
 
