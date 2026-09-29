@@ -176,6 +176,9 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
+	}
 	// Get file name from URL.
 	fileName := r.extractFileNameFromURL(urlStr)
 	return r.ReadFromReader(fileName, resp.Body)
