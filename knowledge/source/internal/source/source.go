@@ -38,8 +38,9 @@ type ReaderConfig struct {
 	chunkSize              int
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
-	ocrExtractor           ocr.Extractor
-	transformers           []transform.Transformer
+	// Deprecated: use source WithExtractor with an OCR-capable content extractor instead.
+	ocrExtractor ocr.Extractor
+	transformers []transform.Transformer
 }
 
 // ReaderOption is a functional option for configuring readers.
@@ -67,6 +68,9 @@ func WithCustomChunkingStrategy(strategy chunking.Strategy) ReaderOption {
 }
 
 // WithOCRExtractor sets the OCR extractor for PDF reader.
+//
+// Deprecated: use source WithExtractor with an OCR-capable content extractor,
+// such as knowledge/extractor/docling, instead.
 func WithOCRExtractor(extractor ocr.Extractor) ReaderOption {
 	return func(c *ReaderConfig) {
 		c.ocrExtractor = extractor
