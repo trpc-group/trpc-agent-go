@@ -2,6 +2,10 @@
 -- This file provides reference SQL for manual database initialization.
 -- The service will automatically create these tables and indexes if skipDBInit is false.
 -- Note: Replace {{PREFIX}} with your actual table prefix (e.g., trpc_) in table and index names.
+-- The Go initializer keeps these prefixed index names while they fit MySQL's
+-- 64-character index-name limit. For an overlong prefixed name, use the
+-- corresponding table-scoped fallback (for example,
+-- idx_session_states_state_init_active or idx_state_initialization_leases_uniq).
 
 -- ============================================================================
 -- Table: session_states
@@ -17,9 +21,29 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- Table: state_initialization_leases
+-- Description: Coordinates fenced session-state initialization across instances
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_{{PREFIX}}state_initialization_leases_uniq` (`coordination_key`,`user_id`),
+    KEY `idx_{{PREFIX}}state_initialization_leases_exp` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
@@ -148,6 +172,8 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 --    - Note: MySQL UNIQUE constraint doesn't prevent duplicate NULL values
 --    - Multiple records with deleted_at=NULL can coexist (NULL != NULL in MySQL)
 --    - Application code handles uniqueness for active records (deleted_at IS NULL)
+--    - Coordinated state initialization additionally uses state_initialization_active=1
+--      plus a UNIQUE index to enforce one active session row across service instances
 --    - Exception: session_summaries uses unique index WITHOUT deleted_at to prevent
 --      duplicate active records, since summary data is regenerable and uses upsert pattern
 --
