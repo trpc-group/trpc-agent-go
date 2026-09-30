@@ -2666,8 +2666,58 @@ func TestSplitCommandLine(t *testing.T) {
 			want: []string{"echo", "hi there"},
 		},
 		{
+			name: "double_quoted_shell_meta",
+			in:   `echo "a > b"`,
+			want: []string{"echo", "a > b"},
+		},
+		{
+			name: "single_quoted_shell_meta",
+			in:   "grep -E 'foo|bar' input.txt",
+			want: []string{"grep", "-E", "foo|bar", "input.txt"},
+		},
+		{
+			name: "quoted_semicolon",
+			in:   `echo "x;y"`,
+			want: []string{"echo", "x;y"},
+		},
+		{
+			name: "escaped_shell_meta",
+			in:   "echo x\\&y",
+			want: []string{"echo", "x&y"},
+		},
+		{
 			name:    "shell_meta",
 			in:      cmdEchoThenLS,
+			wantErr: true,
+		},
+		{
+			name:    "unquoted_redirect",
+			in:      "echo before>after",
+			wantErr: true,
+		},
+		{
+			name:    "unquoted_less_than",
+			in:      "echo before<after",
+			wantErr: true,
+		},
+		{
+			name:    "unquoted_pipe",
+			in:      "echo before|after",
+			wantErr: true,
+		},
+		{
+			name:    "unquoted_ampersand",
+			in:      "echo before&after",
+			wantErr: true,
+		},
+		{
+			name:    "unquoted_newline",
+			in:      "echo before\nafter",
+			wantErr: true,
+		},
+		{
+			name:    "unquoted_carriage_return",
+			in:      "echo before\rafter",
 			wantErr: true,
 		},
 		{
