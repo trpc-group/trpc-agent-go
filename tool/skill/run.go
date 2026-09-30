@@ -1801,10 +1801,6 @@ func splitCommandLine(s string) ([]string, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, fmt.Errorf("skill_run: command is empty")
 	}
-	if idx := strings.IndexAny(s, disallowedShellMeta); idx >= 0 {
-		meta := s[idx : idx+1]
-		return nil, fmt.Errorf(errShellMetaFmt, meta)
-	}
 	var args []string
 	var cur strings.Builder
 	inSingle := false
@@ -1834,6 +1830,10 @@ func splitCommandLine(s string) ([]string, error) {
 		if !inSingle && r == '"' {
 			inDouble = !inDouble
 			continue
+		}
+		if !inSingle && !inDouble &&
+			strings.ContainsRune(disallowedShellMeta, r) {
+			return nil, fmt.Errorf(errShellMetaFmt, string(r))
 		}
 		if !inSingle && !inDouble && (r == ' ' || r == '\t') {
 			flush()
