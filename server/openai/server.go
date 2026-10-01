@@ -583,6 +583,9 @@ func (s *Server) writeSSE(
 	if n != len(payload) {
 		return io.ErrShortWrite
 	}
+	if errorFlusher, ok := flusher.(interface{ FlushError() error }); ok {
+		return errorFlusher.FlushError()
+	}
 	flusher.Flush()
 	return nil
 }
