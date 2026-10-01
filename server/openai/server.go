@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sync"
@@ -35,6 +36,10 @@ const (
 	defaultModelName = "gpt-3.5-turbo"
 	defaultAppName   = "openai-server"
 
+	defaultHeartbeatInterval = 15 * time.Second
+	defaultSSEWriteTimeout   = 30 * time.Second
+	sseHeartbeatFrame        = ": ping\n\n"
+
 	headerAllow                = "Allow"
 	headerSessionID            = "X-Session-ID"
 	headerContentType          = "Content-Type"
@@ -43,11 +48,13 @@ const (
 	headerAccessControlOrigin  = "Access-Control-Allow-Origin"
 	headerAccessControlMethods = "Access-Control-Allow-Methods"
 	headerAccessControlHeaders = "Access-Control-Allow-Headers"
+	headerXAccelBuffering      = "X-Accel-Buffering"
 
 	contentTypeJSON        = "application/json"
 	contentTypeEventStream = "text/event-stream"
 	cacheControlNoCache    = "no-cache"
 	connectionKeepAlive    = "keep-alive"
+	xAccelBufferingNo      = "no"
 
 	defaultUserID = "default"
 
@@ -58,25 +65,28 @@ const (
 
 // Server provides OpenAI-compatible API server.
 type Server struct {
-	basePath       string
-	path           string // path is the chat completions endpoint path.
-	handler        http.Handler
-	sessionService session.Service
-	runner         runner.Runner
-	agent          agent.Agent
-	modelName      string
-	converter      *converter
-	ownedRunner    bool // Indicates if runner was created by this server.
-	closeOnce      sync.Once
+	basePath          string
+	path              string // path is the chat completions endpoint path.
+	handler           http.Handler
+	sessionService    session.Service
+	runner            runner.Runner
+	agent             agent.Agent
+	modelName         string
+	converter         *converter
+	heartbeatInterval time.Duration
+	writeTimeout      time.Duration
+	ownedRunner       bool // Indicates if runner was created by this server.
+	closeOnce         sync.Once
 }
 
 // New creates a new OpenAI server.
 func New(opts ...Option) (*Server, error) {
 	options := &options{
-		basePath:  defaultBasePath,
-		path:      defaultPath,
-		modelName: defaultModelName,
-		appName:   defaultAppName,
+		basePath:          defaultBasePath,
+		path:              defaultPath,
+		modelName:         defaultModelName,
+		appName:           defaultAppName,
+		heartbeatInterval: defaultHeartbeatInterval,
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -103,14 +113,16 @@ func New(opts ...Option) (*Server, error) {
 	}
 	conv := newConverter(options.modelName)
 	s := &Server{
-		basePath:       options.basePath,
-		path:           chatPath,
-		sessionService: options.sessionService,
-		runner:         r,
-		agent:          options.agent,
-		modelName:      options.modelName,
-		converter:      conv,
-		ownedRunner:    ownedRunner,
+		basePath:          options.basePath,
+		path:              chatPath,
+		sessionService:    options.sessionService,
+		runner:            r,
+		agent:             options.agent,
+		modelName:         options.modelName,
+		converter:         conv,
+		heartbeatInterval: options.heartbeatInterval,
+		writeTimeout:      defaultSSEWriteTimeout,
+		ownedRunner:       ownedRunner,
 	}
 	s.setupHandler()
 	return s, nil
@@ -354,9 +366,12 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 		s.writeError(w, err, errorTypeInvalidRequest, http.StatusBadRequest)
 		return
 	}
+	runCtx, cancelRun := context.WithCancel(ctx)
+
 	// Run the agent.
-	eventCh, err := s.runner.Run(ctx, userID, sessionID, runInput.inputMessage, runOpts...)
+	eventCh, err := s.runner.Run(runCtx, userID, sessionID, runInput.inputMessage, runOpts...)
 	if err != nil {
+		cancelRun()
 		log.ErrorfContext(
 			ctx,
 			"openai: failed to run agent: %v",
@@ -370,11 +385,18 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 		)
 		return
 	}
+	defer func() {
+		cancelRun()
+		if eventCh != nil {
+			go drainEventChannel(eventCh)
+		}
+	}()
 	// Set up SSE headers.
 	w.Header().Set(headerContentType, contentTypeEventStream)
 	w.Header().Set(headerCacheControl, cacheControlNoCache)
 	w.Header().Set(headerConnection, connectionKeepAlive)
 	w.Header().Set(headerAccessControlOrigin, "*")
+	w.Header().Set(headerXAccelBuffering, xAccelBufferingNo)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.writeError(w, errors.New("streaming not supported"), errorTypeInternal, http.StatusInternalServerError)
@@ -383,37 +405,76 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, req *op
 	// Stream events.
 	responseID := generateResponseID()
 	created := time.Now().Unix()
+	if err := s.streamEvents(runCtx, w, flusher, eventCh, responseID, created); err != nil {
+		log.WarnfContext(runCtx, "openai: stream response: %v", err)
+	}
+}
+
+func (s *Server) streamEvents(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	eventCh <-chan *event.Event,
+	responseID string,
+	created int64,
+) error {
+	var heartbeat <-chan time.Time
+	if s.heartbeatInterval > 0 {
+		ticker := time.NewTicker(s.heartbeatInterval)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			// Context cancelled, stop processing.
-			return
+			return nil
+		case <-heartbeat:
+			if err := s.writeSSE(w, flusher, []byte(sseHeartbeatFrame)); err != nil {
+				return fmt.Errorf("write SSE heartbeat: %w", err)
+			}
 		case evt, ok := <-eventCh:
 			if !ok {
-				// Channel closed, send done marker and exit.
-				fmt.Fprintf(w, "%s%s%s", sseDataPrefix, sseDoneMarker, sseLineEnding)
-				flusher.Flush()
-				return
+				return s.writeSSEDone(w, flusher)
 			}
-			if evt == nil || evt.Response == nil {
-				continue
+			final, err := s.writeStreamingEvent(ctx, w, flusher, evt, responseID, created)
+			if err != nil {
+				return err
 			}
-			// Skip partial events that are not meaningful.
-			if evt.Response.IsPartial && evt.Response.Done {
-				continue
-			}
-			// Process chunk and check if it's the final event.
-			isFinal := s.processStreamingChunk(ctx, w, flusher, evt, responseID, created)
-			if isFinal {
-				// Send final chunk if needed.
-				s.sendFinalChunk(w, flusher, evt, responseID, created)
-				// Send done marker.
-				fmt.Fprintf(w, "%s%s%s", sseDataPrefix, sseDoneMarker, sseLineEnding)
-				flusher.Flush()
-				return
+			if final {
+				return nil
 			}
 		}
 	}
+}
+
+func (s *Server) writeStreamingEvent(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	evt *event.Event,
+	responseID string,
+	created int64,
+) (bool, error) {
+	if evt == nil || evt.Response == nil {
+		return false, nil
+	}
+	if evt.Response.IsPartial && evt.Response.Done {
+		return false, nil
+	}
+	final, err := s.processStreamingChunk(ctx, w, flusher, evt, responseID, created)
+	if err != nil {
+		return false, fmt.Errorf("write streaming chunk: %w", err)
+	}
+	if !final {
+		return false, nil
+	}
+	if err := s.sendFinalChunk(w, flusher, evt, responseID, created); err != nil {
+		return false, fmt.Errorf("write final streaming chunk: %w", err)
+	}
+	if err := s.writeSSEDone(w, flusher); err != nil {
+		return false, fmt.Errorf("write SSE done marker: %w", err)
+	}
+	return true, nil
 }
 
 // processStreamingChunk processes a single streaming chunk and returns true if it's the final event.
@@ -424,27 +485,27 @@ func (s *Server) processStreamingChunk(
 	evt *event.Event,
 	responseID string,
 	created int64,
-) bool {
+) (bool, error) {
 	chunkData, err := s.converter.convertToChunk(evt)
 	if err != nil {
 		log.Errorf("openai: failed to convert event: %v", err)
-		return false
+		return false, nil
 	}
 	if chunkData == nil {
-		return evt.Response.Done && !evt.Response.IsPartial
+		return evt.Response.Done && !evt.Response.IsPartial, nil
 	}
 	// Skip chunks with empty delta unless there's a finish reason.
 	if !s.shouldSendChunk(chunkData) {
-		return evt.Response.Done && !evt.Response.IsPartial
+		return evt.Response.Done && !evt.Response.IsPartial, nil
 	}
 	// Set consistent ID and created time.
 	chunkData.ID = responseID
 	chunkData.Created = created
 	// Write chunk.
-	if !s.writeChunk(w, flusher, chunkData) {
-		return false
+	if err := s.writeChunk(w, flusher, chunkData); err != nil {
+		return false, err
 	}
-	return evt.Response.Done && !evt.Response.IsPartial
+	return evt.Response.Done && !evt.Response.IsPartial, nil
 }
 
 // shouldSendChunk checks if a chunk should be sent (has content or finish reason).
@@ -459,15 +520,13 @@ func (s *Server) shouldSendChunk(chunk *openAIChunk) bool {
 }
 
 // writeChunk marshals and writes a chunk to the response.
-func (s *Server) writeChunk(w http.ResponseWriter, flusher http.Flusher, chunk *openAIChunk) bool {
+func (s *Server) writeChunk(w http.ResponseWriter, flusher http.Flusher, chunk *openAIChunk) error {
 	data, err := json.Marshal(chunk)
 	if err != nil {
 		log.Errorf("openai: failed to marshal chunk: %v", err)
-		return false
+		return fmt.Errorf("marshal streaming chunk: %w", err)
 	}
-	fmt.Fprintf(w, "%s%s%s", sseDataPrefix, data, sseLineEnding)
-	flusher.Flush()
-	return true
+	return s.writeSSE(w, flusher, []byte(fmt.Sprintf("%s%s%s", sseDataPrefix, data, sseLineEnding)))
 }
 
 // sendFinalChunk sends the final chunk with finish reason if usage is available.
@@ -477,9 +536,9 @@ func (s *Server) sendFinalChunk(
 	evt *event.Event,
 	responseID string,
 	created int64,
-) {
+) error {
 	if evt.Response == nil || evt.Response.Usage == nil {
-		return
+		return nil
 	}
 	finishReason := finishReasonStop
 	if len(evt.Response.Choices) > 0 && evt.Response.Choices[0].FinishReason != nil {
@@ -499,7 +558,41 @@ func (s *Server) sendFinalChunk(
 		},
 	}
 	// Note: OpenAI streaming doesn't include usage in chunks, but we can send it.
-	s.writeChunk(w, flusher, finalChunk)
+	return s.writeChunk(w, flusher, finalChunk)
+}
+
+func (s *Server) writeSSEDone(w http.ResponseWriter, flusher http.Flusher) error {
+	return s.writeSSE(w, flusher, []byte(sseDataPrefix+sseDoneMarker+sseLineEnding))
+}
+
+func (s *Server) writeSSE(
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	payload []byte,
+) error {
+	if s.writeTimeout > 0 {
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil &&
+			!errors.Is(err, http.ErrNotSupported) {
+			return fmt.Errorf("set SSE write deadline: %w", err)
+		}
+	}
+	n, err := w.Write(payload)
+	if err != nil {
+		return err
+	}
+	if n != len(payload) {
+		return io.ErrShortWrite
+	}
+	if errorFlusher, ok := flusher.(interface{ FlushError() error }); ok {
+		return errorFlusher.FlushError()
+	}
+	flusher.Flush()
+	return nil
+}
+
+func drainEventChannel(events <-chan *event.Event) {
+	for range events {
+	}
 }
 
 // writeJSON writes a JSON response.
