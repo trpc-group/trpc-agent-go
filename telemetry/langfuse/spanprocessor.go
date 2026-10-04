@@ -18,9 +18,13 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-func newSpanProcessor(e sdktrace.SpanExporter) sdktrace.SpanProcessor {
+func newSpanProcessor(e sdktrace.SpanExporter, filter BaggageAttributeFilter) sdktrace.SpanProcessor {
+	if filter == nil {
+		filter = defaultLangfuseTraceAttributeFilter
+	}
 	return &baggageBatchSpanProcessor{
-		next: sdktrace.NewBatchSpanProcessor(e),
+		next:   sdktrace.NewBatchSpanProcessor(e),
+		filter: filter,
 	}
 }
 
@@ -29,14 +33,19 @@ func newSpanProcessor(e sdktrace.SpanExporter) sdktrace.SpanProcessor {
 //
 // This mirrors the behavior of go.opentelemetry.io/contrib/processors/baggagecopy.
 type baggageBatchSpanProcessor struct {
-	next sdktrace.SpanProcessor
+	next   sdktrace.SpanProcessor
+	filter BaggageAttributeFilter
 }
 
 var _ sdktrace.SpanProcessor = (*baggageBatchSpanProcessor)(nil)
 
 func (p *baggageBatchSpanProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
+	filter := p.filter
+	if filter == nil {
+		filter = defaultLangfuseTraceAttributeFilter
+	}
 	for _, member := range baggage.FromContext(ctx).Members() {
-		if defaultLangfuseTraceAttributeFilter(member) {
+		if filter(member) {
 			span.SetAttributes(attribute.String(member.Key(), member.Value()))
 		}
 	}
@@ -52,6 +61,7 @@ func (p *baggageBatchSpanProcessor) OnStart(ctx context.Context, span sdktrace.R
 // Propagated attributes:
 // - userId: langfuse.user.id or user.id
 // - sessionId: langfuse.session.id or session.id
+// - trace name: langfuse.trace.name
 // - metadata: langfuse.trace.metadata.* (top-level metadata keys)
 // - version: langfuse.version
 // - release: langfuse.release
@@ -61,6 +71,7 @@ func defaultLangfuseTraceAttributeFilter(member baggage.Member) bool {
 	switch k {
 	case traceUserID, "user.id",
 		traceSessionID, "session.id",
+		traceName,
 		version, release,
 		traceTags:
 		return true
