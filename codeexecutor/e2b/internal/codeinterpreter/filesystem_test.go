@@ -11,6 +11,7 @@ package codeinterpreter
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -89,7 +90,7 @@ func TestFilesystemSandboxConnection(t *testing.T) {
 				require.NoError(t, err)
 				got, err := fs.Read(context.Background(), "/file", 3)
 				require.NoError(t, err)
-				assert.Equal(t, "hel", string(got.Content))
+				assert.Equal(t, "hello"[:3], string(got.Content))
 				assert.EqualValues(t, 5, got.Size)
 				_, err = fs.Stat(context.Background(), "/file")
 				require.NoError(t, err)
@@ -145,6 +146,8 @@ func TestFilesystemConnectionTimeout(t *testing.T) {
 	fs, err := NewFilesystemClient(context.Background(), s)
 	require.NoError(t, err)
 	_, err = fs.Read(context.Background(), "/file", 1)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var timeoutErr net.Error
+	require.ErrorAs(t, err, &timeoutErr)
+	assert.True(t, timeoutErr.Timeout())
 	assert.Zero(t, client.Timeout)
 }
