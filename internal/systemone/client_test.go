@@ -221,6 +221,27 @@ func TestHTTPErrorsDoNotRetry(t *testing.T) {
 	}
 }
 
+func TestTransportErrorDoesNotRetry(t *testing.T) {
+	transportErr := errors.New("connection failed")
+	var calls int
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, transportErr
+	})
+	client, err := systemone.NewClient("https://example.invalid",
+		systemone.WithHTTPClient(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.SystemOne(context.Background(), binaryRequest())
+	if resp != nil || !errors.Is(err, transportErr) {
+		t.Fatalf("transport error cause lost or partial response returned: response=%v error=%v", resp, err)
+	}
+	if calls != 1 {
+		t.Fatalf("transport called %d times, want 1", calls)
+	}
+}
+
 func TestRedirectIsNotFollowed(t *testing.T) {
 	var targetCalls atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

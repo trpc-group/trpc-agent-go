@@ -103,7 +103,7 @@ func TestInvalidRequestsDoNotReachServer(t *testing.T) {
 }
 
 func TestInvalidConfiguration(t *testing.T) {
-	for _, url := range []string{"", "localhost:8000", "ftp://host", "https://", "https://user:secret@host", "https://host?q=x", "https://host?", "https://host#x", "https://host#"} {
+	for _, url := range []string{"", "localhost:8000", "ftp://host", "https://", "https://host/%zz", "https://user:secret@host", "https://host?q=x", "https://host?", "https://host#x", "https://host#"} {
 		if _, err := systemone.NewClient(url); err == nil {
 			t.Errorf("invalid URL accepted: %q", url)
 		}
@@ -167,15 +167,17 @@ func TestChoiceAndScoreValidation(t *testing.T) {
 		"choice negative confidence": {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":-1,"probabilities":{"a":1}}`},
 		"choice null choice":         {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":null,"confidence":1,"probabilities":{"a":1}}`},
 
-		"choice missing confidence":      {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","probabilities":{"a":1}}`},
-		"choice null probability":        {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":null}}`},
-		"choice wrong selected label":    {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"b","confidence":1,"probabilities":{"a":1}}`},
-		"choice wrong probability label": {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"b":1}}`},
-		"choice zero distribution":       {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":0}}`},
-		"score missing score":            {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","confidence":1,"probabilities":{"0":1},"legend":{"0":"low"}}`},
-		"score out of range":             {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","score":1,"confidence":1,"probabilities":{"0":1},"legend":{"0":"low"}}`},
-		"score null legend":              {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","score":0,"confidence":1,"probabilities":{"0":1},"legend":{"0":null}}`},
-		"score wrong index":              {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","score":0,"confidence":1,"probabilities":{"1":1},"legend":{"0":"low"}}`},
+		"choice missing confidence":         {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","probabilities":{"a":1}}`},
+		"choice null probability":           {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":null}}`},
+		"choice wrong selected label":       {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"b","confidence":1,"probabilities":{"a":1}}`},
+		"choice wrong probability label":    {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"b":1}}`},
+		"choice missing option probability": {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}, {Name: "b"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":1}}`},
+		"choice extra option probability":   {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":0.5,"b":0.5}}`},
+		"choice zero distribution":          {systemone.ChoiceQuestion{Instructions: "choose", Options: []systemone.ChoiceOption{{Name: "a"}}}, `{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":0}}`},
+		"score missing score":               {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","confidence":1,"probabilities":{"0":1},"legend":{"0":"low"}}`},
+		"score out of range":                {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","score":1,"confidence":1,"probabilities":{"0":1},"legend":{"0":"low"}}`},
+		"score null legend":                 {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","score":0,"confidence":1,"probabilities":{"0":1},"legend":{"0":null}}`},
+		"score wrong index":                 {systemone.ScoreQuestion{Instructions: "rate", Criteria: []string{"low"}}, `{"type":"score","score":0,"confidence":1,"probabilities":{"1":1},"legend":{"0":"low"}}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var calls atomic.Int32
