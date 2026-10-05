@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync"
@@ -46,10 +48,12 @@ type mockClient struct {
 	indexExistsErr   error
 	createIndexErr   error
 	searchErr        error
+	getDocErr        error
 	indexDocErr      error
 	updateDocErr     error
 	deleteDocErr     error
 	deleteByQueryErr error
+	refreshErr       error
 
 	// searchErrFor fails only search requests whose body contains the
 	// marker, letting tests fail one query leg but not the other.
@@ -58,6 +62,10 @@ type mockClient struct {
 	// lifetime of the mock, zero means never.
 	failSearchOnCall int
 	searchCallCount  int
+	// failGetDocOnCall fails the n-th get-document call (1-based), zero
+	// means never.
+	failGetDocOnCall int
+	getDocCallCount  int
 
 	// searchOverride replaces the default search evaluation, returning a
 	// pre-baked raw response.
@@ -120,11 +128,22 @@ func (m *mockClient) IndexDoc(ctx context.Context, indexName, id string, body []
 func (m *mockClient) GetDoc(ctx context.Context, indexName, id string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.getDocCallCount++
+	if m.getDocErr != nil {
+		return nil, m.getDocErr
+	}
+	if m.failGetDocOnCall > 0 && m.getDocCallCount == m.failGetDocOnCall {
+		return nil, fmt.Errorf("elasticsearch get document failed: 500: simulated")
+	}
 	doc, ok := m.docs[id]
 	if !ok {
 		return nil, fmt.Errorf("elasticsearch get document failed: 404: not found")
 	}
-	return json.Marshal(doc)
+	return json.Marshal(map[string]any{
+		"found":   true,
+		"_id":     id,
+		"_source": doc,
+	})
 }
 
 func (m *mockClient) UpdateDoc(ctx context.Context, indexName, id string, body []byte) error {
@@ -205,7 +224,14 @@ func (m *mockClient) DeleteByQuery(ctx context.Context, indexName string, body [
 	return nil
 }
 
-func (m *mockClient) Refresh(ctx context.Context, indexName string) error { return nil }
+func (m *mockClient) Refresh(ctx context.Context, indexName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.refreshErr != nil {
+		return m.refreshErr
+	}
+	return nil
+}
 
 // mockSearchRequest is the decoded search request for the mock evaluator.
 type mockSearchRequest struct {
@@ -1410,13 +1436,18 @@ func TestClose(t *testing.T) {
 // Construction without an injected client
 // -----------------------------------------------------------------------------
 
-func TestNewServiceBuildsClientAndFailsOnUnreachable(t *testing.T) {
-	// Building the versioned client and wrapping it succeeds without a
-	// reachable server; the first request surfaces as an index init error.
+func TestNewServiceCreateIndexFailure(t *testing.T) {
+	// A controlled endpoint answers 400 so index creation fails
+	// deterministically; the SDK client build and wrap still succeed.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
 	_, err := NewService(
 		WithIndexDimension(testDimension),
 		WithEmbedder(newStubEmbedder(testDimension)),
-		WithAddresses([]string{"http://127.0.0.1:1"}),
+		WithAddresses([]string{server.URL}),
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "init index failed")
@@ -1482,7 +1513,7 @@ func TestUpdateMemoryErrorPaths(t *testing.T) {
 	t.Run("load fails", func(t *testing.T) {
 		mc := newMockClient()
 		svc := newTestService(t, mc)
-		mc.searchErr = assert.AnError
+		mc.getDocErr = assert.AnError
 
 		err := svc.UpdateMemory(context.Background(), memory.Key{
 			AppName: "app", UserID: "user", MemoryID: "any",
@@ -1512,7 +1543,7 @@ func TestUpdateMemoryErrorPaths(t *testing.T) {
 
 		userKey := testUserKey("app", "user")
 		require.NoError(t, svc.AddMemory(context.Background(), userKey, "old", nil))
-		mc.failSearchOnCall = 3 // add consumes one, source lookup two, target lookup three
+		mc.failGetDocOnCall = 3 // add consumes one, source lookup two, target lookup three
 
 		err := svc.UpdateMemory(context.Background(), memory.Key{
 			AppName: "app", UserID: "user", MemoryID: mockOnlyMemoryID(t, mc),
@@ -1541,7 +1572,7 @@ func TestDeleteMemoryErrorPaths(t *testing.T) {
 	t.Run("lookup fails", func(t *testing.T) {
 		mc := newMockClient()
 		svc := newTestService(t, mc, WithSoftDelete(true))
-		mc.searchErr = assert.AnError
+		mc.getDocErr = assert.AnError
 
 		err := svc.DeleteMemory(context.Background(), memory.Key{
 			AppName: "app", UserID: "user", MemoryID: "any",
@@ -1646,6 +1677,72 @@ func TestClearMemoriesSoftMultipleBatches(t *testing.T) {
 	entries, err := svc.ReadMemories(context.Background(), testUserKey("app", "user"), 0)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+}
+
+// TestFindDocScopeGuard verifies the defense-in-depth scope check on point
+// lookups: a document fetched by ID but belonging to another scope is
+// treated as absent.
+func TestFindDocScopeGuard(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc)
+
+	// A document whose stored scope does not match the requested key.
+	mc.docs["cross-scope-id"] = map[string]any{
+		fieldMemoryID:  "cross-scope-id",
+		fieldAppName:   "other-app",
+		fieldUserID:    "user",
+		fieldContent:   "content",
+		fieldKind:      string(memory.KindFact),
+		fieldEmbedding: []float64{1, 0, 0, 0},
+	}
+
+	// UpdateMemory must report not found instead of reactivating or
+	// overwriting the foreign document.
+	err := svc.UpdateMemory(context.Background(), memory.Key{
+		AppName: "app", UserID: "user", MemoryID: "cross-scope-id",
+	}, "new content", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+	assert.Equal(t, "content", mc.docs["cross-scope-id"][fieldContent])
+}
+
+func TestClearMemoriesRefreshFailure(t *testing.T) {
+	t.Run("hard delete refresh fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.refreshErr = assert.AnError
+
+		err := svc.ClearMemories(context.Background(), userKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refresh index failed")
+	})
+
+	t.Run("soft delete refresh fails between batches", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc, WithSoftDelete(true))
+
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		for i := 0; i < tombstoneBatchSize+1; i++ {
+			injectDoc(t, mc, fmt.Sprintf("doc-%04d", i), "app", "user",
+				fmt.Sprintf("content %d", i), base.Add(time.Duration(i)*time.Millisecond))
+		}
+		mc.refreshErr = assert.AnError
+
+		err := svc.ClearMemories(context.Background(), testUserKey("app", "user"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refresh index failed")
+		// The first batch is tombstoned before the refresh stops the loop.
+		tombstoned := 0
+		for _, doc := range mc.docs {
+			if _, ok := doc[fieldDeletedAt]; ok {
+				tombstoned++
+			}
+		}
+		assert.Equal(t, tombstoneBatchSize, tombstoned)
+	})
 }
 
 func TestReadMemoriesError(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -69,9 +70,11 @@ func effectiveMappingVersion(version storage.ESVersion) storage.ESVersion {
 	return version
 }
 
-// buildIndexCreateBody builds the index creation payload with settings and
-// mappings. Elasticsearch 7 does not support the index and similarity
-// parameters on dense_vector fields, so they are only emitted for v8+.
+// buildIndexCreateBody builds the index creation payload with mappings.
+// Shard and replica counts are deliberately omitted so Elasticsearch
+// defaults or index templates decide the data safety configuration.
+// Elasticsearch 7 does not support the index and similarity parameters
+// on dense_vector fields, so they are only emitted for v8+.
 func buildIndexCreateBody(version storage.ESVersion, dimension int) ([]byte, error) {
 	embedding := map[string]any{
 		"type": "dense_vector",
@@ -83,10 +86,6 @@ func buildIndexCreateBody(version storage.ESVersion, dimension int) ([]byte, err
 	}
 
 	body := map[string]any{
-		"settings": map[string]any{
-			"number_of_shards":   "1",
-			"number_of_replicas": "0",
-		},
 		"mappings": map[string]any{
 			"properties": map[string]any{
 				fieldMemoryID:     map[string]any{"type": "keyword"},
@@ -186,19 +185,60 @@ func (s *Service) buildScopeFilter(
 	return filter
 }
 
-// buildIDLookupRequest builds a search request resolving a single document
-// by scope and canonical memory ID.
-func (s *Service) buildIDLookupRequest(
+// getDocNotFoundMarker matches the stable error format returned by the
+// versioned storage clients when a document does not exist. The point
+// lookup has to rely on it because the storage client interface has no
+// dedicated exists check.
+const getDocNotFoundMarker = "elasticsearch get document failed: 404"
+
+// getDocResult is the subset of the Elasticsearch get-document response
+// used by this package.
+type getDocResult struct {
+	Found  bool            `json:"found"`
+	Source json.RawMessage `json:"_source"`
+}
+
+// findDoc resolves a single document by its deterministic ID with a
+// real-time GetDoc. Searching instead would miss documents that are
+// written but not yet refreshed, so AddMemory after AddMemory could lose
+// its original creation timestamp and UpdateMemory could report a just
+// added memory as not found.
+//
+// It returns nil without an error when no document matches: a 404, a
+// document of another scope (which cannot happen because the canonical
+// memory ID hashes the scope, checked here as defense in depth), or a
+// tombstoned document for an active-only lookup.
+func (s *Service) findDoc(
+	ctx context.Context,
 	userKey memory.UserKey,
 	memoryID string,
 	activeOnly bool,
-) *searchRequest {
-	filter := append(s.buildScopeFilter(userKey, memory.SearchOptions{}, activeOnly),
-		termQuery(fieldMemoryID, memoryID))
-	return &searchRequest{
-		Query: map[string]any{"bool": map[string]any{"filter": filter}},
-		Size:  1,
+) (*esDocument, error) {
+	body, err := s.client.GetDoc(ctx, s.indexName, memoryID)
+	if err != nil {
+		if strings.Contains(err.Error(), getDocNotFoundMarker) {
+			return nil, nil
+		}
+		return nil, err
 	}
+	var result getDocResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("decode memory document failed: %w", err)
+	}
+	if !result.Found || len(result.Source) == 0 {
+		return nil, nil
+	}
+	var doc esDocument
+	if err := json.Unmarshal(result.Source, &doc); err != nil {
+		return nil, fmt.Errorf("decode memory document failed: %w", err)
+	}
+	if doc.AppName != userKey.AppName || doc.UserID != userKey.UserID {
+		return nil, nil
+	}
+	if activeOnly && doc.DeletedAt != nil {
+		return nil, nil
+	}
+	return &doc, nil
 }
 
 // buildReadRequest builds a search request listing active scoped entries
@@ -311,25 +351,6 @@ func (s *Service) search(
 	return decodeSearchDocs(data)
 }
 
-// findDoc resolves a single document by scope and memory ID.
-// It returns nil without an error when no document matches.
-func (s *Service) findDoc(
-	ctx context.Context,
-	userKey memory.UserKey,
-	memoryID string,
-	activeOnly bool,
-) (*esDocument, error) {
-	req := s.buildIDLookupRequest(userKey, memoryID, activeOnly)
-	docs, _, err := s.search(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if len(docs) == 0 {
-		return nil, nil
-	}
-	return docs[0], nil
-}
-
 // indexDoc serializes and stores a document under its deterministic ID.
 func (s *Service) indexDoc(ctx context.Context, doc *esDocument) error {
 	body, err := json.Marshal(doc)
@@ -385,6 +406,13 @@ func (s *Service) tombstoneScope(ctx context.Context, userKey memory.UserKey, no
 			}
 		}
 		if len(entries) < tombstoneBatchSize {
+			break
+		}
+		// A partial update is not visible to the active-only read until
+		// Elasticsearch refreshes; without the refresh the same batch
+		// would be returned and updated again.
+		if err := s.client.Refresh(ctx, s.indexName); err != nil {
+			joinedErr = joinErrors(joinedErr, fmt.Errorf("refresh index failed: %w", err))
 			break
 		}
 	}

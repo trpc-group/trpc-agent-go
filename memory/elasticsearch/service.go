@@ -346,6 +346,11 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		return nil
 	}
 
+	// A just-written document may not be searchable yet; without the
+	// refresh the delete-by-query could miss it and leave it stored.
+	if err := s.client.Refresh(ctx, s.indexName); err != nil {
+		return fmt.Errorf("refresh index failed: %w", err)
+	}
 	body, err := json.Marshal(buildDeleteByQueryRequest(userKey))
 	if err != nil {
 		return fmt.Errorf("marshal clear memories request failed: %w", err)
