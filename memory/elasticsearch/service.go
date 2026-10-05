@@ -72,6 +72,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	client := opts.client
 	if client == nil {
+		// Map the zero value to the storage package's unspecified version
+		// so the client default selection applies when no version is set.
+		version := opts.version
+		if version == "" {
+			version = storage.ESVersionUnspecified
+		}
 		builderOpts := []storage.ClientBuilderOpt{
 			storage.WithAddresses(opts.addresses),
 			storage.WithUsername(opts.username),
@@ -83,7 +89,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			storage.WithEnableDebugLogger(opts.enableDebugLogger),
 			storage.WithRetryOnStatus(opts.retryOnStatus),
 			storage.WithMaxRetries(opts.maxRetries),
-			storage.WithVersion(opts.version),
+			storage.WithVersion(version),
 		}
 		if len(opts.extraOptions) > 0 {
 			builderOpts = append(builderOpts, storage.WithExtraOptions(opts.extraOptions...))
