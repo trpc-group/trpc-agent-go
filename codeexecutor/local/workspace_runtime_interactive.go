@@ -578,10 +578,18 @@ func localProgramCommandPath(
 	}
 	pathValue, _ := envValue(env, envPathKey)
 	pathExt, _ := envValue(env, envPathExtKey)
-	for _, dir := range filepath.SplitList(pathValue) {
+	splitDirs := filepath.SplitList(pathValue)
+	dirs := make([]string, 0, len(splitDirs))
+	for _, dir := range splitDirs {
 		if strings.TrimSpace(dir) == "" {
 			dir = "."
 		}
+		dirs = append(dirs, dir)
+	}
+	// Extended candidates (via PATHEXT on Windows) always win so the
+	// bare-name fallback below can never shadow a real executable found
+	// later in the search path.
+	for _, dir := range dirs {
 		for _, candidateName := range localProgramCandidateNames(
 			name,
 			pathExt,
@@ -591,11 +599,43 @@ func localProgramCommandPath(
 				candidate = filepath.Join(cwd, candidate)
 			}
 			if isLocalExecutableFile(candidate) {
-				return candidate, true
+				return canonicalLocalProgramPath(candidate), true
+			}
+		}
+	}
+	// On Windows, PATHEXT-based candidates always carry an extension,
+	// so an extensionless executable in a PATH directory (or in the CWD
+	// for an empty PATH entry) is never matched above. Such a file can
+	// still be launched once resolved to a path (CreateProcess does not
+	// append ".exe" when the name contains a directory path), so try the
+	// bare name as a final candidate.
+	if runtime.GOOS == "windows" {
+		for _, dir := range dirs {
+			candidate := filepath.Join(dir, name)
+			if !filepath.IsAbs(candidate) {
+				candidate = filepath.Join(cwd, candidate)
+			}
+			if isLocalExecutableFile(candidate) {
+				return canonicalLocalProgramPath(candidate), true
 			}
 		}
 	}
 	return name, false
+}
+
+// canonicalLocalProgramPath returns the on-disk spelling of an
+// executable path. Windows path lookups are case-insensitive, so a
+// candidate built from PATHEXT may differ in case from the file that
+// actually exists; EvalSymlinks reports the real case there. Other
+// platforms return the path unchanged.
+func canonicalLocalProgramPath(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	return path
 }
 
 func envValue(env []string, key string) (string, bool) {
