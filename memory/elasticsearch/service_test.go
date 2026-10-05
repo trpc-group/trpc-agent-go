@@ -1707,7 +1707,7 @@ func TestFindDocScopeGuard(t *testing.T) {
 }
 
 func TestClearMemoriesRefreshFailure(t *testing.T) {
-	t.Run("hard delete refresh fails", func(t *testing.T) {
+	t.Run("hard delete refresh is best-effort", func(t *testing.T) {
 		mc := newMockClient()
 		svc := newTestService(t, mc)
 
@@ -1715,9 +1715,10 @@ func TestClearMemoriesRefreshFailure(t *testing.T) {
 		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
 		mc.refreshErr = assert.AnError
 
-		err := svc.ClearMemories(context.Background(), userKey)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "refresh index failed")
+		// A data-access role without the maintenance privilege cannot
+		// refresh; the clear must still go through.
+		require.NoError(t, svc.ClearMemories(context.Background(), userKey))
+		assert.Empty(t, mc.docs)
 	})
 
 	t.Run("soft delete refresh fails between batches", func(t *testing.T) {

@@ -346,10 +346,13 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		return nil
 	}
 
-	// A just-written document may not be searchable yet; without the
-	// refresh the delete-by-query could miss it and leave it stored.
+	// Make just-written documents searchable before the delete-by-query so
+	// they cannot survive the clear. The refresh API requires the index
+	// maintenance privilege that data-access roles may lack, so a failure
+	// only narrows this visibility window instead of failing the whole
+	// clear.
 	if err := s.client.Refresh(ctx, s.indexName); err != nil {
-		return fmt.Errorf("refresh index failed: %w", err)
+		log.WarnfContext(ctx, "elasticsearch memory pre-clear refresh failed: %v", err)
 	}
 	body, err := json.Marshal(buildDeleteByQueryRequest(userKey))
 	if err != nil {
@@ -357,6 +360,12 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	}
 	if err := s.client.DeleteByQuery(ctx, s.indexName, body); err != nil {
 		return fmt.Errorf("clear memories failed: %w", err)
+	}
+	// Deletions are not visible to reads until Elasticsearch refreshes;
+	// make the clear effective immediately for callers reading right
+	// after. Like the pre-clear refresh, this is best-effort.
+	if err := s.client.Refresh(ctx, s.indexName); err != nil {
+		log.WarnfContext(ctx, "elasticsearch memory post-clear refresh failed: %v", err)
 	}
 	return nil
 }
