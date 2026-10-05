@@ -25,6 +25,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // -----------------------------------------------------------------------------
@@ -48,6 +50,14 @@ type mockClient struct {
 	updateDocErr     error
 	deleteDocErr     error
 	deleteByQueryErr error
+
+	// searchErrFor fails only search requests whose body contains the
+	// marker, letting tests fail one query leg but not the other.
+	searchErrFor string
+	// failSearchOnCall fails the n-th search call (1-based) across the
+	// lifetime of the mock, zero means never.
+	failSearchOnCall int
+	searchCallCount  int
 
 	// searchOverride replaces the default search evaluation, returning a
 	// pre-baked raw response.
@@ -155,8 +165,15 @@ func (m *mockClient) DeleteDoc(ctx context.Context, indexName, id string) error 
 func (m *mockClient) Search(ctx context.Context, indexName string, body []byte) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.searchCallCount++
 	if m.searchErr != nil {
 		return nil, m.searchErr
+	}
+	if m.failSearchOnCall > 0 && m.searchCallCount == m.failSearchOnCall {
+		return nil, fmt.Errorf("elasticsearch search failed on call %d", m.searchCallCount)
+	}
+	if m.searchErrFor != "" && strings.Contains(string(body), m.searchErrFor) {
+		return nil, fmt.Errorf("elasticsearch search failed for marker %s", m.searchErrFor)
 	}
 	if m.searchOverride != nil {
 		return m.searchOverride(indexName, body)
@@ -1277,6 +1294,10 @@ func TestSearchPrebakedResponse(t *testing.T) {
 					{"_id": "a", "_score": 0.95, "_source": source("a")},
 					{"_id": "b", "_score": 0.10, "_source": source("b")},
 					{"_id": "c", "_source": source("c")}, // malformed: no score
+					{"_id": "d", "_score": 0.99},         // malformed: no source
+					{"_id": "e", "_score": 0.99, "_source": map[string]any{
+						fieldAppName: "app", // malformed: no memory_id
+					}},
 				},
 			},
 		})
@@ -1383,6 +1404,353 @@ func TestClose(t *testing.T) {
 	mc := newMockClient()
 	svc := newTestService(t, mc)
 	assert.NoError(t, svc.Close())
+}
+
+// -----------------------------------------------------------------------------
+// Construction without an injected client
+// -----------------------------------------------------------------------------
+
+func TestNewServiceBuildsClientAndFailsOnUnreachable(t *testing.T) {
+	// Building the versioned client and wrapping it succeeds without a
+	// reachable server; the first request surfaces as an index init error.
+	_, err := NewService(
+		WithIndexDimension(testDimension),
+		WithEmbedder(newStubEmbedder(testDimension)),
+		WithAddresses([]string{"http://127.0.0.1:1"}),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "init index failed")
+}
+
+func TestNewServiceBuildsClientWithSkipInit(t *testing.T) {
+	svc, err := NewService(
+		WithIndexDimension(testDimension),
+		WithEmbedder(newStubEmbedder(testDimension)),
+		WithAddresses([]string{"http://127.0.0.1:1"}),
+		WithSkipIndexInit(true),
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, svc.Tools())
+	assert.NoError(t, svc.Close())
+}
+
+// -----------------------------------------------------------------------------
+// Auto memory worker construction
+// -----------------------------------------------------------------------------
+
+// stubExtractor is a minimal extractor used to exercise the auto memory
+// worker wiring.
+type stubExtractor struct{}
+
+func (stubExtractor) Extract(ctx context.Context, messages []model.Message,
+	existing []*memory.Entry) ([]*extractor.Operation, error) {
+	return nil, nil
+}
+
+func (stubExtractor) ShouldExtract(ctx *extractor.ExtractionContext) bool { return true }
+
+func (stubExtractor) SetPrompt(prompt string) {}
+
+func (stubExtractor) SetModel(m model.Model) {}
+
+func (stubExtractor) Metadata() map[string]any { return nil }
+
+var _ extractor.MemoryExtractor = (*stubExtractor)(nil)
+
+func TestNewServiceWithExtractorStartsWorker(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc, WithExtractor(stubExtractor{}))
+	require.NotNil(t, svc.autoMemoryWorker)
+	assert.NoError(t, svc.Close())
+}
+
+// -----------------------------------------------------------------------------
+// Storage error propagation
+// -----------------------------------------------------------------------------
+
+func TestAddMemoryIndexDocError(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc)
+
+	mc.indexDocErr = assert.AnError
+	err := svc.AddMemory(context.Background(), testUserKey("app", "user"), "content", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "index memory document failed")
+}
+
+func TestUpdateMemoryErrorPaths(t *testing.T) {
+	t.Run("load fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+		mc.searchErr = assert.AnError
+
+		err := svc.UpdateMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: "any",
+		}, "content", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "load memory entry failed")
+	})
+
+	t.Run("in-place update fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.indexDocErr = assert.AnError
+
+		err := svc.UpdateMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: mockOnlyMemoryID(t, mc),
+		}, "content", []string{"topic"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "update memory entry failed")
+	})
+
+	t.Run("rotate target lookup fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "old", nil))
+		mc.failSearchOnCall = 3 // add consumes one, source lookup two, target lookup three
+
+		err := svc.UpdateMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: mockOnlyMemoryID(t, mc),
+		}, "new content", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "check rotated memory target failed")
+	})
+
+	t.Run("rotate target insert fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "old", nil))
+		mc.indexDocErr = assert.AnError
+
+		err := svc.UpdateMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: mockOnlyMemoryID(t, mc),
+		}, "new content", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rotate memory entry failed")
+	})
+}
+
+func TestDeleteMemoryErrorPaths(t *testing.T) {
+	t.Run("lookup fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc, WithSoftDelete(true))
+		mc.searchErr = assert.AnError
+
+		err := svc.DeleteMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: "any",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "delete memory entry failed")
+	})
+
+	t.Run("soft delete update fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc, WithSoftDelete(true))
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.updateDocErr = assert.AnError
+
+		err := svc.DeleteMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: mockOnlyMemoryID(t, mc),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "delete memory entry failed")
+	})
+
+	t.Run("hard delete fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.deleteDocErr = assert.AnError
+
+		err := svc.DeleteMemory(context.Background(), memory.Key{
+			AppName: "app", UserID: "user", MemoryID: mockOnlyMemoryID(t, mc),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "delete memory entry failed")
+	})
+}
+
+func TestClearMemoriesErrorPaths(t *testing.T) {
+	t.Run("hard delete by query fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc)
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.deleteByQueryErr = assert.AnError
+
+		err := svc.ClearMemories(context.Background(), userKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "clear memories failed")
+	})
+
+	t.Run("soft delete lookup fails", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc, WithSoftDelete(true))
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.searchErr = assert.AnError
+
+		err := svc.ClearMemories(context.Background(), userKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "clear memories failed")
+	})
+
+	t.Run("soft delete partial failure", func(t *testing.T) {
+		mc := newMockClient()
+		svc := newTestService(t, mc, WithSoftDelete(true))
+
+		userKey := testUserKey("app", "user")
+		require.NoError(t, svc.AddMemory(context.Background(), userKey, "content", nil))
+		mc.updateDocErr = assert.AnError
+
+		err := svc.ClearMemories(context.Background(), userKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "clear memories failed")
+	})
+}
+
+func TestClearMemoriesSoftMultipleBatches(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc, WithSoftDelete(true))
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	const total = 2*tombstoneBatchSize + 50
+	for i := 0; i < total; i++ {
+		injectDoc(t, mc, fmt.Sprintf("doc-%04d", i), "app", "user",
+			fmt.Sprintf("content %d", i), base.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	require.NoError(t, svc.ClearMemories(context.Background(), testUserKey("app", "user")))
+
+	tombstoned := 0
+	for _, doc := range mc.docs {
+		if _, ok := doc[fieldDeletedAt]; ok {
+			tombstoned++
+		}
+	}
+	assert.Equal(t, total, tombstoned)
+
+	entries, err := svc.ReadMemories(context.Background(), testUserKey("app", "user"), 0)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestReadMemoriesError(t *testing.T) {
+	mc := newMockClient()
+	mc.searchErr = assert.AnError
+	svc := newTestService(t, mc, WithSkipIndexInit(true))
+
+	_, err := svc.ReadMemories(context.Background(), testUserKey("app", "user"), 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list memories failed")
+}
+
+// -----------------------------------------------------------------------------
+// Search edge paths
+// -----------------------------------------------------------------------------
+
+func TestSearchInvalidKey(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc)
+
+	_, err := svc.SearchMemories(context.Background(), memory.UserKey{AppName: "app"}, "query")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, memory.ErrUserIDRequired)
+}
+
+func TestSearchTimeBefore(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc, WithSimilarityThreshold(0))
+
+	ctx := context.Background()
+	ed := svc.opts.embedder.(*stubEmbedder)
+	ed.vectors["query"] = []float64{1, 0, 0, 0}
+
+	early := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, svc.AddMemory(ctx, testUserKey("app", "user"), "early episode", nil,
+		memory.WithMetadata(&memory.Metadata{Kind: memory.KindEpisode, EventTime: &early})))
+	require.NoError(t, svc.AddMemory(ctx, testUserKey("app", "user"), "late episode", nil,
+		memory.WithMetadata(&memory.Metadata{Kind: memory.KindEpisode, EventTime: &late})))
+
+	cutoff := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	results, err := svc.SearchMemories(ctx, testUserKey("app", "user"), "query",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:      "query",
+			Kind:       memory.KindEpisode,
+			TimeBefore: &cutoff,
+		}))
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "early episode", results[0].Memory.Memory)
+}
+
+func TestSearchKeywordLegFailureIsNotFatal(t *testing.T) {
+	mc := newMockClient()
+	mc.searchErrFor = "multi_match"
+	svc := newTestService(t, mc, WithSimilarityThreshold(0.9))
+
+	ctx := context.Background()
+	ed := svc.opts.embedder.(*stubEmbedder)
+	ed.vectors["alice"] = []float64{1, 0, 0, 0}
+	ed.vectors["alice works at acme"] = []float64{1, 0, 0, 0}
+	ed.vectors["bob likes banana"] = []float64{0, 1, 0, 0}
+
+	require.NoError(t, svc.AddMemory(ctx, testUserKey("app", "user"), "alice works at acme", nil))
+	require.NoError(t, svc.AddMemory(ctx, testUserKey("app", "user"), "bob likes banana", nil))
+
+	results, err := svc.SearchMemories(ctx, testUserKey("app", "user"), "alice",
+		memory.WithSearchOptions(memory.SearchOptions{Query: "alice", HybridSearch: true}))
+	require.NoError(t, err)
+	// Without the lexical leg only the dense results remain.
+	require.Len(t, results, 2)
+	assert.Equal(t, "alice works at acme", results[0].Memory.Memory)
+	assert.Greater(t, results[0].Score, 0.9)
+}
+
+func TestSearchHybridCandidateLimit(t *testing.T) {
+	mc := newMockClient()
+	svc := newTestService(t, mc, WithSimilarityThreshold(0), WithHybridCandidateLimit(1))
+
+	ctx := context.Background()
+	ed := svc.opts.embedder.(*stubEmbedder)
+	ed.vectors["alice"] = []float64{1, 0, 0, 0}
+	ed.vectors["alice works at acme"] = []float64{1, 0, 0, 0}
+	ed.vectors["bob likes banana"] = []float64{0, 1, 0, 0}
+
+	require.NoError(t, svc.AddMemory(ctx, testUserKey("app", "user"), "alice works at acme", nil))
+	require.NoError(t, svc.AddMemory(ctx, testUserKey("app", "user"), "bob likes banana", nil))
+
+	results, err := svc.SearchMemories(ctx, testUserKey("app", "user"), "alice",
+		memory.WithSearchOptions(memory.SearchOptions{Query: "alice", HybridSearch: true}))
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "alice works at acme", results[0].Memory.Memory)
+}
+
+func TestSearchMalformedResponse(t *testing.T) {
+	mc := newMockClient()
+	mc.searchOverride = func(indexName string, body []byte) ([]byte, error) {
+		return []byte("not-json"), nil
+	}
+	svc := newTestService(t, mc, WithSkipIndexInit(true))
+
+	_, err := svc.SearchMemories(context.Background(), testUserKey("app", "user"), "query")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode search response failed")
 }
 
 // -----------------------------------------------------------------------------
