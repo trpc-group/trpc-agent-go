@@ -559,13 +559,28 @@ func newLocalProgramCommand(
 		return cmd
 	}
 	if resolved, ok := localProgramCommandPath(cwd, spec.Cmd, env); ok {
-		cmd.Path = resolved
+		cmd.Path = localProgramLaunchPath(resolved)
 		cmd.Err = nil
 	} else {
 		cmd.Path = spec.Cmd
 		cmd.Err = exec.ErrNotFound
 	}
 	return cmd
+}
+
+// localProgramLaunchPath returns the path to assign to exec.Cmd.Path so
+// that Start launches exactly the resolved file. On Windows, Start
+// re-runs lookExtensions over c.Path, and that lookup only tries
+// PATHEXT candidates for an extensionless name, so a resolved
+// extensionless executable would be found but never launched. A
+// trailing dot marks the name as extensionless for CreateProcess
+// (which then skips appending ".exe") while path lookups still resolve
+// the dotless file on disk. Other platforms return the path unchanged.
+func localProgramLaunchPath(path string) string {
+	if runtime.GOOS != "windows" || filepath.Ext(path) != "" {
+		return path
+	}
+	return path + "."
 }
 
 func localProgramCommandPath(
