@@ -43,6 +43,7 @@ type options struct {
 	expectedRunner                    runner.Runner
 	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
+	additionalCallbacks               []*service.Callbacks
 	judgeRunner                       runner.Runner
 	toolMockRunner                    runner.Runner
 	judgeRunnerNumSamples             *int
@@ -140,6 +141,18 @@ func WithUserSimulator(sim usersimulation.Simulator) Option {
 func WithCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
 		o.callbacks = c
+	}
+}
+
+// WithAdditionalCallbacks appends lifecycle callbacks after the callbacks
+// selected by WithCallbacks or the evaluation service's defaults. Nil is a
+// no-op; existing registrations are not modified. Callbacks must support concurrent calls when
+// the corresponding stage or multiple runs are configured to run in parallel.
+func WithAdditionalCallbacks(c *service.Callbacks) Option {
+	return func(o *options) {
+		if c != nil {
+			o.additionalCallbacks = append(o.additionalCallbacks, c)
+		}
 	}
 }
 

@@ -150,23 +150,32 @@ if err != nil {
 
 ### Case Concurrency
 
-Langfuse remote experiments process cases serially by default. To process up to
-eight cases concurrently within each request, add
-`langfuseeval.WithCaseParallelism(8)` when constructing the handler. The value
-must be positive.
+The Langfuse handler submits all requested case IDs in one `Evaluate` call.
+Configure concurrency on the evaluator using the existing options; no handler
+parallelism option is required:
 
-Each case retains its own trace context, evaluation call, and Langfuse writes.
-Response cases remain in dataset order even when execution finishes out of
-order. This handler option is independent of
-`evaluation.WithEvalCaseParallelism` and the evaluator's parallel inference and
-evaluation flags: those options apply within a single `Evaluate` call, while
-the Langfuse handler calls `Evaluate` once per case.
+```go
+evaluation.WithEvalCaseParallelism(8),
+evaluation.WithEvalCaseParallelInferenceEnabled(true),
+evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+```
 
-When enabling concurrency, the supplied evaluator, runners, callbacks, and
-managers must support concurrent calls. The limit covers each case's evaluation
-and Langfuse writes, and applies per request, not across requests. A case error
-or request cancellation cancels in-flight cases and waits for them to finish;
-completed Langfuse writes are not rolled back.
+The inference and evaluation switches remain independent. Enabling only parallel
+inference leaves evaluation serial, and enabling only parallel evaluation leaves
+inference serial. Default evaluator settings keep both stages serial.
+
+The handler appends a case lifecycle callback without replacing application or
+service callbacks. Each case receives isolated run options and trace metadata;
+trace IDs are associated with inference sessions, including when multiple runs
+execute concurrently. Custom evaluation services must honor the lifecycle
+callbacks and case run options to preserve that association.
+
+After the evaluator completes and saves the batch, the handler writes traces,
+run items, and scores in dataset order. Evaluation errors and cancellation are
+returned before publishing the batch. Case-level failures retain the evaluator's
+normal result semantics. A later Langfuse write failure can leave earlier writes
+in place; completed writes are not rolled back. Runners, callbacks, and managers
+must support the concurrency enabled on the evaluator.
 
 ### Data Format
 

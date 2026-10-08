@@ -150,19 +150,27 @@ if err != nil {
 
 ### Case 并发
 
-Langfuse 远程实验默认串行处理 case。创建 handler 时添加
-`langfuseeval.WithCaseParallelism(8)`，可在每个请求内最多同时处理 8 个 case；
-该参数必须大于 0。
+Langfuse handler 将本次所有 case ID 一次提交给 `Evaluate`，直接复用 evaluator
+已有配置，无需再设置 handler 并行参数：
 
-每个 case 保留独立的 trace context、评估调用和 Langfuse 写入。即使执行完成顺序不同，
-响应中的 case 仍按数据集顺序排列。handler 的该选项独立于
-`evaluation.WithEvalCaseParallelism` 及 evaluator 的推理和评估并行开关：
-后者只在一次 `Evaluate` 调用内部生效，而 Langfuse handler 为每个 case 单独调用一次
-`Evaluate`。
+```go
+evaluation.WithEvalCaseParallelism(8),
+evaluation.WithEvalCaseParallelInferenceEnabled(true),
+evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+```
 
-开启并发时，传入的 evaluator、runner、callback 和 manager 必须支持并发调用。
-并发上限覆盖每个 case 的评估及 Langfuse 写入，按单个请求生效，不是跨请求的全局上限。
-某个 case 出错或请求被取消时，会取消并等待执行中的 case 结束；已完成的 Langfuse 写入不会回滚。
+推理和评估开关独立生效：仅开启推理并行时，评估仍串行；仅开启评估并行时，
+推理仍串行。使用 evaluator 默认配置时，两阶段均串行。
+
+handler 追加逐 case 生命周期回调，保留应用和 service 已配置的回调。每个 case
+使用独立的运行选项和 trace 元数据；trace ID 按推理 session 关联，包括并发执行
+多个 run 的情况。自定义 evaluation service 需要遵守生命周期回调与逐 case
+运行选项约定，才能保留该关联。
+
+批量评测和结果保存完成后，handler 按数据集顺序写入 trace、run item 和 score。
+评测调用出错或请求取消时，不发布该批次到 Langfuse；case 级失败沿用 evaluator
+的结果语义。后续 Langfuse 写入失败可能保留此前已写入的数据，不进行回滚。
+runner、callback 和 manager 需支持 evaluator 配置所启用的并发。
 
 ### 数据格式
 

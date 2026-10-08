@@ -21,10 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -45,20 +43,19 @@ type executionOptions struct {
 
 // Handler serves Langfuse remote experiment webhooks.
 type Handler struct {
-	path            string
-	appName         string
-	userIDSupplier  UserIDSupplier
-	traceTags       []string
-	environment     string
-	timeout         time.Duration
-	client          *client
-	agentEvaluator  coreevaluation.AgentEvaluator
-	caseBuilder     CaseBuilder
-	evalSetManager  evalset.Manager
-	metricManager   metric.Manager
-	resultManager   evalresult.Manager
-	runOptions      []agent.RunOption
-	caseParallelism int
+	path           string
+	appName        string
+	userIDSupplier UserIDSupplier
+	traceTags      []string
+	environment    string
+	timeout        time.Duration
+	client         *client
+	agentEvaluator coreevaluation.AgentEvaluator
+	caseBuilder    CaseBuilder
+	evalSetManager evalset.Manager
+	metricManager  metric.Manager
+	resultManager  evalresult.Manager
+	runOptions     []agent.RunOption
 }
 
 // New creates a Langfuse remote experiment handler.
@@ -108,9 +105,6 @@ func New(
 	if opts.timeout < 0 {
 		return nil, errors.New("langfuse handler: timeout must not be negative")
 	}
-	if opts.caseParallelism < 1 {
-		return nil, errors.New("langfuse handler: case parallelism must be positive")
-	}
 	rawPath := strings.TrimSpace(opts.path)
 	if rawPath == "" {
 		return nil, errors.New("langfuse handler: path must not be empty")
@@ -128,20 +122,19 @@ func New(
 		return nil, fmt.Errorf("langfuse handler: base URL must include scheme and host, got %q", baseURL)
 	}
 	handler := &Handler{
-		path:            routePath,
-		appName:         appName,
-		userIDSupplier:  opts.userIDSupplier,
-		traceTags:       append([]string(nil), opts.traceTags...),
-		environment:     opts.environment,
-		timeout:         opts.timeout,
-		client:          newClient(baseURL, opts.publicKey, opts.secretKey, opts.httpClient),
-		agentEvaluator:  agentEvaluator,
-		caseBuilder:     opts.caseBuilder,
-		evalSetManager:  evalSetManager,
-		metricManager:   metricManager,
-		resultManager:   resultManager,
-		runOptions:      append([]agent.RunOption(nil), opts.runOptions...),
-		caseParallelism: opts.caseParallelism,
+		path:           routePath,
+		appName:        appName,
+		userIDSupplier: opts.userIDSupplier,
+		traceTags:      append([]string(nil), opts.traceTags...),
+		environment:    opts.environment,
+		timeout:        opts.timeout,
+		client:         newClient(baseURL, opts.publicKey, opts.secretKey, opts.httpClient),
+		agentEvaluator: agentEvaluator,
+		caseBuilder:    opts.caseBuilder,
+		evalSetManager: evalSetManager,
+		metricManager:  metricManager,
+		resultManager:  resultManager,
+		runOptions:     append([]agent.RunOption(nil), opts.runOptions...),
 	}
 	return handler, nil
 }
@@ -324,27 +317,14 @@ func (h *Handler) executeRemoteExperiment(
 	datasetRunID := ""
 	passedCases := 0
 	scoreCount := 0
-	var caseResults []caseResult
-	if h.caseParallelism > 1 {
-		var err error
-		caseResults, err = h.processCasesParallel(ctx, remoteRequest.DatasetID, opts, caseSpecs)
+	evaluationResult, traces, err := h.evaluateCases(ctx, remoteRequest.DatasetID, caseSpecs)
+	if err != nil {
+		return nil, err
+	}
+	for _, spec := range caseSpecs {
+		caseSummary, caseRunID, caseScoreCount, err := h.publishCase(ctx, evaluationResult, traces[spec.EvalCase.EvalID], opts, spec)
 		if err != nil {
 			return nil, err
-		}
-	}
-	for i, spec := range caseSpecs {
-		var caseSummary *remoteCaseSummary
-		var caseRunID string
-		var caseScoreCount int
-		if h.caseParallelism > 1 {
-			result := caseResults[i]
-			caseSummary, caseRunID, caseScoreCount = result.summary, result.runID, result.scoreCount
-		} else {
-			var err error
-			caseSummary, caseRunID, caseScoreCount, err = h.processCase(ctx, remoteRequest.DatasetID, opts, spec)
-			if err != nil {
-				return nil, err
-			}
 		}
 		if datasetRunID == "" {
 			datasetRunID = caseRunID
@@ -414,99 +394,30 @@ func (h *Handler) executeRemoteExperiment(
 	return response, nil
 }
 
-type caseResult struct {
-	summary    *remoteCaseSummary
-	runID      string
-	scoreCount int
-}
-
-func (h *Handler) processCasesParallel(
+// publishCase writes one case from a completed batch to Langfuse.
+func (h *Handler) publishCase(
 	ctx context.Context,
-	datasetID string,
-	opts executionOptions,
-	caseSpecs []*CaseSpec,
-) ([]caseResult, error) {
-	results := make([]caseResult, len(caseSpecs))
-	group, caseCtx := errgroup.WithContext(ctx)
-	group.SetLimit(h.caseParallelism)
-	for i, spec := range caseSpecs {
-		if caseCtx.Err() != nil {
-			break
-		}
-		group.Go(func() error {
-			// Admission can block while another case fails or the request is canceled.
-			if err := caseCtx.Err(); err != nil {
-				return err
-			}
-			summary, runID, scoreCount, err := h.processCase(caseCtx, datasetID, opts, spec)
-			if err != nil {
-				return err
-			}
-			results[i] = caseResult{summary: summary, runID: runID, scoreCount: scoreCount}
-			return nil
-		})
-	}
-	if err := group.Wait(); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-func (h *Handler) processCase(
-	ctx context.Context,
-	datasetID string,
+	evaluationResult *coreevaluation.EvaluationResult,
+	trace *caseTrace,
 	opts executionOptions,
 	spec *CaseSpec,
 ) (*remoteCaseSummary, string, int, error) {
-	caseCtxWithTraceParent, traceID, err := injectRemoteTraceParent(ctx)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("inject remote trace parent for case %s: %w", spec.EvalCase.EvalID, err)
-	}
-	runOptions := append([]agent.RunOption(nil), h.runOptions...)
-	runOptions = append(runOptions,
-		agent.WithExecutionTraceEnabled(true),
-		agent.WithSpanAttributes(
-			attribute.String("langfuse.trace.name", spec.TraceName),
-			attribute.String("langfuse.user.id", spec.UserID),
-			attribute.String("langfuse.environment", h.environment),
-		),
-		agent.WithTraceStartedCallback(func(spanContext oteltrace.SpanContext) {
-			if spanContext.IsValid() {
-				traceID = spanContext.TraceID().String()
-			}
-		}),
-	)
-	evaluationResult, err := h.agentEvaluator.Evaluate(
-		caseCtxWithTraceParent,
-		datasetID,
-		coreevaluation.WithEvalCaseIDs(spec.EvalCase.EvalID),
-		coreevaluation.WithRunDetailsEnabled(true),
-		coreevaluation.WithEvalSetManager(h.evalSetManager),
-		coreevaluation.WithMetricManager(h.metricManager),
-		coreevaluation.WithEvalResultManager(h.resultManager),
-		coreevaluation.WithRunOptions(runOptions...),
-	)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("evaluate case %s: %w", spec.EvalCase.EvalID, err)
-	}
 	caseAggregate, runCaseResult, inferenceDetail, err := h.resolveCaseArtifacts(evaluationResult, spec.EvalCase.EvalID)
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("resolve case artifacts for case %s: %w", spec.EvalCase.EvalID, err)
 	}
+	traceID := trace.idForSession(inferenceDetail.SessionID)
 	if traceID == "" {
 		return nil, "", 0, fmt.Errorf("trace id was not captured for case %s", spec.EvalCase.EvalID)
 	}
-	if err := forceFlushTelemetry(caseCtxWithTraceParent); err != nil {
+	if err := forceFlushTelemetry(ctx); err != nil {
 		return nil, "", 0, fmt.Errorf("flush telemetry for case %s: %w", spec.EvalCase.EvalID, err)
 	}
 	finalOutput, err := extractFinalOutput(inferenceDetail)
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("extract final output for case %s: %w", spec.EvalCase.EvalID, err)
 	}
-	if err := h.client.createTrace(caseCtxWithTraceParent, traceCreateRequest{
+	if err := h.client.createTrace(ctx, traceCreateRequest{
 		ID:          traceID,
 		Timestamp:   time.Now().UTC(),
 		Name:        spec.TraceName,
@@ -520,7 +431,7 @@ func (h *Handler) processCase(
 	}); err != nil {
 		return nil, "", 0, fmt.Errorf("create trace for case %s: %w", spec.EvalCase.EvalID, err)
 	}
-	runItem, err := h.client.createDatasetRunItem(caseCtxWithTraceParent, datasetRunItemCreateRequest{
+	runItem, err := h.client.createDatasetRunItem(ctx, datasetRunItemCreateRequest{
 		RunName:        opts.runName,
 		RunDescription: opts.runDescription,
 		DatasetItemID:  spec.DatasetItemID,
@@ -544,7 +455,7 @@ func (h *Handler) processCase(
 	scoreCount := 0
 	for _, metricResult := range runCaseResult.OverallEvalMetricResults {
 		comment := resolveMetricReason(metricResult)
-		if err := h.client.createScore(caseCtxWithTraceParent, scoreCreateRequest{
+		if err := h.client.createScore(ctx, scoreCreateRequest{
 			Name:        metricResult.MetricName,
 			TraceID:     traceID,
 			Value:       metricResult.Score,

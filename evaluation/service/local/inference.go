@@ -99,20 +99,23 @@ func (s *local) runBeforeInferenceCaseCallbacks(
 	req *service.InferenceRequest,
 	evalCaseID string,
 	sessionID string,
-) (context.Context, error) {
-	result, err := callback.RunBeforeInferenceCase(ctx, callbacks, &service.BeforeInferenceCaseArgs{
+	runOptions []agent.RunOption,
+) (context.Context, []agent.RunOption, error) {
+	args := &service.BeforeInferenceCaseArgs{
+		RunOptions: append([]agent.RunOption(nil), runOptions...),
 		Request:    req,
 		EvalCaseID: evalCaseID,
 		SessionID:  sessionID,
-	})
+	}
+	result, err := callback.RunBeforeInferenceCase(ctx, callbacks, args)
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
 	if err != nil {
-		return ctx, fmt.Errorf("run before inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s, sessionID=%s): %w",
+		return ctx, nil, fmt.Errorf("run before inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s, sessionID=%s): %w",
 			req.AppName, req.EvalSetID, evalCaseID, sessionID, err)
 	}
-	return ctx, nil
+	return ctx, args.RunOptions, nil
 }
 
 func (s *local) runAfterInferenceCaseCallbacks(
@@ -242,7 +245,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			UserID:     "",
 		}, errors.New("eval case is nil"))
 	}
-	ctx, err := s.runBeforeInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, sessionID)
+	ctx, runOptions, err := s.runBeforeInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, sessionID, opts.RunOptions)
 	if err != nil {
 		return newFailedInferenceResult(&service.InferenceResult{
 			AppName:    req.AppName,
@@ -253,6 +256,9 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			UserID:     "",
 		}, err)
 	}
+	caseOpts := *opts
+	caseOpts.RunOptions = runOptions
+	opts = &caseOpts
 	caseStartTime := time.Now()
 	defer func() {
 		afterErr := s.runAfterInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, result, nil, caseStartTime)

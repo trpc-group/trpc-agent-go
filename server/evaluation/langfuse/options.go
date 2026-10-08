@@ -28,18 +28,17 @@ const (
 type Option func(*options)
 
 type options struct {
-	path            string
-	baseURL         string
-	publicKey       string
-	secretKey       string
-	caseBuilder     CaseBuilder
-	traceTags       []string
-	userIDSupplier  UserIDSupplier
-	environment     string
-	timeout         time.Duration
-	httpClient      *http.Client
-	runOptions      []agent.RunOption
-	caseParallelism int
+	path           string
+	baseURL        string
+	publicKey      string
+	secretKey      string
+	caseBuilder    CaseBuilder
+	traceTags      []string
+	userIDSupplier UserIDSupplier
+	environment    string
+	timeout        time.Duration
+	httpClient     *http.Client
+	runOptions     []agent.RunOption
 }
 
 func newOptions(opts ...Option) *options {
@@ -54,9 +53,8 @@ func newOptions(opts ...Option) *options {
 		userIDSupplier: func(_ context.Context) string {
 			return defaultUserID
 		},
-		environment:     defaultEnvironment,
-		timeout:         defaultTimeout,
-		caseParallelism: 1,
+		environment: defaultEnvironment,
+		timeout:     defaultTimeout,
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},
@@ -144,19 +142,5 @@ func WithHTTPClient(client *http.Client) Option {
 func WithRunOptions(runOptions ...agent.RunOption) Option {
 	return func(opts *options) {
 		opts.runOptions = append(opts.runOptions, runOptions...)
-	}
-}
-
-// WithCaseParallelism sets the maximum number of cases processed concurrently
-// within one remote experiment request. The default is 1 (serial); values below
-// 1 are rejected by New. Each case includes evaluation and Langfuse writes.
-// This is independent of the evaluator's inference and evaluation parallelism,
-// since the handler calls Evaluate separately for each case to preserve traces.
-// Values above 1 require the evaluator, runners, callbacks, and managers to
-// support concurrent calls. On error, in-flight cases are canceled and awaited;
-// completed Langfuse writes are not rolled back.
-func WithCaseParallelism(parallelism int) Option {
-	return func(opts *options) {
-		opts.caseParallelism = parallelism
 	}
 }
