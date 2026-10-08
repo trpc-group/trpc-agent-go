@@ -34,8 +34,10 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	checkpointmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/partsuserinput"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -2119,8 +2121,15 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 		Type:  model.ContentTypeImage,
 		Image: &model.Image{URL: "https://example.com/a.png"},
 	}
-	staleState := graph.State{graph.StateKeyUserInput: "stale"}
-	resumeState := graph.State{graph.CfgKeyCheckpointID: "checkpoint-123"}
+	staleState := graph.State{
+		graph.StateKeyUserInput: "stale",
+		partsuserinput.Key:      "stale-origin",
+	}
+	resumeState := graph.State{
+		graph.CfgKeyCheckpointID: "checkpoint-123",
+		partsuserinput.Key:       "stale-origin",
+	}
+	seedOrigin := graph.State{partsuserinput.Key: "seed-origin"}
 
 	schema := graph.NewStateSchema().
 		AddField(graph.StateKeyUserInput, graph.StateField{
@@ -2142,9 +2151,12 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 		name          string
 		message       model.Message
 		session       *session.Session
+		agentInitial  graph.State
 		runtimeState  graph.State
 		wantUserInput string
 		wantHasInput  bool
+		wantOrigin    string
+		wantHasOrigin bool
 	}{
 		{
 			name: "content wins and keeps whitespace over parts",
@@ -2156,6 +2168,8 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 					imagePart,
 				},
 			},
+			agentInitial:  seedOrigin,
+			runtimeState:  graph.State{partsuserinput.Key: "stale-origin"},
 			wantUserInput: "  from-content  ",
 			wantHasInput:  true,
 		},
@@ -2171,8 +2185,12 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 					{Type: model.ContentTypeText, Text: &world},
 				},
 			},
+			agentInitial:  seedOrigin,
+			runtimeState:  staleState,
 			wantUserInput: "hello\nworld",
 			wantHasInput:  true,
+			wantOrigin:    "hello\nworld",
+			wantHasOrigin: true,
 		},
 		{
 			name: "session text parts project user_input",
@@ -2185,6 +2203,8 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 			session:       &session.Session{ID: "sid"},
 			wantUserInput: "hello",
 			wantHasInput:  true,
+			wantOrigin:    "hello",
+			wantHasOrigin: true,
 		},
 		{
 			name:          "non-user does not overwrite inherited user_input",
@@ -2236,6 +2256,8 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 			runtimeState:  resumeState,
 			wantUserInput: "resume",
 			wantHasInput:  true,
+			wantOrigin:    "resume",
+			wantHasOrigin: true,
 		},
 	}
 
@@ -2253,12 +2275,19 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 				invocation.RunOptions.RuntimeState = tt.runtimeState
 			}
 			graphAgent.setupInvocation(invocation)
+			graphAgent.initialState = tt.agentInitial
+			t.Cleanup(func() { graphAgent.initialState = nil })
 
 			state := graphAgent.createInitialState(context.Background(), invocation)
 			userInput, hasInput := state[graph.StateKeyUserInput]
 			require.Equal(t, tt.wantHasInput, hasInput)
 			if tt.wantHasInput {
 				require.Equal(t, tt.wantUserInput, userInput)
+			}
+			origin, hasOrigin := state[partsuserinput.Key]
+			require.Equal(t, tt.wantHasOrigin, hasOrigin)
+			if tt.wantHasOrigin {
+				require.Equal(t, tt.wantOrigin, origin)
 			}
 		})
 	}
@@ -2319,10 +2348,12 @@ func TestGraphAgent_RunSessionContentPartsReachLLM(t *testing.T) {
 			MimeType: "text/plain",
 		},
 	}
+	imageURL := "https://example.com/a.png"
 	imagePart := model.ContentPart{
 		Type:  model.ContentTypeImage,
-		Image: &model.Image{URL: "https://example.com/a.png"},
+		Image: &model.Image{URL: imageURL},
 	}
+	annotation := "Attached files (1): notes.txt (text/plain)\n"
 	multiTextFile := []model.ContentPart{
 		{Type: model.ContentTypeText, Text: &hello},
 		{Type: model.ContentTypeText, Text: &world},
@@ -2333,53 +2364,47 @@ func TestGraphAgent_RunSessionContentPartsReachLLM(t *testing.T) {
 		imagePart,
 		{Type: model.ContentTypeText, Text: &world},
 	}
+	mergedParts := []model.ContentPart{
+		{Type: model.ContentTypeText, Text: &hello},
+		imagePart,
+	}
 
 	tests := []struct {
 		name           string
 		parts          []model.ContentPart
-		rewriteInput   string
 		mergePriorUser bool
-		wantContent    string
-		wantTexts      []string
-		wantNoTexts    []string
-		wantImage      bool
-		wantFile       bool
-		wantAnnot      bool
+		want           model.Message
 	}{
 		{
-			name:        "multi-text plus file keeps annotation and parts",
-			parts:       multiTextFile,
-			wantTexts:   []string{hello, world},
-			wantFile:    true,
-			wantAnnot:   true,
-			wantContent: "",
+			name:  "multi-text plus file keeps annotation and parts",
+			parts: multiTextFile,
+			want: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &annotation},
+					{Type: model.ContentTypeText, Text: &hello},
+					{Type: model.ContentTypeText, Text: &world},
+					filePart,
+				},
+			},
 		},
 		{
-			name:         "rewrite target equal to one original part updates the window",
-			parts:        multiTextFile,
-			rewriteInput: hello,
-			wantTexts:    []string{hello},
-			wantNoTexts:  []string{world},
-			wantFile:     true,
-			wantAnnot:    true,
-			wantContent:  "",
-		},
-		{
-			name:         "interleaved text-image-text rewrite keeps the image",
-			parts:        interleaved,
-			rewriteInput: hello,
-			wantTexts:    []string{hello},
-			wantNoTexts:  []string{world},
-			wantImage:    true,
-			wantContent:  "",
+			name:  "interleaved text and image stay in order",
+			parts: interleaved,
+			want: model.Message{
+				Role:         model.RoleUser,
+				ContentParts: interleaved,
+			},
 		},
 		{
 			name:           "merged prior user keeps current content parts after synthetic omit",
-			parts:          []model.ContentPart{{Type: model.ContentTypeText, Text: &hello}, imagePart},
+			parts:          mergedParts,
 			mergePriorUser: true,
-			wantContent:    "first",
-			wantTexts:      []string{hello},
-			wantImage:      true,
+			want: model.Message{
+				Role:         model.RoleUser,
+				Content:      "first",
+				ContentParts: mergedParts,
+			},
 		},
 	}
 
@@ -2389,35 +2414,16 @@ func TestGraphAgent_RunSessionContentPartsReachLLM(t *testing.T) {
 			var durableUser model.Message
 			recordingModel := &requestRecordingGraphAgentModel{requests: requests}
 			stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
-				AddNode("prepare", func(
-					_ context.Context,
-					state graph.State,
-				) (any, error) {
-					if tt.rewriteInput == "" {
-						return nil, nil
-					}
-					return graph.State{graph.StateKeyUserInput: tt.rewriteInput}, nil
-				}).
 				AddLLMNode("llm", recordingModel, "", nil).
 				AddNode("capture", func(
 					_ context.Context,
 					state graph.State,
 				) (any, error) {
-					messages, _ := graph.GetStateValue[[]model.Message](
-						state,
-						graph.StateKeyMessages,
-					)
-					for i := len(messages) - 1; i >= 0; i-- {
-						if messages[i].Role == model.RoleUser {
-							durableUser = messages[i]
-							break
-						}
-					}
+					durableUser = lastUserMessage(state)
 					return nil, nil
 				}).
-				AddEdge("prepare", "llm").
 				AddEdge("llm", "capture").
-				SetEntryPoint("prepare").
+				SetEntryPoint("llm").
 				SetFinishPoint("capture")
 			g, err := stateGraph.Compile()
 			require.NoError(t, err)
@@ -2474,109 +2480,377 @@ func TestGraphAgent_RunSessionContentPartsReachLLM(t *testing.T) {
 			)
 			invocation.RunOptions.RequestID = "request-current"
 
-			events, err := graphAgent.Run(context.Background(), invocation)
-			require.NoError(t, err)
-			for evt := range events {
-				if evt != nil && evt.RequiresCompletion {
-					require.NoError(t, invocation.NotifyCompletion(
-						context.Background(),
-						agent.GetAppendEventNoticeKey(evt.ID),
-					))
-				}
-			}
+			runGraphAgentToCompletion(t, graphAgent, invocation)
 
 			messages := <-requests
 			require.NotEmpty(t, messages)
-			assertTypedUserPreserved(
-				t,
-				messages[len(messages)-1],
-				tt.wantContent,
-				tt.wantTexts,
-				tt.wantNoTexts,
-				tt.wantImage,
-				tt.wantFile,
-				tt.wantAnnot,
-			)
-			assertTypedUserPreserved(
-				t,
-				durableUser,
-				tt.wantContent,
-				tt.wantTexts,
-				tt.wantNoTexts,
-				tt.wantImage,
-				tt.wantFile,
-				tt.wantAnnot,
-			)
+			require.True(t, model.MessagesEqual(tt.want, messages[len(messages)-1]))
+			require.True(t, model.MessagesEqual(tt.want, durableUser))
 		})
 	}
 }
 
-func assertTypedUserPreserved(
+func TestGraphAgent_RunContentPartsRewriteUsesStringOverride(t *testing.T) {
+	const (
+		yes              = "yes"
+		imageA           = "https://example.com/image-a.png"
+		imageB           = "https://example.com/image-b.png"
+		approved         = "approved"
+		originalQuestion = "original question"
+		preparedQuestion = "prepared(original question)"
+		customKey        = "custom_input"
+		fromCustom       = "from-custom"
+	)
+	yesText := yes
+	originalText := originalQuestion
+	preparedText := preparedQuestion
+
+	t.Run("merged duplicate text sends the explicit input", func(t *testing.T) {
+		requests := make(chan []model.Message, 1)
+		var durableUser model.Message
+		recordingModel := &requestRecordingGraphAgentModel{requests: requests}
+		prior := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &yesText},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageA}},
+			},
+		}
+		current := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &yesText},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
+			},
+		}
+		stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
+			AddNode("prepare", func(_ context.Context, _ graph.State) (any, error) {
+				return graph.State{graph.StateKeyUserInput: approved}, nil
+			}).
+			AddLLMNode("llm", recordingModel, "", nil).
+			AddNode("capture", func(_ context.Context, state graph.State) (any, error) {
+				durableUser = lastUserMessage(state)
+				return nil, nil
+			}).
+			AddEdge("prepare", "llm").
+			AddEdge("llm", "capture").
+			SetEntryPoint("prepare").
+			SetFinishPoint("capture")
+		g, err := stateGraph.Compile()
+		require.NoError(t, err)
+		graphAgent, err := New("test-agent", g)
+		require.NoError(t, err)
+
+		first := event.NewResponseEvent("inv-first", "user", &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: prior}},
+		})
+		first.RequestID = "request-first"
+		errorEvent := event.NewErrorEvent(
+			"inv-first",
+			"test-agent",
+			model.ErrorTypeFlowError,
+			"boom",
+		)
+		errorEvent.RequestID = "request-first"
+		errorEvent.Response.Choices = []model.Choice{{
+			Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+		}}
+		errorcontent.MarkSynthetic(errorEvent)
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-current"),
+			agent.WithInvocationMessage(current),
+			agent.WithInvocationSession(&session.Session{
+				ID:     "sid",
+				Events: []event.Event{*first, *errorEvent},
+			}),
+			agent.WithInvocationEventFilterKey("test-agent"),
+		)
+		invocation.RunOptions.RequestID = "request-current"
+		runGraphAgentToCompletion(t, graphAgent, invocation)
+
+		messages := <-requests
+		require.Equal(t, []model.Message{model.NewUserMessage(approved)}, messages)
+		require.True(t, model.MessagesEqual(model.Message{
+			Role:    model.RoleUser,
+			Content: approved,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &yesText},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageA}},
+				{Type: model.ContentTypeText, Text: &yesText},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
+			},
+		}, durableUser))
+	})
+
+	t.Run("prepared message and custom input send the custom input", func(t *testing.T) {
+		requests := make(chan []model.Message, 1)
+		var durableUser model.Message
+		recordingModel := &requestRecordingGraphAgentModel{requests: requests}
+		current := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &originalText},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
+			},
+		}
+		stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
+			AddNode("prepare", func(_ context.Context, state graph.State) (any, error) {
+				messages, _ := graph.GetStateValue[[]model.Message](
+					state,
+					graph.StateKeyMessages,
+				)
+				if len(messages) == 0 || len(messages[len(messages)-1].ContentParts) == 0 {
+					return nil, errors.New("current user message has no content parts")
+				}
+				last := messages[len(messages)-1]
+				last.ContentParts[0] = model.ContentPart{
+					Type: model.ContentTypeText,
+					Text: &preparedText,
+				}
+				messages[len(messages)-1] = last
+				return graph.State{
+					customKey: fromCustom,
+					graph.StateKeyMessages: []graph.MessageOp{
+						graph.RemoveAllMessages{},
+						graph.AppendMessages{Items: messages},
+					},
+				}, nil
+			}).
+			AddLLMNode("llm", recordingModel, "", nil, graph.WithUserInputKey(customKey)).
+			AddNode("capture", func(_ context.Context, state graph.State) (any, error) {
+				durableUser = lastUserMessage(state)
+				return nil, nil
+			}).
+			AddEdge("prepare", "llm").
+			AddEdge("llm", "capture").
+			SetEntryPoint("prepare").
+			SetFinishPoint("capture")
+		g, err := stateGraph.Compile()
+		require.NoError(t, err)
+		graphAgent, err := New("test-agent", g)
+		require.NoError(t, err)
+
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-current"),
+			agent.WithInvocationMessage(current),
+			agent.WithInvocationSession(&session.Session{ID: "sid"}),
+			agent.WithInvocationEventFilterKey("test-agent"),
+		)
+		invocation.RunOptions.RequestID = "request-current"
+		runGraphAgentToCompletion(t, graphAgent, invocation)
+
+		messages := <-requests
+		require.Equal(t, []model.Message{model.NewUserMessage(fromCustom)}, messages)
+		require.True(t, model.MessagesEqual(model.Message{
+			Role:    model.RoleUser,
+			Content: fromCustom,
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &preparedText},
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
+			},
+		}, durableUser))
+	})
+}
+
+func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
+	const (
+		agentName  = "parts-resume"
+		imageURL   = "https://example.invalid/a.png"
+		otherImage = "https://example.invalid/b.png"
+		original   = "describe image"
+		other      = "other caption"
+		rewrite    = "approved"
+		customKey  = "custom_input"
+		customText = "from-custom"
+	)
+	originalMessage := contentPartsUserMessage(original, imageURL)
+
+	tests := []struct {
+		name          string
+		inputKey      string
+		inputValue    string
+		resumeMessage model.Message
+	}{
+		{
+			name:          "plain resume keeps the saved multimodal message",
+			resumeMessage: model.NewUserMessage("resume"),
+		},
+		{
+			name:          "different parts resume keeps the saved multimodal message",
+			resumeMessage: contentPartsUserMessage(other, otherImage),
+		},
+		{
+			name:          "saved user_input rewrite sends the text override",
+			inputKey:      graph.StateKeyUserInput,
+			inputValue:    rewrite,
+			resumeMessage: contentPartsUserMessage(rewrite, otherImage),
+		},
+		{
+			name:          "saved custom input sends the text override",
+			inputKey:      customKey,
+			inputValue:    customText,
+			resumeMessage: contentPartsUserMessage(customText, otherImage),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := make(chan []model.Message, 2)
+			recording := &requestRecordingGraphAgentModel{requests: requests}
+			saver := checkpointmemory.NewSaver()
+			var prepares atomic.Int32
+			stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
+			if tt.inputKey != "" {
+				key, value := tt.inputKey, tt.inputValue
+				stateGraph.AddNode("prepare", func(context.Context, graph.State) (any, error) {
+					prepares.Add(1)
+					return graph.State{key: value}, nil
+				})
+			}
+			var llmOpts []graph.Option
+			if tt.inputKey != "" && tt.inputKey != graph.StateKeyUserInput {
+				llmOpts = append(llmOpts, graph.WithUserInputKey(tt.inputKey))
+			}
+			stateGraph.AddLLMNode("llm", recording, "", nil, llmOpts...)
+			if tt.inputKey != "" {
+				stateGraph.AddEdge("prepare", "llm").SetEntryPoint("prepare")
+			} else {
+				stateGraph.SetEntryPoint("llm")
+			}
+			g, err := stateGraph.SetFinishPoint("llm").Compile()
+			require.NoError(t, err)
+			graphAgent, err := New(agentName, g, WithCheckpointSaver(saver))
+			require.NoError(t, err)
+
+			lineage := "lineage-" + tt.name
+			runParts := func(message model.Message, runtime graph.State, id string) {
+				t.Helper()
+				invocation := agent.NewInvocation(
+					agent.WithInvocationID(id),
+					agent.WithInvocationMessage(message),
+					agent.WithInvocationSession(&session.Session{ID: "sid"}),
+					agent.WithInvocationEventFilterKey(agentName),
+				)
+				invocation.RunOptions.RequestID = id
+				invocation.RunOptions.RuntimeState = runtime
+				runGraphAgentToCompletion(t, graphAgent, invocation)
+			}
+
+			baseRuntime := graph.State{
+				graph.CfgKeyLineageID:    lineage,
+				graph.CfgKeyCheckpointNS: agentName,
+			}
+			runParts(contentPartsUserMessage(original, imageURL), baseRuntime, "first")
+			checkpoint := findPartsOriginCheckpoint(t, saver, lineage, agentName, tt.inputKey == "", func(values map[string]any) bool {
+				if values[partsuserinput.Key] != original {
+					return false
+				}
+				if tt.inputKey == "" {
+					return values[graph.StateKeyUserInput] == original
+				}
+				return values[tt.inputKey] == tt.inputValue
+			})
+			resumedRuntime := graph.State{
+				graph.CfgKeyLineageID:    lineage,
+				graph.CfgKeyCheckpointNS: agentName,
+				graph.CfgKeyCheckpointID: checkpoint.ID,
+			}
+			runParts(tt.resumeMessage, resumedRuntime, "resumed")
+			if tt.inputKey != "" {
+				require.Equal(t, int32(1), prepares.Load())
+			}
+			want := originalMessage
+			if tt.inputKey != "" {
+				want = model.NewUserMessage(tt.inputValue)
+			}
+			require.Len(t, requests, 2)
+			for i := 0; i < 2; i++ {
+				messages := <-requests
+				require.NotEmpty(t, messages)
+				require.True(t, model.MessagesEqual(want, messages[len(messages)-1]))
+			}
+		})
+	}
+}
+
+func findPartsOriginCheckpoint(
 	t *testing.T,
-	msg model.Message,
-	wantContent string,
-	wantTexts []string,
-	wantNoTexts []string,
-	wantImage bool,
-	wantFile bool,
-	wantAnnot bool,
-) {
+	saver *checkpointmemory.Saver,
+	lineage string,
+	namespace string,
+	inputCheckpoint bool,
+	match func(map[string]any) bool,
+) *graph.Checkpoint {
 	t.Helper()
-	require.Equal(t, model.RoleUser, msg.Role)
-	require.Equal(t, wantContent, msg.Content)
-	if wantAnnot {
-		require.True(t, messageHasAttachedFilesAnnotation(msg))
+	tuples, err := saver.List(
+		context.Background(),
+		graph.CreateCheckpointConfig(lineage, "", namespace),
+		nil,
+	)
+	require.NoError(t, err)
+	var described []string
+	for _, tuple := range tuples {
+		if tuple == nil || tuple.Checkpoint == nil || tuple.Metadata == nil {
+			continue
+		}
+		described = append(described, fmt.Sprintf(
+			"%s:%d",
+			tuple.Metadata.Source,
+			tuple.Metadata.Step,
+		))
+		if tuple.Metadata.Source == graph.CheckpointSourceInput && tuple.Metadata.Step == -1 {
+			if inputCheckpoint && match(tuple.Checkpoint.ChannelValues) {
+				return tuple.Checkpoint
+			}
+			continue
+		}
+		if !inputCheckpoint && tuple.Metadata.Source == graph.CheckpointSourceLoop && match(tuple.Checkpoint.ChannelValues) {
+			userInput, _ := tuple.Checkpoint.ChannelValues[graph.StateKeyUserInput].(string)
+			if userInput == "" {
+				continue
+			}
+			return tuple.Checkpoint
+		}
 	}
-	if wantFile {
-		require.True(t, messageHasFilePart(msg))
-	}
-	if wantImage {
-		require.True(t, messageHasImagePart(msg))
-	}
-	for _, want := range wantTexts {
-		require.True(t, messageHasTextPart(msg, want), "missing text %q", want)
-	}
-	for _, refuse := range wantNoTexts {
-		require.False(t, messageHasTextPart(msg, refuse), "stale text %q", refuse)
+	t.Fatalf("parts checkpoint not found in %s", strings.Join(described, ", "))
+	return nil
+}
+
+func contentPartsUserMessage(text, imageURL string) model.Message {
+	return model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: imageURL}},
+		},
 	}
 }
 
-func messageHasTextPart(msg model.Message, want string) bool {
-	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil && *part.Text == want {
-			return true
+func lastUserMessage(state graph.State) model.Message {
+	messages, _ := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleUser {
+			return messages[i]
 		}
 	}
-	return false
+	return model.Message{}
 }
 
-func messageHasFilePart(msg model.Message) bool {
-	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeFile && part.File != nil {
-			return true
+func runGraphAgentToCompletion(t *testing.T, graphAgent *GraphAgent, invocation *agent.Invocation) {
+	t.Helper()
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for evt := range events {
+		if evt != nil && evt.Error != nil {
+			t.Fatalf("run event error: %+v", evt.Error)
+		}
+		if evt != nil && evt.RequiresCompletion {
+			require.NoError(t, invocation.NotifyCompletion(
+				context.Background(),
+				agent.GetAppendEventNoticeKey(evt.ID),
+			))
 		}
 	}
-	return false
-}
-
-func messageHasImagePart(msg model.Message) bool {
-	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeImage && part.Image != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func messageHasAttachedFilesAnnotation(msg model.Message) bool {
-	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeText &&
-			part.Text != nil &&
-			strings.HasPrefix(strings.TrimSpace(*part.Text), "Attached files") {
-			return true
-		}
-	}
-	return false
 }
 
 // mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.

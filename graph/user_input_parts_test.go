@@ -10,198 +10,246 @@
 package graph
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/partsuserinput"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestRetainTypedUserMessage(t *testing.T) {
-	hello, world, annot := "hello", "world", "annotation"
+	hello, world := "hello", "world"
 	image, file := imagePart(), filePart()
-	helloWorldInv := invState(userMsg("", textPart(hello), textPart(world), file))
-	interleavedInv := invState(userMsg("", textPart(hello), image, textPart(world)))
-	merged := userMsg("first", textPart(annot), textPart(hello), textPart(world), file)
+	original := hello + "\n" + world
+	saved := State{partsuserinput.Key: original}
+	merged := userMsg("first", textPart("annotation"), textPart(hello), textPart(world), file)
+	liveOther := State{
+		partsuserinput.Key: original,
+		StateKeyExecContext: &ExecutionContext{
+			Invocation: &agent.Invocation{
+				Message: userMsg("", textPart("other"), image),
+			},
+		},
+	}
 
 	tests := []struct {
 		name      string
 		state     State
 		last      model.Message
 		userInput string
-		wantOK    bool
-		want      model.Message
+		want      bool
 	}{
 		{
 			name:  "empty user input",
-			state: helloWorldInv,
+			state: saved,
 			last:  userMsg("", textPart(hello)),
 		},
 		{
 			name:      "last without content parts",
-			state:     helloWorldInv,
-			last:      model.NewUserMessage(hello),
-			userInput: hello + "\n" + world,
+			state:     saved,
+			last:      model.NewUserMessage(original),
+			userInput: original,
 		},
 		{
-			name: "content plus parts invocation is ineligible",
-			state: invState(model.Message{
-				Role:         model.RoleUser,
-				Content:      hello,
-				ContentParts: []model.ContentPart{textPart(hello), image},
-			}),
-			last:      userMsg("", textPart(hello), image),
-			userInput: hello,
-		},
-		{
-			name:      "unchanged baseline keeps merged content and extra parts",
-			state:     helloWorldInv,
+			name:      "missing origin keeps legacy text override",
+			state:     invState(userMsg("", textPart(hello), textPart(world), file)),
 			last:      merged,
-			userInput: hello + "\n" + world,
-			wantOK:    true,
-			want:      merged,
+			userInput: original,
 		},
 		{
-			name:      "rewrite later window after leading text keeps that part",
-			state:     helloWorldInv,
-			last:      userMsg("", textPart(annot), textPart(hello), textPart(world), file),
-			userInput: hello,
-			wantOK:    true,
-			want:      userMsg("", textPart(annot), textPart(hello), file),
-		},
-		{
-			name:      "rewrite interleaved text-image-text keeps image and content",
-			state:     interleavedInv,
-			last:      userMsg("first", textPart(hello), image, textPart(world)),
-			userInput: hello,
-			wantOK:    true,
-			want:      userMsg("first", textPart(hello), image),
-		},
-		{
-			name:      "unmatched media fail-closed keeps last",
-			state:     helloWorldInv,
-			last:      userMsg("", textPart(hello), image),
-			userInput: "rewritten",
-			wantOK:    true,
-			want:      userMsg("", textPart(hello), image),
-		},
-		{
-			name:      "unmatched text-only falls through",
-			state:     helloWorldInv,
-			last:      userMsg("", textPart(hello)),
-			userInput: "rewritten",
-		},
-		{
-			name:      "empty invocation baseline keeps media last",
-			state:     invState(userMsg("", image)),
+			name:      "empty origin is ignored",
+			state:     State{partsuserinput.Key: ""},
 			last:      userMsg("", textPart(hello), image),
 			userInput: hello,
-			wantOK:    true,
-			want:      userMsg("", textPart(hello), image),
+		},
+		{
+			name:      "non-string origin is ignored",
+			state:     State{partsuserinput.Key: 1},
+			last:      userMsg("", textPart(hello), image),
+			userInput: hello,
+		},
+		{
+			name:      "unchanged original keeps typed message",
+			state:     saved,
+			last:      merged,
+			userInput: original,
+			want:      true,
+		},
+		{
+			name:      "saved origin overrides a different live invocation",
+			state:     liveOther,
+			last:      merged,
+			userInput: original,
+			want:      true,
+		},
+		{
+			name:      "live invocation cannot make a rewrite match",
+			state:     liveOther,
+			last:      userMsg("", textPart(hello), image),
+			userInput: "other",
+		},
+		{
+			name:      "partial text is not the original",
+			state:     saved,
+			last:      userMsg("", textPart("annotation"), textPart(hello), textPart(world), file),
+			userInput: hello,
+		},
+		{
+			name:      "rewritten input falls through",
+			state:     saved,
+			last:      userMsg("", textPart(hello), image),
+			userInput: "rewritten",
+		},
+		{
+			name:      "nil state",
+			last:      userMsg("", textPart(hello), image),
+			userInput: hello,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := retainTypedUserMessage(tt.state, tt.last, tt.userInput)
-			require.Equal(t, tt.wantOK, ok)
-			require.True(t, model.MessagesEqual(tt.want, got))
+			require.Equal(t, tt.want, retainTypedUserMessage(tt.state, tt.last, tt.userInput))
 		})
 	}
 }
 
-func TestRewriteContentPartsUserText(t *testing.T) {
-	hello, world, empty := "hello", "world", ""
-	image := imagePart()
-	tests := []struct {
-		name      string
-		msg       model.Message
-		original  string
-		userInput string
-		wantOK    bool
-		want      model.Message
-	}{
-		{name: "empty original", msg: userMsg("", textPart(hello), image), userInput: hello},
-		{
-			name:      "user input equals original",
-			msg:       userMsg("", textPart(hello), textPart(world)),
-			original:  hello + "\n" + world,
-			userInput: hello + "\n" + world,
-		},
-		{name: "empty parts", msg: model.NewUserMessage(hello), original: hello, userInput: world},
-		{
-			name: "skips empty and nil text parts",
-			msg: userMsg("",
-				model.ContentPart{Type: model.ContentTypeText},
-				model.ContentPart{Type: model.ContentTypeText, Text: &empty},
-				image,
-			),
-			original:  hello,
-			userInput: world,
-		},
-		{
-			name:      "single text window keeps image",
-			msg:       userMsg("", textPart(hello), image),
-			original:  hello,
-			userInput: world,
-			wantOK:    true,
-			want:      userMsg("", textPart(world), image),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := rewriteContentPartsUserText(tt.msg, tt.original, tt.userInput)
-			require.Equal(t, tt.wantOK, ok)
-			require.True(t, model.MessagesEqual(tt.want, got))
-		})
-	}
-}
-
-func TestInvocationContentPartsHelpers(t *testing.T) {
+func TestPartsUserInputSurvivesClearAndReuse(t *testing.T) {
 	hello, world := "hello", "world"
-	image := imagePart()
-	tests := []struct {
-		name      string
-		state     State
-		partsOnly bool
-		text      string
-	}{
-		{name: "nil state"},
-		{name: "empty state", state: State{}},
-		{name: "wrong-type exec context", state: State{StateKeyExecContext: "x"}},
-		{name: "nil invocation", state: State{StateKeyExecContext: &ExecutionContext{}}},
-		{
-			name:      "parts only",
-			state:     invState(userMsg("", textPart(hello), image, textPart(world))),
-			partsOnly: true,
-			text:      hello + "\n" + world,
-		},
-		{
-			name: "content wins",
-			state: invState(model.Message{
-				Content:      hello,
-				ContentParts: []model.ContentPart{textPart(world), image},
-			}),
-			text: hello,
+	original := hello + "\n" + world
+	last := userMsg("", textPart("annotation"), textPart(hello), textPart(world), imagePart())
+	state := State{
+		StateKeyMessages:   []model.Message{last},
+		StateKeyUserInput:  original,
+		partsuserinput.Key: original,
+		StateKeyExecContext: &ExecutionContext{
+			Invocation: &agent.Invocation{
+				Message: userMsg("", textPart("other"), imagePart()),
+			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.partsOnly, invocationIsContentPartsOnly(tt.state))
-			require.Equal(t, tt.text, invocationTextContent(tt.state))
-		})
-	}
-	require.False(t, hasNonTextContentPart(userMsg("", textPart(hello))))
-	require.True(t, hasNonTextContentPart(userMsg("", image)))
-	require.False(t, nonEmptyTextPart(model.ContentPart{Type: model.ContentTypeText}))
-	require.False(t, nonEmptyTextPart(model.ContentPart{Type: model.ContentTypeText, Text: ptr("")}))
-	require.False(t, nonEmptyTextPart(image))
-	require.True(t, nonEmptyTextPart(textPart(hello)))
+	recording := &recordingModel{}
+	runner := &llmRunner{llmModel: recording, nodeID: "llm"}
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test")
+	ctx, span := tracer.Start(context.Background(), "test")
+	defer span.End()
+
+	result, err := runner.executeUserInputStage(
+		ctx,
+		state,
+		StateKeyUserInput,
+		original,
+		span,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, recording.lastMessages)
+	require.True(t, model.MessagesEqual(last, recording.lastMessages[len(recording.lastMessages)-1]))
+
+	update := result.(State)
+	require.Equal(t, "", update[StateKeyUserInput])
+	require.NotContains(t, update, partsuserinput.Key)
+
+	next := MessagesStateSchema().ApplyUpdate(state, update)
+	require.Equal(t, original, next[partsuserinput.Key])
+	require.Equal(t, "", next[StateKeyUserInput])
+
+	kept := next.Clone()
+	kept[StateKeyMessages] = []model.Message{last}
+	kept[StateKeyUserInput] = original
+	_, err = runner.executeUserInputStage(ctx, kept, StateKeyUserInput, original, span)
+	require.NoError(t, err)
+	require.True(t, model.MessagesEqual(last, recording.lastMessages[len(recording.lastMessages)-1]))
+
+	rewritten := next.Clone()
+	rewritten[StateKeyMessages] = []model.Message{last}
+	_, err = runner.executeUserInputStage(ctx, rewritten, "custom_input", "rewritten", span)
+	require.NoError(t, err)
+	got := recording.lastMessages[len(recording.lastMessages)-1]
+	require.Equal(t, model.NewUserMessage("rewritten"), got)
 }
 
-func invState(msg model.Message) State {
-	return State{StateKeyExecContext: &ExecutionContext{
-		Invocation: &agent.Invocation{Message: msg},
+func TestPartsUserInputStatePolicy(t *testing.T) {
+	const origin = "hello\nworld"
+	require.True(t, isInternalStateKey(partsuserinput.Key))
+	require.False(t, isUnsafeStateKey(partsuserinput.Key))
+	require.True(t, isProtectedTimeTravelKey(partsuserinput.Key))
+
+	state := State{
+		partsuserinput.Key:  origin,
+		StateKeyUserInput:   origin,
+		StateKeyExecContext: &ExecutionContext{InvocationID: "inv"},
+	}
+	cloned := state.safeClone()
+	require.Equal(t, origin, cloned[partsuserinput.Key])
+	require.NotContains(t, cloned, StateKeyExecContext)
+	cached, ok := sanitizeForCacheKey(state).(State)
+	require.True(t, ok)
+	require.Equal(t, origin, cached[partsuserinput.Key])
+	copied := NewCheckpoint(cloned, nil, nil).Copy()
+	require.Equal(t, origin, copied.ChannelValues[partsuserinput.Key])
+
+	execCtx := &ExecutionContext{State: State{
+		partsuserinput.Key: origin,
+		"x":                1,
 	}}
+	(&Executor{}).updateStateFromResult(execCtx, State{
+		partsuserinput.Key: "hijack",
+		"x":                2,
+	})
+	require.Equal(t, origin, execCtx.State[partsuserinput.Key])
+	require.Equal(t, 2, execCtx.State["x"])
+
+	updated := NewStateSchema().ApplyUpdate(State{
+		partsuserinput.Key: origin,
+		"x":                1,
+	}, State{
+		partsuserinput.Key: "hijack",
+		"y":                2,
+	})
+	require.Equal(t, origin, updated[partsuserinput.Key])
+	require.Equal(t, 2, updated["y"])
+	injected := NewStateSchema().ApplyUpdate(State{"x": 1}, State{
+		partsuserinput.Key: "hijack",
+	})
+	require.NotContains(t, injected, partsuserinput.Key)
+
+	child := copyRuntimeStateFiltered(state)
+	require.NotContains(t, child, partsuserinput.Key)
+	require.NotContains(t, child, StateKeyExecContext)
+	require.Equal(t, origin, child[StateKeyUserInput])
+
+	event := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv"),
+		WithCompletionEventFinalState(state),
+	)
+	require.NotContains(t, event.StateDelta, partsuserinput.Key)
+	require.Contains(t, event.StateDelta, StateKeyUserInput)
+
+	saved := State{
+		partsuserinput.Key: origin,
+		StateKeyUserInput:  origin,
+	}
+	override := map[string]struct{}{
+		partsuserinput.Key: {},
+		StateKeyUserInput:  {},
+	}
+	merged := (&Executor{}).mergeInitialStateNonInternal(saved, State{
+		partsuserinput.Key: "live",
+		StateKeyUserInput:  "live",
+	}, override)
+	require.Equal(t, origin, merged[partsuserinput.Key])
+	require.Equal(t, "live", merged[StateKeyUserInput])
+
+	legacy := (&Executor{}).mergeInitialStateNonInternal(State{
+		StateKeyUserInput: origin,
+	}, State{
+		partsuserinput.Key: "live",
+	}, override)
+	require.NotContains(t, legacy, partsuserinput.Key)
+	require.Equal(t, origin, legacy[StateKeyUserInput])
 }
 
 func userMsg(content string, parts ...model.ContentPart) model.Message {
@@ -226,4 +274,8 @@ func filePart() model.ContentPart {
 	}
 }
 
-func ptr(s string) *string { return &s }
+func invState(msg model.Message) State {
+	return State{StateKeyExecContext: &ExecutionContext{
+		Invocation: &agent.Invocation{Message: msg},
+	}}
+}

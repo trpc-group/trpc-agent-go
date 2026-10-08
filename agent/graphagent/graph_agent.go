@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/partsuserinput"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	utilmessage "trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -495,6 +496,12 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		appendNonUserInvocationMessage(initialState, invocation.Message)
 	}
 
+	// Drop an inherited parts-only origin so a fresh turn cannot keep a stale
+	// seed from initial or runtime state. Resume merge ignores keys that
+	// start with "_", so deleting or replacing it here cannot override a
+	// checkpoint value.
+	delete(initialState, partsuserinput.Key)
+
 	// Project the current user turn onto StateKeyUserInput.
 	// Agent Builder / AG-UI often encode ordinary text in ContentParts with
 	// empty Content. Prefer Content unchanged when it is non-empty; otherwise
@@ -506,6 +513,12 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		!(isResuming && isPlainResumeInput(invocation.Message)) {
 		if userInput := utilmessage.TextContent(invocation.Message); userInput != "" {
 			initialState[graph.StateKeyUserInput] = userInput
+			// Record the origin only for a nonempty ContentParts-only user
+			// turn. Nonempty Content stays authoritative and leaves no origin.
+			if invocation.Message.Content == "" &&
+				len(invocation.Message.ContentParts) > 0 {
+				initialState[partsuserinput.Key] = userInput
+			}
 		}
 	}
 	// Add session context if available.
