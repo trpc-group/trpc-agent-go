@@ -19,25 +19,109 @@ The managed file-system boundary is designed around three rules:
    the workspace.
 2. Reads and writes are resolved through the file-system policy. More specific
    rules win first; equally specific rules use `none > write > read`.
+   Native backends reject layouts they cannot enforce. On Linux, an explicit
+   child grant beneath an existing no-access mask returns `ErrPolicyViolation`
+   because the final parent mask would hide the granted resource.
 3. Protected metadata paths are never writable, even if they are under a writable
    workspace grant. The default protected set is `.git`, `.agents`, and
    `.trpc-agent-sandbox`.
 
-This boundary is backend-specific at the OS layer. On Linux, host-root profiles
-(`ReadOnlyProfile` and `WorkspaceWriteProfile`) start with a read-only bind
-mount of `/`, then hide sibling session directories, mask common credential
-paths, and add writable bind mounts for explicit external write grants.
-`WorkspaceWriteProfile` additionally makes the workspace writable. That
-host-root view keeps installed tools working; it is not a
-confidentiality boundary for arbitrary host files. `WithLinuxNoHostRoot`
-does not bind `/`; it mounts only runtime directories, the session workspace,
-and explicit grants. On macOS, managed execution starts from a Seatbelt
-deny-default profile, adds selected platform read defaults required by common
-tools, and then grants the workspace and explicit external paths. Sensitive
-files that must not be readable should be covered by no-access denials, for
-example through `WithNoAccessPaths` or `WithNoAccessGlobs`, kept outside the
-host paths visible to the sandbox, or avoided on Linux with
-`WithLinuxNoHostRoot`.
+Concrete grants authorize the resolved resource; granting a parent directory
+does not authorize external targets reached through descendant symlinks.
+Concrete no-access rules match both lexical and resolved paths. Workspace-relative
+glob checks in file APIs also examine the resolved workspace-relative path, so a
+directory symlink cannot hide a denied resource. Directory staging checks each
+source entry for read access and each destination for write access; copying an
+allowed parent does not authorize its denied descendants. Host staging checks
+both the source spelling and canonical resource. Workspace grants do not
+authorize external targets reached through ancestor symlinks.
+
+## Read Mode and Migration
+
+`PermissionProfile.WithReadMode` selects the fallback for filesystem reads on
+all platforms:
+
+- `ReadModeGranted` permits reads only through effective filesystem grants.
+  Write grants also grant reads. This is the default for an unset or empty
+  mode, `ReadOnlyProfile()`, and `WorkspaceWriteProfile()`.
+- `ReadModeHost` permits reads the host process could perform when no path rule
+  determines access. Explicit rules, credentials, sessions, and metadata remain
+  protected. It provides broader host access and does not promise confidentiality
+  for arbitrary host files.
+- Unknown values are preserved by the builder and rejected with
+  `ErrPolicyViolation` when creating workspaces, executing programs, or using
+  filesystem operations. Construction does not return an error. Cleanup remains
+  available even for an invalid profile.
+
+This is an intentional change to the previous Linux default that exposed the
+host root read-only. Callers that need additional resources should grant them
+with `WithReadPaths` or `WithWritePaths`, including executables installed outside
+runtime roots. To opt into broad host reads explicitly:
+
+```go
+profile := sandbox.WorkspaceWriteProfile().WithReadMode(sandbox.ReadModeHost)
+```
+
+Setting the read mode preserves existing path rules; adding paths preserves
+that mode. `WithReadMode(mode).WithReadPaths(path)` and the reverse order have
+the same permissions. In host mode, read grants do not narrow host fallback
+reads to an allowlist. The same independence applies to write and no-access
+path rules.
+
+Replace existing `WithLinuxNoHostRoot()` calls with
+`WithReadMode(ReadModeGranted)`. Built-in profiles now provide that Linux
+private-root behavior by default. Mode does not change environment inheritance,
+networking, or the enforcement modes of `DangerFullAccessProfile` and
+`ExternalSandboxProfile`.
+
+## Platform Runtime Grants
+
+Both built-in managed profiles explicitly include the following read-only path
+rules. Missing runtime paths are optional; explicit caller grants still require
+an available source. Symlinks resolve to their existing targets. Devices, process
+views, filesystem traversal metadata, and platform IPC facilities are separately
+constructed or allowed by the backend.
+
+### Linux
+
+- Directories: `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/lib32`.
+- Loader configuration: `/etc/ld.so.cache`, `/etc/ld.so.conf`, `/etc/ld.so.conf.d`.
+- Command shims: `/etc/alternatives` (Debian-family links such as `/usr/bin/awk`).
+- Public system configuration: `/etc/passwd`, `/etc/group`, `/etc/nsswitch.conf`,
+  `/etc/hosts`, `/etc/resolv.conf`, `/etc/services`, `/etc/protocols`,
+  `/etc/shells`, `/etc/localtime`.
+- Public certificates: `/etc/ssl/certs`, `/etc/pki/tls/certs`,
+  `/etc/pki/ca-trust/extracted`.
+
+The full `/etc` and host home directories are not default runtime grants.
+Application configuration and `/etc/ssl/private` need explicit grants.
+
+### macOS
+
+- Applications and tool support: `/Applications`, `/Library/Apple`,
+  `/Library/Developer`, `/Library/Developer/CommandLineTools`,
+  `/Library/Filesystems/NetFSPlugins`, `/Library/Perl`, `/Library/Preferences`,
+  `/Library/Preferences/Logging`.
+- System libraries: `/System/Library/CoreServices`, `/System/Library/Frameworks`,
+  `/System/Library/Perl`, `/System/Library/PrivateFrameworks`,
+  `/System/Library/SubFrameworks`.
+- Programs and libraries: `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/lib`,
+  `/usr/libexec`, `/usr/share`, `/usr/local/lib`, `/opt/homebrew/lib`.
+- Public configuration: `/etc/passwd`, `/etc/group`, `/etc/hosts`,
+  `/etc/resolv.conf`, `/etc/localtime`, `/etc/services`, `/etc/protocols`,
+  `/etc/shells`, `/etc/paths`, `/etc/paths.d`.
+- Public certificates: `/etc/ssl/cert.pem`, `/etc/ssl/certs`.
+- System validation data: `/private/var/db/DetachedSignatures`,
+  `/private/var/db/SystemPolicyConfiguration`, `/private/var/db/crls`.
+- Time zone data: `/private/var/db/timezone` (the target of `/etc/localtime`).
+- Tool selection: `/private/var/select`, `/var/select`.
+
+The full `/etc`, `/private/etc`, `/var/db`, and `/private/var/db` are not default
+runtime grants. In particular, the local account database is outside these grants.
+macOS allows limited metadata for host temporary-directory ancestors without
+allowing their file contents. Sandbox initialization requires reading the root
+directory itself; the backend permits its entry names and metadata with a
+literal filter that grants no access to descendant file contents.
 
 ## Rule Targets
 
@@ -76,15 +160,19 @@ that subtree read-only.
 
 The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
 
-- Host-root profiles use `--ro-bind / /` so the command has a read-only view of
-  the host root. That does **not** provide confidentiality for arbitrary host
-  files. Read-only mounts also do **not** block `connect(2)` on visible Unix
-  domain socket files. On `NetworkRestricted` Linux profiles, the AF_UNIX
-  seccomp filter described in [`NETWORK_POLICY.md`](NETWORK_POLICY.md) is what
-  prevents the guest from creating sockets to use those paths.
-- After the host-root bind, the backend tmpfs-masks the sessions parent
-  (`<workspaceRoot>/sandbox`) and re-binds only the current session workspace,
-  so sibling sessions are not readable.
+- `ReadModeGranted` starts with a private root and only binds granted runtime
+  resources, workspace paths, and additional paths. It creates empty ancestors
+  to reach grant destinations; it does not bind host parents to make a workspace
+  reachable. `/tmp` is private by default.
+- `ReadModeHost` starts with `--ro-bind / /`. Read-only mounts do not protect
+  arbitrary host data or prevent Unix socket connections. Under
+  `NetworkRestricted`, the AF_UNIX filter described in
+  [`NETWORK_POLICY.md`](NETWORK_POLICY.md) prevents those connections.
+- External parent grants are applied before session protection. The backend
+  hides `<workspaceRoot>/sandbox` and restores only the current workspace and its
+  descendants. Explicit symlink bind views receive the same protection. A grant
+  to another session cannot reopen it. Private device and process views are also
+  established after parent grants.
 - Common credential paths such as `~/.ssh`, `~/.aws`, `~/.kube`, and
   `/etc/shadow` are masked unless the caller grants that exact path with
   `WithReadPaths` / `WithWritePaths`. A parent grant such as `$HOME`, or a
@@ -94,47 +182,62 @@ The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
   Explicit no-access masks are applied after these credential child binds so a
   more-specific denial remains effective. Existing credential symlinks are
   resolved before the mask is mounted.
-- `WithLinuxNoHostRoot` uses `--ro-bind-try` for runtime directories
-  (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/lib32`) instead of binding `/`.
-  It shares selected `/etc` files for dynamic loading, user/group lookup, DNS,
-  time zones, and public CA certificates; it does not mount the entire `/etc`.
-  Application configuration and `/etc/ssl/private` require explicit grants.
-  The workspace is mounted read-only before any permitted writable mounts, so
-  this option also works with `ReadOnlyProfile()`. Home credential
-  masks are omitted unless an explicit absolute grant makes that subtree
-  visible, such as `WithReadPaths($HOME)`. A parent grant still does not
-  re-open the credential directory; only an exact path grant does.
+- Built-in runtime grants use `--ro-bind-try` in both modes so their more-specific
+  read rules remain effective after explicit ancestor write grants. The workspace
+  is restored read-only before writable mounts, supporting both built-in profiles.
+  More-specific read/write mounts follow parent mounts, including workspace
+  resources addressed through explicit external aliases. Missing home credential
+  masks are unnecessary when their subtrees are absent from the view.
 - `--bind <workspace> <workspace>` makes the sandbox workspace writable.
 - Explicit absolute read grants are added with `--ro-bind`.
 - Explicit absolute write grants are added with `--bind`.
 - Protected metadata paths are re-mounted read-only.
+- Read/write carve-outs and protections apply to every bind view of the same
+  resource, including workspace root aliases and external parent aliases.
+- Bind mounts follow symbolic links and cannot protect the link entry itself.
+  When a metadata, credential, no-access, or effective read-only path contains a
+  symlink whose physical parent remains writable, the backend returns
+  `ErrPolicyViolation` before starting the program. Use a read-only parent or an
+  ordinary protected path. Exact credential write grants retain their exemption;
+  credential-child write grants still respect more-specific no-access rules.
 - No-access path, built-in directory, and glob matches are covered by unreadable masks:
   files are replaced with a zero-permission mask file, and directories are
   covered by an empty `tmpfs`.
 - Linux runs drop all process capabilities before executing the command, so a
   process cannot remove these mounts with `umount(2)`.
 
-Credential masks are built from paths that exist when the sandbox starts. A
-host-root profile remains a live read-only bind of the host filesystem, so a
+Credential masks are built from paths that exist when the sandbox starts. Host
+scope and explicit parent grants remain live views of their host sources, so a
 credential path created later by another host process is outside this
-startup-time denylist guarantee. Use `WithLinuxNoHostRoot` without a
+startup-time denylist guarantee. Use `ReadModeGranted` without a
 parent home grant when this race is unacceptable.
+
+The fixed credential locations are `/etc/shadow`, `/etc/gshadow`, and these
+paths under the host user's home: `.ssh`, `.gnupg`, `.aws`, `.azure`,
+`.config/gcloud`, `.config/gh`, `.config/hub`, `.kube`, `.docker`, `.netrc`,
+`.npmrc`, `.pypirc`, `.git-credentials`, `.config/git/credentials`,
+`.cargo/credentials`, `.cargo/credentials.toml`, and
+`.terraform.d/credentials.tfrc.json`. Both platforms enforce the
+applicable protections; exact directory or child grants remain opt-in exceptions.
 
 The default denylist covers fixed credential locations, not arbitrary `.env`,
 `*.pem`, or `*.key` files elsewhere on the host. It does not recursively scan
-host directories or dynamically filter file names. In the stricter mode, files
-under the host home are inaccessible because that directory is not mounted;
+host directories or dynamically filter file names. Name-based masking is
+intentionally not a default: `*.pem` also matches public CA bundles such as
+`/etc/ssl/certs/*.pem`, workspace tasks legitimately create `key.pem` or
+`.env`, and bubblewrap can only mask files that exist at startup. In granted
+mode, files under the host home are inaccessible unless that directory or its
+children are granted;
 secrets inside shared runtime directories, the workspace, or explicit grants
 still need their own policy. `WithNoAccessGlobs` only applies to the workspace
 and is rejected when it overlaps Linux writable mounts.
 
-File visibility and environment inheritance are separate. For untrusted Linux
-commands, configure both explicitly:
+File visibility and environment inheritance are separate. For commands that should exclude host environment variables, configure both:
 
 ```go
 rt := sandbox.NewRuntime(
     sandbox.WithPermissionProfile(
-        sandbox.WorkspaceWriteProfile().WithLinuxNoHostRoot(),
+        sandbox.WorkspaceWriteProfile().WithReadMode(sandbox.ReadModeGranted),
     ),
     sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
         Inherit: sandbox.ShellEnvironmentPolicyInheritNone,
@@ -142,12 +245,13 @@ rt := sandbox.NewRuntime(
 )
 ```
 
-Use `ReadOnlyProfile().WithLinuxNoHostRoot()` when commands only need to read
+Use `ReadOnlyProfile()` when commands only need to read
 the workspace. Grant additional toolchain or configuration paths individually.
 
-The Go-level file APIs and Linux mount setup both derive from the same
-no-access denials so a path denied by `Collect`, `PutFiles`, or `StageInputs` is
-also denied to a process running inside the OS sandbox.
+`StageDirectory` and `host://` inputs use the same mode fallback and path
+protections. Source paths are checked throughout copying, so granting a parent
+directory does not silently copy protected credentials or unrelated sessions.
+Workspace file APIs remain confined to the current workspace in either mode.
 
 The implementation is intentionally path-based. It supports concrete path grants,
 workspace-relative glob no-access denials, and protected metadata masks, but it
@@ -158,12 +262,25 @@ does not currently implement per-file capabilities beyond read, write, and none.
 The macOS backend uses Apple Seatbelt through `/usr/bin/sandbox-exec`:
 
 - The generated SBPL starts with `(deny default)`.
-- Selected macOS platform paths are allowed read-only so common shells,
-  interpreters, dynamic libraries, and system metadata can be used.
+- In granted mode, the profile's runtime and workspace grants provide reads.
+  Host mode adds fallback reads through `/`.
+- Credentials and unrelated sessions are excluded from both read and write
+  filters, including parent grants. Exact credential grants can reopen the
+  authorized directory or child, while sibling credentials stay protected.
+  Credential exclusions also cover files created later at protected locations,
+  even when those locations did not exist when the command started.
+- Canonical path filters govern content access; literal symlink and ancestor
+  metadata allowances permit resolving explicit path aliases.
 - Workspace and explicit external path grants are projected as Seatbelt
   `allow` rules.
 - Exact no-access paths are carved out from broader allows with `require-not`.
 - Protected metadata paths are excluded from write allows but remain readable.
+- Directory entries above concrete no-access paths, effective read-only paths,
+  protected metadata, protected credential locations, and the session store cannot be
+  unlinked or renamed by the sandbox. This prevents moving protected contents
+  outside their path filters, including through a symlink alias. Other children
+  of those directories retain their effective read/write permissions; protecting
+  the ancestor entry does not make its whole subtree read-only.
 - Workspace-relative no-access globs are translated into anchored Seatbelt
   regular-expression denies.
 
@@ -203,19 +320,11 @@ explicitly.
 The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
 `WithPermissionProfile`, that explicit profile replaces the default.
 
-`WorkspaceWriteProfile()` grants writes to the session-owned workspace
-directories. The host view depends on the backend and profile:
-
-- Linux `ReadOnlyProfile` / `WorkspaceWriteProfile` give the sandbox a
-  read-only host root view, then hide sibling sessions and mask common
-  credential paths. Arbitrary host files outside that denylist remain readable.
-- Linux `WithLinuxNoHostRoot` does not bind the host root. Only runtime
-  directories, the current session workspace, and explicit grants are visible.
-- macOS gives the sandbox selected platform read defaults plus explicit grants.
-- The workspace root, `work`, `home`, `tmp`, `runs`, `out`, and `skills`
-  directories are writable.
-- Default protected metadata still blocks writes to `.git`, `.agents`, and
-  `.trpc-agent-sandbox` inside the workspace.
+`WorkspaceWriteProfile()` uses `ReadModeGranted` and grants writes to the
+workspace root, `work`, `home`, `tmp`, `runs`, `out`, and `skills`.
+`ReadOnlyProfile()` grants reads to that workspace. Both include the documented
+platform runtime rules. Protected metadata blocks writes to `.git`, `.agents`,
+and `.trpc-agent-sandbox` even under a writable workspace grant.
 
 The runtime creates the well-known workspace directories during workspace
 preparation. On macOS, these special directories are checked before they become
@@ -231,8 +340,7 @@ The builder API mirrors the access model:
 - `WithNoAccessPaths` denies read and write access to concrete paths.
 - `WithNoAccessGlobs` denies read and write access to workspace-relative glob
   matches.
-- `WithLinuxNoHostRoot` skips the Linux host-root bind. It has no effect on
-  macOS.
+- `WithReadMode` selects granted-only reads or host fallback reads on every platform.
 
 Path builders accept concrete paths. Glob no-access is intentionally separate so
 callers can distinguish exact path rules from workspace-relative pattern rules.
@@ -253,10 +361,9 @@ override it with `WithWorkspaceRoot`.
 
 Non-overlapping session ids map to separate workspace directory trees, so files
 written in one are not visible through another session's workspace APIs. Host
-processes can still read those directories. Guest isolation is separate: Linux
-host-root profiles tmpfs-mask the sessions parent so a guest cannot `ls` sibling
-session directories through the read-only host root, and macOS Seatbelt only
-grants the current workspace. The runtime sanitizes path components in the
+processes can still read those directories. Guest protection applies in both modes: Linux hides the session parent after
+external grants and restores the current workspace; macOS excludes unrelated
+session paths from its access filters. The runtime sanitizes path components in the
 session id before constructing the workspace path, so an id cannot escape the
 configured workspace root. Nested IDs such as `app` and `app/user/session`
 are valid parent and child scopes. The parent owns the full subtree and can

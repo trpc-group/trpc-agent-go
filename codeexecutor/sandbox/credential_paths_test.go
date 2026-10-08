@@ -54,30 +54,30 @@ func TestSkipDefaultCredentialDenyOnlyExactGrant(t *testing.T) {
 	}
 }
 
-func TestSkipIsolatedHomeCredentialMask(t *testing.T) {
+func TestSkipGrantedHomeCredentialMask(t *testing.T) {
 	home := t.TempDir()
 	ssh := filepath.Join(home, ".ssh")
 	config := filepath.Join(ssh, "config")
 
-	if skipIsolatedHomeCredentialMask(WorkspaceWriteProfile(), home, ssh) {
+	if skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeHost), home, ssh) {
 		t.Fatal("host-root profiles must keep home credential masks")
 	}
-	if skipIsolatedHomeCredentialMask(WorkspaceWriteProfile().WithLinuxNoHostRoot(), "", ssh) {
+	if skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeGranted), "", ssh) {
 		t.Fatal("empty HOME should not skip an arbitrary credential path")
 	}
-	if skipIsolatedHomeCredentialMask(WorkspaceWriteProfile().WithLinuxNoHostRoot(), home, "/etc/shadow") {
-		t.Fatal("isolated profiles must not skip non-home credential masks")
+	if skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeGranted), home, "/etc/shadow") {
+		t.Fatal("granted mode must not skip non-home credential masks")
 	}
-	if !skipIsolatedHomeCredentialMask(WorkspaceWriteProfile().WithLinuxNoHostRoot(), home, ssh) {
-		t.Fatal("isolated profiles without a parent grant should skip host ~/.ssh")
+	if !skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeGranted), home, ssh) {
+		t.Fatal("granted mode without a parent grant should skip host ~/.ssh")
 	}
-	if skipIsolatedHomeCredentialMask(WorkspaceWriteProfile().WithLinuxNoHostRoot().WithReadPaths(home), home, ssh) {
-		t.Fatal("isolated $HOME grant should keep the ~/.ssh mask")
+	if skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeGranted).WithReadPaths(home), home, ssh) {
+		t.Fatal("granted $HOME grant should keep the ~/.ssh mask")
 	}
-	if skipIsolatedHomeCredentialMask(WorkspaceWriteProfile().WithLinuxNoHostRoot().WithWritePaths(home), home, ssh) {
-		t.Fatal("isolated $HOME write grant should keep the ~/.ssh mask")
+	if skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeGranted).WithWritePaths(home), home, ssh) {
+		t.Fatal("granted $HOME write grant should keep the ~/.ssh mask")
 	}
-	if !skipIsolatedHomeCredentialMask(WorkspaceWriteProfile().WithLinuxNoHostRoot().WithReadPaths(config), home, ssh) {
+	if !skipGrantedHomeCredentialMask(WorkspaceWriteProfile().WithReadMode(ReadModeGranted).WithReadPaths(config), home, ssh) {
 		t.Fatal("child grant should not treat ~/.ssh as visible")
 	}
 }
@@ -93,6 +93,9 @@ func TestDefaultCredentialDenyPathsIncludeHomeAndShadow(t *testing.T) {
 		filepath.Join(home, ".ssh"),
 		filepath.Join(home, ".aws"),
 		filepath.Join(home, ".kube"),
+		filepath.Join(home, ".config", "hub"),
+		filepath.Join(home, ".cargo", "credentials.toml"),
+		filepath.Join(home, ".terraform.d", "credentials.tfrc.json"),
 	}
 	for _, path := range want {
 		if !containsString(paths, path) {

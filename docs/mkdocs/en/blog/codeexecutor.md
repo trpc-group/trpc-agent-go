@@ -213,6 +213,8 @@ The `local` backend executes code directly on the host. It is useful for local v
 
 Its boundary is also clear: `local` provides no security isolation. Model-generated commands run with the current user's permissions. Its correct role is a convenient executor for trusted environments, not a lightweight sandbox.
 
+For isolated local workspaces, `Cleanup` restores the permissions needed to remove read-only staged files and then removes the workspace. It does not traverse symlink targets. Callers must stop workspace programs and filesystem mutations before cleanup. In trusted local mode, cleanup retains the caller's directory and leaves its permissions unchanged.
+
 ### container: A Common Engineering Middle Layer
 
 The `container` backend runs execution inside Docker or another container runtime. Compared with local execution, it can package dependencies, file-system view, and runtime environment into a container. It is useful for service deployment, semi-trusted tasks, and reproducible environments.
@@ -247,19 +249,15 @@ Code Executor is the execution system. Sandbox is one backend that emphasizes se
 
 tRPC-Agent-Go sandbox permissions revolve around `PermissionProfile`. A profile combines file-system policy and network policy so callers do not create contradictory configurations.
 
-`ReadOnlyProfile` makes the host root file system read-only and restricts network access. `WorkspaceWriteProfile` is the default managed profile: root is read-only, workspace and working directories are writable, and network access is restricted. On Linux this keeps installed tools working, then masks common credential paths and sibling session directories. Arbitrary host files outside that denylist remain readable. `WithLinuxNoHostRoot` skips the host-root bind on Linux, so host home directories and other session workspaces are not visible unless explicitly granted. `DangerFullAccessProfile` explicitly disables sandboxing and enables network access, and should only be used for fully trusted cases that require host permissions. `ExternalSandboxProfile` indicates that isolation is provided externally, such as by a container, remote platform, or upper-layer system.
+`ReadOnlyProfile` grants read-only access to documented platform runtime resources and the session workspace, with restricted networking. `WorkspaceWriteProfile` is the default managed profile: it also grants writes to workspace directories such as `work`, `out`, `runs`, `skills`, `home`, and `tmp`, while protecting metadata. Both profiles use `ReadModeGranted`, so other host resources require an effective path grant. This intentionally changes the previous Linux default that exposed the host root.
 
-`WorkspaceWriteProfile` maps naturally to Agent execution: the outside world is read-only by default, while session workspace directories such as `work`, `out`, `runs`, `skills`, `home`, and `tmp` are writable.
+`WithReadMode(ReadModeHost)` permits host reads when no filesystem rule determines access. It provides broader host visibility and does not protect arbitrary host data. `WithReadPaths` and `WithWritePaths` add concrete grants; `WithNoAccessPaths` and `WithNoAccessGlobs` restrict paths. Setting the mode preserves path rules, and adding grants preserves the mode. In host mode, adding read paths does not turn the fallback into an allowlist.
 
-Callers can add explicit path grants through `WithReadPaths` and `WithWritePaths`, or block sensitive paths through `WithNoAccessPaths` and `WithNoAccessGlobs`. These are runtime mount and path rules, not prompt instructions.
+On Linux, granted mode starts with a private root and exposes only granted runtime resources, the current workspace, and extra paths. Empty ancestor directories allow mounts without exposing their host contents. Host mode starts with `--ro-bind / /`. Both modes apply session and credential protection after ancestor grants, including alternate destinations introduced by symlink grants. Common credential paths remain protected after granting a parent; an exact credential directory or child grant can reopen that resource. The runtime resource lists and protection boundaries are documented in [File System Policy](https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/sandbox/docs/FILE_SYSTEM_POLICY.md).
 
-On Linux, host-root profiles start from a read-only root:
+Replace unpublished `WithLinuxNoHostRoot()` calls with `WithReadMode(ReadModeGranted)`. Configure `WithShellEnvironmentPolicy` with `ShellEnvironmentPolicyInheritNone` to avoid inheriting host secrets through environment variables. The credential protection list does not match arbitrary `.env`, `*.pem`, or `*.key` files. Nested IDs such as `app` and `app/user/session` are valid parent and child scopes: the parent can access its descendants, while the child remains scoped to its own workspace. Use non-overlapping IDs for mutually isolated sessions.
 
-```text
---ro-bind / /
-```
-
-They then hide sibling session directories, mask common credential paths, remount allowed workspace paths as writable, and hide protected paths. The model is important: it is not "everything writable, then deny some paths." It is "read-only by default, then explicitly open writable paths." `WithLinuxNoHostRoot` skips the host-root bind and only mounts runtime directories plus the session workspace. It shares selected public `/etc` runtime files rather than the entire directory and also supports `ReadOnlyProfile()`. Configure `WithShellEnvironmentPolicy` with `ShellEnvironmentPolicyInheritNone` to avoid inheriting host secrets through environment variables. The default credential denylist does not match arbitrary `.env`, `*.pem`, or `*.key` files. Nested IDs such as `app` and `app/user/session` are valid parent and child scopes: the parent can access its descendants, while the child remains scoped to its own workspace. Use non-overlapping IDs for mutually isolated sessions.
+`DangerFullAccessProfile` disables sandboxing and enables networking. Use it only for fully trusted execution. `ExternalSandboxProfile` declares that isolation is provided by an external system, such as a container or remote platform.
 
 ### Network: Restricted by Default, Enabled Explicitly
 

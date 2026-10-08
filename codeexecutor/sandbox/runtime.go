@@ -132,6 +132,9 @@ func (r *Runtime) CreateWorkspace(
 	pol codeexecutor.WorkspacePolicy,
 ) (codeexecutor.Workspace, error) {
 	_ = ctx
+	if err := validateReadMode(r.profile); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
 	if execID == "" {
 		execID = "default"
 	}

@@ -215,6 +215,8 @@ Code Executor 的后端分层，本质上是在“开发便利、运行环境一
 
 它的边界也很清楚：`local` 不提供安全隔离。模型生成的命令会在当前用户权限下触碰宿主环境，因此它的正确定位是“可信环境里的便捷执行器”，不要把它当成“轻量沙箱”。
 
+对于隔离的本地工作区，`Cleanup` 会恢复删除只读暂存文件所需的权限，再删除工作区；清理过程不会遍历符号链接的目标。调用方应先停止工作区中的程序和文件系统修改，再进行清理。可信本地模式会保留调用方目录及其原有权限。
+
 ### container：工程部署的常用中间层
 
 `container` 后端把执行环境放进 Docker/container runtime。相比 local，它至少能把依赖、文件系统视图和运行环境封进容器里，适合服务化部署、半可信任务和需要复现环境的场景。
@@ -251,19 +253,15 @@ Code Executor 是执行体系；sandbox 是其中一种更强调安全边界的�
 
 tRPC-Agent-Go sandbox 的权限模型围绕 `PermissionProfile` 展开。它把文件系统策略和网络策略放在同一个 profile 里，避免调用方组合出自相矛盾的策略。
 
-`ReadOnlyProfile` 表示宿主根文件系统只读、网络受限，适合只需要读取环境、尽量不写文件的任务。`WorkspaceWriteProfile` 是默认 managed profile：根文件系统只读，workspace 及其工作目录可写，网络受限，适合大多数本地 sandbox 执行。在 Linux 上它会继续挂载宿主根以便系统工具能跑，但默认屏蔽常见凭证路径和其他 session 目录。名单外的宿主文件仍可读。`WithLinuxNoHostRoot` 会跳过 Linux 上的宿主根挂载，宿主 home 和其他 session 默认不可见。`DangerFullAccessProfile` 会显式禁用 sandbox 并开启网络，只适合完全可信、确实需要完整宿主权限的特殊任务。`ExternalSandboxProfile` 则表示隔离由外部系统提供，例如外部容器、远程平台或上层系统。
+`ReadOnlyProfile` 授予文档列明的平台运行资源和当前 session workspace 的只读权限，并限制网络。`WorkspaceWriteProfile` 是默认 managed profile：它还授予 `work`、`out`、`runs`、`skills`、`home` 和 `tmp` 等 workspace 目录的写权限，同时保护元数据。两者均使用 `ReadModeGranted`，其他宿主资源需要有效的路径授权。这是对原有 Linux 默认暴露宿主根行为的有意调整。
 
-`WorkspaceWriteProfile` 的含义非常贴近 Agent 执行：外部世界默认只读，真正允许写入的是 session workspace、`work`、`out`、`runs`、`skills`、`home`、`tmp` 等执行所需目录。
+`WithReadMode(ReadModeHost)` 在路径规则没有决定权限时允许宿主读取。它提供更宽泛的宿主可见性，不能保护任意宿主数据的机密性。`WithReadPaths` 和 `WithWritePaths` 增加具体授权，`WithNoAccessPaths` 和 `WithNoAccessGlobs` 限制访问。设置模式保留路径规则，增加路径授权保留模式；在 host 模式下增加读取路径，不会把读取回退收窄为白名单。
 
-在这个基础上，调用方可以通过 `WithReadPaths`、`WithWritePaths` 增加显式路径授权，也可以通过 `WithNoAccessPaths`、`WithNoAccessGlobs` 屏蔽敏感路径。这里的策略不是 prompt 约束，而是运行时挂载（mount）和路径规则约束。
+Linux 的 granted 模式从私有根文件系统构建视图，仅暴露已授权的运行资源、当前 workspace 和额外路径。挂载所需的祖先目录可以为空，不需要暴露其宿主内容。host 模式从 `--ro-bind / /` 开始。两种模式都在祖先授权挂载后实施会话与凭证保护，并覆盖符号链接授权引入的其他挂载入口。授予父目录不会解除常见凭证路径的保护；精确授权凭证目录或其中的子路径可以重新开放对应资源。运行资源清单和保护范围见[文件系统策略](https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/sandbox/docs/FILE_SYSTEM_POLICY.md)。
 
-Linux 后端在宿主根可见的 profile 下，会从只读根开始：
+将尚未发布的 `WithLinuxNoHostRoot()` 调用替换为 `WithReadMode(ReadModeGranted)`。通过 `WithShellEnvironmentPolicy` 设置 `ShellEnvironmentPolicyInheritNone`，可以避免宿主秘密通过环境变量传入。凭证保护清单不会匹配宿主各处的 `.env`、`*.pem`、`*.key`。`app` 与 `app/user/session` 是合法的父子作用域：父作用域可以访问后代，子作用域的访问范围仍限于自身 workspace。需要相互隔离的会话应使用互不包含的 ID。
 
-```text
---ro-bind / /
-```
-
-然后再隐藏同机其他 session 目录、屏蔽常见凭证路径，并把 workspace 里允许写的路径重新以可写方式挂载，把受保护路径屏蔽掉。这个模型很重要：不是“默认都能写，再禁止一部分”，而是“默认只读，再显式开放写路径”。`WithLinuxNoHostRoot` 不会 bind `/`，只挂载运行时目录和当前 session workspace。它只开放 `/etc` 中选定的公共运行时文件，不挂载整个 `/etc`，并支持与 `ReadOnlyProfile()` 组合使用。还应通过 `WithShellEnvironmentPolicy` 设置 `ShellEnvironmentPolicyInheritNone`，避免宿主秘密通过环境变量传入。默认凭证名单不会匹配宿主各处的 `.env`、`*.pem`、`*.key`。`app` 与 `app/user/session` 是合法的父子作用域：父作用域可以访问子作用域，子作用域的访问范围仍限于自身 workspace。需要相互隔离的会话应使用互不包含的 ID。
+`DangerFullAccessProfile` 禁用 sandbox 并开启网络，只适用于完全可信的执行。`ExternalSandboxProfile` 声明隔离由容器、远程平台等外部系统提供。
 
 ### 2. 网络：默认限制，显式开启
 

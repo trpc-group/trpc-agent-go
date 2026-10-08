@@ -28,23 +28,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-func TestMacOSBackendCapabilities(t *testing.T) {
-	caps := backendCapabilities(BackendMacOSSandboxExec, WorkspaceWriteProfile())
-	if !caps.OSSandbox || !caps.NetworkIsolation || !caps.DenyReadGlob ||
-		!caps.ExternalPathGrants || !caps.ProtectedPathMasks {
-		t.Fatalf("managed capabilities = %#v, want macOS sandbox features", caps)
-	}
-	unsupportedCaps := backendCapabilities(BackendLinuxBubblewrap, WorkspaceWriteProfile())
-	if unsupportedCaps.OSSandbox || unsupportedCaps.NetworkIsolation ||
-		unsupportedCaps.DenyReadGlob || unsupportedCaps.ExternalPathGrants {
-		t.Fatalf("unsupported backend capabilities = %#v, want no macOS sandbox features", unsupportedCaps)
-	}
-	disabledCaps := backendCapabilities(BackendAuto, DangerFullAccessProfile())
-	if disabledCaps.OSSandbox || disabledCaps.NetworkIsolation || disabledCaps.ProtectedPathMasks {
-		t.Fatalf("disabled capabilities = %#v, want no managed sandbox features", disabledCaps)
-	}
-}
-
 func TestMacOSSeatbeltProfileGeneration(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "macos/profile", codeexecutor.WorkspacePolicy{})
@@ -104,7 +87,7 @@ func TestMacOSSeatbeltProfileGeneration(t *testing.T) {
 	}
 }
 
-func TestMacOSSeatbeltIgnoresLinuxNoHostRoot(t *testing.T) {
+func TestMacOSSeatbeltDefaultReadMode(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "macos/no-host-root", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -114,16 +97,77 @@ func TestMacOSSeatbeltIgnoresLinuxNoHostRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	noHostRoot, err := rt.macosSeatbeltProfile(
-		WorkspaceWriteProfile().WithLinuxNoHostRoot(),
+	granted, err := rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithReadMode(ReadModeGranted),
 		ws,
 		sandboxDenialRun{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base != noHostRoot {
-		t.Fatal("WithLinuxNoHostRoot must not change the macOS Seatbelt profile")
+	if base != granted {
+		t.Fatal("explicit granted mode must match the default")
+	}
+}
+
+func TestMacOSNativeProtectedMetadataSymlinkEntry(t *testing.T) {
+	requireReadModeBackend(t)
+	ctx := context.Background()
+	for _, mode := range []ReadMode{ReadModeGranted, ReadModeHost} {
+		for _, operation := range []string{"write", "unlink", "rename", "replacement"} {
+			t.Run(string(mode)+"/"+operation, func(t *testing.T) {
+				store := t.TempDir()
+				root := filepath.Join(t.TempDir(), "workspace-root")
+				if err := os.Symlink(t.TempDir(), root); err != nil {
+					t.Fatal(err)
+				}
+				rt := NewRuntime(WithWorkspaceRoot(root), WithPermissionProfile(
+					WorkspaceWriteProfile().WithReadMode(mode).WithWritePaths(store),
+				))
+				t.Cleanup(func() { _ = rt.Close() })
+				ws, err := rt.CreateWorkspace(ctx, "current", codeexecutor.WorkspacePolicy{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				metadata := filepath.Join(ws.Path, ".git")
+				if err := os.WriteFile(filepath.Join(store, "config"), []byte("original"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(store, metadata); err != nil {
+					t.Fatal(err)
+				}
+				result, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+					Cmd: "/bin/cat", Args: []string{filepath.Join(metadata, "config")},
+				})
+				if err != nil || result.ExitCode != 0 || result.Stdout != "original" {
+					t.Fatalf("protected metadata read: %#v, %v", result, err)
+				}
+				var script string
+				switch operation {
+				case "write":
+					script = `printf changed > "$1/config"`
+				case "unlink":
+					script = `/usr/bin/perl -e 'unlink($ARGV[0]) or die "$!\n"' "$1"`
+				case "rename":
+					script = `/usr/bin/perl -e 'rename($ARGV[0], $ARGV[1]) or die "$!\n"' "$1" "$2"`
+				case "replacement":
+					script = `/usr/bin/perl -e 'unlink($ARGV[0]) or die "$!\n"' "$1" && mkdir "$1" && printf changed > "$1/config"`
+				}
+				result, err = rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+					Cmd: "/bin/sh", Args: []string{"-c", script, "test", metadata, filepath.Join(ws.Path, "work", "moved")},
+				})
+				if err != nil || result.ExitCode == 0 {
+					t.Fatalf("protected metadata %s: %#v, %v", operation, result, err)
+				}
+				if got, err := os.Readlink(metadata); err != nil || got != store {
+					t.Fatalf("protected metadata link changed: %q, %v", got, err)
+				}
+				data, err := os.ReadFile(filepath.Join(metadata, "config"))
+				if err != nil || string(data) != "original" {
+					t.Fatalf("protected metadata content changed: %q, %v", data, err)
+				}
+			})
+		}
 	}
 }
 

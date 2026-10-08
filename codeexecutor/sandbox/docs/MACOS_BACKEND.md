@@ -23,17 +23,35 @@ The Go-level file-system policy resolver uses the same model as Linux:
 - Protected metadata such as `.git`, `.agents`, and `.trpc-agent-sandbox` is
   readable but never writable.
 
-The OS projection differs from Linux. Linux starts with a read-only bind mount of
-`/`. macOS starts with `(deny default)`, adds selected platform read defaults,
-and then adds workspace and explicit external path grants. The macOS OS
+Both platforms default to `ReadModeGranted`, with explicit profile grants for
+runtime resources and the workspace. Linux builds a private mount view; macOS
+starts with `(deny default)` and projects the effective grants into allow
+filters. `WithReadMode(ReadModeHost)` enables host fallback reads on either
+platform, while credential and session exclusions remain effective. The macOS OS
 projection has backend-specific behavior for no-access globs, documented below.
+
+Concrete path protections also keep ancestor directory entries stable. Seatbelt
+denies unlink and rename operations on ancestors of concrete no-access paths,
+effective read-only paths, protected metadata, ungranted credential locations,
+and the session store. This prevents moving protected contents to a new name
+outside their filters, including through symlink aliases. For example, denying
+`work/config/secret` also prevents renaming `work/config`; it still permits
+writing `work/config/public` when the effective policy grants that file. These
+entry restrictions do not make every descendant of the ancestor read-only.
+
+Fixed credential exclusions are checked by Seatbelt on each access. They also
+cover files created at protected locations after the command starts, including
+credential directories that did not exist at startup. These exclusions protect
+the documented locations; arbitrary `.env`, `*.pem`, and `*.key` filenames are
+not filtered automatically.
 
 ## Platform Defaults
 
-The backend includes a curated set of read-only macOS paths needed by common
+The built-in profiles include a curated set of read-only macOS paths needed by common
 tools, dynamic libraries, shells, interpreters, and system metadata. This is a
-practical middle ground between strict minimalism and exposing the whole host
-root, while still keeping normal command execution workable.
+documented compatibility set for normal command execution. See the exact
+[platform runtime grants](FILE_SYSTEM_POLICY.md#platform-runtime-grants).
+The full `/etc` and `/private/var/db` are excluded from the default grants.
 
 The baseline currently permits broad `sysctl-read` for tool compatibility. The
 filesystem allow-list remains path-scoped; future iterations may narrow sysctl
@@ -80,8 +98,8 @@ The network model stays binary:
 This is not the same as Linux `--unshare-net`. Linux uses a network namespace
 boundary plus an AF_UNIX/AF_VSOCK/io_uring seccomp filter under
 `NetworkRestricted`, so the guest cannot create pathname or abstract Unix domain
-sockets or VM sockets even though host socket paths remain visible under
-`--ro-bind / /`. Anonymous stream and seqpacket socketpairs remain available.
+sockets or VM sockets, including host sockets visible through explicit grants
+or the host mode's `--ro-bind / /`. Anonymous stream and seqpacket socketpairs remain available.
 macOS uses Seatbelt network rules plus Mach service and Unix socket policy. The
 cross-platform model remains binary, while macOS-specific extension fields
 expose IPC affordances that Linux does not claim to support through path
@@ -147,7 +165,7 @@ caller lifecycle responsibilities, data flow, filtering model, and limitations.
 | Capability | Linux `linux-bubblewrap` | macOS `macos-sandbox-exec` |
 | --- | --- | --- |
 | OS sandbox mechanism | `bubblewrap` namespaces and mounts | Apple Seatbelt through `/usr/bin/sandbox-exec` |
-| Host root visibility | Host-root profiles bind `/` read-only; `WithLinuxNoHostRoot` uses runtime paths plus explicit grants | Selected platform defaults plus explicit grants |
+| Read mode | Granted by default; host mode explicitly binds `/` read-only | Granted by default; host mode adds fallback read filters |
 | Mount namespace | Supported | Not supported |
 | PID namespace | Supported with `--unshare-pid` | Not supported |
 | Parent death handling | `--die-with-parent` plus process-group cleanup | Process-group cleanup only |
@@ -168,12 +186,15 @@ sanitized environment with `ShellEnvironmentPolicy` and passes it directly to th
 
 ## Known Differences From Linux
 
-- macOS does not expose the whole host root as read-only by default.
+- Both backends use granted mode by default; their OS mechanisms differ.
 - macOS no-access glob enforcement is dynamic; Linux enforcement is based on
   static mount masks.
 - macOS uses Seatbelt rules instead of namespace and mount operations.
 - macOS does not provide PID or network namespaces; process and network
   isolation are expressed through Seatbelt and process-group cleanup.
-- Linux host-root profiles retain a read-only host view after masking
-  credential paths and sibling sessions; use `WithLinuxNoHostRoot`
-  when the command must not see the host root.
+- Host mode provides broad host reads on both platforms, with applicable
+  credential and session protection; arbitrary host files remain readable.
+
+macOS sandbox initialization also needs read access to the root directory
+itself. The backend grants this literal runtime resource, so root entry names
+can be listed; this allowance grants no access to descendant file contents.

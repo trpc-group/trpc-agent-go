@@ -36,15 +36,32 @@ const (
 	profileExternal permissionProfileType = "external"
 )
 
+// ReadMode selects the fallback for filesystem reads when no path rule
+// determines access. Under managed enforcement, path rules and mandatory
+// protections apply in both modes. The zero value selects ReadModeGranted.
+// Disabled enforcement bypasses access restrictions; external enforcement
+// remains the external system's responsibility.
+type ReadMode string
+
+const (
+	// ReadModeGranted permits reads only through effective filesystem grants.
+	// Write grants also permit reads. Built-in profiles grant platform runtime
+	// resources and their workspace explicitly.
+	ReadModeGranted ReadMode = "granted"
+	// ReadModeHost permits reads that the host process could perform when no
+	// path rule determines access. It does not provide confidentiality for
+	// arbitrary host files. Credential and session protections still apply.
+	ReadModeHost ReadMode = "host"
+)
+
 // PermissionProfile is the public sandbox permission model. It intentionally
 // owns both filesystem and network policy so callers cannot request contradictory
 // combinations such as read-only + disabled enforcement.
 type PermissionProfile struct {
-	typ             permissionProfileType
-	fileSystem      fileSystemPolicy
-	network         NetworkPolicy
-	macOS           macOSProfilePolicy
-	linuxNoHostRoot bool
+	typ        permissionProfileType
+	fileSystem fileSystemPolicy
+	network    NetworkPolicy
+	macOS      macOSProfilePolicy
 }
 
 // macOSProfilePolicy describes macOS Seatbelt-specific controls. It is kept off
@@ -67,34 +84,33 @@ func (p PermissionProfile) enforcement() enforcement {
 	}
 }
 
-// ReadOnlyProfile returns a managed profile with read-only host visibility and
-// restricted networking. On Linux this also masks credential paths and sibling
-// sessions. On Linux, restricted networking denies pathname and abstract
-// AF_UNIX sockets and AF_VSOCK, while leaving anonymous stream and seqpacket
-// socketpairs available; use NetworkEnabled when the command needs pathname or
-// abstract Unix IPC, or AF_VSOCK.
+// ReadOnlyProfile returns a managed profile granting read-only access to
+// platform runtime resources and the session workspace, with restricted
+// networking. Its read mode is ReadModeGranted. On Linux restricted
+// networking denies pathname and abstract AF_UNIX sockets and AF_VSOCK;
+// anonymous stream and seqpacket socketpairs remain available.
 func ReadOnlyProfile() PermissionProfile {
 	return PermissionProfile{
 		typ: profileManaged,
 		fileSystem: fileSystemPolicy{
-			Rules: []fileSystemRule{{
-				Kind:    ruleSpecial,
-				Access:  accessRead,
-				Special: specialRoot,
-			}},
+			ReadMode: ReadModeGranted,
+			Rules: append(platformReadRules(), fileSystemRule{
+				Kind: ruleSpecial, Access: accessRead, Special: specialRoot,
+			}),
 			ProtectedMetadata: defaultProtectedMetadata(),
 		},
 		network: NetworkPolicy{Mode: NetworkRestricted},
 	}
 }
 
-// WorkspaceWriteProfile returns the default managed profile: read-only host
-// root, writable session workspace, protected metadata, restricted networking.
-// On Linux this also masks credential paths and sibling sessions. On Linux,
-// that restricted default denies pathname and abstract AF_UNIX sockets and
-// AF_VSOCK, while leaving anonymous stream and seqpacket socketpairs
-// available; use NetworkEnabled when the command needs pathname or abstract
-// Unix IPC, or AF_VSOCK.
+// WorkspaceWriteProfile returns the default managed profile: platform runtime
+// resources are readable, the session workspace is writable, metadata is
+// protected, and networking is restricted. Its read mode is ReadModeGranted.
+// Use WithReadMode(ReadModeHost) to opt into broader host reads.
+// Files inside the workspace, runtime grants, and explicit grants are readable
+// unless restricted by path rules or built-in protections. Arbitrary secret
+// filenames are not denied automatically. Host environment inheritance is
+// configured separately with WithShellEnvironmentPolicy.
 func WorkspaceWriteProfile() PermissionProfile {
 	p := ReadOnlyProfile()
 	p.fileSystem.Rules = append(p.fileSystem.Rules,
@@ -109,16 +125,34 @@ func WorkspaceWriteProfile() PermissionProfile {
 	return p
 }
 
+func (p PermissionProfile) effectiveReadMode() ReadMode {
+	if p.fileSystem.ReadMode == "" {
+		return ReadModeGranted
+	}
+	return p.fileSystem.ReadMode
+}
+
 func (p PermissionProfile) exposesHostRoot() bool {
-	if p.linuxNoHostRoot {
-		return false
+	return p.effectiveReadMode() == ReadModeHost
+}
+
+func platformReadRules() []fileSystemRule {
+	var rules []fileSystemRule
+	for _, path := range platformReadPaths() {
+		rules = append(rules, fileSystemRule{
+			Kind: rulePath, Access: accessRead, Path: path, optional: true,
+		})
 	}
-	for _, rule := range p.fileSystem.Rules {
-		if rule.Kind == ruleSpecial && rule.Special == specialRoot && rule.Access == accessRead {
-			return true
-		}
+	return rules
+}
+
+func validateReadMode(p PermissionProfile) error {
+	switch p.effectiveReadMode() {
+	case ReadModeGranted, ReadModeHost:
+		return nil
+	default:
+		return deniedf(ErrPolicyViolation, "read-mode", "", "unknown read mode %q", p.fileSystem.ReadMode)
 	}
-	return false
 }
 
 // DangerFullAccessProfile intentionally disables sandboxing.
@@ -138,15 +172,21 @@ func ExternalSandboxProfile(network NetworkPolicy) PermissionProfile {
 	return PermissionProfile{typ: profileExternal, network: network}
 }
 
-// WithLinuxNoHostRoot skips the Linux host-root bind. The sandbox then mounts
-// only runtime directories (/usr, /bin, /sbin and library directories), selected
-// public /etc runtime files and certificate directories, the session workspace,
-// and explicit grants. The workspace retains the profile's read/write policy.
-// Host home directories and application configuration under /etc are absent
-// unless explicitly granted. Environment inheritance is configured separately
-// with WithShellEnvironmentPolicy. WithLinuxNoHostRoot has no effect on macOS.
-func (p PermissionProfile) WithLinuxNoHostRoot() PermissionProfile {
-	p.linuxNoHostRoot = true
+// WithReadMode returns a profile with the filesystem read fallback set on every
+// platform. An empty mode selects ReadModeGranted. Unknown values are retained and
+// rejected as policy violations by workspace creation, execution, and file
+// operations. This intentionally changes the previous Linux read default.
+//
+// Setting the mode preserves existing path rules; adding path grants preserves
+// the mode. In host mode, read grants do not narrow the fallback to an allowlist.
+//
+// Path rules, credential protection, and session protection apply in both
+// modes. Exact credential path grants remain opt-in exceptions; parent grants
+// do not remove credential or session protection. Environment inheritance uses
+// WithShellEnvironmentPolicy and is unchanged by the mode. Filename-based
+// filtering of arbitrary .env, *.pem, and *.key files is not automatic.
+func (p PermissionProfile) WithReadMode(mode ReadMode) PermissionProfile {
+	p.fileSystem.ReadMode = mode
 	return p
 }
 
@@ -188,7 +228,12 @@ func (p PermissionProfile) WithMacOSUnixSocketPaths(paths ...string) PermissionP
 	return p
 }
 
-// WithReadPaths adds read grants.
+// WithReadPaths adds read-only path rules. Relative paths are workspace-relative;
+// absolute paths refer to host resources. A more-specific read rule can restrict
+// a broader write grant. Equally specific no-access and write rules take
+// precedence over read rules. The profile's read mode is unchanged.
+// Grants authorize resolved resources; parent grants do not authorize external
+// targets reached through descendant symlinks.
 func (p PermissionProfile) WithReadPaths(paths ...string) PermissionProfile {
 	for _, path := range paths {
 		if path == "" {
@@ -201,7 +246,12 @@ func (p PermissionProfile) WithReadPaths(paths ...string) PermissionProfile {
 	return p
 }
 
-// WithWritePaths adds write grants.
+// WithWritePaths adds path rules granting both read and write access. Relative
+// paths are workspace-relative; absolute paths refer to host resources.
+// More-specific rules and mandatory protections can restrict these grants.
+// The profile's read mode is unchanged.
+// Grants authorize resolved resources; parent grants do not authorize external
+// targets reached through descendant symlinks.
 func (p PermissionProfile) WithWritePaths(paths ...string) PermissionProfile {
 	for _, path := range paths {
 		if path == "" {

@@ -54,28 +54,31 @@ access model described in [`FILE_SYSTEM_POLICY.md`](FILE_SYSTEM_POLICY.md). In
 short, `write` includes read access, while `none` means neither readable nor
 writable:
 
-- `ReadOnlyProfile` grants read access to the sandbox root and keeps networking
-  restricted. On Linux this still bind-mounts the host root read-only.
-- `WorkspaceWriteProfile` is the default managed profile. It starts from
-  `ReadOnlyProfile` and grants write access to the session workspace and its
-  well-known working directories. On Linux it bind-mounts the host root
-  read-only, then masks common credential paths and sibling session directories.
-- `WithLinuxNoHostRoot` skips the Linux host-root bind. Parent grants such as
-  `$HOME` still keep default credential masks; re-open a credential path only
-  with an exact `WithReadPaths` or `WithWritePaths` grant. It has no effect on
-  macOS. It shares selected public `/etc` runtime files rather than the whole
-  directory, and supports both read-only and writable workspaces.
-- `WithReadPaths` and `WithWritePaths` add explicit path grants. Relative paths
-  are resolved inside the workspace. Absolute paths are treated as host paths
-  and must be granted explicitly before they are mounted into the sandbox.
-- `WithNoAccessPaths` and `WithNoAccessGlobs` create `none` rules. Matching
-  paths are neither readable nor writable.
+- `ReadOnlyProfile` grants reads to documented platform runtime resources and
+  the current workspace, with restricted networking.
+- `WorkspaceWriteProfile` is the default managed profile. It adds writes to
+  the workspace and keeps metadata protected.
+- Both profiles use `ReadModeGranted`: host files require an effective path
+  grant. Linux builds a private root; macOS uses Seatbelt allow filters.
+- `WithReadMode(ReadModeHost)` opts into host reads when path rules do not
+  determine access. This broader mode does not protect arbitrary host data.
+- `WithReadPaths` and `WithWritePaths` grant paths; writes include reads.
+  Relative paths are workspace-relative, and absolute paths refer to host paths.
+- `WithNoAccessPaths` and `WithNoAccessGlobs` deny reads and writes.
 
-The default credential masks are a fixed startup-time denylist. They do not
-block arbitrary `.env`, `*.pem`, or `*.key` files throughout the host. For
-stricter Linux deployments, combine `WithLinuxNoHostRoot()` with
-`WithShellEnvironmentPolicy(ShellEnvironmentPolicy{Inherit: ShellEnvironmentPolicyInheritNone})`.
-See the [file system policy](FILE_SYSTEM_POLICY.md) for a complete example.
+Credential and session protections apply in both modes, including through
+parent grants and symlink aliases. An exact credential directory or child grant
+can reopen that resource; a HOME grant cannot reopen all credentials. The fixed
+credential list does not cover arbitrary `.env`, `*.pem`, or `*.key` files in
+shared paths. File visibility and environment inheritance are independent; use
+`WithShellEnvironmentPolicy(ShellEnvironmentPolicy{Inherit: ShellEnvironmentPolicyInheritNone})`
+when host environment variables should be excluded.
+
+This intentionally changes the previous Linux default that exposed `/`
+read-only. Grant additional toolchain/configuration paths individually, or opt
+into `ReadModeHost` when broad host reads are required. See
+[`FILE_SYSTEM_POLICY.md`](FILE_SYSTEM_POLICY.md) for runtime grants, protection
+limits, and migration details.
 
 Nested IDs such as `app` and `app/user/session` are valid parent and child
 scopes: the parent can access its descendants, while the child remains scoped

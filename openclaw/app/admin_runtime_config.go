@@ -953,6 +953,27 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					sandboxNetworkRestricted,
 					sandboxNetworkEnabled,
 				)),
+				adminRuntimeSandboxField(adminRuntimeSelectField(
+					"tools.code_executor.sandbox.read_mode",
+					"Sandbox Read Mode",
+					"File reads: granted reads only runtime resources, the workspace, and explicit grants; host also permits other readable host files. Default: granted. A disabled sandbox profile bypasses these restrictions.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey("code_executor"),
+						adminRuntimeKey("sandbox"),
+						adminRuntimeKey("read_mode"),
+					},
+					func(opts runOptions) string {
+						if !adminRuntimeSandboxCodeExecutorEnabled(opts) {
+							return ""
+						}
+						return strings.TrimSpace(
+							opts.CodeExecutor.Sandbox.ReadMode,
+						)
+					},
+					sandboxReadModeGranted,
+					sandboxReadModeHost,
+				)),
 				adminRuntimeSandboxField(adminRuntimeTextField(
 					"tools.code_executor.sandbox.default_timeout",
 					"Default Timeout",

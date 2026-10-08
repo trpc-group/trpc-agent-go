@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 )
 
-// defaultCredentialDenyPaths returns host credential paths that Linux profiles
+// defaultCredentialDenyPaths returns host credential paths that managed profiles
 // mask when visible. An exact path grant reopens a path; a parent or child
 // grant does not unmask the whole directory.
 func defaultCredentialDenyPaths() []string {
@@ -40,6 +40,10 @@ func defaultCredentialDenyPaths() []string {
 		filepath.Join(home, ".pypirc"),
 		filepath.Join(home, ".git-credentials"),
 		filepath.Join(home, ".config", "git", "credentials"),
+		filepath.Join(home, ".config", "hub"),
+		filepath.Join(home, ".cargo", "credentials"),
+		filepath.Join(home, ".cargo", "credentials.toml"),
+		filepath.Join(home, ".terraform.d", "credentials.tfrc.json"),
 	)
 }
 
@@ -51,23 +55,12 @@ func skipDefaultCredentialDeny(profile PermissionProfile, cred string) bool {
 	if err != nil {
 		return true
 	}
-	for _, rule := range profile.fileSystem.Rules {
-		if rule.Kind != rulePath || rule.Path == "" || !filepath.IsAbs(rule.Path) {
-			continue
-		}
-		if rule.Access != accessRead && rule.Access != accessWrite {
-			continue
-		}
-		if filepath.Clean(rule.Path) == credAbs {
-			return true
-		}
-	}
-	return false
+	return credentialExplicitlyGranted(profile, credAbs, credAbs)
 }
 
-// skipIsolatedHomeCredentialMask reports whether an isolated profile can skip
+// skipGrantedHomeCredentialMask reports whether a granted-mode profile can skip
 // masking a home credential because that subtree is not mounted.
-func skipIsolatedHomeCredentialMask(profile PermissionProfile, home, cred string) bool {
+func skipGrantedHomeCredentialMask(profile PermissionProfile, home, cred string) bool {
 	if profile.exposesHostRoot() || home == "" || cred == "" || !sameOrChild(home, cred) {
 		return false
 	}

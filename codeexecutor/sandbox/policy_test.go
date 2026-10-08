@@ -34,21 +34,21 @@ func TestPermissionProfileEnforcement(t *testing.T) {
 	if got := ExternalSandboxProfile(NetworkPolicy{}).enforcement(); got != enforcementExternal {
 		t.Fatalf("external_sandbox enforcement = %s", got)
 	}
-	noHostRoot := WorkspaceWriteProfile().WithLinuxNoHostRoot()
-	if got := noHostRoot.enforcement(); got != enforcementManaged {
-		t.Fatalf("linux_no_host_root enforcement = %s", got)
+	granted := WorkspaceWriteProfile().WithReadMode(ReadModeGranted)
+	if got := granted.enforcement(); got != enforcementManaged {
+		t.Fatalf("granted enforcement = %s", got)
 	}
-	if noHostRoot.exposesHostRoot() {
-		t.Fatal("WithLinuxNoHostRoot should not expose host root")
+	if granted.exposesHostRoot() {
+		t.Fatal("WithReadMode(ReadModeGranted) should not expose host root")
 	}
-	if !containsSpecialRule(noHostRoot, accessRead, specialRoot) {
-		t.Fatal("WithLinuxNoHostRoot should keep the host-root special for path policy")
+	if !containsSpecialRule(granted, accessRead, specialRoot) {
+		t.Fatal("WithReadMode(ReadModeGranted) should keep the workspace read grant")
 	}
-	if !WorkspaceWriteProfile().exposesHostRoot() || !ReadOnlyProfile().exposesHostRoot() {
-		t.Fatalf("host-root profiles should expose host root")
+	if WorkspaceWriteProfile().exposesHostRoot() || ReadOnlyProfile().exposesHostRoot() {
+		t.Fatalf("default profiles should use granted mode")
 	}
-	if !containsSpecialRule(noHostRoot, accessWrite, specialWork) {
-		t.Fatal("WithLinuxNoHostRoot should keep the work write grant")
+	if !containsSpecialRule(granted, accessWrite, specialWork) {
+		t.Fatal("WithReadMode(ReadModeGranted) should keep the work write grant")
 	}
 }
 
