@@ -263,8 +263,9 @@ Agent Request
 - **并发分析**：观察并发执行的效果
 
 Graph LLM 节点收到错误响应时，会同时记录到 `chat` span 和 chat 指标。
-两个通道都根据 model callback 处理后的响应生成 `error.type`：使用响应中的错误类型，
-存在错误码时追加 `_` 和错误码，类型为空时回退为 `_OTHER`。
+两个通道都根据 model callback 处理后的响应生成 `error.type`：先使用响应中的错误类型作为基础标签，
+类型为空时使用 `_OTHER`；再在错误码非空时追加 `_` 和错误码。
+例如，类型为空、错误码为 `429` 时，最终标签为 `_OTHER_429`。
 chat span 会标记为错误；父级 `workflow` span 也可能记录向上传播的失败。
 
 ## Span Attribute 策略（生产侧）

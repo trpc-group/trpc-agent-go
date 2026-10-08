@@ -262,9 +262,10 @@ Trace data can be used to analyze:
 
 For Graph LLM nodes, an error response is recorded on the `chat` span as well as
 in chat metrics. Both use the response after model callbacks to derive
-`error.type`: the response error type, optionally suffixed with `_` and its code,
-or `_OTHER` when the type is empty. The chat span is marked as an error; a parent
-`workflow` span may also record the propagated failure.
+`error.type`: first choose the response error type as the base label, or `_OTHER`
+when the type is empty, then append `_` and the error code if the code is non-empty.
+For example, an empty type with code `429` produces `_OTHER_429`. The chat span
+is marked as an error; a parent `workflow` span may also record the propagated failure.
 
 ## Span Attribute Policy (Production Side)
 
