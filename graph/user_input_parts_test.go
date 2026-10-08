@@ -252,6 +252,217 @@ func TestPartsUserInputStatePolicy(t *testing.T) {
 	require.Equal(t, origin, legacy[StateKeyUserInput])
 }
 
+func TestRefreshPartsOriginOnAcceptedInput(t *testing.T) {
+	const oldOrigin = "caption-a"
+	const newOrigin = "caption-b"
+	oldMessages := []model.Message{userMsg("", textPart(oldOrigin), imagePart())}
+	newMessages := []model.Message{userMsg("", textPart(newOrigin), imagePart())}
+	plain := []model.Message{userMsg("plain text")}
+	saved := State{
+		partsuserinput.Key: oldOrigin,
+		StateKeyUserInput:  oldOrigin,
+		StateKeyMessages:   oldMessages,
+	}
+	both := map[string]struct{}{
+		StateKeyMessages:  {},
+		StateKeyUserInput: {},
+	}
+	exec := &Executor{}
+	tests := []struct {
+		name      string
+		initial   State
+		keys      map[string]struct{}
+		origin    any
+		hasOrigin bool
+		input     any
+		messages  []model.Message
+	}{
+		{
+			name: "matching projection replaces",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: newOrigin, hasOrigin: true,
+			input: newOrigin, messages: newMessages,
+		},
+		{
+			name: "only user_input leaves the saved origin",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			keys:   map[string]struct{}{StateKeyUserInput: {}},
+			origin: oldOrigin, hasOrigin: true,
+			input: newOrigin, messages: oldMessages,
+		},
+		{
+			name: "only messages leaves the saved origin",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			keys:   map[string]struct{}{StateKeyMessages: {}},
+			origin: oldOrigin, hasOrigin: true,
+			input: oldOrigin, messages: newMessages,
+		},
+		{
+			name: "no override keys leave the checkpoint",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			origin: oldOrigin, hasOrigin: true,
+			input: oldOrigin, messages: oldMessages,
+		},
+		{
+			name: "private key alone does not replace",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			keys:   map[string]struct{}{partsuserinput.Key: {}},
+			origin: oldOrigin, hasOrigin: true,
+			input: oldOrigin, messages: oldMessages,
+		},
+		{
+			name: "listed user_input without a value does not clear",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: oldOrigin, messages: newMessages,
+		},
+		{
+			name: "missing source keeps the saved origin",
+			initial: State{
+				StateKeyUserInput: "plain text",
+				StateKeyMessages:  plain,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: "plain text", messages: plain,
+		},
+		{
+			name: "empty source clears a nonempty accepted input",
+			initial: State{
+				partsuserinput.Key: "",
+				StateKeyUserInput:  "plain text",
+				StateKeyMessages:   plain,
+			},
+			keys: both, input: "plain text", messages: plain,
+		},
+		{
+			name: "empty source without user_input does not clear",
+			initial: State{
+				partsuserinput.Key: "",
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: oldOrigin, messages: newMessages,
+		},
+		{
+			name: "empty source clears an accepted empty input",
+			initial: State{
+				partsuserinput.Key: "",
+				StateKeyUserInput:  "",
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, input: "", messages: newMessages,
+		},
+		{
+			name: "accepted empty input without a source keeps the origin",
+			initial: State{
+				StateKeyUserInput: "",
+				StateKeyMessages:  newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: "", messages: newMessages,
+		},
+		{
+			name: "empty input does not match a nonempty source",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  "",
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: "", messages: newMessages,
+		},
+		{
+			name: "mismatched source leaves the saved origin",
+			initial: State{
+				partsuserinput.Key: newOrigin,
+				StateKeyUserInput:  "other",
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: "other", messages: newMessages,
+		},
+		{
+			name: "non-string input does not clear",
+			initial: State{
+				partsuserinput.Key: "",
+				StateKeyUserInput:  1,
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: 1, messages: newMessages,
+		},
+		{
+			name: "non-string source does not replace",
+			initial: State{
+				partsuserinput.Key: 1,
+				StateKeyUserInput:  newOrigin,
+				StateKeyMessages:   newMessages,
+			},
+			keys: both, origin: oldOrigin, hasOrigin: true,
+			input: newOrigin, messages: newMessages,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := exec.mergeInitialStateNonInternal(saved.Clone(), tt.initial, tt.keys)
+			if tt.hasOrigin {
+				require.Equal(t, tt.origin, got[partsuserinput.Key])
+			} else {
+				require.NotContains(t, got, partsuserinput.Key)
+			}
+			require.Equal(t, tt.input, got[StateKeyUserInput])
+			require.Equal(t, tt.messages, got[StateKeyMessages])
+		})
+	}
+	refreshPartsOriginOnAcceptedInput(nil, saved, both)
+
+	cleared := MessagesStateSchema().ApplyUpdate(State{
+		partsuserinput.Key: oldOrigin,
+		StateKeyUserInput:  oldOrigin,
+	}, State{StateKeyUserInput: ""})
+	require.Equal(t, oldOrigin, cleared[partsuserinput.Key])
+	require.Equal(t, "", cleared[StateKeyUserInput])
+
+	compiled, err := NewStateGraph(NewStateSchema()).
+		AddNode("n", func(context.Context, State) (any, error) { return nil, nil }).
+		SetEntryPoint("n").
+		SetFinishPoint("n").
+		Compile()
+	require.NoError(t, err)
+	real, err := NewExecutor(compiled)
+	require.NoError(t, err)
+	marker := State{partsuserinput.Key: "", StateKeyUserInput: oldOrigin}
+	absent := State{StateKeyUserInput: oldOrigin}
+	require.Equal(t, real.initializeState(absent), real.initializeState(marker))
+	require.Equal(t, real.initializeState(absent).safeClone(), real.initializeState(marker).safeClone())
+	require.Equal(t, sanitizeForCacheKey(real.initializeState(absent)), sanitizeForCacheKey(real.initializeState(marker)))
+	require.Equal(t, oldOrigin, real.initializeState(State{
+		partsuserinput.Key: oldOrigin,
+	})[partsuserinput.Key])
+}
 func userMsg(content string, parts ...model.ContentPart) model.Message {
 	return model.Message{Role: model.RoleUser, Content: content, ContentParts: parts}
 }

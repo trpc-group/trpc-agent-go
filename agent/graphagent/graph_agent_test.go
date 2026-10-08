@@ -2172,6 +2172,8 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 			runtimeState:  graph.State{partsuserinput.Key: "stale-origin"},
 			wantUserInput: "  from-content  ",
 			wantHasInput:  true,
+			wantOrigin:    "",
+			wantHasOrigin: true,
 		},
 		{
 			name: "no-session text parts join in order and skip empty",
@@ -2219,6 +2221,15 @@ func TestGraphAgent_CreateInitialStateProjectsUserInput(t *testing.T) {
 				Role:         model.RoleUser,
 				ContentParts: []model.ContentPart{imagePart},
 			},
+			runtimeState:  staleState,
+			wantUserInput: "stale",
+			wantHasInput:  true,
+			wantOrigin:    "",
+			wantHasOrigin: true,
+		},
+		{
+			name:          "blank user keeps inherited input and writes no origin",
+			message:       model.Message{Role: model.RoleUser},
 			runtimeState:  staleState,
 			wantUserInput: "stale",
 			wantHasInput:  true,
@@ -2666,11 +2677,24 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 	)
 	originalMessage := contentPartsUserMessage(original, imageURL)
 
+	acceptedParts := contentPartsUserMessage(other, otherImage)
 	tests := []struct {
-		name          string
-		inputKey      string
-		inputValue    string
-		resumeMessage model.Message
+		name           string
+		inputKey       string
+		inputValue     string
+		resumeMessage  model.Message
+		overrideKeys   []string
+		emptyInput     bool
+		rewriteTo      string
+		acceptBoth     bool
+		acceptedInput  string
+		acceptedOrigin string
+		originPresent  bool
+		acceptedImage  string
+		explicitResume bool
+		resumeWant     model.Message
+		durableContent string
+		durableImage   string
 	}{
 		{
 			name:          "plain resume keeps the saved multimodal message",
@@ -2692,6 +2716,44 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 			inputValue:    customText,
 			resumeMessage: contentPartsUserMessage(customText, otherImage),
 		},
+		{
+			name:           "accepted parts replacement keeps the new image",
+			resumeMessage:  acceptedParts,
+			overrideKeys:   []string{graph.StateKeyMessages, graph.StateKeyUserInput},
+			acceptBoth:     true,
+			acceptedInput:  other,
+			acceptedOrigin: other,
+			originPresent:  true,
+			acceptedImage:  otherImage,
+			explicitResume: true,
+			resumeWant:     acceptedParts,
+		},
+		{
+			name:           "accepted content rewrite sends the saved text",
+			resumeMessage:  contentWithImageUserMessage(other, otherImage),
+			overrideKeys:   []string{graph.StateKeyMessages, graph.StateKeyUserInput},
+			rewriteTo:      original,
+			acceptBoth:     true,
+			acceptedInput:  other,
+			acceptedImage:  otherImage,
+			explicitResume: true,
+			resumeWant:     model.NewUserMessage(original),
+			durableContent: original,
+			durableImage:   otherImage,
+		},
+		{
+			name:           "accepted empty input rewrite sends the saved text",
+			resumeMessage:  contentWithImageUserMessage("", otherImage),
+			overrideKeys:   []string{graph.StateKeyMessages, graph.StateKeyUserInput},
+			emptyInput:     true,
+			rewriteTo:      original,
+			acceptBoth:     true,
+			acceptedImage:  otherImage,
+			explicitResume: true,
+			resumeWant:     model.NewUserMessage(original),
+			durableContent: original,
+			durableImage:   otherImage,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2699,6 +2761,9 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 			recording := &requestRecordingGraphAgentModel{requests: requests}
 			saver := checkpointmemory.NewSaver()
 			var prepares atomic.Int32
+			var acceptedInput, acceptedOrigin, acceptedImage string
+			var acceptedInputPresent, acceptedOriginPresent bool
+			var durable model.Message
 			stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
 			if tt.inputKey != "" {
 				key, value := tt.inputKey, tt.inputValue
@@ -2706,24 +2771,55 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 					prepares.Add(1)
 					return graph.State{key: value}, nil
 				})
+			} else if tt.acceptBoth {
+				rewrite := tt.rewriteTo
+				stateGraph.AddNode("prepare", func(_ context.Context, state graph.State) (any, error) {
+					if prepares.Add(1) == 1 {
+						return nil, nil
+					}
+					if value, ok := state[graph.StateKeyUserInput].(string); ok {
+						acceptedInput = value
+						acceptedInputPresent = true
+					}
+					if value, ok := state[partsuserinput.Key].(string); ok {
+						acceptedOrigin = value
+						acceptedOriginPresent = true
+					}
+					acceptedImage = messageImageURL(lastUserMessage(state))
+					if rewrite != "" {
+						return graph.State{graph.StateKeyUserInput: rewrite}, nil
+					}
+					return nil, nil
+				})
+			}
+			if tt.durableImage != "" {
+				stateGraph.AddNode("capture", func(_ context.Context, state graph.State) (any, error) {
+					durable = lastUserMessage(state)
+					return nil, nil
+				})
 			}
 			var llmOpts []graph.Option
 			if tt.inputKey != "" && tt.inputKey != graph.StateKeyUserInput {
 				llmOpts = append(llmOpts, graph.WithUserInputKey(tt.inputKey))
 			}
 			stateGraph.AddLLMNode("llm", recording, "", nil, llmOpts...)
-			if tt.inputKey != "" {
+			if tt.inputKey != "" || tt.acceptBoth {
 				stateGraph.AddEdge("prepare", "llm").SetEntryPoint("prepare")
 			} else {
 				stateGraph.SetEntryPoint("llm")
 			}
-			g, err := stateGraph.SetFinishPoint("llm").Compile()
+			if tt.durableImage != "" {
+				stateGraph.AddEdge("llm", "capture").SetFinishPoint("capture")
+			} else {
+				stateGraph.SetFinishPoint("llm")
+			}
+			g, err := stateGraph.Compile()
 			require.NoError(t, err)
 			graphAgent, err := New(agentName, g, WithCheckpointSaver(saver))
 			require.NoError(t, err)
 
 			lineage := "lineage-" + tt.name
-			runParts := func(message model.Message, runtime graph.State, id string) {
+			runParts := func(message model.Message, runtime graph.State, keys []string, id string) {
 				t.Helper()
 				invocation := agent.NewInvocation(
 					agent.WithInvocationID(id),
@@ -2733,6 +2829,11 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 				)
 				invocation.RunOptions.RequestID = id
 				invocation.RunOptions.RuntimeState = runtime
+				if len(keys) > 0 {
+					graph.WithCallOptions(
+						graph.WithCallResumeStateOverrideKeys(keys...),
+					)(&invocation.RunOptions)
+				}
 				runGraphAgentToCompletion(t, graphAgent, invocation)
 			}
 
@@ -2740,7 +2841,7 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 				graph.CfgKeyLineageID:    lineage,
 				graph.CfgKeyCheckpointNS: agentName,
 			}
-			runParts(contentPartsUserMessage(original, imageURL), baseRuntime, "first")
+			runParts(contentPartsUserMessage(original, imageURL), baseRuntime, nil, "first")
 			checkpoint := findPartsOriginCheckpoint(t, saver, lineage, agentName, tt.inputKey == "", func(values map[string]any) bool {
 				if values[partsuserinput.Key] != original {
 					return false
@@ -2755,22 +2856,77 @@ func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
 				graph.CfgKeyCheckpointNS: agentName,
 				graph.CfgKeyCheckpointID: checkpoint.ID,
 			}
-			runParts(tt.resumeMessage, resumedRuntime, "resumed")
+			if tt.emptyInput {
+				resumedRuntime[graph.StateKeyUserInput] = ""
+			}
+			runParts(tt.resumeMessage, resumedRuntime, tt.overrideKeys, "resumed")
 			if tt.inputKey != "" {
 				require.Equal(t, int32(1), prepares.Load())
 			}
-			want := originalMessage
+			if tt.acceptBoth {
+				require.Equal(t, int32(2), prepares.Load())
+				require.True(t, acceptedInputPresent)
+				require.Equal(t, tt.acceptedInput, acceptedInput)
+				require.Equal(t, tt.originPresent, acceptedOriginPresent)
+				require.Equal(t, tt.acceptedOrigin, acceptedOrigin)
+				require.Equal(t, tt.acceptedImage, acceptedImage)
+			}
+			if tt.durableImage != "" {
+				require.Equal(t, tt.durableContent, durable.Content)
+				require.Equal(t, tt.durableImage, messageImageURL(durable))
+			}
+			firstWant := originalMessage
+			resumeWant := originalMessage
 			if tt.inputKey != "" {
-				want = model.NewUserMessage(tt.inputValue)
+				firstWant = model.NewUserMessage(tt.inputValue)
+				resumeWant = firstWant
+			}
+			if tt.explicitResume {
+				resumeWant = tt.resumeWant
 			}
 			require.Len(t, requests, 2)
-			for i := 0; i < 2; i++ {
+			for _, want := range []model.Message{firstWant, resumeWant} {
 				messages := <-requests
 				require.NotEmpty(t, messages)
 				require.True(t, model.MessagesEqual(want, messages[len(messages)-1]))
 			}
 		})
 	}
+
+	t.Run("fresh pure media omits the empty origin", func(t *testing.T) {
+		saver := checkpointmemory.NewSaver()
+		g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+			AddNode("noop", func(context.Context, graph.State) (any, error) {
+				return nil, nil
+			}).
+			SetEntryPoint("noop").
+			SetFinishPoint("noop").
+			Compile()
+		require.NoError(t, err)
+		graphAgent, err := New(agentName, g, WithCheckpointSaver(saver))
+		require.NoError(t, err)
+		lineage := "lineage-pure-media"
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("pure-media"),
+			agent.WithInvocationMessage(contentWithImageUserMessage("", otherImage)),
+			agent.WithInvocationSession(&session.Session{ID: "sid"}),
+			agent.WithInvocationEventFilterKey(agentName),
+		)
+		invocation.RunOptions.RequestID = "pure-media"
+		invocation.RunOptions.RuntimeState = graph.State{
+			graph.CfgKeyLineageID:    lineage,
+			graph.CfgKeyCheckpointNS: agentName,
+		}
+		runGraphAgentToCompletion(t, graphAgent, invocation)
+		checkpoint := findPartsOriginCheckpoint(t, saver, lineage, agentName, true, func(values map[string]any) bool {
+			if _, ok := values[partsuserinput.Key]; ok {
+				return false
+			}
+			input, hasInput := values[graph.StateKeyUserInput].(string)
+			return !hasInput || input == ""
+		})
+		require.NotContains(t, checkpoint.ChannelValues, partsuserinput.Key)
+	})
 }
 
 func findPartsOriginCheckpoint(
@@ -2824,6 +2980,26 @@ func contentPartsUserMessage(text, imageURL string) model.Message {
 			{Type: model.ContentTypeImage, Image: &model.Image{URL: imageURL}},
 		},
 	}
+}
+
+func contentWithImageUserMessage(content, imageURL string) model.Message {
+	return model.Message{
+		Role:    model.RoleUser,
+		Content: content,
+		ContentParts: []model.ContentPart{{
+			Type:  model.ContentTypeImage,
+			Image: &model.Image{URL: imageURL},
+		}},
+	}
+}
+
+func messageImageURL(message model.Message) string {
+	for _, part := range message.ContentParts {
+		if part.Image != nil {
+			return part.Image.URL
+		}
+	}
+	return ""
 }
 
 func lastUserMessage(state graph.State) model.Message {

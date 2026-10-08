@@ -496,31 +496,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		appendNonUserInvocationMessage(initialState, invocation.Message)
 	}
 
-	// Drop an inherited parts-only origin so a fresh turn cannot keep a stale
-	// seed from initial or runtime state. Resume merge ignores keys that
-	// start with "_", so deleting or replacing it here cannot override a
-	// checkpoint value.
-	delete(initialState, partsuserinput.Key)
-
-	// Project the current user turn onto StateKeyUserInput.
-	// Agent Builder / AG-UI often encode ordinary text in ContentParts with
-	// empty Content. Prefer Content unchanged when it is non-empty; otherwise
-	// join textual ContentParts. When resuming, preserve the legacy Content
-	// "resume" sentinel and also recognize text-only ContentParts.
-	isResuming := invocation.RunOptions.RuntimeState != nil &&
-		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
-	if invocation.Message.Role == model.RoleUser &&
-		!(isResuming && isPlainResumeInput(invocation.Message)) {
-		if userInput := utilmessage.TextContent(invocation.Message); userInput != "" {
-			initialState[graph.StateKeyUserInput] = userInput
-			// Record the origin only for a nonempty ContentParts-only user
-			// turn. Nonempty Content stays authoritative and leaves no origin.
-			if invocation.Message.Content == "" &&
-				len(invocation.Message.ContentParts) > 0 {
-				initialState[partsuserinput.Key] = userInput
-			}
-		}
-	}
+	projectInvocationUserInput(initialState, invocation)
 	// Add session context if available.
 	if invocation.Session != nil {
 		initialState[graph.StateKeySession] = invocation.Session
@@ -533,6 +509,43 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+// projectInvocationUserInput writes the current user turn onto user_input.
+//
+// Agent Builder / AG-UI often encode ordinary text in ContentParts with
+// empty Content. Prefer Content unchanged when it is non-empty; otherwise
+// join textual ContentParts. When resuming, preserve the legacy Content
+// "resume" sentinel and also recognize text-only ContentParts.
+//
+// An inherited parts-only origin is dropped so a fresh turn cannot keep a
+// stale seed from initial or runtime state. The generic resume merge ignores
+// keys that start with "_". Only the scoped both-key replacement reads the
+// value written here. A meaningful user turn (nonempty Content or any
+// content parts), other than the resume sentinel, stores an empty string as
+// a clear signal. A nonempty parts-only projection replaces that signal with
+// the projected text. A blank user message, a non-user message, and a plain
+// resume leave the key absent, which is not a clear signal. Public
+// user_input assignment is unchanged. Execution initialization removes the
+// empty string before a fresh run is executed or checkpointed.
+func projectInvocationUserInput(initialState graph.State, invocation *agent.Invocation) {
+	delete(initialState, partsuserinput.Key)
+	isResuming := invocation.RunOptions.RuntimeState != nil &&
+		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
+	if invocation.Message.Role != model.RoleUser ||
+		(isResuming && isPlainResumeInput(invocation.Message)) {
+		return
+	}
+	if invocation.Message.Content != "" || len(invocation.Message.ContentParts) > 0 {
+		initialState[partsuserinput.Key] = ""
+	}
+	if userInput := utilmessage.TextContent(invocation.Message); userInput != "" {
+		initialState[graph.StateKeyUserInput] = userInput
+		if invocation.Message.Content == "" &&
+			len(invocation.Message.ContentParts) > 0 {
+			initialState[partsuserinput.Key] = userInput
+		}
+	}
 }
 
 // isPlainResumeInput reports whether msg is the checkpoint resume sentinel.

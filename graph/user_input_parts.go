@@ -32,3 +32,62 @@ func retainTypedUserMessage(
 	original, _ := state[partsuserinput.Key].(string)
 	return original != "" && userInput == original
 }
+
+// refreshPartsOriginOnAcceptedInput updates the checkpoint parts projection
+// when this resume accepted a new user turn.
+//
+// Both StateKeyMessages and StateKeyUserInput must be selected override keys
+// and present in initial, and user_input must be a string. A nonempty source
+// replaces the checkpoint value only when it equals that string. An empty
+// source string removes the checkpoint value, including when the accepted
+// user_input is itself empty. A missing source is not that signal. A single
+// accepted key, a non-string user_input, a non-string source, or any other
+// source string leaves the checkpoint value unchanged. The normal override
+// loop still ignores the private key, and clearing user_input after the
+// model does not remove it.
+func refreshPartsOriginOnAcceptedInput(
+	restored, initial State,
+	resumeStateOverrideKeys map[string]struct{},
+) {
+	if restored == nil || initial == nil || len(resumeStateOverrideKeys) == 0 {
+		return
+	}
+	if _, ok := resumeStateOverrideKeys[StateKeyMessages]; !ok {
+		return
+	}
+	if _, ok := resumeStateOverrideKeys[StateKeyUserInput]; !ok {
+		return
+	}
+	if _, supplied := initial[StateKeyMessages]; !supplied {
+		return
+	}
+	userInput, ok := initial[StateKeyUserInput].(string)
+	if !ok {
+		return
+	}
+	origin, ok := initial[partsuserinput.Key].(string)
+	if !ok {
+		return
+	}
+	if origin == "" {
+		delete(restored, partsuserinput.Key)
+		return
+	}
+	if userInput == "" || origin != userInput {
+		return
+	}
+	restored[partsuserinput.Key] = origin
+}
+
+// dropEmptyPartsOrigin removes a clear-origin marker before fresh execution.
+// Resume merge reads the marker from the original initial map. Keeping the
+// empty string out of the executed state stops checkpoints and cache keys
+// from treating it as a stored projection.
+func dropEmptyPartsOrigin(state State) {
+	if state == nil {
+		return
+	}
+	if origin, ok := state[partsuserinput.Key].(string); ok && origin == "" {
+		delete(state, partsuserinput.Key)
+	}
+}
