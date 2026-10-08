@@ -260,6 +260,16 @@ Trace data can be used to analyze:
 - **Dependencies**: Understand relationships between components.
 - **Concurrency Analysis**: Observe the effects of concurrent execution.
 
+For Graph LLM nodes, an error response is recorded on the `chat` span as well as
+in chat metrics. Both use the response after model callbacks to derive
+`error.type`: first choose the response error type as the base label, or `_OTHER`
+when the type is empty, then append `_` and the error code if the code is non-empty.
+For example, an empty type with code `429` produces `_OTHER_429`. The chat span
+is marked as an error; a parent `workflow` span may also record the propagated failure.
+Final response validation failures are also recorded on the chat span with the
+same `error.type` as chat metrics, including when a model callback supplied a
+successful replacement response before validation failed.
+
 ## Span Attribute Policy (Production Side)
 
 `telemetry/trace` provides an opt-in `SpanAttributePolicy` that controls collection and size of large payload **span attributes** at span creation time.
