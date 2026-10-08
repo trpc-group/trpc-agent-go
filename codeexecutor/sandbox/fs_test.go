@@ -11,12 +11,59 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	ds "github.com/bmatcuk/doublestar/v4"
+
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
+
+func TestStageDirectoryCanceledContextDoesNotCopy(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.WriteFile(source, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()), WithPermissionProfile(
+		WorkspaceWriteProfile().WithReadPaths(source),
+	))
+	ws, err := rt.CreateWorkspace(context.Background(), "canceled-copy", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = rt.StageDirectory(ctx, ws, source, "work/copied", codeexecutor.StageOptions{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled staging error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "work", "copied")); !os.IsNotExist(err) {
+		t.Fatalf("canceled staging created a destination: %v", err)
+	}
+}
+
+func TestStageDirectoryInvalidGlobFailsBeforeCopy(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.WriteFile(source, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()), WithPermissionProfile(
+		WorkspaceWriteProfile().WithReadPaths(source).WithNoAccessGlobs("["),
+	))
+	ws, err := rt.CreateWorkspace(context.Background(), "invalid-copy-policy", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = rt.StageDirectory(context.Background(), ws, source, "work/copied", codeexecutor.StageOptions{})
+	if !errors.Is(err, ds.ErrBadPattern) {
+		t.Fatalf("invalid glob staging error = %v, want invalid pattern", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "work", "copied")); !os.IsNotExist(err) {
+		t.Fatalf("invalid policy copied a source: %v", err)
+	}
+}
 
 func TestHostStagingAncestorSymlinkGrants(t *testing.T) {
 	for _, grant := range []string{

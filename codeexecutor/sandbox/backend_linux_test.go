@@ -3573,6 +3573,305 @@ print(json.loads(path.read_text())["answer"])
 	}
 }
 
+func TestLinuxSessionAliasMountsPreserveWorkspacePermissions(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		for _, grantKind := range []string{"read-alias", "write-alias", "read-physical"} {
+			name := "read-only/" + grantKind
+			if writable {
+				name = "workspace-write/" + grantKind
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+				ws, err := rt.CreateWorkspace(context.Background(), "current", codeexecutor.WorkspacePolicy{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				peer, err := rt.CreateWorkspace(context.Background(), "peer", codeexecutor.WorkspacePolicy{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				alias := filepath.Join(t.TempDir(), "runtime-alias")
+				if err := os.Symlink(rt.root, alias); err != nil {
+					t.Fatal(err)
+				}
+				grant := alias
+				if grantKind == "read-physical" {
+					grant = rt.root
+				}
+				profile := ReadOnlyProfile()
+				if writable {
+					profile = WorkspaceWriteProfile()
+				}
+				parentBind := "--ro-bind"
+				if grantKind == "write-alias" {
+					profile = profile.WithWritePaths(grant)
+					parentBind = "--bind"
+				} else {
+					profile = profile.WithReadPaths(grant)
+				}
+				if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+					t.Fatal(err)
+				}
+				args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil,
+					codeexecutor.RunProgramSpec{Cmd: "/bin/true"}, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				parentAt := argTripleIndex(args, parentBind, grant, grant)
+				maskAt := argPairIndex(args, "--tmpfs", filepath.Join(grant, "sandbox"))
+				if parentAt < 0 || maskAt <= parentAt {
+					t.Fatalf("session mask did not follow ancestor bind: %#v", args)
+				}
+				bind := "--ro-bind"
+				if writable {
+					bind = "--bind"
+				}
+				currentView := filepath.Join(grant, "sandbox", "current")
+				if argTripleIndexAfter(args, maskAt, bind, ws.Path, currentView) < 0 {
+					t.Fatalf("current workspace permissions not restored after mask: %#v", args)
+				}
+				if !writable && hasArgTriple(args, "--bind", ws.Path, currentView) {
+					t.Fatalf("ancestor write grant made read-only workspace writable: %#v", args)
+				}
+				peerView := filepath.Join(grant, "sandbox", "peer")
+				if hasArgTriple(args, "--bind", peer.Path, peerView) || hasArgTriple(args, "--ro-bind", peer.Path, peerView) {
+					t.Fatalf("peer workspace restored under ancestor view: %#v", args)
+				}
+			})
+		}
+	}
+}
+
+func TestLinuxWorkspaceAliasReadOnlyCarveout(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "alias-carveout", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readonly := filepath.Join(ws.Path, "work", "readonly")
+	if err := os.Mkdir(readonly, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(ws.Path, alias); err != nil {
+		t.Fatal(err)
+	}
+	aliasReadonly := filepath.Join(alias, "work", "readonly")
+	profile := WorkspaceWriteProfile().WithWritePaths(alias).WithReadPaths(aliasReadonly)
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(args, "--ro-bind", readonly, readonly) ||
+		!hasArgTriple(args, "--ro-bind", readonly, aliasReadonly) {
+		t.Fatalf("read-only carveout missing from canonical or alias view: %#v", args)
+	}
+	parentAt := argTripleIndex(args, "--bind", alias, alias)
+	if parentAt < 0 || argTripleIndexAfter(args, parentAt, "--ro-bind", readonly, aliasReadonly) < 0 {
+		t.Fatalf("alias parent bind replaced read-only carveout: %#v", args)
+	}
+}
+
+func TestLinuxProtectedMetadataDoesNotExposeUngrantedSiblings(t *testing.T) {
+	profile := normalizeProfile(PermissionProfile{}.WithReadPaths("work").WithWritePaths(".git/config"))
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()), WithPermissionProfile(profile))
+	ws, err := rt.CreateWorkspace(context.Background(), "selected-metadata", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(ws.Path, ".git")
+	if err := os.Mkdir(metadata, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(metadata, "config")
+	if err := os.WriteFile(config, []byte("metadata"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasArgTriple(args, "--ro-bind", ws.Path, ws.Path) || hasArgTriple(args, "--ro-bind", metadata, metadata) {
+		t.Fatalf("metadata protection exposed ungranted workspace or metadata siblings: %#v", args)
+	}
+	if !hasArgTriple(args, "--ro-bind", filepath.Join(ws.Path, "work"), filepath.Join(ws.Path, "work")) {
+		t.Fatalf("selected workspace read grant missing: %#v", args)
+	}
+	writeAt := argTripleIndex(args, "--bind", config, config)
+	if writeAt < 0 || argTripleIndexAfter(args, writeAt, "--ro-bind", config, config) < 0 {
+		t.Fatalf("protected metadata child was not made read-only after its write grant: %#v", args)
+	}
+}
+
+func TestLinuxSymlinkedGrantDescendantUsesResolvedDestination(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "grant-descendant", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, child := t.TempDir(), t.TempDir()
+	if err := os.Symlink(child, filepath.Join(parent, "child")); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "parent-alias")
+	if err := os.Symlink(parent, alias); err != nil {
+		t.Fatal(err)
+	}
+	requested := filepath.Join(alias, "child")
+	profile := WorkspaceWriteProfile().WithReadPaths(alias, requested)
+	args, err := rt.externalGrantArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(args, "--ro-bind", alias, alias) || !hasArgTriple(args, "--ro-bind", requested, child) {
+		t.Fatalf("descendant symlink target is unreachable through its ancestor bind: %#v", args)
+	}
+	if hasArgTriple(args, "--ro-bind", requested, requested) {
+		t.Fatalf("descendant grant incorrectly replaced the ancestor's symlink entry: %#v", args)
+	}
+}
+
+func TestLinuxProtectedParentsPermitImmutableSymlinkEntries(t *testing.T) {
+	for _, protection := range []string{"metadata", "credential"} {
+		t.Run(protection, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+			ws, err := rt.CreateWorkspace(context.Background(), "protected-parent", codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent := filepath.Join(ws.Path, ".git")
+			profile := WorkspaceWriteProfile()
+			if protection == "credential" {
+				parent = filepath.Join(home, ".ssh")
+				profile = profile.WithWritePaths(home)
+			}
+			if err := os.Mkdir(parent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(parent, "config")
+			if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(parent, "alias")
+			if err := os.Symlink(target, alias); err != nil {
+				t.Fatal(err)
+			}
+			if protection == "metadata" {
+				profile = profile.WithReadPaths(alias)
+			} else {
+				profile = profile.WithNoAccessPaths(alias)
+			}
+			if err := rt.validateLinuxProtectedSymlinkEntries(profile, ws); err != nil {
+				t.Fatalf("an enclosing protection already makes the symlink entry immutable: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxExplicitCredentialWriteGrantRemainsWritable(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		name := "directory"
+		if alias {
+			name = "symlink"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			credential := filepath.Join(home, ".ssh")
+			if alias {
+				if err := os.Symlink(t.TempDir(), credential); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Mkdir(credential, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+			ws, err := rt.CreateWorkspace(context.Background(), "credential-write", codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := WorkspaceWriteProfile().WithWritePaths(credential)
+			if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+				t.Fatal(err)
+			}
+			args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil,
+				codeexecutor.RunProgramSpec{Cmd: "/bin/true"}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !hasArgTriple(args, "--bind", credential, credential) {
+				t.Fatalf("exact credential write grant missing: %#v", args)
+			}
+			if hasInaccessibleDirMask(args, credential) || hasInaccessibleDirMask(args, policyCanonicalPath(credential)) {
+				t.Fatalf("exact credential write grant was masked: %#v", args)
+			}
+		})
+	}
+}
+
+func TestLinuxWorkspaceCredentialPathsStayVisible(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "workspace-credentials", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", ws.Path)
+	credential := filepath.Join(ws.Path, ".ssh")
+	if err := os.Mkdir(credential, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credential, "config"), []byte("workspace input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(profile, ws, filepath.Join(ws.Path, "work"), nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArgTriple(args, "--bind", ws.Path, ws.Path) || hasInaccessibleDirMask(args, credential) {
+		t.Fatalf("workspace-local input was treated as a host credential: %#v", args)
+	}
+}
+
+func TestLinuxSystemViewsDoNotMountDescendantDirectories(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "system-views", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithReadPaths("/dev/null", "/proc/self")
+	for _, mountProc := range []bool{false, true} {
+		args := linuxSystemViewArgs(profile, ws, mountProc)
+		if !hasArgPair(args, "--dev", "/dev") || hasArgPair(args, "--dev", "/dev/null") {
+			t.Fatalf("a device descendant was replaced with a device filesystem: %#v", args)
+		}
+		if mountProc && !hasArgPair(args, "--proc", "/proc") {
+			t.Fatalf("private process view missing: %#v", args)
+		}
+		if !mountProc && !hasInaccessibleDirMask(args, "/proc") {
+			t.Fatalf("host process view was not masked: %#v", args)
+		}
+		if hasArgPair(args, "--proc", "/proc/self") || hasInaccessibleDirMask(args, "/proc/self") {
+			t.Fatalf("a process descendant was used as a filesystem root: %#v", args)
+		}
+	}
+}
+
 func (r *Runtime) linuxSandboxArgs(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
