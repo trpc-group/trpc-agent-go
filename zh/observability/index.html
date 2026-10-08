@@ -4433,6 +4433,13 @@
 <li><strong>依赖关系</strong>：了解组件间的调用关系</li>
 <li><strong>并发分析</strong>：观察并发执行的效果</li>
 </ul>
+<p>Graph LLM 节点收到错误响应时，会同时记录到 <code>chat</code> span 和 chat 指标。
+两个通道都根据 model callback 处理后的响应生成 <code>error.type</code>：先使用响应中的错误类型作为基础标签，
+类型为空时使用 <code>_OTHER</code>；再在错误码非空时追加 <code>_</code> 和错误码。
+例如，类型为空、错误码为 <code>429</code> 时，最终标签为 <code>_OTHER_429</code>。
+chat span 会标记为错误；父级 <code>workflow</code> span 也可能记录向上传播的失败。
+最终响应校验失败时，也会在 chat span 上记录与 chat 指标一致的 <code>error.type</code>，
+包括 model callback 已提供成功的替换响应、但后续最终校验仍失败的情况。</p>
 <h2 id="span-attribute">Span Attribute 策略（生产侧）</h2>
 <p><code>telemetry/trace</code> 提供 opt-in 的 <code>SpanAttributePolicy</code>，在 span 创建阶段控制大 payload <strong>span attribute</strong> 的采集与写入大小。</p>
 <p>默认不配置时行为不变。</p>
@@ -4619,7 +4626,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月18日 08:51:38 UTC">2026-08-18 08:51:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年10月8日 08:14:18 UTC">2026-10-08 08:14:18</span>
   </span>
 
     

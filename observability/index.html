@@ -4432,6 +4432,15 @@ The above code integrates with Langfuse by setting <code>OTEL_EXPORTER_OTLP_HEAD
 <li><strong>Dependencies</strong>: Understand relationships between components.</li>
 <li><strong>Concurrency Analysis</strong>: Observe the effects of concurrent execution.</li>
 </ul>
+<p>For Graph LLM nodes, an error response is recorded on the <code>chat</code> span as well as
+in chat metrics. Both use the response after model callbacks to derive
+<code>error.type</code>: first choose the response error type as the base label, or <code>_OTHER</code>
+when the type is empty, then append <code>_</code> and the error code if the code is non-empty.
+For example, an empty type with code <code>429</code> produces <code>_OTHER_429</code>. The chat span
+is marked as an error; a parent <code>workflow</code> span may also record the propagated failure.
+Final response validation failures are also recorded on the chat span with the
+same <code>error.type</code> as chat metrics, including when a model callback supplied a
+successful replacement response before validation failed.</p>
 <h2 id="span-attribute-policy-production-side">Span Attribute Policy (Production Side)</h2>
 <p><code>telemetry/trace</code> provides an opt-in <code>SpanAttributePolicy</code> that controls collection and size of large payload <strong>span attributes</strong> at span creation time.</p>
 <p>Default (unset) behavior is unchanged.</p>
@@ -4618,7 +4627,7 @@ The above code integrates with Langfuse by setting <code>OTEL_EXPORTER_OTLP_HEAD
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 18, 2026 08:51:38 UTC">2026-08-18 08:51:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 8, 2026 08:14:18 UTC">2026-10-08 08:14:18</span>
   </span>
 
     
