@@ -48,6 +48,21 @@ func (r *sessionTraceRunner) Run(ctx context.Context, _, sessionID string, messa
 }
 func (r *sessionTraceRunner) Close() error { return nil }
 
+// TestBatchRejectsDuplicateCaseIDs prevents ambiguous trace/result associations
+// from a custom case builder before evaluation or persistence can start.
+func TestBatchRejectsDuplicateCaseIDs(t *testing.T) {
+	called := false
+	h := &Handler{agentEvaluator: &parallelEvaluator{evaluate: func(context.Context) (*coreevaluation.EvaluationResult, error) {
+		called = true
+		return nil, nil
+	}}}
+	response, err := h.executeRemoteExperiment(context.Background(), &remoteExperimentRequest{DatasetID: "set"}, executionOptions{},
+		[]*CaseSpec{buildTestCaseSpec("duplicate"), buildTestCaseSpec("duplicate")})
+	require.ErrorContains(t, err, "duplicate eval case id duplicate")
+	require.Nil(t, response)
+	require.False(t, called)
+}
+
 // TestBatchRunTraceAssociation covers concurrent runs, ordered publication, and
 // callback failures without relying on the evaluator to reuse a parent trace ID.
 func TestBatchRunTraceAssociation(t *testing.T) {
