@@ -2203,7 +2203,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 				config.Response.Error.Message,
 			),
 		)
-		return ctx, nil, fmt.Errorf(
+		return ctx, llmEvent, fmt.Errorf(
 			"model API error: %s",
 			config.Response.Error.Message,
 		)
@@ -5347,6 +5347,7 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
 	p.finalResponse = response
 	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
+	var responseErr error
 	if p.fastResponsePath {
 		responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 		lastEvent, err := emitFastModelResponseEvent(
@@ -5360,12 +5361,9 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 			reusableEvent,
 		)
 		p.lastEvent = lastEvent
-		if err != nil {
-			return false, err
-		}
+		responseErr = err
 	} else {
-		var err error
-		p.ctx, p.lastEvent, err = processModelResponse(p.ctx, modelResponseConfig{
+		p.ctx, p.lastEvent, responseErr = processModelResponse(p.ctx, modelResponseConfig{
 			Response:         response,
 			Invocation:       p.invocation,
 			StableInvocation: p.stableInvocation,
@@ -5380,9 +5378,6 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 			Span:             p.config.Span,
 			NodeID:           p.config.NodeID,
 		})
-		if err != nil {
-			return false, err
-		}
 	}
 	p.invocation = invocationFromContextOrDefault(p.ctx, p.invocation)
 	p.observabilityInvocation = refreshObservabilityInvocationView(
@@ -5390,6 +5385,10 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 		p.stableInvocation,
 		p.config,
 	)
+	// Trace the same processed response used by metrics, including callback replacements.
+	if p.lastEvent != nil {
+		response = p.lastEvent.Response
+	}
 	traceProcessedModelResponse(
 		p.config.Span,
 		&p.chatTraceState,
@@ -5399,6 +5398,9 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 		response,
 		p.lastEvent,
 	)
+	if responseErr != nil {
+		return false, responseErr
+	}
 	return true, nil
 }
 
