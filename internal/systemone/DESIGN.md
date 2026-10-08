@@ -289,6 +289,8 @@ Model 是服务端返回的实际名字，可能不同于请求 alias。RequestI
 
 保持 `SystemOne(ctx, *Request) (*Response, error)`：非法请求在发送前失败；非 2xx 仍返回现有可通过 `errors.As` 检查的 HTTPError；传输、取消、deadline 和读取错误继续通过 `%w` 保留原因；无自动重试或 provider fallback。
 
+非 2xx 的正文读取失败时，通过 `errors.Join` 同时保留 HTTPError 和读取错误：调用方仍可通过 `errors.As` 获取状态、响应头及已接收的部分正文，通过 `errors.Is` 检查读取、取消或 deadline 原因。正文最多保留 8 MiB；`HTTPError.Truncated` 表示正文因大小限制或读取错误而不完整。错误时仍不返回部分 Response。
+
 调用期间不得并发修改 Request 及其 State、Questions、Options、Criteria。包不修改调用方数据。返回后调用方拥有 Response，读取方法返回的指针与 Answers 中对象一致；只读访问可以并发，任何修改都需要调用方同步。Raw 与类型化字段不提供修改后的双向同步。修改一个答案不会改写 Raw，修改 Raw 也不会重新生成答案。
 
 保留当前 30 秒默认客户端超时、零超时关闭客户端 deadline、拒绝重定向、8 MiB 响应上限和响应体关闭规则。HTTP client/transport 所有权不变。context 取消只保证客户端 HTTP 操作取消，不保证远端停止推理，也不承诺能够中断调用方的自定义 MarshalJSON。

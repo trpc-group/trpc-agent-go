@@ -12,6 +12,7 @@ package systemone
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,24 +68,28 @@ func (c *Client) newRequest(ctx context.Context, body []byte) (*http.Request, er
 }
 
 // readResponse applies HTTP status and size limits before protocol decoding.
-// Non-2xx responses retain their status even when their error body is oversized.
+// Non-2xx responses retain their status even when reading their body fails.
 func readResponse(resp *http.Response) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("systemone: read response: %w", err)
-	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		truncated := len(body) > maxResponseBytes
 		if truncated {
 			body = body[:maxResponseBytes]
 		}
-		return nil, &HTTPError{
+		httpErr := &HTTPError{
 			StatusCode: resp.StatusCode,
 			RequestID:  resp.Header.Get("X-Request-ID"),
 			RetryAfter: resp.Header.Get("Retry-After"),
 			Body:       body,
-			Truncated:  truncated,
+			Truncated:  truncated || readErr != nil,
 		}
+		if readErr != nil {
+			return nil, errors.Join(httpErr, fmt.Errorf("systemone: read response: %w", readErr))
+		}
+		return nil, httpErr
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("systemone: read response: %w", readErr)
 	}
 	if len(body) > maxResponseBytes {
 		return nil, fmt.Errorf("systemone: response exceeds %d bytes", maxResponseBytes)
@@ -94,13 +99,16 @@ func readResponse(resp *http.Response) ([]byte, error) {
 
 // HTTPError reports a non-2xx response and can be inspected with errors.As.
 // Error excludes the response body, which may contain sensitive provider data.
+// If reading the body fails, the returned error also wraps the read error so
+// callers can inspect its cause with errors.Is.
 type HTTPError struct {
 	StatusCode int
 	RequestID  string
 	// RetryAfter is the unparsed Retry-After header; the client does not retry.
 	RetryAfter string
 	// Body contains at most 8 MiB of the provider's unmodified error body.
-	Body      []byte
+	Body []byte
+	// Truncated reports an incomplete Body due to the size limit or a read error.
 	Truncated bool
 }
 

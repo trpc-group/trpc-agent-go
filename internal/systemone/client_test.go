@@ -221,6 +221,41 @@ func TestHTTPErrorsDoNotRetry(t *testing.T) {
 	}
 }
 
+func TestHTTPErrorBodyReadFailure(t *testing.T) {
+	const partialBody = `{"detail":"sensitive partial error`
+	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Length", "100")
+				w.Header().Set("X-Request-ID", "interrupted-response")
+				w.Header().Set("Retry-After", "30")
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, partialBody)
+			}))
+			defer srv.Close()
+			client, err := systemone.NewClient(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.SystemOne(context.Background(), binaryRequest())
+			if resp != nil || !errors.Is(err, io.ErrUnexpectedEOF) || calls.Load() != 1 {
+				t.Fatalf("unexpected response/read error/retry: response=%v error=%v calls=%d", resp, err, calls.Load())
+			}
+			var httpErr *systemone.HTTPError
+			if !errors.As(err, &httpErr) || httpErr.StatusCode != status ||
+				httpErr.RequestID != "interrupted-response" || httpErr.RetryAfter != "30" ||
+				string(httpErr.Body) != partialBody || !httpErr.Truncated {
+				t.Fatalf("HTTP error metadata or partial body lost: %v", err)
+			}
+			if strings.Contains(err.Error(), "sensitive") {
+				t.Fatalf("response body leaked in error: %v", err)
+			}
+		})
+	}
+}
+
 func TestTransportErrorDoesNotRetry(t *testing.T) {
 	transportErr := errors.New("connection failed")
 	var calls int
@@ -336,6 +371,13 @@ func TestResponseBodyClosed(t *testing.T) {
 		{name: "oversized success", status: http.StatusOK, body: strings.Repeat(" ", (8<<20)+1)},
 		{name: "oversized error", status: http.StatusServiceUnavailable, body: strings.Repeat("x", (8<<20)+1)},
 		{name: "read error", status: http.StatusOK, cause: readErr},
+		{name: "success body with read error", status: http.StatusOK, body: binaryResponse, cause: readErr},
+		{name: "http error with empty body read error", status: http.StatusServiceUnavailable, cause: readErr},
+		{name: "http error with partial body", status: http.StatusServiceUnavailable, body: "partial", cause: readErr},
+		{name: "http error with canceled read", status: http.StatusServiceUnavailable, body: "partial", cause: context.Canceled},
+		{name: "http error with read deadline", status: http.StatusServiceUnavailable, body: "partial", cause: context.DeadlineExceeded},
+		{name: "limit-sized error", status: http.StatusServiceUnavailable, body: strings.Repeat("x", 8<<20)},
+		{name: "limit-sized error with read error", status: http.StatusServiceUnavailable, body: strings.Repeat("x", 8<<20), cause: readErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := &trackedResponseBody{Reader: strings.NewReader(tc.body), readErr: tc.cause}
@@ -370,7 +412,7 @@ func TestResponseBodyClosed(t *testing.T) {
 				var httpErr *systemone.HTTPError
 				if !errors.As(err, &httpErr) || httpErr.StatusCode != tc.status ||
 					httpErr.RequestID != "tracked-response" || httpErr.RetryAfter != "2" ||
-					httpErr.Truncated != (len(tc.body) > 8<<20) ||
+					httpErr.Truncated != (len(tc.body) > 8<<20 || tc.cause != nil) ||
 					string(httpErr.Body) != tc.body[:min(len(tc.body), 8<<20)] {
 					t.Fatalf("HTTP error metadata or bounded body lost: %v", err)
 				}
@@ -392,10 +434,11 @@ type trackedResponseBody struct {
 }
 
 func (b *trackedResponseBody) Read(p []byte) (int, error) {
-	if b.readErr != nil {
-		return 0, b.readErr
+	n, err := b.Reader.Read(p)
+	if err == io.EOF && b.readErr != nil {
+		return n, b.readErr
 	}
-	return b.Reader.Read(p)
+	return n, err
 }
 
 func (b *trackedResponseBody) Close() error {

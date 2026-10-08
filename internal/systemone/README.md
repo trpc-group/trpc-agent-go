@@ -19,6 +19,13 @@ Read answers with `Response.Binary(id)`, `Response.Choice(id)`, or
 errors for missing IDs, wrong types, or nil answers. See `example_test.go` for
 a complete executable example and `DESIGN.md` for ownership and validation rules.
 
+Non-2xx responses return an error inspectable as `*HTTPError` with `errors.As`,
+including when reading the response body fails. The status, `X-Request-ID`,
+`Retry-After`, and up to 8 MiB of the received body remain available. A body read
+failure is also preserved for `errors.Is`, including cancellation and deadline
+errors. `HTTPError.Truncated` indicates an incomplete body due to the size limit
+or a read error. The client does not retry or return a partial `Response`.
+
 ## Integration tests
 
 The package has two test layers:
@@ -132,10 +139,10 @@ LAYA_LOG_ERROR_BODY=true go test -tags=integration ./internal/systemone \
 
 This logs up to 4096 bytes after redacting the configured key, with a marker if
 the log was truncated. `server_body_truncated` separately reports whether the
-client's 8 MiB response limit truncated the body. The command-scoped variable
-does not enable logging in subsequent runs. Error bodies may echo input or
-deployment details; review them before sharing. The production client's
-`HTTPError.Error()` continues to omit response bodies.
+body is incomplete because of the client's 8 MiB response limit or a read error.
+The command-scoped variable does not enable logging in subsequent runs. Error
+bodies may echo input or deployment details; review them before sharing. The
+production client's `HTTPError.Error()` continues to omit response bodies.
 
 An HTTP 422 alone does not identify the invalid field. Inspect the returned
 `detail` and the deployed server's schema/version before changing requests or
