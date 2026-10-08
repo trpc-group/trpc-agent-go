@@ -162,10 +162,13 @@ evaluation.WithEvalCaseParallelEvaluationEnabled(true),
 推理和评估开关独立生效：仅开启推理并行时，评估仍串行；仅开启评估并行时，
 推理仍串行。使用 evaluator 默认配置时，两阶段均串行。
 
-handler 追加逐 case 生命周期回调，保留应用和 service 已配置的回调。每个 case
-使用独立的运行选项和 trace 元数据；trace ID 按推理 session 关联，包括并发执行
-多个 run 的情况。自定义 evaluation service 需要遵守生命周期回调与逐 case
-运行选项约定，才能保留该关联。
+handler 追加逐 case 生命周期回调，保留应用和 service 已配置的回调。逐 case
+运行选项只作用于实际 runner，expected runner 仍使用已配置的共享选项。每个
+推理 session 保留实际 runner 首个有效 trace，避免 expected runner 或后续对话
+轮次覆盖发布时使用的 trace。评分阶段恢复同一 session 的 trace 上下文，
+包括多个 run 并发执行的情况。实际 runner 未产生 trace 时（包括 trace mode），
+评分和发布使用注入的 case trace。自定义 evaluation service 需要遵守生命周期
+回调与逐 case 运行选项约定，才能保留这些关联。
 
 批量评测和结果保存完成后，handler 按数据集顺序写入 trace、run item 和 score。
 评测调用出错或请求取消时，不发布该批次到 Langfuse；case 级失败沿用 evaluator

@@ -207,8 +207,9 @@ type AfterInferenceSetResult struct {
 // BeforeInferenceCaseArgs contains parameters for before inference case callbacks.
 type BeforeInferenceCaseArgs struct {
 	// RunOptions starts with a copy of the configured inference run options.
-	// Callbacks may append or replace options for this case only. The resulting
-	// options apply to all of its turns, including trace and simulation modes.
+	// Callbacks may append or replace options for this case's actual runner only,
+	// across all of its turns, including simulated conversations. Expected
+	// runners keep the configured options; trace mode does not run the actual runner.
 	// Callbacks must not mutate state captured by shared option functions.
 	RunOptions []agent.RunOption `json:"-"`
 	Request    *InferenceRequest

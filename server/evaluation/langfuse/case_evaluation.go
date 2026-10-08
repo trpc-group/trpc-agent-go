@@ -26,7 +26,7 @@ type caseTrace struct {
 	parent   oteltrace.SpanContext
 	fallback string
 	mu       sync.Mutex
-	sessions map[string]string
+	sessions map[string]oteltrace.SpanContext
 }
 
 // idForSession selects the published run, falling back to the injected parent
@@ -34,10 +34,34 @@ type caseTrace struct {
 func (t *caseTrace) idForSession(sessionID string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if id := t.sessions[sessionID]; id != "" {
-		return id
+	if sc := t.sessions[sessionID]; sc.IsValid() {
+		return sc.TraceID().String()
 	}
 	return t.fallback
+}
+
+// record retains the first actual turn's valid span for each inference session.
+// Later turns and invalid notifications must not change the published trace.
+func (t *caseTrace) record(sessionID string, sc oteltrace.SpanContext) {
+	if !sc.IsValid() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.sessions[sessionID].IsValid() {
+		t.sessions[sessionID] = sc
+	}
+}
+
+// spanForSession restores the actual-run trace for scoring, or the injected
+// case parent when the actual runner did not emit a trace (including trace mode).
+func (t *caseTrace) spanForSession(sessionID string) oteltrace.SpanContext {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if sc := t.sessions[sessionID]; sc.IsValid() {
+		return sc
+	}
+	return t.parent
 }
 
 // evaluateCases submits one batch so the evaluator owns both stage schedulers.
@@ -63,7 +87,7 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, specs []*
 		}
 		ids = append(ids, id)
 		byID[id] = spec
-		traces[id] = &caseTrace{parent: oteltrace.SpanContextFromContext(traceCtx), fallback: traceID, sessions: make(map[string]string)}
+		traces[id] = &caseTrace{parent: oteltrace.SpanContextFromContext(traceCtx), fallback: traceID, sessions: make(map[string]oteltrace.SpanContext)}
 	}
 	callbacks := service.NewCallbacks().RegisterBeforeInferenceCase("langfuse", func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
 		if err := ctx.Err(); err != nil {
@@ -84,14 +108,24 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, specs []*
 					attribute.String("langfuse.environment", h.environment))
 			},
 			agent.WithTraceStartedCallback(func(sc oteltrace.SpanContext) {
-				if sc.IsValid() {
-					trace.mu.Lock()
-					trace.sessions[args.SessionID] = sc.TraceID().String()
-					trace.mu.Unlock()
-				}
+				trace.record(args.SessionID, sc)
 			}),
 		)
 		return &service.BeforeInferenceCaseResult{Context: oteltrace.ContextWithRemoteSpanContext(ctx, trace.parent)}, nil
+	})
+	callbacks.RegisterBeforeEvaluateCase("langfuse", func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
+		trace, ok := traces[args.EvalCaseID]
+		if !ok {
+			return nil, fmt.Errorf("unknown eval case %s", args.EvalCaseID)
+		}
+		if args.Request != nil {
+			for _, result := range args.Request.InferenceResults {
+				if result != nil && result.EvalCaseID == args.EvalCaseID {
+					return &service.BeforeEvaluateCaseResult{Context: oteltrace.ContextWithRemoteSpanContext(ctx, trace.spanForSession(result.SessionID))}, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("inference result missing for case %s", args.EvalCaseID)
 	})
 	result, err := h.agentEvaluator.Evaluate(ctx, datasetID,
 		coreevaluation.WithEvalCaseIDs(ids...),

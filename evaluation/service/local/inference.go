@@ -256,9 +256,6 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			UserID:     "",
 		}, err)
 	}
-	caseOpts := *opts
-	caseOpts.RunOptions = runOptions
-	opts = &caseOpts
 	caseStartTime := time.Now()
 	defer func() {
 		afterErr := s.runAfterInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, result, nil, caseStartTime)
@@ -310,8 +307,8 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
 		return newFailedInferenceResult(result, err)
 	}
-	mergedRunOptions := make([]agent.RunOption, 0, len(opts.RunOptions)+1)
-	mergedRunOptions = append(mergedRunOptions, opts.RunOptions...)
+	mergedRunOptions := make([]agent.RunOption, 0, len(runOptions)+1)
+	mergedRunOptions = append(mergedRunOptions, runOptions...)
 	if len(seedMessages) > 0 {
 		mergedRunOptions = append(mergedRunOptions, agent.WithInjectedContextMessages(seedMessages))
 	}
@@ -549,6 +546,16 @@ func (s *local) inferScenarioConversation(
 		if opts.ExpectedRunner == nil {
 			return nil, nil, errors.New("expected runner is nil")
 		}
+		// Keep actual-runner callback options out of the expected driver while
+		// preserving the configured options and conversation seed for both roles.
+		seedMessages, err := seedMessagesFromPointers(evalCase.ContextMessages)
+		if err != nil {
+			return nil, nil, fmt.Errorf("seed context messages: %w", err)
+		}
+		expectedOptions := append([]agent.RunOption(nil), opts.RunOptions...)
+		if len(seedMessages) > 0 {
+			expectedOptions = append(expectedOptions, agent.WithInjectedContextMessages(seedMessages))
+		}
 		expectedInferenceResult, err := inference.InferenceWithConversationScenario(
 			ctx,
 			opts.ExpectedRunner,
@@ -557,7 +564,7 @@ func (s *local) inferScenarioConversation(
 			evalCase.ConversationScenario,
 			evalCase.SessionInput,
 			expectedRunnerSessionID(sessionID),
-			runOptions,
+			expectedOptions,
 		)
 		if err != nil {
 			return nil, nil, err

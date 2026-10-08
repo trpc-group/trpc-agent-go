@@ -164,11 +164,15 @@ The inference and evaluation switches remain independent. Enabling only parallel
 inference leaves evaluation serial, and enabling only parallel evaluation leaves
 inference serial. Default evaluator settings keep both stages serial.
 
-The handler appends a case lifecycle callback without replacing application or
-service callbacks. Each case receives isolated run options and trace metadata;
-trace IDs are associated with inference sessions, including when multiple runs
-execute concurrently. Custom evaluation services must honor the lifecycle
-callbacks and case run options to preserve that association.
+The handler appends case lifecycle callbacks without replacing application or
+service callbacks. Case run options apply only to the actual runner; expected
+runners retain the configured shared options. Each inference session retains
+the first valid actual-run trace, so expected runners and later conversation
+turns cannot replace the trace used for publication. Scoring restores the same
+session's trace context, including when multiple runs execute concurrently.
+When no actual trace is emitted (including trace mode), scoring and publication
+use the injected case trace. Custom evaluation services must honor the lifecycle
+callbacks and case run options to preserve these associations.
 
 After the evaluator completes and saves the batch, the handler writes traces,
 run items, and scores in dataset order. Evaluation errors and cancellation are
