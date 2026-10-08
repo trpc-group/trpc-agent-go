@@ -49,6 +49,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -5407,6 +5408,21 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 func (p *modelResponseProcessor) finalize() (*model.Response, error) {
 	finalResponse, err := validateFinalModelResponse(p.config.Span, p.finalResponse)
 	if err != nil {
+		if !tracingDisabled(p.invocation) && p.config.Span.IsRecording() {
+			// Final validation can fail after a callback supplied a successful response.
+			// Keep that response's trace attributes and record the final failure used by metrics.
+			p.chatTraceState.TraceChat(p.config.Span, &itelemetry.TraceChatAttributes{
+				Invocation: p.observabilityInvocation,
+				Request:    p.config.Request,
+			})
+			p.config.Span.SetAttributes(
+				attribute.String(semconvtrace.KeyErrorType,
+					itelemetry.ToErrorType(err, semconvtrace.ValueDefaultErrorType)),
+				attribute.String(semconvtrace.KeyErrorMessage, err.Error()),
+			)
+			p.config.Span.SetStatus(codes.Error, err.Error())
+			p.config.Span.RecordError(err)
+		}
 		return nil, err
 	}
 	mergeToolCallsIntoFinalResponse(finalResponse, p.toolCalls)

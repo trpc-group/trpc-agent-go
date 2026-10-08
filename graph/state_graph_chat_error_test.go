@@ -220,6 +220,101 @@ func TestGraphChatAndWorkflowResponseErrorTelemetry(t *testing.T) {
 	require.True(t, operations["workflow"], "parent workflow error reporting must be preserved")
 }
 
+func TestGraphChatFinalizationErrorTelemetry(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		response       *model.Response
+		nilIterator    bool
+		recover        bool
+		wantError      string
+		wantResponseID string
+	}{
+		{
+			name: "callback_recovery",
+			response: &model.Response{ID: "original", Done: true,
+				Error: &model.ResponseError{Type: "api_error", Message: "original failure"}},
+			recover: true, wantError: errMsgNoModelChoices, wantResponseID: "recovered",
+		},
+		{
+			name: "no_choices", response: &model.Response{ID: "empty", Done: true},
+			wantError: errMsgNoModelChoices, wantResponseID: "empty",
+		},
+		{name: "no_response", wantError: errMsgNoModelResponse},
+		{name: "nil_iterator", nilIterator: true, wantError: errMsgNoModelResponse},
+	} {
+		for _, disableTracing := range []bool{false, true} {
+			name := tc.name
+			if disableTracing {
+				name += "_tracing_disabled"
+			}
+			t.Run(name, func(t *testing.T) {
+				reader := useChatErrorMetricReader(t)
+				recorder := useSpanRecorder(t)
+				responses := &multiResponseModel{}
+				if tc.response != nil {
+					response := *tc.response
+					responses.responses = []*model.Response{&response}
+				}
+				var llm model.Model = responses
+				if tc.nilIterator {
+					llm = &nilIterModel{}
+				}
+				var callbacks *model.Callbacks
+				if tc.recover {
+					callbacks = model.NewCallbacks().RegisterAfterModel(
+						func(context.Context, *model.Request, *model.Response, error) (*model.Response, error) {
+							return &model.Response{ID: "recovered", Done: true,
+								Choices: []model.Choice{{Message: model.NewAssistantMessage("fallback")}}}, nil
+						})
+				}
+				sg := NewStateGraph(MessagesStateSchema())
+				sg.AddLLMNode("llm", llm, "", nil, WithModelCallbacks(callbacks)).
+					SetEntryPoint("llm").SetFinishPoint("llm")
+				executor := compileExecutorForWorkflowMetric(t, sg)
+				invocation := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+					DisableTracing: disableTracing,
+				}))
+				ch, err := executor.Execute(context.Background(), State{}, invocation)
+				require.NoError(t, err)
+				var failure string
+				for ev := range ch {
+					if ev.Error != nil {
+						failure = ev.Error.Message
+					}
+				}
+				require.Contains(t, failure, tc.wantError, "finalization must preserve the existing failure")
+				metricAttrs := collectChatErrorMetricAttributes(t, reader)
+				require.Equal(t, "_OTHER", metricAttrs[semconvtrace.KeyErrorType].AsString())
+				if disableTracing {
+					require.Empty(t, recorder.Ended())
+					return
+				}
+				var chatSpans int
+				for _, span := range recorder.Ended() {
+					if span.Name() != itelemetry.NewChatSpanName(llm.Info().Name) {
+						continue
+					}
+					chatSpans++
+					attrs := make(map[string]attribute.Value)
+					for _, attr := range span.Attributes() {
+						attrs[string(attr.Key)] = attr.Value
+					}
+					require.Equal(t, "chat", attrs[semconvtrace.KeyGenAIOperationName].AsString())
+					require.Equal(t, llm.Info().Name, attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+					require.Equal(t, tc.wantResponseID, attrs[semconvtrace.KeyGenAIResponseID].AsString())
+					require.Equal(t, metricAttrs[semconvtrace.KeyErrorType], attrs[semconvtrace.KeyErrorType])
+					require.Equal(t, tc.wantError, attrs[semconvtrace.KeyErrorMessage].AsString())
+					require.Equal(t, codes.Error, span.Status().Code)
+					require.Equal(t, tc.wantError, span.Status().Description)
+					require.Len(t, span.Events(), 1)
+					require.Equal(t, "exception", span.Events()[0].Name)
+				}
+				require.Equal(t, 1, chatSpans)
+			})
+		}
+	}
+}
+
 func useChatErrorMetricReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
