@@ -21,6 +21,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
+func TestInvalidReadModeCannotResolveWorkspaceOrHostAccess(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "invalid-read-query", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithReadMode("unknown")
+	decision, err := rt.decidePath(profile, ws, "work")
+	if !isKind(err, ErrPolicyViolation) || decision.matched || accessCanRead(decision.access) {
+		t.Fatalf("invalid mode produced workspace access: %#v, %v", decision, err)
+	}
+	if err := rt.checkHostRead(profile, ws, filepath.Join(ws.Path, "work")); !isKind(err, ErrPolicyViolation) {
+		t.Fatalf("invalid mode produced host access: %v", err)
+	}
+}
+
 func TestPermissionProfileEnforcement(t *testing.T) {
 	if got := WorkspaceWriteProfile().enforcement(); got != enforcementManaged {
 		t.Fatalf("workspace_write enforcement = %s", got)
