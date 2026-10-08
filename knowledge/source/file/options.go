@@ -76,6 +76,9 @@ func WithChunkOverlap(overlap int) Option {
 }
 
 // WithOCRExtractor sets an OCR extractor for processing images in documents (e.g., PDFs).
+//
+// Deprecated: use WithExtractor with an OCR-capable content extractor, such as
+// knowledge/extractor/docling, instead.
 func WithOCRExtractor(extractor ocr.Extractor) Option {
 	return func(s *Source) {
 		s.ocrExtractor = extractor
