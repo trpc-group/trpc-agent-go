@@ -529,6 +529,51 @@ func TestSanitizeMessagesWithTools_SplitsMatchedAndOrphanToolCalls(t *testing.T)
 	}
 }
 
+func TestSanitizeMessagesWithTools_PreservesToolCallOrderWhenOrphanComesFirst(t *testing.T) {
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_orphan",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"a":1}`),
+					},
+				},
+				{
+					ID: "call_keep",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"b":2}`),
+					},
+				},
+			},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call_keep",
+			ToolName: "test_tool",
+			Content:  "ok",
+		},
+	}
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
+	if assert.Len(t, out, 3) {
+		assert.Equal(t, model.RoleAssistant, out[0].Role)
+		if assert.Len(t, out[0].ToolCalls, 2) {
+			// Original call order is preserved: the orphan stays first even
+			// though only the second call has a result.
+			assert.Equal(t, "call_orphan", out[0].ToolCalls[0].ID)
+			assert.Equal(t, "call_keep", out[0].ToolCalls[1].ID)
+		}
+		assert.Equal(t, model.RoleTool, out[1].Role)
+		assert.Equal(t, "call_keep", out[1].ToolID)
+		assert.Equal(t, model.RoleTool, out[2].Role)
+		assert.Equal(t, "call_orphan", out[2].ToolID)
+		assert.Contains(t, out[2].Content, interruptedToolCallTag)
+	}
+}
+
 func TestSanitizeMessagesWithTools_PreservesNonObjectJSONArgumentsWhenToolsUnknown(t *testing.T) {
 	in := []model.Message{
 		{
