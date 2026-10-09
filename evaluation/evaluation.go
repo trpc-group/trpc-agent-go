@@ -474,7 +474,7 @@ func (a *agentEvaluator) runEvaluationOnce(
 		inferenceOpts = append(inferenceOpts, service.WithCallbacks(opts.callbacks))
 	}
 	for _, callbacks := range opts.additionalCallbacks {
-		inferenceOpts = append(inferenceOpts, service.WithAdditionalCallbacks(callbacks))
+		inferenceOpts = append(inferenceOpts, withAdditionalCallbacks(callbacks))
 	}
 	if opts.userSimulator != nil {
 		inferenceOpts = append(inferenceOpts, service.WithUserSimulator(opts.userSimulator))
@@ -520,7 +520,7 @@ func (a *agentEvaluator) runEvaluationOnce(
 		evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
 	}
 	for _, callbacks := range opts.additionalCallbacks {
-		evaluateOpts = append(evaluateOpts, service.WithAdditionalCallbacks(callbacks))
+		evaluateOpts = append(evaluateOpts, withAdditionalCallbacks(callbacks))
 	}
 	if opts.expectedRunner != nil {
 		evaluateOpts = append(evaluateOpts, service.WithExpectedRunner(opts.expectedRunner))

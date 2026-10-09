@@ -6,32 +6,35 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package service
+package evaluation
 
 import (
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 )
 
 // TestAdditionalCallbacksOwnership protects ordering and reusable registrations.
 func TestAdditionalCallbacksOwnership(t *testing.T) {
-	callback := func(context.Context, *BeforeInferenceCaseArgs) (*BeforeInferenceCaseResult, error) { return nil, nil }
-	base := NewCallbacks().RegisterBeforeInferenceCase("base", callback)
-	extra := NewCallbacks().RegisterBeforeInferenceCase("extra", callback)
-	opts := &Options{Callbacks: base}
-	WithAdditionalCallbacks(nil)(opts)
+	callback := func(context.Context, *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
+		return nil, nil
+	}
+	base := service.NewCallbacks().RegisterBeforeInferenceCase("base", callback)
+	extra := service.NewCallbacks().RegisterBeforeInferenceCase("extra", callback)
+	opts := &service.Options{Callbacks: base}
+	withAdditionalCallbacks(nil)(opts)
 	require.Same(t, base, opts.Callbacks)
-	WithAdditionalCallbacks(extra)(opts)
+	withAdditionalCallbacks(extra)(opts)
 	require.Equal(t, "base", opts.Callbacks.BeforeInferenceCase[0].Name)
 	require.Equal(t, "extra", opts.Callbacks.BeforeInferenceCase[1].Name)
 	opts.Callbacks.BeforeInferenceCase[0].Name = "changed"
 	opts.Callbacks.BeforeInferenceCase[1].Name = "changed"
 	require.Equal(t, "base", base.BeforeInferenceCase[0].Name)
 	require.Equal(t, "extra", extra.BeforeInferenceCase[0].Name)
-	second := &Options{}
-	WithAdditionalCallbacks(extra)(second)
+	second := &service.Options{}
+	withAdditionalCallbacks(extra)(second)
 	require.Len(t, second.Callbacks.BeforeInferenceCase, 1)
 	require.Equal(t, "extra", second.Callbacks.BeforeInferenceCase[0].Name)
 }

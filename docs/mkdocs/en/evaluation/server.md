@@ -174,6 +174,18 @@ When no actual trace is emitted (including trace mode), scoring and publication
 use the injected case trace. Custom evaluation services must honor the lifecycle
 callbacks and case run options to preserve these associations.
 
+Callback options are applied in the order supplied, with evaluator constructor
+options before per-call options. `evaluation.WithCallbacks(A)` replaces the
+selected callbacks and discards earlier additions;
+`evaluation.WithAdditionalCallbacks(B)` appends to them. Thus, setting `A` then
+appending `B` runs `A` followed by `B` at each lifecycle point, while appending `B`
+then setting `A` runs only `A`. Appending alone preserves service defaults.
+`WithCallbacks(nil)` discards earlier additions and falls back to service
+defaults; an empty, non-nil `service.Callbacks` disables callbacks.
+`WithAdditionalCallbacks(nil)` does nothing. The handler adds its callbacks last.
+Callback merging is internal to `evaluation`; the service layer uses its existing
+`service.WithCallbacks` option.
+
 After the evaluator completes and saves the batch, the handler writes traces,
 run items, and scores in dataset order. Evaluation errors and cancellation are
 returned before publishing the batch. Case-level failures retain the evaluator's

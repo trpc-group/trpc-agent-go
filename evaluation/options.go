@@ -137,17 +137,24 @@ func WithUserSimulator(sim usersimulation.Simulator) Option {
 	}
 }
 
-// WithCallbacks sets evaluation callbacks for evaluation service.
+// WithCallbacks replaces the evaluation callbacks, discarding callbacks appended
+// by earlier WithAdditionalCallbacks options. Constructor options are applied
+// before per-call options. A nil value falls back to the evaluation service's
+// defaults; use an empty, non-nil service.Callbacks to disable callbacks.
 func WithCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
 		o.callbacks = c
+		o.additionalCallbacks = nil
 	}
 }
 
 // WithAdditionalCallbacks appends lifecycle callbacks after the callbacks
-// selected by WithCallbacks or the evaluation service's defaults. Nil is a
-// no-op; existing registrations are not modified. Callbacks must support concurrent calls when
-// the corresponding stage or multiple runs are configured to run in parallel.
+// selected by WithCallbacks or the evaluation service's defaults. Options are
+// applied in order, with constructor options before per-call options; a later
+// WithCallbacks replaces earlier additions. Nil is a no-op. Callback registration
+// slices are copied when merged, but callback functions and their captured state
+// are shared. Callbacks must support concurrent calls when the corresponding
+// stage or multiple runs are configured to run in parallel.
 func WithAdditionalCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
 		if c != nil {

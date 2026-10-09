@@ -170,6 +170,15 @@ handler 追加逐 case 生命周期回调，保留应用和 service 已配置的
 评分和发布使用注入的 case trace。自定义 evaluation service 需要遵守生命周期
 回调与逐 case 运行选项约定，才能保留这些关联。
 
+回调选项按传入顺序生效，先应用 evaluator 构造选项，再应用每次调用的选项。
+`evaluation.WithCallbacks(A)` 替换当前回调，并丢弃此前的追加项；
+`evaluation.WithAdditionalCallbacks(B)` 在当前回调之后追加。因此，先设置 `A`
+再追加 `B`，每个生命周期节点按 `A`、`B` 顺序执行；先追加 `B` 再设置 `A`，
+则只执行 `A`。仅追加时保留 service 默认回调。`WithCallbacks(nil)` 丢弃此前的
+追加项，并回退到 service 默认回调；空的非 nil `service.Callbacks` 可禁用回调。
+`WithAdditionalCallbacks(nil)` 不做任何修改。handler 最后追加自身回调。
+合并逻辑位于 `evaluation` 内部，service 层复用现有的 `service.WithCallbacks`。
+
 批量评测和结果保存完成后，handler 按数据集顺序写入 trace、run item 和 score。
 评测调用出错或请求取消时，不发布该批次到 Langfuse；case 级失败沿用 evaluator
 的结果语义。后续 Langfuse 写入失败可能保留此前已写入的数据，不进行回滚。

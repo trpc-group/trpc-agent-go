@@ -12,7 +12,6 @@ package service
 import (
 	"context"
 	"runtime"
-	"slices"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -139,32 +138,6 @@ func WithUserSimulator(sim usersimulation.Simulator) Option {
 func WithCallbacks(c *Callbacks) Option {
 	return func(o *Options) {
 		o.Callbacks = c
-	}
-}
-
-// WithAdditionalCallbacks appends callbacks after the configured callbacks at
-// each lifecycle point. Nil is a no-op. It copies the callback slices without
-// modifying either collection; callback functions may run concurrently when
-// their corresponding evaluation stage is parallel.
-func WithAdditionalCallbacks(c *Callbacks) Option {
-	return func(o *Options) {
-		if c == nil {
-			return
-		}
-		previous := o.Callbacks
-		if previous == nil {
-			previous = &Callbacks{}
-		}
-		o.Callbacks = &Callbacks{
-			BeforeInferenceSet:  slices.Concat(previous.BeforeInferenceSet, c.BeforeInferenceSet),
-			AfterInferenceSet:   slices.Concat(previous.AfterInferenceSet, c.AfterInferenceSet),
-			BeforeInferenceCase: slices.Concat(previous.BeforeInferenceCase, c.BeforeInferenceCase),
-			AfterInferenceCase:  slices.Concat(previous.AfterInferenceCase, c.AfterInferenceCase),
-			BeforeEvaluateSet:   slices.Concat(previous.BeforeEvaluateSet, c.BeforeEvaluateSet),
-			AfterEvaluateSet:    slices.Concat(previous.AfterEvaluateSet, c.AfterEvaluateSet),
-			BeforeEvaluateCase:  slices.Concat(previous.BeforeEvaluateCase, c.BeforeEvaluateCase),
-			AfterEvaluateCase:   slices.Concat(previous.AfterEvaluateCase, c.AfterEvaluateCase),
-		}
 	}
 }
 
