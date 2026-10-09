@@ -26,10 +26,10 @@ import (
 )
 
 const (
-	invalidToolCallTag   = "[invalid_tool_call]"
-	invalidToolResultTag = "[invalid_tool_result]"
-	orphanToolCallTag    = "[orphan_tool_call]"
-	orphanToolResultTag  = "[orphan_tool_result]"
+	invalidToolCallTag     = "[invalid_tool_call]"
+	invalidToolResultTag   = "[invalid_tool_result]"
+	orphanToolResultTag    = "[orphan_tool_result]"
+	interruptedToolCallTag = "[interrupted_tool_call]"
 )
 
 var (
@@ -46,8 +46,14 @@ var (
 // (e.g., HTTP 400 Bad Request). This function removes such tool calls from assistant messages
 // and emits equivalent user messages that preserve the original payload for context.
 //
-// This function also downgrades orphan tool calls that are not associated with a kept
-// tool result message, and orphan tool result messages that are not associated with a
+// A valid tool call whose result never arrived — typically because the run was interrupted
+// before the tool finished — is instead PAIRED with a synthetic tool-role result tagged
+// [interrupted_tool_call], so the conversation keeps a valid assistant(tool_calls) →
+// tool(result) round and the model sees the interruption as a tool outcome rather than as
+// user text. Downgrading such calls to user messages distorted the conversation roles and
+// was repeated on every request that replayed the interrupted history.
+//
+// This function also downgrades orphan tool result messages that are not associated with a
 // kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
 // The context is used to attach request-scoped metadata to downgrade warnings.
 func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, tools map[string]tool.Tool) []model.Message {
@@ -199,7 +205,16 @@ func sanitizeToolRound(
 	)
 	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
 	filteredAssistant := assistant.message
-	filteredAssistant.ToolCalls = toolCallSplit.kept
+	// Orphan tool calls — valid calls whose result never arrived, typically
+	// because the run was interrupted mid-execution — stay in the assistant
+	// message and are answered by synthetic interrupted results below. This
+	// keeps a wire-valid tool round and the correct role for the model,
+	// instead of downgrading the call to a user message on every request
+	// that replays the interrupted history.
+	filteredAssistant.ToolCalls = append(
+		append([]model.ToolCall(nil), toolCallSplit.kept...),
+		toolCallSplit.orphan...,
+	)
 	if len(filteredAssistant.ToolCalls) == 0 {
 		filteredAssistant.ToolCalls = nil
 	}
@@ -214,12 +229,12 @@ func sanitizeToolRound(
 			sourceIndex: assistant.sourceIndex,
 		})
 		out = append(out, split.kept...)
-	}
-	for _, orphanCall := range toolCallSplit.orphan {
-		out = append(out, indexedMessage{
-			message:     downgradeOrphanToolCall(ctx, orphanCall),
-			sourceIndex: assistant.sourceIndex,
-		})
+		for _, orphanCall := range toolCallSplit.orphan {
+			out = append(out, indexedMessage{
+				message:     synthesizeInterruptedToolResult(ctx, orphanCall),
+				sourceIndex: assistant.sourceIndex,
+			})
+		}
 	}
 	for _, invalid := range validation.invalidToolCalls {
 		out = append(out, indexedMessage{
@@ -583,23 +598,28 @@ func downgradeInvalidToolCall(ctx context.Context, call model.ToolCall, reason s
 	}
 }
 
-// downgradeOrphanToolCall converts a tool call without a matching tool result into a user message.
-func downgradeOrphanToolCall(ctx context.Context, call model.ToolCall) model.Message {
+// synthesizeInterruptedToolResult answers an orphan tool call — a valid call
+// whose result never arrived because execution was interrupted — with a
+// synthetic tool-role result, keeping a valid tool round in the conversation.
+// The result carries the call id and tool name but not the original
+// arguments: the assistant message already preserves them, and repeating
+// the payload on every request that replays this history would bloat the
+// context and could re-emit sensitive argument content.
+func synthesizeInterruptedToolResult(ctx context.Context, call model.ToolCall) model.Message {
 	log.WarnfContext(ctx,
-		"toolcall: downgraded orphan tool call to user message: name=%q id=%q",
+		"toolcall: paired orphan tool call with synthetic interrupted result: name=%q id=%q",
 		call.Function.Name,
 		call.ID,
 	)
 	content := fmt.Sprintf(
-		"%s Tool call was downgraded to a user message because no matching tool result exists.\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
-		orphanToolCallTag,
-		call.Function.Name,
-		call.ID,
-		string(call.Function.Arguments),
+		"%s Tool call never completed: execution was interrupted before this result was produced. The call and its arguments are preserved in the preceding assistant message; re-issue the call if its result is still needed.",
+		interruptedToolCallTag,
 	)
 	return model.Message{
-		Role:    model.RoleUser,
-		Content: content,
+		Role:     model.RoleTool,
+		ToolID:   call.ID,
+		ToolName: call.Function.Name,
+		Content:  content,
 	}
 }
 

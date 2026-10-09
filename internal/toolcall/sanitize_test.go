@@ -161,13 +161,13 @@ func TestSanitizeMessagesWithTools_WarnsOnDowngradeWithoutPayload(t *testing.T) 
 		},
 	}
 	out := SanitizeMessagesWithTools(ctx, in, nil)
-	assert.Len(t, out, 4)
+	assert.Len(t, out, 5)
 	assert.Len(t, messages, 4)
 	assert.Equal(t, 4, contextMatches)
 	allLogs := strings.Join(messages, "\n")
 	assert.Contains(t, allLogs, "downgraded invalid tool call")
 	assert.Contains(t, allLogs, "downgraded invalid tool result")
-	assert.Contains(t, allLogs, "downgraded orphan tool call")
+	assert.Contains(t, allLogs, "paired orphan tool call with synthetic interrupted result")
 	assert.Contains(t, allLogs, "downgraded orphan tool result")
 	assert.Contains(t, allLogs, "call_invalid")
 	assert.Contains(t, allLogs, "call_orphan")
@@ -424,7 +424,7 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolResult(t *testing.T) {
 	}
 }
 
-func TestSanitizeMessagesWithTools_DowngradesOrphanToolCall(t *testing.T) {
+func TestSanitizeMessagesWithTools_PairsOrphanToolCallWithSyntheticResult(t *testing.T) {
 	in := []model.Message{
 		{
 			Role: model.RoleAssistant,
@@ -440,14 +440,22 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolCall(t *testing.T) {
 		},
 	}
 	out := SanitizeMessagesWithTools(context.Background(), in, nil)
-	if assert.Len(t, out, 1) {
-		assert.Equal(t, model.RoleUser, out[0].Role)
-		assert.Contains(t, out[0].Content, orphanToolCallTag)
-		assert.Contains(t, out[0].Content, "call_1")
+	if assert.Len(t, out, 2) {
+		assert.Equal(t, model.RoleAssistant, out[0].Role)
+		if assert.Len(t, out[0].ToolCalls, 1) {
+			assert.Equal(t, "call_1", out[0].ToolCalls[0].ID)
+		}
+		assert.Equal(t, model.RoleTool, out[1].Role)
+		assert.Equal(t, "call_1", out[1].ToolID)
+		assert.Equal(t, "test_tool", out[1].ToolName)
+		assert.Contains(t, out[1].Content, interruptedToolCallTag)
+		// The synthetic result must not repeat the call arguments: it rides
+		// every request that replays this history.
+		assert.NotContains(t, out[1].Content, "string")
 	}
 }
 
-func TestSanitizeMessagesWithTools_DropsReasoningOnlyAssistantAfterOrphanToolCall(t *testing.T) {
+func TestSanitizeMessagesWithTools_KeepsReasoningOnlyAssistantWithOrphanToolCall(t *testing.T) {
 	in := []model.Message{
 		{
 			Role:             model.RoleAssistant,
@@ -465,10 +473,15 @@ func TestSanitizeMessagesWithTools_DropsReasoningOnlyAssistantAfterOrphanToolCal
 	}
 
 	out := SanitizeMessagesWithTools(context.Background(), in, nil)
-	if assert.Len(t, out, 1) {
-		assert.Equal(t, model.RoleUser, out[0].Role)
-		assert.Contains(t, out[0].Content, orphanToolCallTag)
-		assert.Contains(t, out[0].Content, "call_1")
+	if assert.Len(t, out, 2) {
+		assert.Equal(t, model.RoleAssistant, out[0].Role)
+		assert.Equal(t, "I should call the tool.", out[0].ReasoningContent)
+		if assert.Len(t, out[0].ToolCalls, 1) {
+			assert.Equal(t, "call_1", out[0].ToolCalls[0].ID)
+		}
+		assert.Equal(t, model.RoleTool, out[1].Role)
+		assert.Equal(t, "call_1", out[1].ToolID)
+		assert.Contains(t, out[1].Content, interruptedToolCallTag)
 	}
 }
 
@@ -503,14 +516,16 @@ func TestSanitizeMessagesWithTools_SplitsMatchedAndOrphanToolCalls(t *testing.T)
 	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 3) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
-		if assert.Len(t, out[0].ToolCalls, 1) {
+		if assert.Len(t, out[0].ToolCalls, 2) {
 			assert.Equal(t, "call_keep", out[0].ToolCalls[0].ID)
+			assert.Equal(t, "call_orphan", out[0].ToolCalls[1].ID)
 		}
 		assert.Equal(t, model.RoleTool, out[1].Role)
 		assert.Equal(t, "call_keep", out[1].ToolID)
-		assert.Equal(t, model.RoleUser, out[2].Role)
-		assert.Contains(t, out[2].Content, orphanToolCallTag)
-		assert.Contains(t, out[2].Content, "call_orphan")
+		assert.Equal(t, "ok", out[1].Content)
+		assert.Equal(t, model.RoleTool, out[2].Role)
+		assert.Equal(t, "call_orphan", out[2].ToolID)
+		assert.Contains(t, out[2].Content, interruptedToolCallTag)
 	}
 }
 
