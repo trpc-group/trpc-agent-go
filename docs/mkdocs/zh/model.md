@@ -1768,15 +1768,23 @@ counter := model.NewSimpleTokenCounter(
     model.WithApproxRunesPerToken(1.6),  // 中文场景推荐值
 )
 
-// 2. 设置为全局计数器（影响所有摘要触发）
+// 2. 设置进程默认计数器；agent 显式配置的请求计数器优先
 summary.SetTokenCounter(counter)
 
 // 3. 创建摘要器
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithTokenThreshold(4000),  // 使用自定义计数器评估
+    summary.WithTokenThreshold(4000),  // 阈值单位为估算 token 数
 )
 ```
+
+`summary.SetTokenCounter(...)` 配置摘要检查和摘要请求估算的进程默认计数器，
+同时作为模型可见 request view 计数和 LLM 调用前摘要触发的默认值。Agent 显式
+设置的 `WithContextCompactionTokenCounter(...)` 对该 agent 的请求计数优先，
+关闭 context compaction 时也适用。进程默认值在每次评估时读取，因此后续更新
+会影响已创建的 agent；`SetTokenCounter(nil)` 恢复内置 `SimpleTokenCounter`。
+自定义计数器须支持并发调用。Tool result 压缩和模型层 token tailoring 保留独立
+默认值，如需相同的估算口径，应为这些路径显式配置计数器。
 
 #### 7. Token 裁剪（Token Tailoring）
 

@@ -1774,7 +1774,7 @@ func (m *Model) handleStreamingResponseWithEmitter(
 	stream := m.client.Chat.Completions.NewStreaming(ctx, chatRequest, opts...)
 	defer stream.Close()
 
-	acc := openai.ChatCompletionAccumulator{}
+	acc := chatStreamAccumulator{}
 	// Track ID -> Index mapping.
 	idToIndexMap := make(map[string]int)
 	// Track ExtraFields by tool call ID (SDK accumulator doesn't preserve ExtraFields).
@@ -1820,16 +1820,16 @@ func (m *Model) handleStreamingResponseWithEmitter(
 
 		if !emit(m.createPartialResponse(chunk)) {
 			if err := ctx.Err(); err != nil {
-				m.handleStreamCompleteCallback(ctx, chatRequest, acc, err)
+				m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, err)
 			}
 			return
 		}
 	}
 
 	// Call the stream complete callback before the final response is emitted.
-	m.handleStreamCompleteCallback(ctx, chatRequest, acc, stream.Err())
+	m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, stream.Err())
 
-	m.emitStreamingFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
+	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -2176,7 +2176,7 @@ func applyOpenAISDKTokenDetailsAccumulationFix(
 // always appends reasoning deltas to the reasoning buffer.
 func (m *Model) accumulateChunk(
 	chunk openai.ChatCompletionChunk,
-	acc *openai.ChatCompletionAccumulator,
+	acc *chatStreamAccumulator,
 	reasoningBuf *bytes.Buffer,
 ) {
 	chunkForAccumulator := chunk
@@ -2194,15 +2194,15 @@ func (m *Model) accumulateChunk(
 		// avoid known panics when JSON.ToolCalls is marked present but the
 		// typed ToolCalls slice is empty, especially on finish_reason chunks.
 		sanitizedChunk := sanitizeChunkForAccumulator(chunkForAccumulator)
-		if acc.AddChunk(sanitizedChunk) {
-			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+		if acc.addChunk(sanitizedChunk) {
+			applyOpenAISDKTokenDetailsAccumulationFix(&acc.acc, chunk)
 		}
 
 		if m.accumulateChunkUsage != nil {
-			accUsage, chunkUsage := completionUsageToModelUsage(acc.Usage), completionUsageToModelUsage(chunk.Usage)
+			accUsage, chunkUsage := completionUsageToModelUsage(acc.acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
 			usage = m.accumulateChunkUsage(usage, chunkUsage)
-			acc.Usage = modelUsageToCompletionUsage(usage)
+			acc.acc.Usage = modelUsageToCompletionUsage(usage)
 		}
 	}
 

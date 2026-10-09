@@ -262,6 +262,14 @@ Agent Request
 - **依赖关系**：了解组件间的调用关系
 - **并发分析**：观察并发执行的效果
 
+Graph LLM 节点收到错误响应时，会同时记录到 `chat` span 和 chat 指标。
+两个通道都根据 model callback 处理后的响应生成 `error.type`：先使用响应中的错误类型作为基础标签，
+类型为空时使用 `_OTHER`；再在错误码非空时追加 `_` 和错误码。
+例如，类型为空、错误码为 `429` 时，最终标签为 `_OTHER_429`。
+chat span 会标记为错误；父级 `workflow` span 也可能记录向上传播的失败。
+最终响应校验失败时，也会在 chat span 上记录与 chat 指标一致的 `error.type`，
+包括 model callback 已提供成功的替换响应、但后续最终校验仍失败的情况。
+
 ## Span Attribute 策略（生产侧）
 
 `telemetry/trace` 提供 opt-in 的 `SpanAttributePolicy`，在 span 创建阶段控制大 payload **span attribute** 的采集与写入大小。

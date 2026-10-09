@@ -9461,12 +9461,12 @@ func TestModel_accumulateChunk(t *testing.T) {
 				},
 			},
 		}
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		assert.NotEmpty(t, acc.Choices)
+		assert.NotEmpty(t, acc.acc.Choices)
 		assert.Equal(t, "", reasoningBuf.String())
 	})
 
@@ -9483,13 +9483,13 @@ func TestModel_accumulateChunk(t *testing.T) {
 				}
 			}]
 		}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
 		assert.Equal(t, "First reasoning", reasoningBuf.String())
-		assert.Empty(t, acc.Choices)
+		assert.Empty(t, acc.acc.Choices)
 	})
 
 	t.Run("accumulate chunk with reasoning and content", func(t *testing.T) {
@@ -9506,13 +9506,13 @@ func TestModel_accumulateChunk(t *testing.T) {
 					}
 				}]
 			}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		require.Len(t, acc.Choices, 1)
-		assert.Equal(t, "Hello", acc.Choices[0].Message.Content)
+		require.Len(t, acc.acc.Choices, 1)
+		assert.Equal(t, "Hello", acc.acc.Choices[0].Message.Content)
 		assert.Equal(t, "plan", reasoningBuf.String())
 	})
 
@@ -9538,22 +9538,22 @@ func TestModel_accumulateChunk(t *testing.T) {
 					}
 				}]
 			}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		require.Len(t, acc.Choices, 1)
-		require.Len(t, acc.Choices[0].Message.ToolCalls, 1)
+		require.Len(t, acc.acc.Choices, 1)
+		require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 1)
 		assert.Equal(
 			t,
 			"lookup_weather",
-			acc.Choices[0].Message.ToolCalls[0].Function.Name,
+			acc.acc.Choices[0].Message.ToolCalls[0].Function.Name,
 		)
 		assert.Equal(
 			t,
 			`{"city":"Shenzhen"}`,
-			acc.Choices[0].Message.ToolCalls[0].Function.Arguments,
+			acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments,
 		)
 		assert.Equal(t, "tool planning", reasoningBuf.String())
 	})
@@ -9572,13 +9572,13 @@ func TestModel_accumulateChunk(t *testing.T) {
 					"finish_reason": "stop"
 				}]
 			}`)
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		require.Len(t, acc.Choices, 1)
-		assert.Equal(t, "stop", acc.Choices[0].FinishReason)
+		require.Len(t, acc.acc.Choices, 1)
+		assert.Equal(t, "stop", acc.acc.Choices[0].FinishReason)
 		assert.Equal(t, "final step", reasoningBuf.String())
 	})
 
@@ -9611,14 +9611,293 @@ func TestModel_accumulateChunk(t *testing.T) {
 				TotalTokens:      15,
 			},
 		}
-		acc := openai.ChatCompletionAccumulator{}
+		acc := chatStreamAccumulator{}
 		var reasoningBuf bytes.Buffer
 
 		m.accumulateChunk(chunk, &acc, &reasoningBuf)
 
-		assert.Equal(t, int64(20), acc.Usage.PromptTokens)
-		assert.Equal(t, int64(10), acc.Usage.CompletionTokens)
+		assert.Equal(t, int64(20), acc.acc.Usage.PromptTokens)
+		assert.Equal(t, int64(10), acc.acc.Usage.CompletionTokens)
 	})
+}
+
+func TestChatStreamAccumulator_PreservesLongFields(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+	const (
+		chunkCount   = 2048
+		contentPart  = "content-"
+		refusalPart  = "refusal-"
+		argumentPart = `{"city":"shenzhen"}`
+	)
+
+	acc := chatStreamAccumulator{}
+	var reasoningBuf bytes.Buffer
+	for i := 0; i < chunkCount; i++ {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "stream-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: []openai.ChatCompletionChunkChoice{{
+				Index: 0,
+				Delta: openai.ChatCompletionChunkChoiceDelta{
+					Content: contentPart,
+					Refusal: refusalPart,
+					ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{{
+						Index: 0,
+						ID: func() string {
+							if i == 0 {
+								return "call-1"
+							}
+							return ""
+						}(),
+						Type: func() string {
+							if i == 0 {
+								return "function"
+							}
+							return ""
+						}(),
+						Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+							Name: func() string {
+								if i == 0 {
+									return "lookup_"
+								}
+								if i == 1 {
+									return "weather"
+								}
+								return ""
+							}(),
+							Arguments: argumentPart,
+						},
+					}},
+				},
+			}},
+		}
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+	}
+
+	require.Len(t, acc.acc.Choices, 1)
+	require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 1)
+	assert.Equal(t, strings.Repeat(contentPart, chunkCount), acc.acc.Choices[0].Message.Content)
+	assert.Equal(t, strings.Repeat(refusalPart, chunkCount), acc.acc.Choices[0].Message.Refusal)
+	assert.Equal(t, "lookup_weather", acc.acc.Choices[0].Message.ToolCalls[0].Function.Name)
+	assert.Equal(t, strings.Repeat(argumentPart, chunkCount), acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+}
+
+func TestChatStreamAccumulator_ClearsScratchRawJSON(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+	largeRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"tool_calls":[{"index":0,"id":"call-0","type":"function","function":{"name":"first","arguments":"` + strings.Repeat("a", 1<<20) + `"}},{"index":1,"id":"call-1","type":"function","function":{"name":"second","arguments":"` + strings.Repeat("b", 1<<20) + `"}}]}}]}`
+	var first openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(largeRaw), &first))
+	require.Equal(t, largeRaw, first.RawJSON())
+
+	acc := chatStreamAccumulator{}
+	var reasoningBuf bytes.Buffer
+	m.accumulateChunk(first, &acc, &reasoningBuf)
+	require.Len(t, acc.acc.Choices, 1)
+	require.Len(t, acc.acc.Choices[0].Message.ToolCalls, 2)
+
+	smallRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"tool_calls":[{"index":0,"function":{"arguments":"tail"}}]}}]}`
+	var second openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(smallRaw), &second))
+	m.accumulateChunk(second, &acc, &reasoningBuf)
+
+	assert.Equal(t, "first", acc.acc.Choices[0].Message.ToolCalls[0].Function.Name)
+	assert.Equal(t, strings.Repeat("a", 1<<20)+"tail", acc.acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+	assert.Equal(t, "second", acc.acc.Choices[0].Message.ToolCalls[1].Function.Name)
+	assert.Equal(t, strings.Repeat("b", 1<<20), acc.acc.Choices[0].Message.ToolCalls[1].Function.Arguments)
+	assert.Empty(t, acc.scratchToolCalls[0][0].RawJSON())
+	assert.Empty(t, acc.scratchToolCalls[0][0].Function.RawJSON())
+	assert.Empty(t, acc.scratchChoices[0].RawJSON())
+
+	choiceRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"content":"last"}},{"index":1,"finish_reason":"","delta":{"content":"second"}}]}`
+	var third openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(choiceRaw), &third))
+	m.accumulateChunk(third, &acc, &reasoningBuf)
+	choicesRaw := `{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[{"index":0,"finish_reason":"","delta":{"content":"only"}}]}`
+	var fourth openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(choicesRaw), &fourth))
+	m.accumulateChunk(fourth, &acc, &reasoningBuf)
+	assert.Len(t, acc.scratchChoices, 1)
+	assert.Empty(t, acc.scratchChoices[0].RawJSON())
+	assert.Empty(t, acc.scratchChoices[0].Delta.RawJSON())
+
+	var emptyChoices openai.ChatCompletionChunk
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"stream-id","object":"chat.completion.chunk","created":1699200000,"model":"test-model","choices":[]}`), &emptyChoices))
+	m.accumulateChunk(emptyChoices, &acc, &reasoningBuf)
+	assert.Empty(t, acc.scratchChoices[0].RawJSON())
+	assert.Empty(t, acc.scratchChoices[0].Delta.RawJSON())
+	assert.Nil(t, acc.scratchChoices[0].Delta.ToolCalls)
+	assert.Nil(t, acc.scratchToolCalls[0])
+}
+
+func TestChatStreamAccumulator_ScratchSlicesShrinkAndRegrow(t *testing.T) {
+	acc := chatStreamAccumulator{}
+
+	addChunk := func(choiceCount, toolCallCount int) {
+		chunk := openai.ChatCompletionChunk{
+			ID:      "stream-id",
+			Object:  "chat.completion.chunk",
+			Created: 1699200000,
+			Model:   "test-model",
+			Choices: make([]openai.ChatCompletionChunkChoice, choiceCount),
+		}
+		for choiceIndex := range chunk.Choices {
+			chunk.Choices[choiceIndex].Index = int64(choiceIndex)
+			chunk.Choices[choiceIndex].Delta.ToolCalls = make(
+				[]openai.ChatCompletionChunkChoiceDeltaToolCall,
+				toolCallCount,
+			)
+			for toolCallIndex := range chunk.Choices[choiceIndex].Delta.ToolCalls {
+				chunk.Choices[choiceIndex].Delta.ToolCalls[toolCallIndex] = openai.ChatCompletionChunkChoiceDeltaToolCall{
+					Index: int64(toolCallIndex),
+					ID:    "call",
+					Type:  "function",
+					Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+						Name:      "lookup",
+						Arguments: "{}",
+					},
+				}
+			}
+		}
+		require.True(t, acc.addChunk(chunk))
+	}
+
+	t.Run("tool calls shrink and regrow", func(t *testing.T) {
+		addChunk(1, 2)
+		addChunk(1, 1)
+		addChunk(1, 2)
+		assert.Len(t, acc.scratchToolCalls[0], 2)
+	})
+
+	acc = chatStreamAccumulator{}
+	t.Run("tool calls regrow from empty", func(t *testing.T) {
+		addChunk(1, 1)
+		addChunk(1, 0)
+		addChunk(1, 1)
+		assert.Len(t, acc.scratchToolCalls[0], 1)
+	})
+
+	acc = chatStreamAccumulator{}
+	t.Run("choices shrink and regrow", func(t *testing.T) {
+		addChunk(2, 1)
+		addChunk(1, 1)
+		addChunk(2, 1)
+		assert.Len(t, acc.scratchChoices, 2)
+		assert.Len(t, acc.scratchToolCalls, 2)
+	})
+}
+
+func TestChatStreamAccumulator_ReportsFinishedDecodedFields(t *testing.T) {
+	tests := []struct {
+		name             string
+		firstChunk       string
+		secondChunk      string
+		wantContent      string
+		wantRefusal      string
+		wantToolCallName string
+		wantToolCallArgs string
+	}{
+		{
+			name:        "content",
+			firstChunk:  `{"id":"stream-id","choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+			secondChunk: `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantContent: "answer",
+		},
+		{
+			name:        "refusal",
+			firstChunk:  `{"id":"stream-id","choices":[{"index":0,"delta":{"refusal":"cannot help"}}]}`,
+			secondChunk: `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantRefusal: "cannot help",
+		},
+		{
+			name:             "tool call",
+			firstChunk:       `{"id":"stream-id","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+			secondChunk:      `{"id":"stream-id","choices":[{"index":0,"delta":{}}]}`,
+			wantToolCallName: "lookup",
+			wantToolCallArgs: "{}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New("test-model", WithAPIKey("test-key"))
+			acc := chatStreamAccumulator{}
+			var reasoningBuf bytes.Buffer
+
+			m.accumulateChunk(parseChunkWithExtraFields(t, tt.firstChunk), &acc, &reasoningBuf)
+			m.accumulateChunk(parseChunkWithExtraFields(t, tt.secondChunk), &acc, &reasoningBuf)
+
+			if tt.wantContent != "" {
+				content, ok := acc.acc.JustFinishedContent()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantContent, content)
+			}
+			if tt.wantRefusal != "" {
+				refusal, ok := acc.acc.JustFinishedRefusal()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantRefusal, refusal)
+			}
+			if tt.wantToolCallName != "" {
+				toolCall, ok := acc.acc.JustFinishedToolCall()
+				require.True(t, ok)
+				assert.Equal(t, tt.wantToolCallName, toolCall.Name)
+				assert.Equal(t, tt.wantToolCallArgs, toolCall.Arguments)
+			}
+		})
+	}
+}
+func TestChatStreamAccumulator_AllocationGrowth(t *testing.T) {
+	m := New("test-model", WithAPIKey("test-key"))
+	chunk := openai.ChatCompletionChunk{
+		ID:      "stream-id",
+		Object:  "chat.completion.chunk",
+		Created: 1699200000,
+		Model:   "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{{
+			Index: 0,
+			Delta: openai.ChatCompletionChunkChoiceDelta{Content: strings.Repeat("x", 64)},
+		}},
+	}
+	measure := func(chunkCount int) float64 {
+		return testing.AllocsPerRun(5, func() {
+			acc := chatStreamAccumulator{}
+			var reasoningBuf bytes.Buffer
+			for i := 0; i < chunkCount; i++ {
+				m.accumulateChunk(chunk, &acc, &reasoningBuf)
+			}
+			if len(acc.acc.Choices) != 1 || len(acc.acc.Choices[0].Message.Content) != chunkCount*64 {
+				t.Fatalf("unexpected accumulated content")
+			}
+		})
+	}
+
+	small := measure(256)
+	large := measure(2048)
+	assert.Less(t, large, small*2.5, "allocation growth should remain sub-quadratic")
+}
+
+func BenchmarkChatStreamAccumulatorLongContent(b *testing.B) {
+	m := New("test-model", WithAPIKey("test-key"))
+	chunk := openai.ChatCompletionChunk{
+		ID:      "stream-id",
+		Object:  "chat.completion.chunk",
+		Created: 1699200000,
+		Model:   "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{{
+			Index: 0,
+			Delta: openai.ChatCompletionChunkChoiceDelta{Content: strings.Repeat("x", 64)},
+		}},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		acc := chatStreamAccumulator{}
+		var reasoningBuf bytes.Buffer
+		for j := 0; j < 2048; j++ {
+			m.accumulateChunk(chunk, &acc, &reasoningBuf)
+		}
+	}
 }
 
 // TestModel_sendPartialResponse tests the sendPartialResponse method.

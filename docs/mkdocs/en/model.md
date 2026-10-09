@@ -1799,15 +1799,26 @@ counter := model.NewSimpleTokenCounter(
     model.WithApproxRunesPerToken(1.6),  // Recommended value for Chinese scenarios
 )
 
-// 2. Set as global counter (affects all summary triggers)
+// 2. Set the process default; explicit agent request counters take precedence
 summary.SetTokenCounter(counter)
 
 // 3. Create summarizer
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithTokenThreshold(4000),  // Uses your custom counter for evaluation
+    summary.WithTokenThreshold(4000),  // Threshold in estimated tokens
 )
 ```
+
+`summary.SetTokenCounter(...)` configures the process default for summary checks
+and summary-request estimates. It also supplies the default for model-visible
+request-view estimates and pre-LLM summary triggers. An agent's explicit
+`WithContextCompactionTokenCounter(...)` takes precedence for its request
+estimates, including when context compaction is disabled. The process default
+is read at evaluation time, so later updates affect existing agents;
+`SetTokenCounter(nil)` restores the built-in `SimpleTokenCounter`. Custom
+counters must support concurrent calls. Tool-result compaction and model token
+tailoring keep their independent defaults; configure those paths explicitly
+when the same estimates are needed.
 
 #### 7. Token Tailoring
 

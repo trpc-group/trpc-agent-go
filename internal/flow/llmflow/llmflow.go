@@ -42,6 +42,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytoken"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -2190,7 +2191,7 @@ func syncCompactContextDecision(
 		ratio,
 	)
 	if counter == nil {
-		counter = model.NewSimpleTokenCounter()
+		counter = summarytoken.Get()
 	}
 	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
 	decision.tokenCount = tokens
@@ -2793,7 +2794,7 @@ func finalizeSummaryView(
 		return
 	}
 	if counter == nil {
-		counter = model.NewSimpleTokenCounter()
+		counter = summarytoken.Get()
 	}
 	tokens, err := counter.CountTokensRange(
 		ctx,

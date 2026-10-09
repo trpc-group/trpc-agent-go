@@ -408,9 +408,11 @@ type Options struct {
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
 	// ContextCompactionTokenCounter estimates request and tool-result size for
-	// context compaction. Compaction thresholds are compared against this
-	// estimate, not provider-reported usage tokens. When nil,
-	// SimpleTokenCounter is used.
+	// context compaction and model-visible request size for automatic summary
+	// checks. Thresholds use these estimates, not provider-reported usage tokens.
+	// When nil, request estimates use the current process default configured by
+	// summary.SetTokenCounter (SimpleTokenCounter unless overridden), while
+	// tool-result compaction uses its independent SimpleTokenCounter default.
 	ContextCompactionTokenCounter model.TokenCounter
 	// ToolResultCompactionConfig declares tool-name based compaction rules.
 	ToolResultCompactionConfig *ToolResultCompactionConfig
@@ -1875,6 +1877,8 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 // budgets use the counter's estimated token count, not provider-reported usage
 // tokens. For SimpleTokenCounter, WithApproxRunesPerToken is runes per token
 // (estimated tokens = counted runes / value).
+// The counter also takes precedence over summary.SetTokenCounter for
+// model-visible request estimates used by automatic summary checks.
 func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *Options) {
 		if counter != nil {
