@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// CI probe: verify whether the test pipeline is disabled for a Go test change.
 func TestNewEvent(t *testing.T) {
 	const (
 		invocationID = "invocation-123"
