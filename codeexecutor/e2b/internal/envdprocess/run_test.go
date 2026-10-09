@@ -1174,9 +1174,20 @@ func TestRunProcessTimeoutWhileInitialStdinRPCIsPending(t *testing.T) {
 			handler := blockingProcessHandler(t, nil)
 			// Keep the server from returning a remote DeadlineExceeded before
 			// the client's timer fires. This case specifically tests cancellation
-			// by the local process deadline, not an independent RPC status.
+			// by the local process deadline, not an independent RPC status. Both
+			// the process stream and the pending stdin RPC must remain blocked.
 			release := make(chan struct{})
 			defer close(release)
+			originalStart := handler.start
+			handler.start = func(
+				ctx context.Context,
+				req *connect.Request[process.StartRequest],
+				stream *connect.ServerStream[process.StartResponse],
+			) error {
+				err := originalStart(ctx, req, stream)
+				<-release
+				return err
+			}
 			tt.configure(handler, release)
 			handler.sendSignal = unexpectedSendSignal(t)
 
