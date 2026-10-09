@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -318,8 +317,12 @@ func (h *Handler) executeRemoteExperiment(
 	datasetRunID := ""
 	passedCases := 0
 	scoreCount := 0
+	evaluationResult, traces, err := h.evaluateCases(ctx, remoteRequest.DatasetID, caseSpecs)
+	if err != nil {
+		return nil, err
+	}
 	for _, spec := range caseSpecs {
-		caseSummary, caseRunID, caseScoreCount, err := h.processCase(ctx, remoteRequest.DatasetID, opts, spec)
+		caseSummary, caseRunID, caseScoreCount, err := h.publishCase(ctx, evaluationResult, traces[spec.EvalCase.EvalID], opts, spec)
 		if err != nil {
 			return nil, err
 		}
@@ -391,58 +394,30 @@ func (h *Handler) executeRemoteExperiment(
 	return response, nil
 }
 
-func (h *Handler) processCase(
+// publishCase writes one case from a completed batch to Langfuse.
+func (h *Handler) publishCase(
 	ctx context.Context,
-	datasetID string,
+	evaluationResult *coreevaluation.EvaluationResult,
+	trace *caseTrace,
 	opts executionOptions,
 	spec *CaseSpec,
 ) (*remoteCaseSummary, string, int, error) {
-	caseCtxWithTraceParent, traceID, err := injectRemoteTraceParent(ctx)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("inject remote trace parent for case %s: %w", spec.EvalCase.EvalID, err)
-	}
-	runOptions := append([]agent.RunOption(nil), h.runOptions...)
-	runOptions = append(runOptions,
-		agent.WithExecutionTraceEnabled(true),
-		agent.WithSpanAttributes(
-			attribute.String("langfuse.trace.name", spec.TraceName),
-			attribute.String("langfuse.user.id", spec.UserID),
-			attribute.String("langfuse.environment", h.environment),
-		),
-		agent.WithTraceStartedCallback(func(spanContext oteltrace.SpanContext) {
-			if spanContext.IsValid() {
-				traceID = spanContext.TraceID().String()
-			}
-		}),
-	)
-	evaluationResult, err := h.agentEvaluator.Evaluate(
-		caseCtxWithTraceParent,
-		datasetID,
-		coreevaluation.WithEvalCaseIDs(spec.EvalCase.EvalID),
-		coreevaluation.WithRunDetailsEnabled(true),
-		coreevaluation.WithEvalSetManager(h.evalSetManager),
-		coreevaluation.WithMetricManager(h.metricManager),
-		coreevaluation.WithEvalResultManager(h.resultManager),
-		coreevaluation.WithRunOptions(runOptions...),
-	)
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("evaluate case %s: %w", spec.EvalCase.EvalID, err)
-	}
 	caseAggregate, runCaseResult, inferenceDetail, err := h.resolveCaseArtifacts(evaluationResult, spec.EvalCase.EvalID)
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("resolve case artifacts for case %s: %w", spec.EvalCase.EvalID, err)
 	}
+	traceID := trace.idForSession(inferenceDetail.SessionID)
 	if traceID == "" {
 		return nil, "", 0, fmt.Errorf("trace id was not captured for case %s", spec.EvalCase.EvalID)
 	}
-	if err := forceFlushTelemetry(caseCtxWithTraceParent); err != nil {
+	if err := forceFlushTelemetry(ctx); err != nil {
 		return nil, "", 0, fmt.Errorf("flush telemetry for case %s: %w", spec.EvalCase.EvalID, err)
 	}
 	finalOutput, err := extractFinalOutput(inferenceDetail)
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("extract final output for case %s: %w", spec.EvalCase.EvalID, err)
 	}
-	if err := h.client.createTrace(caseCtxWithTraceParent, traceCreateRequest{
+	if err := h.client.createTrace(ctx, traceCreateRequest{
 		ID:          traceID,
 		Timestamp:   time.Now().UTC(),
 		Name:        spec.TraceName,
@@ -456,7 +431,7 @@ func (h *Handler) processCase(
 	}); err != nil {
 		return nil, "", 0, fmt.Errorf("create trace for case %s: %w", spec.EvalCase.EvalID, err)
 	}
-	runItem, err := h.client.createDatasetRunItem(caseCtxWithTraceParent, datasetRunItemCreateRequest{
+	runItem, err := h.client.createDatasetRunItem(ctx, datasetRunItemCreateRequest{
 		RunName:        opts.runName,
 		RunDescription: opts.runDescription,
 		DatasetItemID:  spec.DatasetItemID,
@@ -480,7 +455,7 @@ func (h *Handler) processCase(
 	scoreCount := 0
 	for _, metricResult := range runCaseResult.OverallEvalMetricResults {
 		comment := resolveMetricReason(metricResult)
-		if err := h.client.createScore(caseCtxWithTraceParent, scoreCreateRequest{
+		if err := h.client.createScore(ctx, scoreCreateRequest{
 			Name:        metricResult.MetricName,
 			TraceID:     traceID,
 			Value:       metricResult.Score,

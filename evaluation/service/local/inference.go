@@ -99,20 +99,23 @@ func (s *local) runBeforeInferenceCaseCallbacks(
 	req *service.InferenceRequest,
 	evalCaseID string,
 	sessionID string,
-) (context.Context, error) {
-	result, err := callback.RunBeforeInferenceCase(ctx, callbacks, &service.BeforeInferenceCaseArgs{
+	runOptions []agent.RunOption,
+) (context.Context, []agent.RunOption, error) {
+	args := &service.BeforeInferenceCaseArgs{
+		RunOptions: append([]agent.RunOption(nil), runOptions...),
 		Request:    req,
 		EvalCaseID: evalCaseID,
 		SessionID:  sessionID,
-	})
+	}
+	result, err := callback.RunBeforeInferenceCase(ctx, callbacks, args)
 	if result != nil && result.Context != nil {
 		ctx = result.Context
 	}
 	if err != nil {
-		return ctx, fmt.Errorf("run before inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s, sessionID=%s): %w",
+		return ctx, nil, fmt.Errorf("run before inference case callbacks (app=%s, evalSetID=%s, evalCaseID=%s, sessionID=%s): %w",
 			req.AppName, req.EvalSetID, evalCaseID, sessionID, err)
 	}
-	return ctx, nil
+	return ctx, args.RunOptions, nil
 }
 
 func (s *local) runAfterInferenceCaseCallbacks(
@@ -242,7 +245,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 			UserID:     "",
 		}, errors.New("eval case is nil"))
 	}
-	ctx, err := s.runBeforeInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, sessionID)
+	ctx, runOptions, err := s.runBeforeInferenceCaseCallbacks(ctx, opts.Callbacks, req, evalCase.EvalID, sessionID, opts.RunOptions)
 	if err != nil {
 		return newFailedInferenceResult(&service.InferenceResult{
 			AppName:    req.AppName,
@@ -304,8 +307,8 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
 		return newFailedInferenceResult(result, err)
 	}
-	mergedRunOptions := make([]agent.RunOption, 0, len(opts.RunOptions)+1)
-	mergedRunOptions = append(mergedRunOptions, opts.RunOptions...)
+	mergedRunOptions := make([]agent.RunOption, 0, len(runOptions)+1)
+	mergedRunOptions = append(mergedRunOptions, runOptions...)
 	if len(seedMessages) > 0 {
 		mergedRunOptions = append(mergedRunOptions, agent.WithInjectedContextMessages(seedMessages))
 	}
@@ -543,6 +546,16 @@ func (s *local) inferScenarioConversation(
 		if opts.ExpectedRunner == nil {
 			return nil, nil, errors.New("expected runner is nil")
 		}
+		// Keep actual-runner callback options out of the expected driver while
+		// preserving the configured options and conversation seed for both roles.
+		seedMessages, err := seedMessagesFromPointers(evalCase.ContextMessages)
+		if err != nil {
+			return nil, nil, fmt.Errorf("seed context messages: %w", err)
+		}
+		expectedOptions := append([]agent.RunOption(nil), opts.RunOptions...)
+		if len(seedMessages) > 0 {
+			expectedOptions = append(expectedOptions, agent.WithInjectedContextMessages(seedMessages))
+		}
 		expectedInferenceResult, err := inference.InferenceWithConversationScenario(
 			ctx,
 			opts.ExpectedRunner,
@@ -551,7 +564,7 @@ func (s *local) inferScenarioConversation(
 			evalCase.ConversationScenario,
 			evalCase.SessionInput,
 			expectedRunnerSessionID(sessionID),
-			runOptions,
+			expectedOptions,
 		)
 		if err != nil {
 			return nil, nil, err
