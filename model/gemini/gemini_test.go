@@ -3080,3 +3080,56 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 		})
 	}
 }
+
+func TestModel_StreamingUsageMatchesLastChunk(t *testing.T) {
+	usage := func(prompt, candidates, total, cached int32) *genai.GenerateContentResponseUsageMetadata {
+		return &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        prompt,
+			CandidatesTokenCount:    candidates,
+			TotalTokenCount:         total,
+			CachedContentTokenCount: cached,
+		}
+	}
+	chunk := func(text string, u *genai.GenerateContentResponseUsageMetadata) *genai.GenerateContentResponse {
+		return &genai.GenerateContentResponse{
+			ModelVersion: "gemini-pro",
+			Candidates: []*genai.Candidate{
+				{Content: &genai.Content{Parts: []*genai.Part{{Text: text}}}},
+			},
+			UsageMetadata: u,
+		}
+	}
+	chunks := []*genai.GenerateContentResponse{
+		chunk("He", usage(12, 3, 15, 4)),
+		chunk("llo", usage(12, 7, 19, 4)),
+		chunk("!", usage(12, 11, 23, 4)),
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice(chunks))
+
+	m := &Model{client: mockClient}
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	assert.NoError(t, err)
+
+	var final *model.Response
+	for rsp := range ch {
+		if rsp.Done {
+			final = rsp
+		}
+	}
+	assert.NotNil(t, final)
+	assert.Equal(t, 12, final.Usage.PromptTokens)
+	assert.Equal(t, 11, final.Usage.CompletionTokens)
+	assert.Equal(t, 23, final.Usage.TotalTokens)
+	assert.Equal(t, 4, final.Usage.PromptTokensDetails.CachedTokens)
+}

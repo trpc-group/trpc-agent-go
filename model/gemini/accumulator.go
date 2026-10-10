@@ -48,10 +48,10 @@ func (a *Accumulator) Accumulate(resp *model.Response) {
 			}
 		}
 	}
+	// Gemini repeats usageMetadata on every chunk: the prompt count is constant
+	// and the candidate/total counts are cumulative, so the newest one wins.
 	if resp.Usage != nil {
-		a.Usage.PromptTokens += resp.Usage.PromptTokens
-		a.Usage.CompletionTokens += resp.Usage.CompletionTokens
-		a.Usage.TotalTokens += resp.Usage.TotalTokens
+		a.Usage = *resp.Usage
 	}
 }
 
