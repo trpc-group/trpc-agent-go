@@ -61,4 +61,12 @@ const (
 	// MySQLErrDuplicateEntry is the error code when a duplicate entry violates a unique constraint
 	// Error 1062: Duplicate entry for key
 	MySQLErrDuplicateEntry uint16 = 1062
+
+	// MySQLErrLockWaitTimeout is the error code when lock wait timeout is exceeded.
+	// Error 1205: Lock wait timeout exceeded
+	MySQLErrLockWaitTimeout uint16 = 1205
+
+	// MySQLErrLockDeadlock is the error code when a deadlock is found.
+	// Error 1213: Deadlock found when trying to get lock
+	MySQLErrLockDeadlock uint16 = 1213
 )
