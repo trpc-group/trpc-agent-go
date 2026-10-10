@@ -190,6 +190,76 @@ func (s *Service) LoadArtifact(
 	}, nil
 }
 
+// Head returns metadata for an artifact without downloading its content.
+// If req.Version is nil, the latest version is used.
+// It returns (nil, nil) when the artifact (or requested version) is not found.
+func (s *Service) Head(
+	ctx context.Context,
+	req *artifact.HeadRequest,
+	opts ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("head request is nil")
+	}
+	if err := validateSessionInfo(req.SessionInfo); err != nil {
+		return nil, err
+	}
+	if err := validateFilename(req.Filename); err != nil {
+		return nil, err
+	}
+	if req.Version != nil && *req.Version < 0 {
+		return nil, fmt.Errorf("version must be >= 0")
+	}
+
+	targetVersion := 0
+	if req.Version != nil {
+		targetVersion = *req.Version
+	} else {
+		versions, err := s.listVersions(ctx, req.SessionInfo, req.Filename)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list versions: %w", err)
+		}
+		if len(versions) == 0 {
+			return nil, nil
+		}
+		targetVersion = slices.Max(versions)
+	}
+
+	objectKey := iartifact.BuildObjectName(req.SessionInfo, req.Filename, targetVersion)
+	head, err := s.client.HeadObject(ctx, &s3storage.HeadObjectRequest{Key: objectKey})
+	if err != nil {
+		if errors.Is(err, s3storage.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to head artifact: %w", err)
+	}
+	if head == nil {
+		return nil, fmt.Errorf("failed to head artifact: empty response")
+	}
+
+	o := artifact.HeadOptions{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&o)
+	}
+
+	// Best-effort: S3 backend does not expose a stable public URL here.
+	// URL may still be empty even when IncludeURL is true.
+	url := ""
+	_ = o
+
+	return &artifact.HeadResponse{
+		Filename: req.Filename,
+		Version:  targetVersion,
+		Size:     head.Size,
+		MimeType: cmp.Or(head.ContentType, defaultContentType),
+		URL:      url,
+		Name:     req.Filename,
+	}, nil
+}
+
 // ListArtifactKeys lists all artifact filenames within a session.
 // It returns artifacts from both session scope and user scope.
 func (s *Service) ListArtifactKeys(

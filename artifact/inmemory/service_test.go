@@ -141,6 +141,69 @@ func TestLoadArtifactMultipleVersions(t *testing.T) {
 	}
 }
 
+func TestHeadArtifact(t *testing.T) {
+	service := NewService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	// Not found.
+	got, err := service.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    "missing.txt",
+	})
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	// Save two versions.
+	art0 := &artifact.Artifact{Data: []byte("v0"), MimeType: "text/plain"}
+	v0, err := service.SaveArtifact(ctx, sessionInfo, "a.txt", art0)
+	require.NoError(t, err)
+	require.Equal(t, 0, v0)
+
+	art1 := &artifact.Artifact{Data: []byte("v1"), MimeType: "text/plain"}
+	v1, err := service.SaveArtifact(ctx, sessionInfo, "a.txt", art1)
+	require.NoError(t, err)
+	require.Equal(t, 1, v1)
+
+	// Head latest.
+	got, err = service.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    "a.txt",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "a.txt", got.Filename)
+	assert.Equal(t, 1, got.Version)
+	assert.Equal(t, int64(len(art1.Data)), got.Size)
+	assert.Equal(t, "text/plain", got.MimeType)
+	assert.Equal(t, "a.txt", got.Name)
+
+	// Head specific version.
+	got, err = service.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    "a.txt",
+		Version:     &v0,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 0, got.Version)
+	assert.Equal(t, int64(len(art0.Data)), got.Size)
+
+	// Invalid version.
+	neg := -1
+	_, err = service.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    "a.txt",
+		Version:     &neg,
+	})
+	require.Error(t, err)
+}
+
 func TestListArtifactKeys(t *testing.T) {
 	service := NewService()
 	ctx := context.Background()

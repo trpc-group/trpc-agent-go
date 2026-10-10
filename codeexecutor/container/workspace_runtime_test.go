@@ -1560,6 +1560,14 @@ func (*artMem) LoadArtifact(
 	}, nil
 }
 
+func (*artMem) Head(
+	_ context.Context,
+	_ *artifact.HeadRequest,
+	_ ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	return nil, nil
+}
+
 func (*artMem) ListArtifactKeys(
 	_ context.Context,
 	_ artifact.SessionInfo,
@@ -1612,6 +1620,14 @@ func (s *pinnedArtifactService) LoadArtifact(
 		MimeType: "text/plain",
 		Name:     "name",
 	}, nil
+}
+
+func (*pinnedArtifactService) Head(
+	_ context.Context,
+	_ *artifact.HeadRequest,
+	_ ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	return nil, nil
 }
 
 func (*pinnedArtifactService) ListArtifactKeys(
