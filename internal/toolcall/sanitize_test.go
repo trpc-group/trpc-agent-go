@@ -574,6 +574,69 @@ func TestSanitizeMessagesWithTools_PreservesToolCallOrderWhenOrphanComesFirst(t 
 	}
 }
 
+func TestSanitizeMessagesWithTools_DowngradesDuplicateIDCalls(t *testing.T) {
+	newCall := func(id string) model.ToolCall {
+		return model.ToolCall{
+			ID: id,
+			Function: model.FunctionDefinitionParam{
+				Name:      "test_tool",
+				Arguments: []byte(`{"a":1}`),
+			},
+		}
+	}
+
+	t.Run("two unanswered calls sharing an id yield one synthetic result", func(t *testing.T) {
+		in := []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: []model.ToolCall{newCall("call_dup"), newCall("call_dup")},
+		}}
+		out := SanitizeMessagesWithTools(context.Background(), in, nil)
+		if assert.Len(t, out, 3) {
+			assert.Equal(t, model.RoleAssistant, out[0].Role)
+			assert.Len(t, out[0].ToolCalls, 1)
+			assert.Equal(t, "call_dup", out[0].ToolCalls[0].ID)
+			toolIDs := map[string]int{}
+			for _, m := range out {
+				if m.Role == model.RoleTool {
+					toolIDs[m.ToolID]++
+				}
+			}
+			assert.Equal(t, 1, toolIDs["call_dup"], "synthetic results must not share a ToolID")
+			assert.Equal(t, model.RoleTool, out[1].Role)
+			assert.Equal(t, "call_dup", out[1].ToolID)
+			assert.Contains(t, out[1].Content, interruptedToolCallTag)
+			assert.Equal(t, model.RoleUser, out[2].Role)
+			assert.Contains(t, out[2].Content, invalidToolCallTag)
+			assert.Contains(t, out[2].Content, errDuplicateToolCallID.Error())
+		}
+	})
+
+	t.Run("first occurrence keeps the result, duplicate is downgraded", func(t *testing.T) {
+		in := []model.Message{
+			{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{newCall("call_dup"), newCall("call_dup")},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolID:   "call_dup",
+				ToolName: "test_tool",
+				Content:  "ok",
+			},
+		}
+		out := SanitizeMessagesWithTools(context.Background(), in, nil)
+		if assert.Len(t, out, 3) {
+			assert.Equal(t, model.RoleAssistant, out[0].Role)
+			assert.Len(t, out[0].ToolCalls, 1)
+			assert.Equal(t, "call_dup", out[0].ToolCalls[0].ID)
+			assert.Equal(t, model.RoleTool, out[1].Role)
+			assert.Equal(t, "ok", out[1].Content)
+			assert.Equal(t, model.RoleUser, out[2].Role)
+			assert.Contains(t, out[2].Content, errDuplicateToolCallID.Error())
+		}
+	})
+}
+
 func TestSanitizeMessagesWithTools_PreservesNonObjectJSONArgumentsWhenToolsUnknown(t *testing.T) {
 	in := []model.Message{
 		{

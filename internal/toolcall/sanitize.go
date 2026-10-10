@@ -35,6 +35,7 @@ const (
 var (
 	errArgumentsNotValidJSON = errors.New("arguments are not valid JSON")
 	errFunctionNameEmpty     = errors.New("function name is empty")
+	errDuplicateToolCallID   = errors.New("tool call id is duplicated in the same assistant message")
 )
 
 // SanitizeMessagesWithTools downgrades invalid tool calls and tool results into user messages.
@@ -278,13 +279,29 @@ func sanitizeToolRound(
 }
 
 // validateToolCalls validates tool call arguments and groups tool calls by validity.
+// A non-empty call ID may be claimed only once per assistant message: later
+// calls repeating a claimed ID are reported invalid so the sanitizer
+// downgrades them, keeping the retained tool calls (and any synthetic
+// results paired with them) unique by ID on the wire.
 func validateToolCalls(toolCalls []model.ToolCall, tools map[string]tool.Tool) toolCallValidation {
 	out := toolCallValidation{
 		validToolCalls: make([]model.ToolCall, 0, len(toolCalls)),
 		validIDs:       make(map[string]struct{}),
 		invalidIDs:     make(map[string]struct{}),
 	}
+	seenIDs := make(map[string]struct{}, len(toolCalls))
 	for _, tc := range toolCalls {
+		if tc.ID != "" {
+			if _, dup := seenIDs[tc.ID]; dup {
+				out.invalidToolCalls = append(out.invalidToolCalls, invalidToolCall{
+					call:   tc,
+					reason: errDuplicateToolCallID.Error(),
+				})
+				out.invalidIDs[tc.ID] = struct{}{}
+				continue
+			}
+			seenIDs[tc.ID] = struct{}{}
+		}
 		validated, ok, reason := validateToolCall(tc, tools)
 		if ok {
 			out.validToolCalls = append(out.validToolCalls, validated)
