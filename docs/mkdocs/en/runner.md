@@ -729,15 +729,22 @@ eventChan, err := r.Run(
 
 When `WithResume(true)` is set:
 
-- Runner inspects the latest persisted session event.
-- If the last event is an assistant response that contains `tool_calls` and
+- Runner inspects the latest persisted session event of the agent's own
+  branch, that is, the latest event whose filter key equals the invocation's
+  filter key. Unkeyed legacy events can be resumed only by the default root
+  invocation when their author is that agent; they never select a subagent's
+  history. Events of
+  other branches, such as AgentTool children or parallel sub-agents, are
+  skipped, so an agent never runs another branch's pending tool calls. Child
+  invocations inherit the option and apply the same rule to their own branch.
+- If that event is an assistant response that contains `tool_calls` and
   there is no later tool result, Runner will execute those pending tools first
   (using the same tool set and callbacks as a normal step) and persist the
   tool results into the session.
 - After tools finish, the normal LLM cycle continues using the updated session
   history, so the model sees both the original tool calls and their results.
 
-If the last event is a user or tool message (or a plain assistant reply
+If that event is a user or tool message (or a plain assistant reply
 without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
 today’s `Run` call.
 

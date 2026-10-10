@@ -1728,11 +1728,12 @@ AgentTool 目前有两个历史作用域：
       如果你把子 Agent 配成只看当前 request/invocation，则稳定 key 也不会带来跨次可见）。
     - 目前仅 `agenttool.NewTool(agent)` 支持；`agenttool.NewDynamicTool()` 会忽略该配置（dynamic 设计上是短生命周期、无记忆的）。
     - 与 `HistoryScopeParentBranch` 不兼容：当同时开启时，框架会忽略 persistent history，并沿用 `parent/child-uuid` 语义。
+    - 与 `WithResumableSubAgents` 不兼容：后者为每个子 Agent 维护各自的历史，任一 `WithPersistentHistory*` 与它同时设置时，`NewTool` 会 panic。persistent history key 下保存的历史不会迁移到任何子 Agent。
   - 完整示例：见 `examples/agenttool/`（通过 `-persistent-child-history` / `-persistent-child-key` 体验）。
 
 - WithHistoryScope(HistoryScope)：
-  - `HistoryScopeIsolated`（默认）：子调用使用独立 `FilterKey`，通常只读取本次工具参数，不继承父历史。
-  - `HistoryScopeParentBranch`：子调用使用 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 形式的分层 `FilterKey`。父子事件处于同一上下文链路，prefix 匹配下可互相进入上下文。典型场景：基于上一轮产出进行“编辑/优化/续写”。
+  - `HistoryScopeIsolated`（默认）：子调用使用独立 `FilterKey`，通常只读取本次工具参数，不继承父历史。显式传入 `HistoryScopeIsolated` 可以与 `WithResumableSubAgents` 同时使用。
+  - `HistoryScopeParentBranch`：子调用使用 `父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）` 形式的分层 `FilterKey`。父子事件处于同一上下文链路，prefix 匹配下可互相进入上下文。典型场景：基于上一轮产出进行“编辑/优化/续写”。与 `WithResumableSubAgents` 不兼容：两者同时设置时 `NewTool` 会 panic。
 
 示例：
 
@@ -1747,6 +1748,14 @@ child := agenttool.NewTool(
 )
 ```
 
+- WithResumableSubAgents() / WithSubAgentNamespace(string)：
+
+  - 默认关闭。`WithResumableSubAgents` 让模型可以启动固定 `NewTool` 的子 Agent，并通过
+    `subagent_id` 继续对话，详见下文“可续接子 Agent”。设置任一选项时 `NewDynamicTool`
+    会 panic。
+  - `WithSubAgentNamespace` 为子 Agent ID 设置稳定的命名空间，必须与
+    `WithResumableSubAgents` 一起使用；单独使用时 `NewTool` 会 panic。
+
 ### 注意事项
 
 - 事件完成信号：工具响应事件会被标记 `RequiresCompletion=true`，Runner 会自动发送完成信号，无需手工处理
@@ -1758,6 +1767,224 @@ child := agenttool.NewTool(
   `WithResponseMode(agenttool.ResponseModeFinalOnly)` 控制父 Agent 作为工具结果收到什么。
 - `HistoryScopeParentBranch` 是共享上下文链路，不是快照隔离。如果不希望子 Agent 的详细事件在父 Agent 后续上下文中出现，保持默认 `HistoryScopeIsolated`，并把必要上下文放进工具参数。
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
+
+### 可续接子 Agent（`WithResumableSubAgents`）
+
+`agenttool.WithResumableSubAgents()` 让父模型可以启动被包装 Agent 的子 Agent，
+并在后续工具调用中继续与它对话。它需要显式开启，且只适用于固定的
+`agenttool.NewTool`。不设置时，`NewTool` 保持原有的输入、输出、历史、流式和 Graph
+行为。
+
+有三个概念容易混淆：
+
+- **被包装 Agent** 是定义：一个 `agent.Agent` 值及其配置。
+- **逻辑子 Agent** 有自己的 ID 和已保存的对话历史。`subagent_id` 只在同一个父
+  Session 和同一个命名空间内有意义，不代表独立的 Go Agent 对象。
+- **调用**是一次工具调用。它要么启动一个新的子 Agent，要么继续一个已有的子 Agent。
+
+继续一个子 Agent，会基于之前调用保存在父 Session 中的历史，**重新发起一次**被包装
+Agent 的调用；它不会恢复暂停中的执行，也不会还原 checkpoint。所有子 Agent 共享父
+Session 的 State 和同一个 Agent 对象；子 Agent 的历史能保留多久，取决于父 Session
+保留并持久化这些事件的时间。
+
+同一个父 Agent 上可以混用可续接和普通 AgentTool，二者各自保持原有行为：
+
+```go
+researcher := agenttool.NewTool(
+    researchAgent,
+    agenttool.WithResumableSubAgents(),
+)
+
+coordinator := llmagent.New(
+    "coordinator",
+    llmagent.WithModel(m),
+    llmagent.WithTools([]tool.Tool{
+        researcher,                       // 可续接子 Agent
+        agenttool.NewTool(summaryAgent),  // 普通 AgentTool，行为不变
+    }),
+)
+```
+
+#### 输入与结果
+
+工具输入在被包装 Agent 自己的输入外再包一层：
+
+```json
+{"subagent_id": "<可选，之前调用返回的 ID>", "input": {"request": "..."}}
+```
+
+`input` 字段必填。它的 JSON 值会像普通 `NewTool` 的参数一样原样交给被包装 Agent；
+被包装 Agent 的 schema 允许 null 时，JSON `null` 也会原样传入。缺少 `input` 时以
+`retryable: false` 失败。调用不会在运行时再按 schema 校验这个值，声明本身仍是
+schema 检查。使用默认 schema 时，`input` 是 `{"request": "..."}`；被包装 Agent
+声明了输入 schema 时，`input` 遵循该 schema（包括其中的 `$defs`）：
+
+```go
+planner := llmagent.New(
+    "planner",
+    llmagent.WithModel(m),
+    llmagent.WithInputSchema(map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "goal": map[string]any{"type": "string"},
+        },
+        "required": []any{"goal"},
+    }),
+)
+plannerTool := agenttool.NewTool(planner, agenttool.WithResumableSubAgents())
+// 模型侧输入：{"subagent_id"?: string, "input": {"goal": string}}
+```
+
+每次调用都返回 `agenttool.SubAgentResult`：
+
+```json
+{"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "status": "completed", "output": "ACME 公布的营收为 ..."}
+{"status": "failed", "error": "unknown subagent_id: ...", "retryable": false}
+```
+
+- `status` 为 `completed` 或 `failed`，只描述本次调用。调用完成后该子 Agent 仍可继续，
+  不存在“已关闭”状态。
+- `output` 始终是字符串：被包装 Agent 在本次调用中产生的 assistant 文本，按
+  `WithResponseMode` 收集，可以为空。即使 Agent 声明了对象类型的 `OutputSchema`，
+  得到的仍是文本（通常是其 JSON）。
+- `error` 描述失败原因。大多数失败（非法参数、未知 ID、缺少父 Session、被包装 Agent
+  报错等）都以 `failed` 结果返回，而不是返回 Go error。
+- `retryable`：用相同参数重试也无法成功时（非法参数、未知 ID、缺少父 Session、graph
+  interrupt）为 `false`；context 取消、超时和 Session flush 失败时为 `true`；无法判断
+  时省略，普通的被包装 Agent 失败也属于这种情况。
+  如果被包装 Agent 因为调用 context 被取消或到达 deadline 而关闭事件流，且此前没有
+  正常完成，也没有更早的错误，则本次调用失败且 `retryable: true`。已经观察到的正常完成
+  在随后的取消下仍是 `completed`：包括被包装 Agent 自身内容为空的 LLM 最终响应，以及
+  Graph 的正常完成快照。嵌套 Agent 的完成不代表外层调用完成，仅有 partial 输出也不算
+  完成。Graph interrupt 优先，仍为 `retryable: false`。
+
+#### 启动与继续子 Agent
+
+第一次调用启动子 Agent 并完成；之后带上返回的 ID 即可继续同一个子 Agent：
+
+```text
+调用 1：{"input": {"request": "查一下 ACME 2024 年的营收。"}}
+     -> {"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "status": "completed", "output": "ACME 公布的营收为 ..."}
+调用 2：{"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "input": {"request": "和 2023 年比较一下。"}}
+     -> {"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "status": "completed", "output": "与 2023 年相比 ..."}
+```
+
+调用 2 会再次运行被包装 Agent，其历史中包含调用 1 的输入和回答，之后才是新的输入。
+每次调用都只追加到该子 Agent 的历史中，不会替换或重试之前的内容。
+
+模型可以通过区分 ID，同时维护同一个 Agent 的多个子 Agent：
+
+```text
+{"input": {"request": "调研 ACME。"}}     -> subagent_id "9c1e67b10a534f84a6d03752ea619cb3"
+{"input": {"request": "调研 Globex。"}}   -> subagent_id "4b7d612fab1841a3ad69f23c83ed740a"
+{"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "input": {"request": "列出 ACME 的主要风险。"}}
+```
+
+在默认的分支过滤下，每个子 Agent 的历史只包含它自己的事件，根 Agent 的历史也不包含
+子 Agent 的事件。如果根 Agent 使用 `BranchFilterModeAll` 或空的过滤键，则会包含它们。
+
+ID 规则：
+
+- 省略 `subagent_id`、传 `null` 或空白字符串，都会以生成的不透明 ID 启动新的子 Agent。
+- 传入的 ID 必须匹配 `^[A-Za-z0-9_-]{8,128}$`，且在父 Session 中有已保存的历史。
+  非法 ID 和未知 ID 会以 `retryable: false` 失败，绝不会被隐式创建。
+- 只有当调用返回时父 Session 中已有该子 Agent 的事件，结果才会带上 `subagent_id`。
+  非法或未知 ID、调用尚未开始运行就失败、以及新子 Agent 在保存任何内容之前就失败，
+  这些结果都不带 ID。结果中只有 `status` 一定存在。
+- 返回 ID 表示调用返回时已确认存在历史。后续调用要求历史仍然可取回；重启后继续，
+  还要求 SessionService 已持久化这些事件。
+
+#### 命名空间
+
+历史以事件过滤键 `agenttool:<namespace>:thread:<id>` 保存在父 Session 中。命名空间
+默认取被包装 Agent 的名称，因此 Agent 改名后，之前的 ID 会变成未知 ID。设置一个稳定的
+命名空间，可以让这些 ID 保持可用，也可以避免两个同名 Agent 的工具共用子 Agent：
+
+```go
+researcher := agenttool.NewTool(
+    researchAgent,
+    agenttool.WithResumableSubAgents(),
+    agenttool.WithSubAgentNamespace("research-v1"),
+)
+```
+
+- 命名空间必须匹配 `^[A-Za-z0-9_-]+$`，并按原样使用，不会被 trim 或改写。命名空间
+  非法、或默认使用的 Agent 名称不匹配该规则时，`NewTool` 会 panic。
+- 在同一个 Session 内，命名空间相同的工具共享子 Agent。
+- 单独使用 `WithSubAgentNamespace`（未设置 `WithResumableSubAgents`）会 panic，
+  避免漏掉选项却被静默忽略。
+- 命名空间不会改变模型侧的工具名。
+
+#### 配置冲突
+
+可续接工具为每个子 Agent 维护各自的历史，因此 `WithResumableSubAgents` 与
+`WithPersistentHistory`、`WithPersistentHistoryKey`、`WithPersistentHistoryKeyFunc`
+或 `WithHistoryScope(HistoryScopeParentBranch)` 组合时，`NewTool` 会 panic，与选项
+顺序无关。显式的 `WithHistoryScope(HistoryScopeIsolated)` 允许使用。设置了
+`WithResumableSubAgents` 或 `WithSubAgentNamespace` 时，`NewDynamicTool` 会 panic。
+
+`WithPersistentHistory*` 保存的历史（例如 `agenttool:<toolName>:default` 下的事件）
+不会被迁移。工具切换为可续接子 Agent 后，初始没有任何子 Agent。
+
+#### 存储、State 与并发
+
+- 调用必须有父 invocation Session，没有时直接失败，不会回退到内存实现。不会为子 Agent
+  创建独立的 Session、表或注册表。
+- 事件历史按子 Agent 隔离，Session State 不隔离：所有子 Agent 读写同一个父 Session
+  State。如果被包装 Agent 在其中保存按对话区分的状态，请在 key 中包含
+  `agenttool.SubAgentIDFromContext(ctx)`。
+- 父对话和所有子 Agent 共享同一个 Session 事件保留窗口（例如
+  `WithSessionEventLimit`），很长的 Session 可能把较早的子 Agent 事件挤出可检索范围。
+  子 Agent 没有单独的 TTL、列举或删除，随父 Session 一起存续和销毁。
+- 同一个 `Tool` 上针对同一个子 Agent 的调用会依次执行；等待中的调用在 context 结束时
+  以 `retryable: true` 放弃。该互斥只在进程内生效，不跨进程或节点协调。不同子 Agent
+  的调用可以并发。
+- 所有子 Agent 共享被包装 Agent 对象，不同 ID 的调用可能并发运行它。它必须支持并发
+  使用，且不能在自身字段中保存对话状态。
+
+#### 中断的调用与 Runner resume
+
+调用会随着被包装 Agent 的输出逐条保存事件，而不是原子地整体保存。
+
+- 调用中途失败或被取消时，已产生的事件会留在子 Agent 的历史中，下一次调用在其后继续。
+  孤立的 tool call 只会被清洗到足以让下一次模型请求合法，不会替换或回滚任何内容。
+- 如果父运行在工具结果写入父 Session 之前就停止，模型可能永远收不到新的
+  `subagent_id`。该子 Agent 的事件仍留在 Session 中，但无法再被寻址；框架没有预创建
+  ID 或调用注册表来找回它。
+- `WithResumableSubAgents` 不会开启 `agent.WithResume`。调用方开启它时，每个 Agent
+  只会恢复位于自己分支历史末尾、尚未得到结果的 tool call，绝不会执行其他 Agent 或其他
+  子 Agent 的 tool call。因此，被包装 Agent 可能在处理新输入之前，先执行子 Agent 历史
+  末尾未完成的 tool call；父 Agent 也可能再次执行对本工具的待处理调用。两种情况下，
+  工具的副作用都可能发生两次。
+
+#### 流式与 Graph
+
+- 调用是同步的。`StreamableCall` 只以 `tool.FinalResultChunk` 发送最终的
+  `SubAgentResult`，即使设置了 `WithStreamInner(true)` 也不转发内部事件。
+- 不支持 Graph checkpoint 和 interrupt 恢复。无论被包装 Agent 是以错误形式返回 graph
+  interrupt，还是只通过 graph executor 事件发出信号，调用都会以 `retryable: false`
+  失败。为了观察事件形式的 interrupt，调用会为被包装 Agent 的运行开启 graph executor
+  事件；如果调用方通过 `agent.WithDisableGraphExecutorEvents(true)` 关闭了这些事件，
+  它们不会写入共享 Session。`CallWithAgentToolGraphRuntime` 返回同样的结果，不参与
+  graph checkpoint 状态。普通 `NewTool` 的 Graph 行为不变。
+- 父 Graph 放在 `RunOptions.RuntimeState` 中的 checkpoint 与 interrupt 恢复值不会进入
+  子 Agent 运行。被去掉的键包括 lineage ID、checkpoint ID（空字符串也算，因为键存在
+  即表示恢复）、checkpoint namespace、command、直接 resume、resume map、used
+  interrupts 和 subgraph interrupt。其他 runtime 值仍然传递。过滤使用新的顶层 map，
+  不修改父 map；嵌套 map 等业务值保留原有共享语义，不提供深层状态隔离。
+  `RunOptions.Resume` 用于恢复未完成的 tool call，是
+  另一项选项，不会被清除。`Call` 和 `CallWithAgentToolGraphRuntime` 都遵守这条边界。
+  普通 `NewTool` 的 Graph 执行仍会收到父 runtime state。
+
+#### 自行维护对话状态的 Agent
+
+框架只通过把已保存的历史发送给被包装 Agent 来恢复子 Agent。在别处维护对话状态的
+Agent 自身感知不到子 Agent 的边界。例如，远程 A2A Agent 收到的 context ID 是父
+Session ID，因此它的所有子 Agent 会共用同一个远程会话。这类 Agent 需要依赖框架发送的
+历史，或者把 `agenttool.SubAgentIDFromContext(ctx)` 映射到自己的会话 ID。
+
+`SubAgentIDFromContext` 返回最近一层可续接调用的 ID。嵌套的普通 AgentTool 能看到外层
+ID，但保留自己的历史；嵌套的可续接 AgentTool 在其调用期间返回它自己的 ID。
 
 ### 动态 AgentTool
 
@@ -1903,6 +2130,7 @@ Dynamic AgentTool 与另外两种多 Agent 机制的边界不同：
 | 机制 | 模型选择什么 | 生命周期 | 控制权 |
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | 一个固定的工具入口 | 每次工具调用 | 返回工具结果给父 Agent |
+| `agenttool.NewTool(agent, agenttool.WithResumableSubAgents())` | 固定工具入口加上可选 `subagent_id` | 每次工具调用；子 Agent 的历史保留在父 Session 中，后续调用可以继续 | 返回 `SubAgentResult` `{subagent_id?, status, output?, error?, retryable?}`，其中只有 `status` 一定存在 |
 | `transfer_to_agent` | 一个已注册 sub-agent | 当前轮继续由目标 Agent 处理 | 控制权移交 |
 | `agenttool.NewDynamicTool()` | 本次调用的 `request`、`instruction`、tools/skills 子集，以及可选的已注册模型 profile | 每次工具调用 | 返回工具结果给父 Agent |
 

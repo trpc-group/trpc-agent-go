@@ -4703,6 +4703,202 @@ func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
 	require.Equal(t, "resume", toolCalls[0])
 }
 
+func TestRun_WithResumeOnlyExecutesOwnBranchPendingToolCalls(t *testing.T) {
+	toolCall := func(key, value string) event.Event {
+		evt := event.NewResponseEvent("inv-old", "agent", &model.Response{
+			Done: true,
+			Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-" + value,
+					Function: model.FunctionDefinitionParam{
+						Name:      "resume_tool",
+						Arguments: []byte(`{"value":"` + value + `"}`),
+					},
+				}},
+			}}},
+		})
+		evt.FilterKey = key
+		return *evt
+	}
+	message := func(key string, msg model.Message) event.Event {
+		evt := event.NewResponseEvent("inv-old", "agent", &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: msg}},
+		})
+		evt.FilterKey = key
+		return *evt
+	}
+	assistant := func(key string) event.Event {
+		return message(key, model.NewAssistantMessage("done"))
+	}
+	toolResult := func(key, value string) event.Event {
+		return message(key, model.Message{
+			Role:    model.RoleTool,
+			ToolID:  "call-" + value,
+			Content: "ok",
+		})
+	}
+	legacyToolCall := func(branch, value string) event.Event {
+		evt := toolCall("", value)
+		evt.Version = event.InitVersion
+		evt.Branch = branch
+		return evt
+	}
+
+	tests := []struct {
+		name      string
+		filterKey string
+		events    []event.Event
+		want      []string
+	}{
+		{
+			name:      "own pending found behind other branches",
+			filterKey: "root/a",
+			events: []event.Event{
+				toolCall("root/a", "a"),
+				assistant("root"),
+				assistant("root/b"),
+			},
+			want: []string{"a"},
+		},
+		{
+			name:      "sibling pending is not replayed",
+			filterKey: "root/b",
+			events:    []event.Event{toolCall("root/a", "a")},
+		},
+		{
+			name:      "child pending is not replayed by parent",
+			filterKey: "root",
+			events:    []event.Event{toolCall("root/a", "a")},
+		},
+		{
+			name:      "parent pending is not replayed by child",
+			filterKey: "root/a",
+			events:    []event.Event{toolCall("root", "root")},
+		},
+		{
+			name:      "own tool result prevents replay",
+			filterKey: "root/a",
+			events: []event.Event{
+				toolCall("root/a", "a"),
+				toolResult("root/a", "a"),
+				toolCall("root/b", "b"),
+			},
+		},
+		{
+			name:      "own completion prevents replay",
+			filterKey: "root/a",
+			events: []event.Event{
+				toolCall("root/a", "a"),
+				assistant("root/a"),
+				toolCall("root", "root"),
+			},
+		},
+		{
+			name:      "unkeyed event does not select an explicit branch",
+			filterKey: "root/a",
+			events: []event.Event{
+				toolCall("", "unkeyed"),
+				assistant("root/b"),
+			},
+		},
+		{
+			name:      "unkeyed call does not select a resumable subagent",
+			filterKey: "agenttool:agent:thread:abcdefgh",
+			events:    []event.Event{toolCall("", "unkeyed")},
+		},
+		{
+			name:      "unkeyed completion does not hide own pending call",
+			filterKey: "agenttool:agent:thread:abcdefgh",
+			events: []event.Event{
+				toolCall("agenttool:agent:thread:abcdefgh", "own"),
+				assistant(""),
+			},
+			want: []string{"own"},
+		},
+		{
+			name:      "unkeyed event still matches default root agent",
+			filterKey: "agent",
+			events:    []event.Event{toolCall("", "unkeyed")},
+			want:      []string{"unkeyed"},
+		},
+		{
+			name:      "unkeyed event still matches default root app",
+			filterKey: "app",
+			events:    []event.Event{toolCall("", "unkeyed")},
+			want:      []string{"unkeyed"},
+		},
+		{
+			name:      "legacy event uses branch",
+			filterKey: "root/a",
+			events: []event.Event{
+				legacyToolCall("root/a", "legacy"),
+				legacyToolCall("root/b", "other"),
+			},
+			want: []string{"legacy"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runResumeFlow(t, tt.filterKey, tt.events)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// runResumeFlow runs one resumed flow over events and returns the values
+// passed to the pending tool calls it executed.
+func runResumeFlow(t *testing.T, filterKey string, events []event.Event) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var executed []string
+	resumeTool := function.NewFunctionTool(
+		func(_ context.Context, req *struct {
+			Value string `json:"value"`
+		}) (string, error) {
+			executed = append(executed, req.Value)
+			return "ok", nil
+		},
+		function.WithName("resume_tool"),
+		function.WithDescription("resume test tool"),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-new"),
+		agent.WithInvocationAgent(&mockAgentWithTools{
+			name:  "agent",
+			tools: []tool.Tool{resumeTool},
+		}),
+		agent.WithInvocationSession(&session.Session{AppName: "app", Events: events}),
+		agent.WithInvocationModel(&noResponseModel{}),
+		agent.WithInvocationEventFilterKey(filterKey),
+		agent.WithInvocationRunOptions(agent.RunOptions{Resume: true}),
+	)
+	inv.Message = model.NewUserMessage("test")
+
+	llmFlow := New(
+		[]flow.RequestProcessor{&seedMessagesRequestProcessor{
+			messages: []model.Message{model.NewUserMessage("test")},
+		}},
+		[]flow.ResponseProcessor{
+			processor.NewFunctionCallResponseProcessor(false, nil),
+		},
+		Options{},
+	)
+	eventCh, err := llmFlow.Run(ctx, inv)
+	require.NoError(t, err)
+	for evt := range eventCh {
+		if evt.RequiresCompletion {
+			key := agent.AppendEventNoticeKeyPrefix + evt.ID
+			_ = inv.NotifyCompletion(ctx, key)
+		}
+		require.Nil(t, evt.Error)
+	}
+	return executed
+}
+
 type countingSessionService struct {
 	session.Service
 	mu         sync.Mutex
