@@ -438,6 +438,39 @@ func TestLocalProgramCommandPath_WindowsPathExt(t *testing.T) {
 	require.Equal(t, filepath.Join(bin, "tool.cmd"), got)
 }
 
+func TestNewLocalProgramCommand_ExtensionlessLaunch(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("extensionless launch path adjustment only applies on Windows")
+	}
+	cwd := t.TempDir()
+	// Copy the running test binary as an extensionless executable: it
+	// is a real PE image and exits 0 quickly with -test.list=^$.
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	data, err := os.ReadFile(exe)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cwd, "tool"),
+		data,
+		0o755,
+	))
+
+	cmd := newLocalProgramCommand(
+		context.Background(),
+		cwd,
+		codeexecutor.RunProgramSpec{
+			Cmd:  "tool",
+			Args: []string{"-test.list=^$"},
+		},
+		[]string{envPathKey + "=" + cwd},
+	)
+	require.NoError(t, cmd.Err)
+	// The resolved extensionless file must actually be runnable: Start
+	// re-runs lookExtensions on cmd.Path, which only tries PATHEXT
+	// candidates unless the path is marked extensionless.
+	require.NoError(t, cmd.Run())
+}
+
 func TestStartPipes_RejectsPresetFields(t *testing.T) {
 	cmd := exec.Command("echo", "hi")
 	cmd.Stdout = os.Stdout
