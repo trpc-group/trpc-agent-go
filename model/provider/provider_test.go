@@ -118,6 +118,63 @@ func TestOpenAIFactoryAppliesOptions(t *testing.T) {
 	assert.NotNil(t, readInterfaceField(openaiModel, "chatStreamCompleteCallback"))
 }
 
+func TestOrcaRouterFactoryAppliesOptions(t *testing.T) {
+	cb := Callbacks{
+		OpenAIChatRequest:  openai.ChatRequestCallbackFunc(func(context.Context, *openaisdk.ChatCompletionNewParams) {}),
+		OpenAIChatResponse: openai.ChatResponseCallbackFunc(func(context.Context, *openaisdk.ChatCompletionNewParams, *openaisdk.ChatCompletion) {}),
+		OpenAIChatChunk:    openai.ChatChunkCallbackFunc(func(context.Context, *openaisdk.ChatCompletionNewParams, *openaisdk.ChatCompletionChunk) {}),
+		OpenAIStreamComplete: openai.ChatStreamCompleteCallbackFunc(func(context.Context, *openaisdk.ChatCompletionNewParams, *openaisdk.ChatCompletionAccumulator, error) {
+		}),
+	}
+
+	opts := &Options{ModelName: "openai/gpt-5"}
+	WithAPIKey("orcarouter-key")(opts)
+	WithBaseURL("https://api.orcarouter.ai/v1")(opts)
+	WithCallbacks(cb)(opts)
+
+	modelInstance, err := orcaRouterProvider(opts)
+	assert.NoError(t, err)
+
+	openaiModel, ok := modelInstance.(*openai.Model)
+	assert.True(t, ok)
+
+	assert.Equal(t, "openai/gpt-5", modelInstance.Info().Name)
+	assert.Equal(t, "https://api.orcarouter.ai/v1", readStringField(openaiModel, "baseURL"))
+	assert.Equal(t, "orcarouter-key", readStringField(openaiModel, "apiKey"))
+	assert.Equal(t, openai.VariantOrcaRouter, readInterfaceField(openaiModel, "variant"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatRequestCallback"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatResponseCallback"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatChunkCallback"))
+	assert.NotNil(t, readInterfaceField(openaiModel, "chatStreamCompleteCallback"))
+}
+
+func TestOrcaRouterFactoryDefaultsToVariantWhenNoBaseURL(t *testing.T) {
+	opts := &Options{ModelName: "auto"}
+	WithAPIKey("orcarouter-key")(opts)
+
+	modelInstance, err := orcaRouterProvider(opts)
+	assert.NoError(t, err)
+
+	openaiModel, ok := modelInstance.(*openai.Model)
+	assert.True(t, ok)
+
+	assert.Equal(t, "auto", modelInstance.Info().Name)
+	assert.Equal(t, "orcarouter-key", readStringField(openaiModel, "apiKey"))
+	assert.Equal(t, openai.VariantOrcaRouter, readInterfaceField(openaiModel, "variant"))
+}
+
+func TestModelOrcaRouter(t *testing.T) {
+	modelInstance, err := Model("orcarouter", "auto", WithAPIKey("key"))
+	assert.NoError(t, err)
+
+	openaiModel, ok := modelInstance.(*openai.Model)
+	assert.True(t, ok)
+
+	assert.Equal(t, "auto", modelInstance.Info().Name)
+	assert.Equal(t, "key", readStringField(openaiModel, "apiKey"))
+	assert.Equal(t, openai.VariantOrcaRouter, readInterfaceField(openaiModel, "variant"))
+}
+
 func TestAnthropicFactoryAppliesOptions(t *testing.T) {
 	cb := Callbacks{
 		AnthropicChatRequest:    anthropic.ChatRequestCallbackFunc(func(context.Context, *anthropicsdk.MessageNewParams) {}),
