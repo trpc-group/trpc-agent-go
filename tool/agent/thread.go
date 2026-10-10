@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -24,25 +24,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	fieldThreadID  = "thread_id"
-	fieldInput     = "input"
-	fieldStatus    = "status"
-	fieldOutput    = "output"
-	fieldError     = "error"
-	fieldRetryable = "retryable"
+	fieldSubAgentID = "subagent_id"
+	fieldInput      = "input"
+	fieldStatus     = "status"
+	fieldOutput     = "output"
+	fieldError      = "error"
+	fieldRetryable  = "retryable"
 
-	// ThreadStatusCompleted is returned when the child agent finished.
-	ThreadStatusCompleted = "completed"
-	// ThreadStatusFailed is returned when the thread call cannot produce a
-	// child result.
-	ThreadStatusFailed = "failed"
+	subAgentStatusCompleted = "completed"
+	subAgentStatusFailed    = "failed"
 
 	threadIDMinLen    = 8
 	threadIDMaxLen    = 128
@@ -50,18 +46,22 @@ const (
 
 	threadNamespacePattern = `^[A-Za-z0-9_-]+$`
 
+	// Saved subagent history is found by the exact key
+	// agenttool:<namespace>:thread:<id>, so this layout is a persistence
+	// contract and must not change.
 	threadKeyPrefix = "agenttool:"
 	threadKeyInfix  = ":thread:"
 
-	threadToolDescriptionSuffix = "Omit thread_id to start a new conversation " +
-		"branch; pass a previously returned thread_id to append a new message " +
-		"to that branch. Unknown or invalid thread IDs fail. Put the wrapped " +
-		"agent's arguments in input."
+	subAgentToolDescriptionSuffix = "Omit subagent_id to start a new " +
+		"subagent; pass a subagent_id returned by an earlier call to send " +
+		"that subagent a follow-up that continues its conversation. Unknown " +
+		"or invalid IDs fail. Put the wrapped agent's arguments in input."
 
-	errNoParentSession = "parent session is required for threaded agent tool calls"
-	errUnknownThreadID = "unknown thread_id"
-	errGraphInterrupt  = "the wrapped agent requested a graph interrupt, but " +
-		"NewThreadTool does not support graph checkpoint or interrupt resume"
+	errNoParentSession   = "a parent session is required for resumable subagent calls"
+	errUnknownSubAgentID = "unknown subagent_id: this session has no saved " +
+		"history for it; omit subagent_id to start a new subagent"
+	errGraphInterrupt = "the wrapped agent requested a graph interrupt, but " +
+		"resumable subagents do not support graph checkpoint or interrupt resume"
 )
 
 // threadIDPattern is derived from the length bounds so the schema, the
@@ -74,181 +74,169 @@ var (
 	threadNamespaceRegexp = regexp.MustCompile(threadNamespacePattern)
 )
 
-type threadIDContextKey struct{}
+type subAgentIDContextKey struct{}
 
-// ThreadResult is the model-facing envelope returned by NewThreadTool.
-type ThreadResult struct {
-	// ThreadID is the opaque ID of this conversation branch. Pass it on later
-	// calls to append to the same branch. It is empty when a new branch could
-	// not be established, which happens when the call failed before the child
-	// agent persisted any event.
-	ThreadID string `json:"thread_id,omitempty"`
-	// Status is ThreadStatusCompleted or ThreadStatusFailed.
+// SubAgentResult is the result of one call to a NewTool configured with
+// WithResumableSubAgents. Call returns it, StreamableCall emits it as the
+// final result, and the model receives its JSON form.
+type SubAgentResult struct {
+	// SubAgentID identifies the subagent this call ran. Pass it as
+	// subagent_id on a later call to continue that subagent. It is set only
+	// when the parent Session holds saved events for the subagent when the
+	// call returns, and is empty otherwise: for invalid or unknown IDs, for
+	// failures before the call could run, and when a new subagent failed
+	// before any of its events were saved.
+	SubAgentID string `json:"subagent_id,omitempty"`
+	// Status is "completed" when the wrapped agent finished this call and
+	// "failed" otherwise. It describes this call only; a subagent whose call
+	// completed can still be continued.
 	Status string `json:"status"`
-	// Output is the wrapped agent's collected assistant text when status is
-	// completed.
-	Output any `json:"output,omitempty"`
-	// Error is the model-facing failure message when status is failed.
+	// Output is the assistant text the wrapped agent produced in this call,
+	// collected as WithResponseMode configures. It is always text, even when
+	// the wrapped agent declares an object output schema, and it may be
+	// empty when Status is "completed".
+	Output string `json:"output,omitempty"`
+	// Error describes the failure when Status is "failed".
 	Error string `json:"error,omitempty"`
-	// Retryable reports whether the caller may retry this call. It is omitted
-	// when the tool cannot tell a transient fault from a permanent one, which
-	// is the case for most child agent failures.
+	// Retryable reports whether retrying the same call may succeed. It is nil
+	// when that is unknown, which is the case for most wrapped agent
+	// failures. Cancellation and deadlines are retryable, including when the
+	// wrapped agent only closes its event stream because the context ended
+	// and no normal completion was observed.
 	Retryable *bool `json:"retryable,omitempty"`
 }
 
-// ThreadIDFromContext returns the thread ID of the nearest enclosing
-// NewThreadTool invocation, if the current run was started by one.
+// SubAgentIDFromContext returns the subagent ID of the nearest enclosing call
+// to a NewTool configured with WithResumableSubAgents. It returns false when
+// ctx is nil or is not inside such a call.
 //
-// The value propagates to everything the wrapped agent runs, including nested
-// agents and tools, so it identifies the enclosing branch rather than the
-// immediate caller.
+// The ID is visible to everything the wrapped agent runs, including nested
+// agents and tools. A nested ordinary AgentTool still keeps its own history
+// and never writes into the enclosing subagent's history, while a nested
+// resumable AgentTool reports its own subagent ID for the duration of its
+// call.
 //
-// Reading this ID does not restore a conversation. Full restoration still
-// requires the wrapped agent to consume framework Session history or to map
-// this ID to a provider conversation ID. Wrapped agent implementations must be
-// concurrency-safe and must not keep conversation-local state across calls:
-// different thread IDs may run concurrently.
-func ThreadIDFromContext(ctx context.Context) (string, bool) {
+// Reading the ID restores nothing. The framework restores a subagent only
+// through parent Session events, so an agent that keeps conversation state
+// elsewhere, such as in a remote service or a provider-side conversation,
+// must map this ID to that conversation itself.
+func SubAgentIDFromContext(ctx context.Context) (string, bool) {
 	if ctx == nil {
 		return "", false
 	}
-	id, ok := ctx.Value(threadIDContextKey{}).(string)
+	id, ok := ctx.Value(subAgentIDContextKey{}).(string)
 	if !ok || id == "" {
 		return "", false
 	}
 	return id, true
 }
 
-func contextWithThreadID(ctx context.Context, id string) context.Context {
+func contextWithSubAgentID(ctx context.Context, id string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, threadIDContextKey{}, id)
+	return context.WithValue(ctx, subAgentIDContextKey{}, id)
 }
 
-// NewThreadTool wraps a fixed agent as an opt-in conversation-branch tool.
-// Existing NewTool and NewDynamicTool schemas and runtime behavior are
-// unchanged.
+// resolveSubAgentConfig validates the resumable-subagent options and returns
+// the namespace NewTool must use. It returns "" when resumable subagents are
+// not enabled and panics on any invalid combination.
 //
-// The wrapped agent gets multiple independently addressed conversation
-// branches inside the parent Session. Each branch is exactly the set of parent
-// Session events carrying a stable event-filter key
-// (agenttool:<namespace>:thread:<opaque-id>). Calls without thread_id start a
-// new branch with a cryptographically strong opaque ID; calls with thread_id
-// append a new message to that branch.
-//
-// NewThreadTool is synchronous call-return. It adds no Controller, message
-// queue, lease, background task, executor checkpointing, separate child
-// Session, or Graph resume/checkpoint behavior.
-//
-// Guarantees and limits:
-//
-//   - Continuity across turns and processes is limited by successful parent
-//     Session persistence and by the parent Session's event retention window.
-//     That window is shared by the parent conversation and every branch, so a
-//     long parent Session can push older branch events out of retrieval.
-//   - Filter keys isolate event history, not Session State. Every branch still
-//     shares the parent Session's State map; a wrapped agent that stores
-//     conversation-local state must namespace its keys by thread ID itself.
-//   - Branches have no independent lifecycle: no TTL, list, or delete. They
-//     live and die with the parent Session.
-//   - Appending is the only turn semantic. There is no resume flag, no
-//     replacement of an interrupted turn, and no checkpoint recovery. If a
-//     previous turn was interrupted, its partial tail stays in the branch; the
-//     framework's orphan tool-call sanitization keeps the next request valid.
-//   - Different thread IDs may run concurrently. Same-thread calls are
-//     serialized by a per-Tool in-process guard only; there is no cross-node
-//     mutual exclusion.
-//   - The parent invocation Session is required. NewThreadTool never falls
-//     back to an isolated in-memory runner.
-//   - output.output is always a string: the child call path collects assistant
-//     text and cannot preserve a custom agent OutputSchema type.
-//
-// Supplied IDs are strictly validated against ^[A-Za-z0-9_-]{8,128}$ so they
-// cannot inject filter-key path separators. An unknown thread ID fails instead
-// of silently creating a branch. A branch is known only when the parent
-// Session holds at least one event under its filter key, so a call that fails
-// before the child agent persists anything returns no thread_id at all and the
-// caller simply starts a new branch.
-//
-// CallWithAgentToolGraphRuntime uses this envelope path and does not
-// participate in graph checkpoint resume.
-//
-// A child graph interrupt is reported as a failed envelope with
-// retryable=false, whether the wrapped agent returns the interrupt as an error
-// or only signals it through a graph executor event. Because the event-signalled
-// form is only observable through those events, a thread call always enables
-// them for the child run; when the caller disabled them, they are observed
-// internally and kept out of the shared Session.
-func NewThreadTool(wrapped agent.Agent, opts ...Option) *Tool {
-	// Options are applied once and the resolved set is shared with the common
-	// fixed-agent constructor, because an application-defined Option may have
-	// side effects and must not run twice per constructor call.
-	options := applyAgentToolOptions(opts)
-	at := newFixedAgentTool(wrapped, options)
-	at.thread = true
-	// Branch identity tracks the wrapped agent, not the model-facing tool name.
-	at.threadNamespace = resolveThreadNamespace(
-		wrapped.Info().Name, options.threadNamespace,
-	)
-	at.threadLocks = newThreadLockSet()
-	if at.historyScope == HistoryScopeParentBranch {
-		log.Warnf(
-			"AgentTool[%s]: HistoryScopeParentBranch is ignored by NewThreadTool; "+
-				"threads use isolated filter keys",
-			at.name,
-		)
-		at.historyScope = HistoryScopeIsolated
-	}
-	if at.persistentHistory != nil {
-		log.Warnf(
-			"AgentTool[%s]: WithPersistentHistory* is ignored by NewThreadTool; "+
-				"threads use per-call thread IDs",
-			at.name,
-		)
-		at.persistentHistory = nil
-	}
-	at.inputSchema = wrapThreadInputSchema(at.inputSchema)
-	// callWithParentInvocation collects child assistant text as a string, so
-	// the envelope output field is always a string even when the wrapped
-	// agent declares an object OutputSchema.
-	at.outputSchema = wrapThreadOutputSchema()
-	if !strings.Contains(at.description, fieldThreadID) {
-		at.description = strings.TrimSpace(
-			at.description + " " + threadToolDescriptionSuffix,
-		)
-	}
-	return at
-}
-
-// resolveThreadNamespace validates the thread key namespace at construction
-// time. Invalid static configuration panics rather than being rewritten,
-// because any lossy rewrite could map two distinct agents onto one namespace
-// and silently merge their branches.
-func resolveThreadNamespace(agentName string, override *string) string {
-	if override != nil {
-		namespace := strings.TrimSpace(*override)
-		if !threadNamespaceRegexp.MatchString(namespace) {
+// NewTool must call it on the resolved option set before newFixedAgentTool.
+// That constructor discards an enabled persistent-history option when
+// HistoryScopeParentBranch is set and only logs a warning, so checking
+// afterward would hide that conflict.
+func resolveSubAgentConfig(agentName string, options *agentToolOptions) string {
+	if !options.resumableSubAgents {
+		if options.subAgentNamespace != nil {
 			panic(fmt.Sprintf(
-				"Invalid Thread AgentTool configuration: thread namespace %q "+
-					"must match %s",
-				namespace, threadNamespacePattern,
+				"Invalid AgentTool configuration: AgentTool[%s]: "+
+					"WithSubAgentNamespace requires WithResumableSubAgents",
+				agentName,
 			))
 		}
-		return namespace
+		return ""
+	}
+	if conflicts := incompatibleSubAgentOptions(options); len(conflicts) > 0 {
+		panic(fmt.Sprintf(
+			"Invalid AgentTool configuration: AgentTool[%s]: "+
+				"WithResumableSubAgents is incompatible with %s",
+			agentName,
+			strings.Join(conflicts, " and "),
+		))
+	}
+	return resolveThreadNamespace(agentName, options.subAgentNamespace)
+}
+
+func incompatibleSubAgentOptions(options *agentToolOptions) []string {
+	var conflicts []string
+	if options.historyScope == HistoryScopeParentBranch {
+		conflicts = append(conflicts, "HistoryScopeParentBranch")
+	}
+	if label := persistentHistoryConflict(options.persistentHistory); label != "" {
+		conflicts = append(conflicts, label)
+	}
+	return conflicts
+}
+
+func persistentHistoryConflict(cfg *persistentHistoryOptions) string {
+	if cfg == nil || !cfg.enabled {
+		return ""
+	}
+	switch {
+	case cfg.keyFunc != nil:
+		return "WithPersistentHistoryKeyFunc"
+	case cfg.key != "":
+		return "WithPersistentHistoryKey"
+	default:
+		return "WithPersistentHistory"
+	}
+}
+
+// resolveThreadNamespace validates the namespace segment of the history key.
+// Invalid static configuration panics rather than being rewritten: any lossy
+// rewrite, including trimming spaces, could map two distinct namespaces onto
+// one key and silently merge their subagents.
+func resolveThreadNamespace(agentName string, override *string) string {
+	if override != nil {
+		if !threadNamespaceRegexp.MatchString(*override) {
+			panic(fmt.Sprintf(
+				"Invalid AgentTool configuration: AgentTool[%s]: "+
+					"subagent namespace %q must match %s",
+				agentName, *override, threadNamespacePattern,
+			))
+		}
+		return *override
 	}
 	if !threadNamespaceRegexp.MatchString(agentName) {
 		panic(fmt.Sprintf(
-			"Invalid Thread AgentTool configuration: wrapped agent name %q "+
-				"cannot be used as a thread namespace because it does not "+
-				"match %s; rename the agent or pass WithThreadNamespace",
+			"Invalid AgentTool configuration: AgentTool[%s]: the wrapped "+
+				"agent name cannot be used as the subagent namespace because "+
+				"it does not match %s; rename the agent or pass "+
+				"WithSubAgentNamespace",
 			agentName, threadNamespacePattern,
 		))
 	}
 	return agentName
 }
 
-func wrapThreadInputSchema(inner *tool.Schema) *tool.Schema {
+// configureThreadTool installs the resumable-subagent protocol on a fixed
+// Tool already built by newFixedAgentTool, using a namespace returned by
+// resolveSubAgentConfig. It does not apply Option values again.
+func configureThreadTool(at *Tool, namespace string) {
+	at.thread = true
+	at.threadNamespace = namespace
+	at.threadLocks = newThreadLockSet()
+	at.inputSchema = wrapSubAgentInputSchema(at.inputSchema)
+	at.outputSchema = subAgentOutputSchema()
+	if !strings.Contains(at.description, fieldSubAgentID) {
+		at.description = strings.TrimSpace(
+			at.description + " " + subAgentToolDescriptionSuffix,
+		)
+	}
+}
+
+func wrapSubAgentInputSchema(inner *tool.Schema) *tool.Schema {
 	if inner == nil {
 		inner = &tool.Schema{
 			Type:        "object",
@@ -262,53 +250,110 @@ func wrapThreadInputSchema(inner *tool.Schema) *tool.Schema {
 			Required: []string{"request"},
 		}
 	}
+	// Local references resolve from the document root. Rebase references to
+	// the original root onto input, while keeping references to the hoisted
+	// definitions at the envelope root. Work on a copy so an ordinary tool
+	// wrapping the same agent keeps its original declaration.
+	inner = copySubAgentInputSchema(inner)
+	var defs map[string]*tool.Schema
+	if len(inner.Defs) > 0 {
+		defs = inner.Defs
+		inner.Defs = nil
+	}
 	return &tool.Schema{
 		Type:        "object",
-		Description: "Threaded invocation of the wrapped agent.",
+		Description: "Call to a resumable subagent of the wrapped agent.",
 		Properties: map[string]*tool.Schema{
-			fieldThreadID: {
+			fieldSubAgentID: {
 				Type: "string",
-				Description: "Opaque ID of an existing conversation branch in " +
-					"this session. Omit to start a new branch. Must match " +
-					threadIDPattern + ". Unknown IDs fail; they are not created.",
+				Description: "ID returned by an earlier call of this tool in " +
+					"this session. Omit it to start a new subagent. Must match " +
+					threadIDPattern + ". Unknown IDs fail; they are never created.",
 				Pattern: threadIDPattern,
 			},
 			fieldInput: inner,
 		},
 		Required: []string{fieldInput},
+		Defs:     defs,
 	}
 }
 
-func wrapThreadOutputSchema() *tool.Schema {
+func copySubAgentInputSchema(inner *tool.Schema) *tool.Schema {
+	encoded, err := json.Marshal(inner)
+	if err != nil {
+		panic(fmt.Sprintf("Invalid AgentTool configuration: subagent input schema: %v", err))
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(encoded, &doc); err != nil {
+		panic(fmt.Sprintf("Invalid AgentTool configuration: subagent input schema: %v", err))
+	}
+	rebaseSubAgentSchemaRefs(doc)
+	return convertMapToToolSchema(doc)
+}
+
+// rebaseSubAgentSchemaRefs visits schema-valued keywords only. Values such
+// as default and enum may contain ordinary data with a "$ref" member and
+// must not be rewritten.
+func rebaseSubAgentSchemaRefs(schema map[string]any) {
+	if ref, ok := schema["$ref"].(string); ok {
+		if (ref == "#" || strings.HasPrefix(ref, "#/")) &&
+			ref != "#/$defs" && !strings.HasPrefix(ref, "#/$defs/") {
+			schema["$ref"] = "#/properties/" + fieldInput + strings.TrimPrefix(ref, "#")
+		}
+	}
+	for _, key := range []string{"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"} {
+		children, _ := schema[key].(map[string]any)
+		for _, child := range children {
+			if nested, ok := child.(map[string]any); ok {
+				rebaseSubAgentSchemaRefs(nested)
+			}
+		}
+	}
+	for _, key := range []string{"items", "additionalProperties", "contains", "propertyNames", "not", "if", "then", "else", "unevaluatedItems", "unevaluatedProperties"} {
+		if nested, ok := schema[key].(map[string]any); ok {
+			rebaseSubAgentSchemaRefs(nested)
+		}
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "prefixItems", "items"} {
+		children, _ := schema[key].([]any)
+		for _, child := range children {
+			if nested, ok := child.(map[string]any); ok {
+				rebaseSubAgentSchemaRefs(nested)
+			}
+		}
+	}
+}
+
+func subAgentOutputSchema() *tool.Schema {
 	return &tool.Schema{
 		Type:        "object",
-		Description: "Result of a threaded agent-tool call.",
+		Description: "Result of one resumable subagent call.",
 		Properties: map[string]*tool.Schema{
-			fieldThreadID: {
+			fieldSubAgentID: {
 				Type: "string",
-				Description: "Opaque thread ID to pass on later calls. Present " +
-					"once the branch holds at least one persisted event; absent " +
-					"when a new branch could not be established.",
+				Description: "ID to pass as subagent_id on later calls to " +
+					"continue this subagent. Present only when this session " +
+					"has saved history for it.",
 			},
 			fieldStatus: {
-				Type:        "string",
-				Description: "completed or failed",
-				Enum:        []any{ThreadStatusCompleted, ThreadStatusFailed},
+				Type: "string",
+				Description: "completed or failed. Describes this call only; " +
+					"a completed subagent can still be continued.",
+				Enum: []any{subAgentStatusCompleted, subAgentStatusFailed},
 			},
 			fieldOutput: {
 				Type: "string",
-				Description: "The wrapped agent's collected assistant text. " +
-					"Always a string: NewThreadTool collects child events as text " +
-					"and does not preserve a custom OutputSchema type.",
+				Description: "Assistant text the wrapped agent produced in " +
+					"this call. Always text; omitted when empty.",
 			},
 			fieldError: {
 				Type:        "string",
-				Description: "Error message when status is failed.",
+				Description: "Failure message when status is failed.",
 			},
 			fieldRetryable: {
 				Type: "boolean",
-				Description: "Whether the caller may retry this call. Omitted " +
-					"when retryability is unknown.",
+				Description: "Whether retrying the same call may succeed. " +
+					"Omitted when unknown.",
 			},
 		},
 		Required: []string{fieldStatus},
@@ -330,52 +375,47 @@ func (at *Tool) streamThread(
 	}, nil)
 }
 
-func (at *Tool) executeThread(ctx context.Context, jsonArgs []byte) ThreadResult {
-	threadID, input, err := parseThreadArgs(jsonArgs)
+// executeThread runs one resumable subagent call. Every result carries a
+// subagent ID only when confirmedSubAgentID finds saved events for it, so the
+// result confirms the ID's current history, without promising future retention.
+func (at *Tool) executeThread(ctx context.Context, jsonArgs []byte) SubAgentResult {
+	id, input, err := parseSubAgentArgs(jsonArgs)
 	if err != nil {
-		return threadFailed(threadID, err.Error(), boolPtr(false))
-	}
-	if threadID != "" {
-		if err := validateThreadID(threadID); err != nil {
-			return threadFailed(threadID, err.Error(), boolPtr(false))
-		}
+		return subAgentFailed("", err.Error(), boolPtr(false))
 	}
 
 	parentInv, ok := agent.InvocationFromContext(ctx)
 	if !ok || parentInv == nil || parentInv.Session == nil {
-		return threadFailed(threadID, errNoParentSession, boolPtr(false))
+		return subAgentFailed("", errNoParentSession, boolPtr(false))
 	}
-
 	if err := flush.Invoke(ctx, parentInv); err != nil {
-		return threadFailed(
-			threadID,
+		return subAgentFailed(
+			"",
 			fmt.Sprintf("flush parent invocation session: %v", err),
 			boolPtr(true),
 		)
 	}
 	parentInv = parentInvocationWithLiveSession(parentInv)
 	if parentInv == nil || parentInv.Session == nil {
-		return threadFailed(threadID, errNoParentSession, boolPtr(false))
+		return subAgentFailed("", errNoParentSession, boolPtr(false))
 	}
+	sess := parentInv.Session
 
-	supplied := threadID != ""
+	supplied := id != ""
 	if !supplied {
-		threadID, err = generateThreadID()
+		id, err = generateThreadID()
 		if err != nil {
-			return threadFailed("", err.Error(), boolPtr(true))
+			return subAgentFailed("", err.Error(), boolPtr(true))
 		}
 	}
-	childKey := threadFilterKey(at.threadNamespace, threadID)
+	childKey := threadFilterKey(at.threadNamespace, id)
 
 	if at.threadLocks != nil {
-		unlock, lockErr := at.threadLocks.acquire(
-			ctx,
-			threadLockKey(parentInv.Session, threadID),
-		)
+		unlock, lockErr := at.threadLocks.acquire(ctx, threadLockKey(sess, id))
 		if lockErr != nil {
-			return threadFailed(
-				suppliedThreadID(supplied, threadID),
-				fmt.Sprintf("acquire thread lock: %v", lockErr),
+			return subAgentFailed(
+				confirmedSubAgentID(sess, childKey, id),
+				fmt.Sprintf("wait for the previous call of this subagent: %v", lockErr),
 				retryableForError(lockErr),
 			)
 		}
@@ -384,67 +424,74 @@ func (at *Tool) executeThread(ctx context.Context, jsonArgs []byte) ThreadResult
 
 	// Existence is decided under the lock so a concurrent first call for the
 	// same ID cannot be observed half-established.
-	if supplied && !sessionHasThreadEvents(parentInv.Session, childKey) {
-		return threadFailed(threadID, errUnknownThreadID, boolPtr(false))
+	if supplied && !sessionHasThreadEvents(sess, childKey) {
+		return subAgentFailed("", errUnknownSubAgentID, boolPtr(false))
 	}
 
-	runCtx := contextWithThreadID(ctx, threadID)
-	message := model.NewUserMessage(string(input))
 	output, runErr := at.callWithParentInvocation(
-		runCtx, parentInv, message, nil, childKey,
+		contextWithSubAgentID(ctx, id),
+		parentInv,
+		model.NewUserMessage(string(input)),
+		nil,
+		childKey,
 	)
-
-	// A thread ID is only meaningful once the branch holds a persisted event,
-	// because that is exactly what a later call looks for. Anything else would
-	// hand the model an ID that can never be continued.
-	established := sessionHasThreadEvents(parentInv.Session, childKey)
-	resultID := threadID
-	if !established {
-		resultID = ""
-	}
+	resultID := confirmedSubAgentID(sess, childKey, id)
 	if runErr != nil {
 		// Covers both a directly returned interrupt and one that a graph agent
 		// only signalled through an executor event (see
 		// threadInterruptObserver). Rerunning cannot clear it, so the failure
 		// is permanent for this call path.
 		if graph.IsInterruptError(runErr) {
-			return threadFailed(resultID, errGraphInterrupt, boolPtr(false))
+			return subAgentFailed(resultID, errGraphInterrupt, boolPtr(false))
 		}
-		return threadFailed(resultID, runErr.Error(), retryableForError(runErr))
+		return subAgentFailed(resultID, runErr.Error(), retryableForError(runErr))
 	}
-	return threadCompleted(resultID, output)
+	return SubAgentResult{
+		SubAgentID: resultID,
+		Status:     subAgentStatusCompleted,
+		Output:     output,
+	}
 }
 
-// suppliedThreadID echoes a caller-supplied ID back on failure so the model can
-// correlate the result, while never echoing a generated ID that was not
-// established.
-func suppliedThreadID(supplied bool, threadID string) string {
-	if supplied {
-		return threadID
+// confirmedSubAgentID returns id only when sess holds at least one event under
+// the subagent's history key. Those events are exactly what a later call
+// checks before it continues the subagent.
+func confirmedSubAgentID(sess *session.Session, filterKey, id string) string {
+	if !sessionHasThreadEvents(sess, filterKey) {
+		return ""
 	}
-	return ""
+	return id
 }
 
-func parseThreadArgs(jsonArgs []byte) (string, []byte, error) {
+// parseSubAgentArgs splits the tool arguments into the requested subagent ID
+// and the raw wrapped-agent input. An omitted, null, or blank subagent_id
+// yields an empty ID, which starts a new subagent. The input field must be
+// present; its raw JSON, including null, is passed through unchanged.
+func parseSubAgentArgs(jsonArgs []byte) (string, []byte, error) {
 	if len(strings.TrimSpace(string(jsonArgs))) == 0 {
-		return "", nil, fmt.Errorf("thread tool arguments are required")
+		return "", nil, fmt.Errorf("arguments are required")
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(jsonArgs, &raw); err != nil {
-		return "", nil, fmt.Errorf("invalid thread tool arguments: %w", err)
+		return "", nil, fmt.Errorf("invalid arguments: %w", err)
 	}
-	var threadID string
-	if tid, ok := raw[fieldThreadID]; ok && !isJSONNull(tid) {
-		if err := json.Unmarshal(tid, &threadID); err != nil {
-			return "", nil, fmt.Errorf("invalid thread_id: %w", err)
+	var id string
+	if rawID, ok := raw[fieldSubAgentID]; ok && !isJSONNull(rawID) {
+		if err := json.Unmarshal(rawID, &id); err != nil {
+			return "", nil, fmt.Errorf("invalid subagent_id: %w", err)
 		}
-		threadID = strings.TrimSpace(threadID)
+		id = strings.TrimSpace(id)
 	}
 	input, ok := raw[fieldInput]
-	if !ok || isJSONNull(input) {
-		return threadID, nil, fmt.Errorf("input is required")
+	if !ok {
+		return "", nil, fmt.Errorf("input is required")
 	}
-	return threadID, []byte(input), nil
+	if id != "" {
+		if err := validateThreadID(id); err != nil {
+			return "", nil, err
+		}
+	}
+	return id, []byte(input), nil
 }
 
 func isJSONNull(raw json.RawMessage) bool {
@@ -453,13 +500,13 @@ func isJSONNull(raw json.RawMessage) bool {
 
 func validateThreadID(id string) error {
 	if id == "" {
-		return fmt.Errorf("thread_id is empty")
+		return fmt.Errorf("subagent_id is empty")
 	}
 	if strings.ContainsAny(id, "/:\\") || strings.Contains(id, "..") {
-		return fmt.Errorf("thread_id contains invalid characters")
+		return fmt.Errorf("subagent_id contains invalid characters")
 	}
 	if !threadIDRegexp.MatchString(id) {
-		return fmt.Errorf("thread_id must match %s", threadIDPattern)
+		return fmt.Errorf("subagent_id must match %s", threadIDPattern)
 	}
 	return nil
 }
@@ -467,14 +514,14 @@ func validateThreadID(id string) error {
 func generateThreadID() (string, error) {
 	var b [threadIDRandBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("generate thread id: %w", err)
+		return "", fmt.Errorf("generate subagent id: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
 }
 
-// threadFilterKey builds the stable branch event-filter key. The namespace is
+// threadFilterKey builds the stable subagent history key. The namespace is
 // validated at construction time and the key deliberately contains no "/" so
-// the branch never falls under a parent's prefix subtree filter.
+// a subagent's history never falls under a parent's prefix or subtree filter.
 func threadFilterKey(namespace, threadID string) string {
 	return threadKeyPrefix + namespace + threadKeyInfix + threadID
 }
@@ -487,8 +534,9 @@ func threadLockKey(sess *session.Session, threadID string) string {
 }
 
 // sessionHasThreadEvents reports whether the parent session holds at least one
-// event for the branch. This is the only existence signal: a branch is exactly
-// its persisted events, with no separate marker or registry to keep in sync.
+// event under filterKey. This is the only existence signal: a subagent is
+// exactly its saved events, with no separate marker or registry to keep in
+// sync.
 func sessionHasThreadEvents(sess *session.Session, filterKey string) bool {
 	if sess == nil || filterKey == "" {
 		return false
@@ -511,33 +559,64 @@ func sessionHasThreadEvents(sess *session.Session, filterKey string) bool {
 // the child call returns normally. Without this observer such a run would be
 // reported as completed even though the child produced no answer.
 //
-// The observer is thread-only. It records the interrupt so the envelope can
-// report a permanent failure; it never enables graph checkpoint or interrupt
-// resume, and it does not change ordinary NewTool graph behavior.
+// The observer is only used by resumable subagent calls. It records the
+// interrupt so the result can report a permanent failure; it never enables
+// graph checkpoint or interrupt resume, and it does not change ordinary
+// NewTool graph behavior.
 //
-// The signal is always available because a thread call enables graph executor
-// events for the child run regardless of the caller's own setting; see
-// childInvocationOptions.
+// The signal is always available because a resumable subagent call enables
+// graph executor events for the child run regardless of the caller's own
+// setting; see childInvocationOptions.
+//
+// The same observer records a normal completion. LLMAgent completion is a
+// non-partial final response (model.Response.IsFinalResponse); an empty
+// assistant choice still counts, and a partial does not. Graph completion is
+// the terminal graph.execution snapshot or its visible rewrite, including a
+// snapshot with no assistant text. A context cancellation or deadline that
+// closes the stream before either of those, and before an earlier error, is
+// reported as ctx.Err. An interrupt still takes precedence.
 type threadInterruptObserver struct {
-	interrupt *graph.InterruptError
+	interrupt    *graph.InterruptError
+	invocationID string
+	completed    bool
 }
 
-// newThreadInterruptObserver returns an observer for a threaded call, or nil
-// when this tool is not a thread tool.
-func (at *Tool) newThreadInterruptObserver() *threadInterruptObserver {
+// newThreadInterruptObserver returns an observer for a resumable subagent
+// call, or nil for any other tool.
+func (at *Tool) newThreadInterruptObserver(inv *agent.Invocation) *threadInterruptObserver {
 	if !at.thread {
 		return nil
 	}
-	return &threadInterruptObserver{}
+	return &threadInterruptObserver{invocationID: inv.InvocationID}
 }
 
 func (o *threadInterruptObserver) observe(evt *event.Event) {
-	if o == nil || o.interrupt != nil {
+	if o == nil || evt == nil {
 		return
 	}
-	if interrupt, _, ok := pregelStepInterrupt(evt); ok {
-		o.interrupt = interrupt
+	if o.interrupt == nil {
+		if interrupt, _, ok := pregelStepInterrupt(evt); ok {
+			o.interrupt = interrupt
+		}
 	}
+	// A nested agent can finish while the wrapped agent is still running.
+	// Its completion must not turn cancellation of the outer call into success.
+	if !o.completed && evt.InvocationID == o.invocationID && threadEventNormallyCompleted(evt) {
+		o.completed = true
+	}
+}
+
+// threadEventNormallyCompleted reports a terminal success event. Error events
+// are not completion: the collector returns them, and they must not hide a
+// later cancellation when no successful terminal event was seen.
+func threadEventNormallyCompleted(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil || evt.Response.Error != nil {
+		return false
+	}
+	if isGraphCompletionSnapshotEvent(evt) {
+		return true
+	}
+	return evt.IsFinalResponse()
 }
 
 // interruptError returns the first observed interrupt as an error that
@@ -548,6 +627,68 @@ func (o *threadInterruptObserver) interruptError() error {
 		return nil
 	}
 	return o.interrupt
+}
+
+// canceledWithoutCompletion returns ctx.Err when the child stream ended
+// because the context was canceled or its deadline was exceeded and no normal
+// completion was observed. The caller must already have preferred collector
+// errors and graph interrupts.
+func (o *threadInterruptObserver) canceledWithoutCompletion(ctx context.Context) error {
+	if o == nil || o.completed || ctx == nil {
+		return nil
+	}
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("wrapped agent run canceled: %w", err)
+}
+
+// threadChildRuntimeState copies parent runtime state for a resumable
+// subagent and drops graph checkpoint and interrupt-resume keys.
+//
+// Invocation.Clone shares RunOptions.RuntimeState with the parent. GraphAgent
+// merges that map into the child execution state, treats the presence of
+// checkpoint_id (even when empty) as a resume request, and graph.Interrupt
+// consumes command and resume values from the same map. Copying the top-level
+// map keeps filtering from modifying the parent. Business values retain their
+// existing ownership and sharing; this is not deep state isolation. A nil
+// result means the child inherits no runtime state.
+// RunOptions.Resume is not stored in this map and is left unchanged.
+func threadChildRuntimeState(parent map[string]any) map[string]any {
+	if len(parent) == 0 {
+		return nil
+	}
+	child := make(map[string]any, len(parent))
+	for key, value := range parent {
+		if threadParentExecutionStateKey(key) {
+			continue
+		}
+		child[key] = value
+	}
+	if len(child) == 0 {
+		return nil
+	}
+	return child
+}
+
+// threadParentExecutionStateKey reports runtime-state keys that resume a
+// parent graph execution. Command covers both *graph.Command and
+// *graph.ResumeCommand because both are stored under StateKeyCommand.
+func threadParentExecutionStateKey(key string) bool {
+	switch key {
+	case graph.CfgKeyLineageID,
+		graph.CfgKeyCheckpointID,
+		graph.CfgKeyCheckpointNS,
+		graph.StateKeyCommand,
+		graph.ResumeChannel,
+		graph.StateKeyResumeMap,
+		graph.StateKeyUsedInterrupts,
+		graph.StateKeySubgraphInterrupt:
+		return true
+	default:
+		return false
+	}
 }
 
 func boolPtr(v bool) *bool { return &v }
@@ -568,20 +709,12 @@ func retryableForError(err error) *bool {
 	return nil
 }
 
-func threadCompleted(id string, output any) ThreadResult {
-	return ThreadResult{
-		ThreadID: id,
-		Status:   ThreadStatusCompleted,
-		Output:   output,
-	}
-}
-
-func threadFailed(id, msg string, retryable *bool) ThreadResult {
-	return ThreadResult{
-		ThreadID:  id,
-		Status:    ThreadStatusFailed,
-		Error:     msg,
-		Retryable: retryable,
+func subAgentFailed(id, msg string, retryable *bool) SubAgentResult {
+	return SubAgentResult{
+		SubAgentID: id,
+		Status:     subAgentStatusFailed,
+		Error:      msg,
+		Retryable:  retryable,
 	}
 }
 

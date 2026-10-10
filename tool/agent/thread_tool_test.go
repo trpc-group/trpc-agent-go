@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -15,11 +15,13 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/require"
 	coreagent "trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
@@ -28,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -87,7 +90,7 @@ func (a *threadHistoryAgent) Run(
 		a.seenKeys = append(a.seenKeys, inv.GetEventFilterKey())
 		a.seenInputs = append(a.seenInputs, inv.Message.Content)
 	}
-	if id, ok := ThreadIDFromContext(ctx); ok {
+	if id, ok := SubAgentIDFromContext(ctx); ok {
 		a.seenIDs = append(a.seenIDs, id)
 	} else {
 		a.seenIDs = append(a.seenIDs, "")
@@ -150,7 +153,7 @@ func (a *threadSchemaAgent) Run(
 		a.lastMessage = inv.Message.Content
 		a.lastKey = inv.GetEventFilterKey()
 	}
-	a.lastThread, _ = ThreadIDFromContext(ctx)
+	a.lastThread, _ = SubAgentIDFromContext(ctx)
 	return singleAssistantEvent("schema-ok"), nil
 }
 
@@ -177,7 +180,7 @@ func (a *threadObjectOutputAgent) Run(
 	if inv != nil {
 		a.lastMessage = inv.Message.Content
 	}
-	return singleAssistantEvent("object-child-text"), nil
+	return singleAssistantEvent(`{"answer":"42"}`), nil
 }
 
 func (a *threadObjectOutputAgent) Tools() []tool.Tool { return nil }
@@ -236,8 +239,8 @@ func (a *threadFailOnceAgent) messages() []string {
 	return append([]string(nil), a.runMessages...)
 }
 
-// threadErrorAgent starts its stream and then reports an error, so the branch
-// user event is already persisted when the call fails.
+// threadErrorAgent starts its stream and then reports an error, so the
+// subagent's user event is already persisted when the call fails.
 type threadErrorAgent struct{ name string }
 
 func (a *threadErrorAgent) Run(
@@ -280,6 +283,25 @@ func (a *threadRunErrorAgent) Info() coreagent.Info {
 }
 func (a *threadRunErrorAgent) SubAgents() []coreagent.Agent        { return nil }
 func (a *threadRunErrorAgent) FindSubAgent(string) coreagent.Agent { return nil }
+
+// threadEmptyOutputAgent finishes successfully without any assistant text.
+type threadEmptyOutputAgent struct{ name string }
+
+func (a *threadEmptyOutputAgent) Run(
+	_ context.Context,
+	_ *coreagent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (a *threadEmptyOutputAgent) Tools() []tool.Tool { return nil }
+func (a *threadEmptyOutputAgent) Info() coreagent.Info {
+	return coreagent.Info{Name: a.name, Description: "thread-empty-output-test"}
+}
+func (a *threadEmptyOutputAgent) SubAgents() []coreagent.Agent        { return nil }
+func (a *threadEmptyOutputAgent) FindSubAgent(string) coreagent.Agent { return nil }
 
 // threadGateAgent records concurrent Run overlap and can park inside Run.
 type threadGateAgent struct {
@@ -339,22 +361,26 @@ func (a *threadGateAgent) stats() (runs, maxActive int) {
 	return a.runs, a.maxActive
 }
 
-// threadKeyRecordingAgent records the event filter key it was given.
+// threadKeyRecordingAgent records the event filter key and the subagent ID it
+// was given.
 type threadKeyRecordingAgent struct {
 	name string
 
 	mu   sync.Mutex
 	keys []string
+	ids  []string
 }
 
 func (a *threadKeyRecordingAgent) Run(
-	_ context.Context,
+	ctx context.Context,
 	inv *coreagent.Invocation,
 ) (<-chan *event.Event, error) {
 	a.mu.Lock()
 	if inv != nil {
 		a.keys = append(a.keys, inv.GetEventFilterKey())
 	}
+	id, _ := SubAgentIDFromContext(ctx)
+	a.ids = append(a.ids, id)
 	a.mu.Unlock()
 	return singleAssistantEvent("nested-ok"), nil
 }
@@ -372,30 +398,49 @@ func (a *threadKeyRecordingAgent) filterKeys() []string {
 	return append([]string(nil), a.keys...)
 }
 
-// threadNestingAgent calls an ordinary NewTool AgentTool with its own child
-// context, the way an LLM flow does when the wrapped agent has agent tools.
-type threadNestingAgent struct {
-	name   string
-	nested *Tool
+func (a *threadKeyRecordingAgent) subAgentIDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.ids...)
+}
 
-	mu      sync.Mutex
-	ownKeys []string
-	callErr error
+// threadNestingAgent calls a nested AgentTool with its own child context, the
+// way an LLM flow does when the wrapped agent has agent tools.
+type threadNestingAgent struct {
+	name       string
+	nested     *Tool
+	nestedArgs string
+
+	mu        sync.Mutex
+	ownKeys   []string
+	idsBefore []string
+	idsAfter  []string
+	nestedOut any
+	callErr   error
 }
 
 func (a *threadNestingAgent) Run(
 	ctx context.Context,
 	inv *coreagent.Invocation,
 ) (<-chan *event.Event, error) {
+	before, _ := SubAgentIDFromContext(ctx)
 	a.mu.Lock()
 	if inv != nil {
 		a.ownKeys = append(a.ownKeys, inv.GetEventFilterKey())
 	}
+	a.idsBefore = append(a.idsBefore, before)
 	a.mu.Unlock()
 
-	_, err := a.nested.Call(ctx, []byte(`{"request":"nested"}`))
+	args := a.nestedArgs
+	if args == "" {
+		args = `{"request":"nested"}`
+	}
+	out, err := a.nested.Call(ctx, []byte(args))
+	after, _ := SubAgentIDFromContext(ctx)
 	a.mu.Lock()
+	a.nestedOut = out
 	a.callErr = err
+	a.idsAfter = append(a.idsAfter, after)
 	a.mu.Unlock()
 	return singleAssistantEvent("outer-ok"), nil
 }
@@ -411,6 +456,14 @@ func (a *threadNestingAgent) snapshot() (ownKeys []string, callErr error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]string(nil), a.ownKeys...), a.callErr
+}
+
+func (a *threadNestingAgent) subAgentIDs() (before, after []string, nestedOut any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.idsBefore...),
+		append([]string(nil), a.idsAfter...),
+		a.nestedOut
 }
 
 func newThreadParent(t *testing.T) (context.Context, *session.Session, *coreagent.Invocation) {
@@ -439,14 +492,14 @@ func newThreadParentRunOptions(
 	return coreagent.NewInvocationContext(context.Background(), parent), sess, parent
 }
 
-func requireThreadResult(t *testing.T, v any) ThreadResult {
+func requireSubAgentResult(t *testing.T, v any) SubAgentResult {
 	t.Helper()
-	result, ok := v.(ThreadResult)
-	require.True(t, ok, "expected ThreadResult, got %T", v)
+	result, ok := v.(SubAgentResult)
+	require.True(t, ok, "expected SubAgentResult, got %T", v)
 	return result
 }
 
-func threadResultJSON(t *testing.T, result ThreadResult) map[string]any {
+func subAgentResultJSON(t *testing.T, result SubAgentResult) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(result)
 	require.NoError(t, err)
@@ -513,7 +566,7 @@ func TestNewTool_UnchangedWithoutThreadEnvelope(t *testing.T) {
 	require.Nil(t, at.threadLocks)
 	decl := at.Declaration()
 	require.NotNil(t, decl.InputSchema)
-	_, hasThread := decl.InputSchema.Properties[fieldThreadID]
+	_, hasThread := decl.InputSchema.Properties[fieldSubAgentID]
 	require.False(t, hasThread)
 	_, hasInput := decl.InputSchema.Properties[fieldInput]
 	require.False(t, hasInput)
@@ -527,137 +580,154 @@ func TestNewTool_UnchangedWithoutThreadEnvelope(t *testing.T) {
 }
 
 // Option is an exported function type, so an application-defined Option may
-// have side effects. Every fixed-agent constructor must apply each Option
-// exactly once.
-func TestFixedAgentToolConstructors_ApplyEachOptionOnce(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		newTool func(coreagent.Agent, ...Option) *Tool
-	}{
-		{name: "NewTool", newTool: NewTool},
-		{name: "NewThreadTool", newTool: NewThreadTool},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			counting := Option(func(opts *agentToolOptions) {
-				calls++
-			})
-			at := tc.newTool(
-				&threadHistoryAgent{name: "child"},
-				counting,
-				WithThreadNamespace("child"),
-				WithSkipSummarization(true),
-			)
-			require.Equal(t, 1, calls, "each Option must run exactly once")
-			require.True(t, at.SkipSummarization(),
-				"the resolved options must still take effect")
-		})
-	}
+// have side effects. Ordinary and resumable NewTool must each apply every
+// supplied Option exactly once.
+func TestNewTool_ApplyEachOptionOnce(t *testing.T) {
+	t.Run("ordinary", func(t *testing.T) {
+		calls := 0
+		counting := Option(func(*agentToolOptions) { calls++ })
+		at := NewTool(
+			&threadHistoryAgent{name: "child"},
+			counting,
+			WithSkipSummarization(true),
+		)
+		require.Equal(t, 1, calls, "each Option must run exactly once")
+		require.False(t, at.thread)
+		require.Empty(t, at.threadNamespace)
+		require.True(t, at.SkipSummarization())
+	})
+	t.Run("resumable", func(t *testing.T) {
+		calls := 0
+		counting := Option(func(*agentToolOptions) { calls++ })
+		at := NewTool(
+			&threadHistoryAgent{name: "child"},
+			counting,
+			WithResumableSubAgents(),
+			WithSubAgentNamespace("child"),
+			WithSkipSummarization(true),
+		)
+		require.Equal(t, 1, calls, "each Option must run exactly once")
+		require.True(t, at.thread)
+		require.Equal(t, "child", at.threadNamespace)
+		require.True(t, at.SkipSummarization())
+	})
 }
 
-// WithThreadNamespace is thread-only: the other constructors must ignore it,
-// including its validation.
-func TestWithThreadNamespace_IgnoredByNewToolAndNewDynamicTool(t *testing.T) {
-	at := NewTool(
-		&mockAgent{name: "plain", description: "plain agent"},
-		WithThreadNamespace("not even valid /"),
-	)
-	require.False(t, at.thread)
-	require.Empty(t, at.threadNamespace)
-	require.Equal(t, "plain", at.Declaration().Name)
-
-	dyn := NewDynamicTool(WithThreadNamespace("also ignored /"))
-	require.Empty(t, dyn.threadNamespace)
-	require.Equal(t, DefaultDynamicToolName, dyn.Declaration().Name)
+// A namespace without WithResumableSubAgents is a configuration mistake, such
+// as a forgotten option, so it fails loudly instead of being ignored. The
+// namespace value does not matter, valid or not.
+func TestWithSubAgentNamespace_RequiresResumableSubAgents(t *testing.T) {
+	for _, namespace := range []string{"child", "not even valid /", ""} {
+		calls := 0
+		counting := Option(func(*agentToolOptions) { calls++ })
+		msg := requireConfigPanic(t, func() {
+			NewTool(
+				&mockAgent{name: "plain", description: "plain agent"},
+				counting,
+				WithSubAgentNamespace(namespace),
+			)
+		})
+		require.Equal(t,
+			"Invalid AgentTool configuration: AgentTool[plain]: "+
+				"WithSubAgentNamespace requires WithResumableSubAgents",
+			msg, "namespace %q", namespace)
+		require.Equal(t, 1, calls, "each Option must run exactly once")
+	}
 }
 
 // --- Declaration -----------------------------------------------------------
 
-func TestNewThreadTool_DeclarationSchema(t *testing.T) {
-	at := NewThreadTool(&mockAgent{name: "math-specialist", description: "Math helper"})
+func TestNewTool_ResumableSubAgents_DeclarationSchema(t *testing.T) {
+	at := NewTool(&mockAgent{name: "math-specialist", description: "Math helper"}, WithResumableSubAgents())
 	decl := at.Declaration()
 	require.Equal(t, "math-specialist", decl.Name)
-	require.Contains(t, decl.Description, fieldThreadID)
+	require.Contains(t, decl.Description, fieldSubAgentID)
 	require.Equal(t, []string{fieldInput}, decl.InputSchema.Required)
-	require.Contains(t, decl.InputSchema.Properties, fieldThreadID)
-	require.Equal(t, threadIDPattern, decl.InputSchema.Properties[fieldThreadID].Pattern)
+	require.Contains(t, decl.InputSchema.Properties, fieldSubAgentID)
+	require.Equal(t, threadIDPattern, decl.InputSchema.Properties[fieldSubAgentID].Pattern)
 	input := decl.InputSchema.Properties[fieldInput]
 	require.NotNil(t, input)
 	require.Equal(t, "object", input.Type)
 	require.Contains(t, input.Properties, "request")
-	// thread_id can legitimately be absent, so only status is required.
+	// subagent_id can legitimately be absent, so only status is required.
 	require.Equal(t, []string{fieldStatus}, decl.OutputSchema.Required)
-	require.Contains(t, decl.OutputSchema.Properties, fieldThreadID)
-	require.Contains(t, decl.OutputSchema.Properties, fieldOutput)
-	require.Contains(t, decl.OutputSchema.Properties, fieldError)
-	require.Contains(t, decl.OutputSchema.Properties, fieldRetryable)
-	require.Equal(t, []any{ThreadStatusCompleted, ThreadStatusFailed},
+	require.Equal(t, "string", decl.OutputSchema.Properties[fieldSubAgentID].Type)
+	require.Equal(t, "string", decl.OutputSchema.Properties[fieldOutput].Type)
+	require.Equal(t, "string", decl.OutputSchema.Properties[fieldError].Type)
+	require.Equal(t, "boolean", decl.OutputSchema.Properties[fieldRetryable].Type)
+	require.Equal(t, []any{subAgentStatusCompleted, subAgentStatusFailed},
 		decl.OutputSchema.Properties[fieldStatus].Enum)
+
+	// The model-facing field names are the documented contract.
+	raw, err := json.Marshal(decl.InputSchema)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"subagent_id"`)
+	require.NotContains(t, string(raw), "thread")
 }
 
-// --- Core branch behavior --------------------------------------------------
+// --- Core subagent behavior ------------------------------------------------
 
-func TestNewThreadTool_FirstCallReturnsIDAndPersistsHistory(t *testing.T) {
+func TestNewTool_ResumableSubAgents_FirstCallReturnsIDAndPersistsHistory(t *testing.T) {
 	child := &threadHistoryAgent{name: "child"}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, sess, _ := newThreadParent(t)
 
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
-	require.NoError(t, validateThreadID(result.ThreadID))
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.NoError(t, validateThreadID(result.SubAgentID))
 	require.Equal(t, "run1", result.Output)
 
 	keys, ids, inputs := child.snapshot()
-	require.Equal(t, []string{threadFilterKey("child", result.ThreadID)}, keys)
-	require.Equal(t, []string{result.ThreadID}, ids)
+	require.Equal(t, []string{threadFilterKey("child", result.SubAgentID)}, keys)
+	require.Equal(t, []string{result.SubAgentID}, ids)
 	require.Equal(t, []string{`{"request":"one"}`}, inputs)
 	require.True(t, sessionHasThreadEvents(sess, keys[0]))
 }
 
-func TestNewThreadTool_ContinuationUsesPriorHistory(t *testing.T) {
+func TestNewTool_ResumableSubAgents_ContinuationUsesPriorHistory(t *testing.T) {
 	child := &threadHistoryAgent{name: "child"}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, _, _ := newThreadParent(t)
 
 	first, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
 	require.NoError(t, err)
-	id := requireThreadResult(t, first).ThreadID
+	id := requireSubAgentResult(t, first).SubAgentID
 
 	second, err := at.Call(ctx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"two"}}`, id),
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"two"}}`, id),
 	))
 	require.NoError(t, err)
-	result := requireThreadResult(t, second)
-	require.Equal(t, id, result.ThreadID)
+	result := requireSubAgentResult(t, second)
+	require.Equal(t, id, result.SubAgentID)
 	require.Equal(t, "run1|run2", result.Output)
 }
 
-func TestNewThreadTool_TwoIDsRemainIsolated(t *testing.T) {
+func TestNewTool_ResumableSubAgents_TwoIDsRemainIsolated(t *testing.T) {
 	child := &threadHistoryAgent{name: "child"}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, _, _ := newThreadParent(t)
 
 	a1, err := at.Call(ctx, []byte(`{"input":{"request":"A"}}`))
 	require.NoError(t, err)
-	idA := requireThreadResult(t, a1).ThreadID
+	idA := requireSubAgentResult(t, a1).SubAgentID
 	b1, err := at.Call(ctx, []byte(`{"input":{"request":"B"}}`))
 	require.NoError(t, err)
-	idB := requireThreadResult(t, b1).ThreadID
+	idB := requireSubAgentResult(t, b1).SubAgentID
 	require.NotEqual(t, idA, idB)
 
 	a2, err := at.Call(ctx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"A2"}}`, idA),
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"A2"}}`, idA),
 	))
 	require.NoError(t, err)
-	require.Equal(t, "run1|run3", requireThreadResult(t, a2).Output)
+	require.Equal(t, "run1|run3", requireSubAgentResult(t, a2).Output)
 
 	b2, err := at.Call(ctx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"B2"}}`, idB),
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"B2"}}`, idB),
 	))
 	require.NoError(t, err)
-	require.Equal(t, "run2|run4", requireThreadResult(t, b2).Output)
+	require.Equal(t, "run2|run4", requireSubAgentResult(t, b2).Output)
 
 	keys, _, _ := child.snapshot()
 	require.Equal(t, []string{
@@ -668,20 +738,23 @@ func TestNewThreadTool_TwoIDsRemainIsolated(t *testing.T) {
 	}, keys)
 }
 
-func TestNewThreadTool_UnknownAndInvalidID(t *testing.T) {
-	at := NewThreadTool(&threadHistoryAgent{name: "child"})
-	ctx, _, _ := newThreadParent(t)
+func TestNewTool_ResumableSubAgents_UnknownAndInvalidID(t *testing.T) {
+	child := &threadFailOnceAgent{name: "child"}
+	at := NewTool(child, WithResumableSubAgents())
+	ctx, sess, _ := newThreadParent(t)
 
 	unknown, err := at.Call(ctx, []byte(
-		`{"thread_id":"abcd1234","input":{"request":"x"}}`,
+		`{"subagent_id":"abcd1234","input":{"request":"x"}}`,
 	))
 	require.NoError(t, err)
-	got := requireThreadResult(t, unknown)
-	require.Equal(t, ThreadStatusFailed, got.Status)
-	require.Equal(t, "abcd1234", got.ThreadID)
-	require.Contains(t, got.Error, errUnknownThreadID)
+	got := requireSubAgentResult(t, unknown)
+	require.Equal(t, subAgentStatusFailed, got.Status)
+	require.Empty(t, got.SubAgentID, "an unknown ID must not be echoed back")
+	require.Contains(t, got.Error, errUnknownSubAgentID)
 	require.NotNil(t, got.Retryable)
 	require.False(t, *got.Retryable)
+	require.Empty(t, sessionFilterKeys(sess), "an unknown ID must not be created")
+	require.Empty(t, child.messages(), "the wrapped agent must not run")
 
 	for _, id := range []string{
 		"../escape",
@@ -692,33 +765,90 @@ func TestNewThreadTool_UnknownAndInvalidID(t *testing.T) {
 		strings.Repeat("a", threadIDMaxLen+1),
 	} {
 		raw, marshalErr := json.Marshal(map[string]any{
-			"thread_id": id,
-			"input":     map[string]string{"request": "x"},
+			"subagent_id": id,
+			"input":       map[string]string{"request": "x"},
 		})
 		require.NoError(t, marshalErr)
 		out, callErr := at.Call(ctx, raw)
 		require.NoError(t, callErr)
-		result := requireThreadResult(t, out)
-		require.Equal(t, ThreadStatusFailed, result.Status, "id %q", id)
+		result := requireSubAgentResult(t, out)
+		require.Equal(t, subAgentStatusFailed, result.Status, "id %q", id)
+		require.Empty(t, result.SubAgentID, "id %q", id)
 		require.NotNil(t, result.Retryable, "id %q", id)
 		require.False(t, *result.Retryable, "id %q", id)
-		require.NotContains(t, result.Error, errUnknownThreadID, "id %q", id)
+		require.NotContains(t, result.Error, errUnknownSubAgentID, "id %q", id)
 	}
+	require.Empty(t, sessionFilterKeys(sess))
+	require.Empty(t, child.messages())
 }
 
-func TestNewThreadTool_NoParentSession(t *testing.T) {
-	at := NewThreadTool(&threadHistoryAgent{name: "child"})
+// Malformed arguments fail before anything runs and never carry an ID.
+func TestNewTool_ResumableSubAgents_MalformedArguments(t *testing.T) {
+	child := &threadFailOnceAgent{name: "child"}
+	at := NewTool(child, WithResumableSubAgents())
+	ctx, sess, _ := newThreadParent(t)
+
+	for _, tc := range []struct {
+		args string
+		want string
+	}{
+		{args: ``, want: "arguments are required"},
+		{args: `not json`, want: "invalid arguments"},
+		{args: `{}`, want: "input is required"},
+		{args: `{"subagent_id":"abcd1234"}`, want: "input is required"},
+		{args: `{"subagent_id":123,"input":{"request":"x"}}`, want: "invalid subagent_id"},
+	} {
+		out, err := at.Call(ctx, []byte(tc.args))
+		require.NoError(t, err, "args %q", tc.args)
+		result := requireSubAgentResult(t, out)
+		require.Equal(t, subAgentStatusFailed, result.Status, "args %q", tc.args)
+		require.Contains(t, result.Error, tc.want, "args %q", tc.args)
+		require.Empty(t, result.SubAgentID, "args %q", tc.args)
+		require.NotNil(t, result.Retryable, "args %q", tc.args)
+		require.False(t, *result.Retryable, "args %q", tc.args)
+	}
+	require.Empty(t, sessionFilterKeys(sess))
+	require.Empty(t, child.messages())
+}
+
+// An omitted, null, or blank subagent_id starts a new subagent.
+func TestNewTool_ResumableSubAgents_BlankIDStartsNewSubAgent(t *testing.T) {
+	child := &threadHistoryAgent{name: "child"}
+	at := NewTool(child, WithResumableSubAgents())
+	ctx, _, _ := newThreadParent(t)
+
+	ids := make(map[string]struct{})
+	for _, args := range []string{
+		`{"input":{"request":"x"}}`,
+		`{"subagent_id":null,"input":{"request":"x"}}`,
+		`{"subagent_id":"","input":{"request":"x"}}`,
+		`{"subagent_id":"   ","input":{"request":"x"}}`,
+	} {
+		out, err := at.Call(ctx, []byte(args))
+		require.NoError(t, err)
+		result := requireSubAgentResult(t, out)
+		require.Equal(t, subAgentStatusCompleted, result.Status, "args %s", args)
+		require.Equal(t, "run"+strconv.Itoa(len(ids)+1), result.Output,
+			"args %s must not continue an earlier subagent", args)
+		require.NoError(t, validateThreadID(result.SubAgentID))
+		ids[result.SubAgentID] = struct{}{}
+	}
+	require.Len(t, ids, 4)
+}
+
+func TestNewTool_ResumableSubAgents_NoParentSession(t *testing.T) {
+	at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents())
 	out, err := at.Call(context.Background(), []byte(`{"input":{"request":"x"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
 	require.Contains(t, result.Error, "parent session is required")
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable)
-	require.Empty(t, result.ThreadID)
+	require.Empty(t, result.SubAgentID)
 }
 
-func TestNewThreadTool_CustomInputPassedAsRawChildPayload(t *testing.T) {
+func TestNewTool_ResumableSubAgents_CustomInputPassedAsRawChildPayload(t *testing.T) {
 	child := &threadSchemaAgent{
 		name: "custom",
 		inputSchema: map[string]any{
@@ -729,23 +859,169 @@ func TestNewThreadTool_CustomInputPassedAsRawChildPayload(t *testing.T) {
 			"required": []any{"query"},
 		},
 	}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	decl := at.Declaration()
 	require.Contains(t, decl.InputSchema.Properties[fieldInput].Properties, "query")
 
 	ctx, _, _ := newThreadParent(t)
 	out, err := at.Call(ctx, []byte(`{"input":{"query":"hello"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
 	require.Equal(t, `{"query":"hello"}`, child.lastMessage)
-	require.Equal(t, result.ThreadID, child.lastThread)
-	require.Equal(t, threadFilterKey("custom", result.ThreadID), child.lastKey)
+	require.Equal(t, result.SubAgentID, child.lastThread)
+	require.Equal(t, threadFilterKey("custom", result.SubAgentID), child.lastKey)
 }
 
-func TestNewThreadTool_OutputAlwaysStringDespiteObjectSchema(t *testing.T) {
+// References in the wrapped agent's schema resolve from the document root, so
+// its definitions must move to the root of the wrapper schema.
+func TestNewTool_ResumableSubAgents_CustomInputDefinitionsStayResolvable(t *testing.T) {
+	child := &threadSchemaAgent{
+		name: "custom",
+		inputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"item": map[string]any{"$ref": "#/$defs/item"},
+			},
+			"$defs": map[string]any{
+				"item": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	}
+	at := NewTool(child, WithResumableSubAgents())
+	decl := at.Declaration()
+	require.Contains(t, decl.InputSchema.Defs, "item")
+	input := decl.InputSchema.Properties[fieldInput]
+	require.Empty(t, input.Defs)
+	require.Equal(t, "#/$defs/item", input.Properties["item"].Ref)
+
+	// The ordinary declaration of the same agent is unchanged.
+	plain := NewTool(child).Declaration()
+	require.Contains(t, plain.InputSchema.Defs, "item")
+
+	ctx, _, _ := newThreadParent(t)
+	out, err := at.Call(ctx, []byte(`{"input":{"item":{"name":"x"}}}`))
+	require.NoError(t, err)
+	require.Equal(t, subAgentStatusCompleted, requireSubAgentResult(t, out).Status)
+	require.Equal(t, `{"item":{"name":"x"}}`, child.lastMessage)
+}
+
+func TestNewTool_ResumableSubAgents_CustomInputRootReferencesPreserveValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		schema  map[string]any
+		valid   map[string]any
+		invalid map[string]any
+	}{
+		{
+			name: "properties items and additional properties",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "number"},
+					"copy":  map[string]any{"$ref": "#/properties/value"},
+					"list": map[string]any{
+						"type": "array", "items": map[string]any{"$ref": "#/properties/value"},
+					},
+					"dict": map[string]any{
+						"type": "object", "additionalProperties": map[string]any{"$ref": "#/properties/value"},
+					},
+				},
+			},
+			valid:   map[string]any{"value": 1.0, "copy": 2.0, "list": []any{3.0}, "dict": map[string]any{"x": 4.0}},
+			invalid: map[string]any{"copy": "not a number"},
+		},
+		{
+			name: "recursive root",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "string"},
+					"child": map[string]any{"$ref": "#"},
+				},
+			},
+			valid:   map[string]any{"child": map[string]any{"value": "nested"}},
+			invalid: map[string]any{"child": map[string]any{"value": 1.0}},
+		},
+		{
+			name: "definition referring back to root property",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "number"},
+					"item":  map[string]any{"$ref": "#/$defs/item"},
+				},
+				"$defs": map[string]any{
+					"item": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"copy": map[string]any{"$ref": "#/properties/value"},
+						},
+					},
+				},
+			},
+			valid:   map[string]any{"item": map[string]any{"copy": 1.0}},
+			invalid: map[string]any{"item": map[string]any{"copy": "not a number"}},
+		},
+		{
+			name: "reference member inside enum is ordinary data",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"literal": map[string]any{
+						"enum": []any{map[string]any{"$ref": "#/properties/value"}},
+					},
+				},
+			},
+			valid:   map[string]any{"literal": map[string]any{"$ref": "#/properties/value"}},
+			invalid: map[string]any{"literal": map[string]any{"$ref": "#/properties/other"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			child := &threadSchemaAgent{name: "custom", inputSchema: tt.schema}
+			plain := NewTool(child).Declaration().InputSchema
+			before, err := json.Marshal(plain)
+			require.NoError(t, err)
+			wrapped := NewTool(child, WithResumableSubAgents()).Declaration().InputSchema
+			after, err := json.Marshal(NewTool(child).Declaration().InputSchema)
+			require.NoError(t, err)
+			require.JSONEq(t, string(before), string(after), "ordinary declaration must remain unchanged")
+
+			compiler := jsonschema.NewCompiler()
+			for _, decl := range []struct {
+				url     string
+				schema  *tool.Schema
+				valid   any
+				invalid any
+			}{
+				{"https://example.com/plain.json", plain, tt.valid, tt.invalid},
+				{"https://example.com/wrapped.json", wrapped, map[string]any{"input": tt.valid}, map[string]any{"input": tt.invalid}},
+			} {
+				encoded, err := json.Marshal(decl.schema)
+				require.NoError(t, err)
+				var doc any
+				require.NoError(t, json.Unmarshal(encoded, &doc))
+				require.NoError(t, compiler.AddResource(decl.url, doc))
+				compiled, err := compiler.Compile(decl.url)
+				require.NoError(t, err)
+				require.NoError(t, compiled.Validate(decl.valid), decl.url)
+				require.Error(t, compiled.Validate(decl.invalid), decl.url)
+			}
+		})
+	}
+}
+
+// Output is always text, even when the wrapped agent declares an object output
+// schema: the model receives the text as a JSON string, not as an object.
+func TestNewTool_ResumableSubAgents_OutputAlwaysStringDespiteObjectSchema(t *testing.T) {
 	child := &threadObjectOutputAgent{name: "child"}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	output := at.Declaration().OutputSchema.Properties[fieldOutput]
 	require.NotNil(t, output)
 	require.Equal(t, "string", output.Type)
@@ -753,40 +1029,39 @@ func TestNewThreadTool_OutputAlwaysStringDespiteObjectSchema(t *testing.T) {
 	ctx, _, _ := newThreadParent(t)
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
-	_, isString := result.Output.(string)
-	require.True(t, isString, "output must be string, got %T", result.Output)
-	require.Equal(t, "object-child-text", result.Output)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, `{"answer":"42"}`, result.Output)
+	require.Equal(t, `{"answer":"42"}`, subAgentResultJSON(t, result)[fieldOutput])
 	require.Equal(t, `{"request":"hi"}`, child.lastMessage)
 }
 
-// --- Thread establishment --------------------------------------------------
+// --- Subagent ID confirmation ----------------------------------------------
 
 // A failure before the child persists anything must not hand back an ID: there
-// is no branch to continue, and the caller simply starts a new one.
-func TestNewThreadTool_PreEventRunErrorReturnsNoThreadID(t *testing.T) {
+// is no subagent to continue, and the caller simply starts a new one.
+func TestNewTool_ResumableSubAgents_PreEventRunErrorReturnsNoSubAgentID(t *testing.T) {
 	child := &threadFailOnceAgent{name: "child"}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, sess, parent := newThreadParent(t)
 
 	first, err := at.Call(ctx, []byte(`{"input":{"request":"first"}}`))
 	require.NoError(t, err)
-	failed := requireThreadResult(t, first)
-	require.Equal(t, ThreadStatusFailed, failed.Status)
+	failed := requireSubAgentResult(t, first)
+	require.Equal(t, subAgentStatusFailed, failed.Status)
 	require.Contains(t, failed.Error, "first run failed")
-	require.Empty(t, failed.ThreadID, "an unestablished branch must not be advertised")
+	require.Empty(t, failed.SubAgentID, "an unconfirmed subagent must not be advertised")
 	require.Empty(t, sessionFilterKeys(sess), "no event may be persisted")
 
-	// Retrying starts a fresh branch and the failed request is never replayed.
+	// Retrying starts a fresh subagent and the failed request is never replayed.
 	second, err := at.Call(ctx, []byte(`{"input":{"request":"retry"}}`))
 	require.NoError(t, err)
-	ok := requireThreadResult(t, second)
-	require.Equal(t, ThreadStatusCompleted, ok.Status)
-	require.NoError(t, validateThreadID(ok.ThreadID))
+	ok := requireSubAgentResult(t, second)
+	require.Equal(t, subAgentStatusCompleted, ok.Status)
+	require.NoError(t, validateThreadID(ok.SubAgentID))
 	require.Equal(t, "retry-ok", ok.Output)
 
-	childKey := threadFilterKey("child", ok.ThreadID)
+	childKey := threadFilterKey("child", ok.SubAgentID)
 	require.Equal(t, []string{`{"request":"retry"}`}, sessionUserContents(sess, childKey))
 	require.Equal(t, []string{`{"request":"first"}`, `{"request":"retry"}`}, child.messages())
 
@@ -808,32 +1083,62 @@ func TestNewThreadTool_PreEventRunErrorReturnsNoThreadID(t *testing.T) {
 	require.Equal(t, 1, strings.Count(out, `{"request":"retry"}`))
 }
 
-// Once the child stream starts, ensureUserMessageForCall establishes the
-// branch, so a later failure still returns a continuable ID.
-func TestNewThreadTool_ErrorAfterStreamStartsKeepsEstablishedThreadID(t *testing.T) {
-	at := NewThreadTool(&threadErrorAgent{name: "child"})
+// Once the child stream starts, ensureUserMessageForCall saves the call's
+// input, so a later failure still returns a continuable ID.
+func TestNewTool_ResumableSubAgents_ErrorAfterStreamStartsKeepsConfirmedSubAgentID(t *testing.T) {
+	at := NewTool(&threadErrorAgent{name: "child"}, WithResumableSubAgents())
 	ctx, sess, _ := newThreadParent(t)
 
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"boom"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.NoError(t, validateThreadID(result.ThreadID))
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.NoError(t, validateThreadID(result.SubAgentID))
 	require.Contains(t, result.Error, "child failed")
 	// An ordinary child failure is neither known-transient nor known-permanent.
 	require.Nil(t, result.Retryable)
 
-	childKey := threadFilterKey("child", result.ThreadID)
+	childKey := threadFilterKey("child", result.SubAgentID)
 	require.True(t, sessionHasThreadEvents(sess, childKey))
 
 	again, err := at.Call(ctx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"retry"}}`, result.ThreadID),
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"retry"}}`, result.SubAgentID),
 	))
 	require.NoError(t, err)
-	retry := requireThreadResult(t, again)
-	require.Equal(t, result.ThreadID, retry.ThreadID,
-		"an established branch stays addressable after a failed turn")
-	require.Equal(t, ThreadStatusFailed, retry.Status)
+	retry := requireSubAgentResult(t, again)
+	require.Equal(t, result.SubAgentID, retry.SubAgentID,
+		"a confirmed subagent stays addressable after a failed call")
+	require.Equal(t, subAgentStatusFailed, retry.Status)
+}
+
+// A call that fails before it can check the parent Session returns no ID, even
+// for a subagent that exists: an ID is only reported once confirmed.
+func TestNewTool_ResumableSubAgents_FlushFailureReturnsNoSubAgentID(t *testing.T) {
+	child := &threadHistoryAgent{name: "child"}
+	at := NewTool(child, WithResumableSubAgents())
+	ctx, _, parent := newThreadParent(t)
+
+	out, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
+	require.NoError(t, err)
+	id := requireSubAgentResult(t, out).SubAgentID
+	require.NoError(t, validateThreadID(id))
+
+	// Nobody serves this flush channel, so a canceled call cannot flush.
+	flush.Attach(ctx, parent, make(chan *flush.FlushRequest))
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	out, err = at.Call(canceled, []byte(
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"two"}}`, id),
+	))
+	require.NoError(t, err)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Contains(t, result.Error, "flush parent invocation session")
+	require.Empty(t, result.SubAgentID)
+	require.NotNil(t, result.Retryable)
+	require.True(t, *result.Retryable)
+	_, ids, _ := child.snapshot()
+	require.Len(t, ids, 1, "the wrapped agent must not run")
 }
 
 // --- Persistence and reload ------------------------------------------------
@@ -856,11 +1161,11 @@ func newPersistedThreadParent(
 	return coreagent.NewInvocationContext(context.Background(), parent), parent
 }
 
-// The core design claim is that a branch is nothing but parent Session events
-// under a stable filter key. So a thread must survive losing every in-process
-// object: the Tool, the wrapped agent, the Invocation, and the Session value
-// itself. Only the persisted events and the agent identity carry over.
-func TestNewThreadTool_ContinuesBranchAfterSessionReload(t *testing.T) {
+// The core design claim is that a subagent is nothing but parent Session events
+// under a stable filter key. So a subagent must survive losing every
+// in-process object: the Tool, the wrapped agent, the Invocation, and the
+// Session value itself. Only the persisted events and the namespace carry over.
+func TestNewTool_ResumableSubAgents_ContinuesSubAgentAfterSessionReload(t *testing.T) {
 	service := sessioninmemory.NewSessionService()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	created, err := service.CreateSession(context.Background(), key, nil)
@@ -868,14 +1173,14 @@ func TestNewThreadTool_ContinuesBranchAfterSessionReload(t *testing.T) {
 
 	firstCtx, _ := newPersistedThreadParent(t, service, created)
 	firstAgent := &threadHistoryAgent{name: "child"}
-	out, err := NewThreadTool(firstAgent).Call(
+	out, err := NewTool(firstAgent, WithResumableSubAgents()).Call(
 		firstCtx, []byte(`{"input":{"request":"one"}}`),
 	)
 	require.NoError(t, err)
-	first := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, first.Status)
+	first := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, first.Status)
 	require.Equal(t, "run1", first.Output)
-	threadID := first.ThreadID
+	threadID := first.SubAgentID
 	require.NoError(t, validateThreadID(threadID))
 
 	// Reload the parent session from the service into a fresh value, dropping
@@ -885,21 +1190,23 @@ func TestNewThreadTool_ContinuesBranchAfterSessionReload(t *testing.T) {
 	require.NotNil(t, reloaded)
 	require.NotSame(t, created, reloaded, "the reload must not reuse the value")
 	childKey := threadFilterKey("child", threadID)
+	require.Equal(t, "agenttool:child:thread:"+threadID, childKey,
+		"the persisted key layout is a compatibility contract")
 	require.True(t, sessionHasThreadEvents(reloaded, childKey),
-		"the branch must be recoverable from persisted events alone")
+		"the subagent must be recoverable from persisted events alone")
 
 	secondCtx, _ := newPersistedThreadParent(t, service, reloaded)
 	// A fresh Tool and a fresh wrapped agent: same identity, no shared state.
 	secondAgent := &threadHistoryAgent{name: "child"}
-	out, err = NewThreadTool(secondAgent).Call(secondCtx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"two"}}`, threadID),
+	out, err = NewTool(secondAgent, WithResumableSubAgents()).Call(secondCtx, []byte(
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"two"}}`, threadID),
 	))
 	require.NoError(t, err)
-	second := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, second.Status)
-	require.Equal(t, threadID, second.ThreadID)
+	second := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, second.Status)
+	require.Equal(t, threadID, second.SubAgentID)
 	// The fresh agent's own counter restarts at 1, so "run1|run1" can only come
-	// from the reloaded branch history.
+	// from the reloaded subagent history.
 	require.Equal(t, "run1|run1", second.Output)
 
 	keys, ids, inputs := secondAgent.snapshot()
@@ -907,7 +1214,7 @@ func TestNewThreadTool_ContinuesBranchAfterSessionReload(t *testing.T) {
 	require.Equal(t, []string{threadID}, ids)
 	require.Equal(t, []string{`{"request":"two"}`}, inputs)
 
-	// Both turns are persisted under the same branch key, and the parent
+	// Both calls are persisted under the same subagent key, and the parent
 	// conversation is untouched.
 	final, err := service.GetSession(context.Background(), key)
 	require.NoError(t, err)
@@ -917,46 +1224,52 @@ func TestNewThreadTool_ContinuesBranchAfterSessionReload(t *testing.T) {
 	)
 	for _, got := range sessionFilterKeys(final) {
 		require.Equal(t, childKey, got,
-			"a thread call must not write outside its branch key")
+			"a subagent call must not write outside its history key")
 	}
 
-	// An unknown ID still fails after a reload rather than creating a branch.
-	out, err = NewThreadTool(&threadHistoryAgent{name: "child"}).Call(
-		secondCtx, []byte(`{"thread_id":"abcd1234","input":{"request":"x"}}`),
+	// An unknown ID still fails after a reload rather than creating a subagent.
+	out, err = NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents()).Call(
+		secondCtx, []byte(`{"subagent_id":"abcd1234","input":{"request":"x"}}`),
 	)
 	require.NoError(t, err)
-	unknown := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, unknown.Status)
-	require.Contains(t, unknown.Error, errUnknownThreadID)
+	unknown := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, unknown.Status)
+	require.Contains(t, unknown.Error, errUnknownSubAgentID)
+	require.Empty(t, unknown.SubAgentID)
 }
 
-// --- P0: nested ordinary AgentTool keeps its own filter key ----------------
+// --- Nested agent tools ----------------------------------------------------
 
-func TestNewThreadTool_NestedAgentToolKeepsOwnFilterKey(t *testing.T) {
+// A nested ordinary AgentTool keeps its own per-call history key. The
+// enclosing subagent ID stays visible to it, but its history never lands in
+// the enclosing subagent.
+func TestNewTool_ResumableSubAgents_NestedAgentToolKeepsOwnFilterKey(t *testing.T) {
 	nestedChild := &threadKeyRecordingAgent{name: "nested-child"}
 	outer := &threadNestingAgent{name: "outer", nested: NewTool(nestedChild)}
-	at := NewThreadTool(outer)
+	at := NewTool(outer, WithResumableSubAgents())
 	ctx, sess, _ := newThreadParent(t)
 
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"go"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
 
-	threadKey := threadFilterKey("outer", result.ThreadID)
+	threadKey := threadFilterKey("outer", result.SubAgentID)
 	ownKeys, callErr := outer.snapshot()
 	require.NoError(t, callErr)
 	require.Equal(t, []string{threadKey}, ownKeys,
-		"the wrapped agent runs on the thread branch key")
+		"the wrapped agent runs on the subagent history key")
 
 	nestedKeys := nestedChild.filterKeys()
 	require.Len(t, nestedKeys, 1)
 	require.NotEqual(t, threadKey, nestedKeys[0],
-		"a nested ordinary AgentTool must not inherit the thread branch key")
+		"a nested ordinary AgentTool must not inherit the subagent history key")
 	require.True(t, strings.HasPrefix(nestedKeys[0], "nested-child-"),
 		"nested key %q must be the ordinary per-call key", nestedKeys[0])
+	require.Equal(t, []string{result.SubAgentID}, nestedChild.subAgentIDs(),
+		"the nearest enclosing subagent ID stays visible")
 
-	// The nested sub-agent's events must not land on the thread branch either.
+	// The nested sub-agent's events must not land on the subagent key either.
 	for _, key := range sessionFilterKeys(sess) {
 		if key == threadKey {
 			continue
@@ -966,10 +1279,49 @@ func TestNewThreadTool_NestedAgentToolKeepsOwnFilterKey(t *testing.T) {
 	}
 }
 
-func TestNewThreadTool_NestedAgentToolKeepsOwnFilterKeyViaGraphRuntime(t *testing.T) {
+// Inside a nested resumable AgentTool the accessor reports the nested
+// subagent, and the enclosing ID is visible again once the nested call ends.
+func TestNewTool_ResumableSubAgents_NestedResumableToolReportsNearestID(t *testing.T) {
+	innerChild := &threadKeyRecordingAgent{name: "inner"}
+	outer := &threadNestingAgent{
+		name:       "outer",
+		nested:     NewTool(innerChild, WithResumableSubAgents()),
+		nestedArgs: `{"input":{"request":"nested"}}`,
+	}
+	at := NewTool(outer, WithResumableSubAgents())
+	ctx, _, _ := newThreadParent(t)
+
+	out, err := at.Call(ctx, []byte(`{"input":{"request":"go"}}`))
+	require.NoError(t, err)
+	outerResult := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, outerResult.Status)
+
+	before, after, nestedOut := outer.subAgentIDs()
+	require.Equal(t, []string{outerResult.SubAgentID}, before)
+	require.Equal(t, []string{outerResult.SubAgentID}, after)
+	innerResult := requireSubAgentResult(t, nestedOut)
+	require.Equal(t, subAgentStatusCompleted, innerResult.Status)
+	require.NotEqual(t, outerResult.SubAgentID, innerResult.SubAgentID)
+	require.Equal(t, []string{innerResult.SubAgentID}, innerChild.subAgentIDs())
+	require.Equal(t,
+		[]string{threadFilterKey("inner", innerResult.SubAgentID)},
+		innerChild.filterKeys(),
+	)
+}
+
+func TestSubAgentIDFromContext_OutsideCall(t *testing.T) {
+	_, ok := SubAgentIDFromContext(nil)
+	require.False(t, ok)
+	_, ok = SubAgentIDFromContext(context.Background())
+	require.False(t, ok)
+	_, ok = SubAgentIDFromContext(contextWithSubAgentID(context.Background(), ""))
+	require.False(t, ok)
+}
+
+func TestNewTool_ResumableSubAgents_NestedAgentToolKeepsOwnFilterKeyViaGraphRuntime(t *testing.T) {
 	nestedChild := &threadKeyRecordingAgent{name: "nested-child"}
 	outer := &threadNestingAgent{name: "outer", nested: NewTool(nestedChild)}
-	at := NewThreadTool(outer)
+	at := NewTool(outer, WithResumableSubAgents())
 	ctx, _, parent := newThreadParent(t)
 
 	out, err := at.CallWithAgentToolGraphRuntime(
@@ -985,10 +1337,10 @@ func TestNewThreadTool_NestedAgentToolKeepsOwnFilterKeyViaGraphRuntime(t *testin
 		},
 	)
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
 
-	threadKey := threadFilterKey("outer", result.ThreadID)
+	threadKey := threadFilterKey("outer", result.SubAgentID)
 	ownKeys, callErr := outer.snapshot()
 	require.NoError(t, callErr)
 	require.Equal(t, []string{threadKey}, ownKeys)
@@ -1002,9 +1354,9 @@ func TestNewThreadTool_NestedAgentToolKeepsOwnFilterKeyViaGraphRuntime(t *testin
 
 // --- Graph runtime ---------------------------------------------------------
 
-func TestNewThreadTool_GraphRuntimeUsesEnvelopeNotCheckpoint(t *testing.T) {
+func TestNewTool_ResumableSubAgents_GraphRuntimeUsesEnvelopeNotCheckpoint(t *testing.T) {
 	child := &threadHistoryAgent{name: "child"}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, _, parent := newThreadParent(t)
 
 	out, err := at.CallWithAgentToolGraphRuntime(
@@ -1022,24 +1374,24 @@ func TestNewThreadTool_GraphRuntimeUsesEnvelopeNotCheckpoint(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
 	require.Equal(t, "run1", result.Output)
-	require.NoError(t, validateThreadID(result.ThreadID))
+	require.NoError(t, validateThreadID(result.SubAgentID))
 
 	keys, ids, inputs := child.snapshot()
-	require.Equal(t, []string{threadFilterKey("child", result.ThreadID)}, keys)
+	require.Equal(t, []string{threadFilterKey("child", result.SubAgentID)}, keys)
 	require.NotContains(t, keys, "graph-should-not-win")
-	require.Equal(t, []string{result.ThreadID}, ids)
+	require.Equal(t, []string{result.SubAgentID}, ids)
 	require.Equal(t, []string{`{"request":"graph-input"}`}, inputs)
 }
 
-func TestNewThreadTool_GraphInterruptIsUnsupportedAndNotRetryable(t *testing.T) {
+func TestNewTool_ResumableSubAgents_GraphInterruptIsUnsupportedAndNotRetryable(t *testing.T) {
 	child := &threadRunErrorAgent{
 		name: "child",
 		err:  graph.NewInterruptError("needs approval"),
 	}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, _, parent := newThreadParent(t)
 
 	out, err := at.CallWithAgentToolGraphRuntime(
@@ -1056,11 +1408,12 @@ func TestNewThreadTool_GraphInterruptIsUnsupportedAndNotRetryable(t *testing.T) 
 	// The interrupt must not propagate as a graph interrupt error: the parent
 	// graph has no child checkpoint to resume.
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.Contains(t, result.Error, "does not support graph checkpoint")
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable, "rerunning cannot clear an interrupt")
+	require.Empty(t, result.SubAgentID, "nothing was saved before the interrupt")
 }
 
 // newThreadInterruptGraphAgent builds a real GraphAgent whose only node
@@ -1085,26 +1438,29 @@ func newThreadInterruptGraphAgent(t *testing.T, name string) coreagent.Agent {
 }
 
 // An interrupt that a real GraphAgent only signals through executor events must
-// still fail the envelope. Reporting it as completed would tell the model the
-// branch answered when it did not.
-func TestNewThreadTool_GraphAgentEventSignalledInterruptFails(t *testing.T) {
-	at := NewThreadTool(newThreadInterruptGraphAgent(t, "graph-child"))
-	ctx, _, _ := newThreadParent(t)
+// still fail the call. Reporting it as completed would tell the model the
+// subagent answered when it did not.
+func TestNewTool_ResumableSubAgents_GraphAgentEventSignalledInterruptFails(t *testing.T) {
+	at := NewTool(newThreadInterruptGraphAgent(t, "graph-child"), WithResumableSubAgents())
+	ctx, sess, _ := newThreadParent(t)
 
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"approve"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.Contains(t, result.Error, "does not support graph checkpoint")
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable, "rerunning cannot clear an interrupt")
 	require.Empty(t, result.Output)
+	// The call's input was saved before the interrupt, so the ID is confirmed.
+	require.True(t, sessionHasThreadEvents(sess,
+		threadFilterKey("graph-child", result.SubAgentID)))
 }
 
 // The same interrupt on the graph runtime entrypoint must not be reported as a
 // resumable graph interrupt either: the parent graph has no child checkpoint.
-func TestNewThreadTool_GraphAgentEventSignalledInterruptViaGraphRuntime(t *testing.T) {
-	at := NewThreadTool(newThreadInterruptGraphAgent(t, "graph-child"))
+func TestNewTool_ResumableSubAgents_GraphAgentEventSignalledInterruptViaGraphRuntime(t *testing.T) {
+	at := NewTool(newThreadInterruptGraphAgent(t, "graph-child"), WithResumableSubAgents())
 	ctx, _, parent := newThreadParent(t)
 
 	out, err := at.CallWithAgentToolGraphRuntime(
@@ -1119,9 +1475,9 @@ func TestNewThreadTool_GraphAgentEventSignalledInterruptViaGraphRuntime(t *testi
 		},
 	)
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.Contains(t, result.Error, "does not support graph checkpoint")
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable)
 }
@@ -1141,7 +1497,7 @@ func newThreadAnswerGraphAgent(t *testing.T, name, answer string) coreagent.Agen
 
 // graphExecutorMetadataStateKeys are the session state keys carried only by
 // graph.* executor events. A caller that turned those events off must never see
-// them, even though a thread call re-enables the events internally.
+// them, even though a subagent call re-enables the events internally.
 var graphExecutorMetadataStateKeys = []string{
 	graph.MetadataKeyPregel,
 	graph.MetadataKeyNode,
@@ -1172,12 +1528,12 @@ func requireNoGraphExecutorState(t *testing.T, state session.StateMap) {
 	}
 }
 
-// A caller that turned graph executor events off must still get a fail-fast
-// envelope. The interrupt is signalled only through those events, so a thread
+// A caller that turned graph executor events off must still get a failed
+// result. The interrupt is signalled only through those events, so a subagent
 // call re-enables them for the child run and keeps them out of the shared
 // session.
-func TestNewThreadTool_GraphAgentInterruptFailsWhenCallerDisabledExecutorEvents(t *testing.T) {
-	at := NewThreadTool(newThreadInterruptGraphAgent(t, "graph-child"))
+func TestNewTool_ResumableSubAgents_GraphAgentInterruptFailsWhenCallerDisabledExecutorEvents(t *testing.T) {
+	at := NewTool(newThreadInterruptGraphAgent(t, "graph-child"), WithResumableSubAgents())
 	ctx, sess, parent := newThreadParentRunOptions(
 		t, coreagent.WithDisableGraphExecutorEvents(true),
 	)
@@ -1185,9 +1541,9 @@ func TestNewThreadTool_GraphAgentInterruptFailsWhenCallerDisabledExecutorEvents(
 
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"approve"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.Contains(t, result.Error, "does not support graph checkpoint")
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable, "rerunning cannot clear an interrupt")
 	require.Empty(t, result.Output)
@@ -1201,26 +1557,26 @@ func TestNewThreadTool_GraphAgentInterruptFailsWhenCallerDisabledExecutorEvents(
 	requireNoGraphExecutorState(t, sess.SnapshotState())
 	require.True(t, coreagent.IsGraphExecutorEventsDisabled(parent),
 		"the caller's own run options must not be rewritten")
-	// The branch's own user message legitimately remains.
+	// The subagent's own user message legitimately remains.
 	require.Equal(t,
 		[]string{`{"request":"approve"}`},
-		sessionUserContents(sess, threadFilterKey("graph-child", result.ThreadID)),
+		sessionUserContents(sess, threadFilterKey("graph-child", result.SubAgentID)),
 	)
 }
 
 // Re-enabling executor events must not change what the shared session ends up
-// holding for a branch that completes: the graph completion snapshot is the
-// branch's record of the child's result, so suppression must not swallow it.
-func TestNewThreadTool_GraphAgentCompletionSnapshotSurvivesEventSuppression(t *testing.T) {
+// holding for a subagent call that completes: the graph completion snapshot is
+// the record of the child's result, so suppression must not swallow it.
+func TestNewTool_ResumableSubAgents_GraphAgentCompletionSnapshotSurvivesEventSuppression(t *testing.T) {
 	const answer = "graph-answer"
 	run := func(t *testing.T, opts ...coreagent.RunOption) session.StateMap {
 		t.Helper()
-		at := NewThreadTool(newThreadAnswerGraphAgent(t, "graph-child", answer))
+		at := NewTool(newThreadAnswerGraphAgent(t, "graph-child", answer), WithResumableSubAgents())
 		ctx, sess, _ := newThreadParentRunOptions(t, opts...)
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"ask"}}`))
 		require.NoError(t, err)
-		result := requireThreadResult(t, out)
-		require.Equal(t, ThreadStatusCompleted, result.Status)
+		result := requireSubAgentResult(t, out)
+		require.Equal(t, subAgentStatusCompleted, result.Status)
 		require.Equal(t, answer, result.Output)
 		return sess.SnapshotState()
 	}
@@ -1255,67 +1611,83 @@ func TestNewTool_GraphAgentEventSignalledInterruptUnchanged(t *testing.T) {
 	require.Empty(t, text)
 }
 
-func TestNewThreadTool_GraphInterruptOnCallPath(t *testing.T) {
-	at := NewThreadTool(&threadRunErrorAgent{
+func TestNewTool_ResumableSubAgents_GraphInterruptOnCallPath(t *testing.T) {
+	at := NewTool(&threadRunErrorAgent{
 		name: "child",
 		err:  fmt.Errorf("wrapped: %w", graph.NewInterruptError("needs approval")),
-	})
+	}, WithResumableSubAgents())
 	ctx, _, _ := newThreadParent(t)
 
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"approve"}}`))
 	require.NoError(t, err)
-	result := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.Contains(t, result.Error, "does not support graph checkpoint")
+	result := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable)
 }
 
-// --- Retryable classification and envelope serialization -------------------
+// --- Retryable classification and result serialization ---------------------
 
-func TestNewThreadTool_RetryableSerialization(t *testing.T) {
+func TestNewTool_ResumableSubAgents_RetryableSerialization(t *testing.T) {
 	ctx, _, _ := newThreadParent(t)
 
 	t.Run("completed omits retryable and error", func(t *testing.T) {
-		at := NewThreadTool(&threadHistoryAgent{name: "child"})
+		at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents())
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
 		require.NoError(t, err)
-		decoded := threadResultJSON(t, requireThreadResult(t, out))
-		require.Equal(t, ThreadStatusCompleted, decoded[fieldStatus])
+		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
+		require.Equal(t, subAgentStatusCompleted, decoded[fieldStatus])
 		require.NotContains(t, decoded, fieldRetryable)
 		require.NotContains(t, decoded, fieldError)
-		require.Contains(t, decoded, fieldThreadID)
+		require.Contains(t, decoded, fieldSubAgentID)
 	})
 
 	t.Run("permanent validation failure reports false", func(t *testing.T) {
-		at := NewThreadTool(&threadHistoryAgent{name: "child"})
-		out, err := at.Call(ctx, []byte(`{"thread_id":"abcd1234","input":{"request":"x"}}`))
+		at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents())
+		out, err := at.Call(ctx, []byte(`{"subagent_id":"abcd1234","input":{"request":"x"}}`))
 		require.NoError(t, err)
-		decoded := threadResultJSON(t, requireThreadResult(t, out))
+		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
 		require.Equal(t, false, decoded[fieldRetryable])
+		require.NotContains(t, decoded, fieldSubAgentID)
+		require.NotContains(t, decoded, fieldOutput)
+	})
+
+	t.Run("completed with empty output omits output", func(t *testing.T) {
+		at := NewTool(&threadEmptyOutputAgent{name: "child"}, WithResumableSubAgents())
+		out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
+		require.NoError(t, err)
+		result := requireSubAgentResult(t, out)
+		require.Equal(t, subAgentStatusCompleted, result.Status)
+		require.Empty(t, result.Output)
+		require.NoError(t, validateThreadID(result.SubAgentID),
+			"the saved input alone confirms the subagent")
+		decoded := subAgentResultJSON(t, result)
+		require.NotContains(t, decoded, fieldOutput)
+		require.NotContains(t, decoded, fieldError)
 	})
 
 	t.Run("unknown child failure omits retryable", func(t *testing.T) {
-		at := NewThreadTool(&threadErrorAgent{name: "child"})
+		at := NewTool(&threadErrorAgent{name: "child"}, WithResumableSubAgents())
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"boom"}}`))
 		require.NoError(t, err)
-		decoded := threadResultJSON(t, requireThreadResult(t, out))
-		require.Equal(t, ThreadStatusFailed, decoded[fieldStatus])
+		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
+		require.Equal(t, subAgentStatusFailed, decoded[fieldStatus])
 		require.NotContains(t, decoded, fieldRetryable)
 	})
 
-	t.Run("cancellation reports true and omits thread_id", func(t *testing.T) {
-		at := NewThreadTool(&threadRunErrorAgent{
+	t.Run("cancellation reports true and omits subagent_id", func(t *testing.T) {
+		at := NewTool(&threadRunErrorAgent{
 			name: "child",
 			err:  fmt.Errorf("child aborted: %w", context.Canceled),
-		})
+		}, WithResumableSubAgents())
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"x"}}`))
 		require.NoError(t, err)
-		result := requireThreadResult(t, out)
-		require.Empty(t, result.ThreadID)
-		decoded := threadResultJSON(t, result)
+		result := requireSubAgentResult(t, out)
+		require.Empty(t, result.SubAgentID)
+		decoded := subAgentResultJSON(t, result)
 		require.Equal(t, true, decoded[fieldRetryable])
-		require.NotContains(t, decoded, fieldThreadID)
+		require.NotContains(t, decoded, fieldSubAgentID)
 	})
 }
 
@@ -1334,31 +1706,31 @@ func TestRetryableForError(t *testing.T) {
 
 // --- Namespace -------------------------------------------------------------
 
-func TestNewThreadTool_NamespaceDefaultsToWrappedAgentName(t *testing.T) {
-	at := NewThreadTool(&threadHistoryAgent{name: "child"})
+func TestNewTool_ResumableSubAgents_NamespaceDefaultsToWrappedAgentName(t *testing.T) {
+	at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents())
 	require.Equal(t, "child", at.threadNamespace)
 	require.Equal(t, "agenttool:child:thread:abcd1234",
 		threadFilterKey(at.threadNamespace, "abcd1234"))
 	require.NotContains(t, threadFilterKey(at.threadNamespace, "abcd1234"), "/")
 }
 
-// NewTool ignores WithName, so branch identity must follow the wrapped agent
+// NewTool ignores WithName, so the namespace must follow the wrapped agent
 // rather than any tool-name override.
-func TestNewThreadTool_NamespaceIgnoresWithName(t *testing.T) {
-	at := NewThreadTool(&threadHistoryAgent{name: "child"}, WithName("renamed"))
+func TestNewTool_ResumableSubAgents_NamespaceIgnoresWithName(t *testing.T) {
+	at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents(), WithName("renamed"))
 	require.Equal(t, "child", at.threadNamespace)
 	require.Equal(t, "child", at.Declaration().Name)
 }
 
-func TestNewThreadTool_ExplicitNamespaceSurvivesAgentRename(t *testing.T) {
+func TestNewTool_ResumableSubAgents_ExplicitNamespaceSurvivesAgentRename(t *testing.T) {
 	const namespace = "billing-specialist"
-	before := NewThreadTool(
-		&threadHistoryAgent{name: "old-name"},
-		WithThreadNamespace(namespace),
+	before := NewTool(
+		&threadHistoryAgent{name: "old-name"}, WithResumableSubAgents(),
+		WithSubAgentNamespace(namespace),
 	)
-	after := NewThreadTool(
-		&threadHistoryAgent{name: "new-name"},
-		WithThreadNamespace(namespace),
+	after := NewTool(
+		&threadHistoryAgent{name: "new-name"}, WithResumableSubAgents(),
+		WithSubAgentNamespace(namespace),
 	)
 	require.Equal(t, namespace, before.threadNamespace)
 	require.Equal(t, namespace, after.threadNamespace)
@@ -1372,86 +1744,92 @@ func TestNewThreadTool_ExplicitNamespaceSurvivesAgentRename(t *testing.T) {
 }
 
 // Two tools whose agents share a name stay isolated when given distinct
-// namespaces, and the thread of one is unknown to the other.
-func TestNewThreadTool_SameAgentNameDistinctNamespacesStayIsolated(t *testing.T) {
-	first := NewThreadTool(
-		&threadHistoryAgent{name: "shared"},
-		WithThreadNamespace("first"),
+// namespaces, and the subagent of one is unknown to the other.
+func TestNewTool_ResumableSubAgents_SameAgentNameDistinctNamespacesStayIsolated(t *testing.T) {
+	first := NewTool(
+		&threadHistoryAgent{name: "shared"}, WithResumableSubAgents(),
+		WithSubAgentNamespace("first"),
 	)
-	second := NewThreadTool(
-		&threadHistoryAgent{name: "shared"},
-		WithThreadNamespace("second"),
+	second := NewTool(
+		&threadHistoryAgent{name: "shared"}, WithResumableSubAgents(),
+		WithSubAgentNamespace("second"),
 	)
 	ctx, _, _ := newThreadParent(t)
 
 	out, err := first.Call(ctx, []byte(`{"input":{"request":"a"}}`))
 	require.NoError(t, err)
-	created := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, created.Status)
+	created := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, created.Status)
 
 	crossed, err := second.Call(ctx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"b"}}`, created.ThreadID),
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"b"}}`, created.SubAgentID),
 	))
 	require.NoError(t, err)
-	result := requireThreadResult(t, crossed)
-	require.Equal(t, ThreadStatusFailed, result.Status)
-	require.Contains(t, result.Error, errUnknownThreadID)
+	result := requireSubAgentResult(t, crossed)
+	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Contains(t, result.Error, errUnknownSubAgentID)
+	require.Empty(t, result.SubAgentID)
 }
 
-func TestNewThreadTool_SameAgentNameSharedNamespaceSharesBranches(t *testing.T) {
-	first := NewThreadTool(&threadHistoryAgent{name: "shared"})
-	second := NewThreadTool(&threadHistoryAgent{name: "shared"})
+func TestNewTool_ResumableSubAgents_SameAgentNameSharedNamespaceSharesSubAgents(t *testing.T) {
+	first := NewTool(&threadHistoryAgent{name: "shared"}, WithResumableSubAgents())
+	second := NewTool(&threadHistoryAgent{name: "shared"}, WithResumableSubAgents())
 	ctx, _, _ := newThreadParent(t)
 
 	out, err := first.Call(ctx, []byte(`{"input":{"request":"a"}}`))
 	require.NoError(t, err)
-	created := requireThreadResult(t, out)
+	created := requireSubAgentResult(t, out)
 
 	crossed, err := second.Call(ctx, []byte(
-		fmt.Sprintf(`{"thread_id":%q,"input":{"request":"b"}}`, created.ThreadID),
+		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"b"}}`, created.SubAgentID),
 	))
 	require.NoError(t, err)
-	require.Equal(t, ThreadStatusCompleted, requireThreadResult(t, crossed).Status)
+	require.Equal(t, subAgentStatusCompleted, requireSubAgentResult(t, crossed).Status)
 }
 
-func TestNewThreadTool_InvalidNamespacePanics(t *testing.T) {
-	for _, namespace := range []string{"", "  ", "has space", "a/b", "a:b", "café"} {
-		require.Panics(t, func() {
-			NewThreadTool(
-				&threadHistoryAgent{name: "child"},
-				WithThreadNamespace(namespace),
+// Namespaces are used exactly as given. Even surrounding spaces are rejected
+// rather than trimmed, so two configured values never share one key.
+func TestNewTool_ResumableSubAgents_InvalidNamespacePanics(t *testing.T) {
+	for _, namespace := range []string{
+		"", "  ", " child", "child ", "has space", "a/b", "a:b", "café",
+	} {
+		requireConfigPanic(t, func() {
+			NewTool(
+				&threadHistoryAgent{name: "child"}, WithResumableSubAgents(),
+				WithSubAgentNamespace(namespace),
 			)
-		}, "namespace %q must be rejected", namespace)
+		}, "Invalid AgentTool configuration: AgentTool[child]: subagent namespace",
+			fmt.Sprintf("%q", namespace))
 	}
 }
 
-func TestNewThreadTool_UnusableAgentNamePanicsInsteadOfRewriting(t *testing.T) {
+func TestNewTool_ResumableSubAgents_UnusableAgentNamePanicsInsteadOfRewriting(t *testing.T) {
 	require.Panics(t, func() {
-		NewThreadTool(&threadHistoryAgent{name: "team/child"})
+		NewTool(&threadHistoryAgent{name: "team/child"}, WithResumableSubAgents())
 	})
 	// The escape hatch is an explicit namespace, never a lossy rewrite.
 	require.NotPanics(t, func() {
-		NewThreadTool(
-			&threadHistoryAgent{name: "team/child"},
-			WithThreadNamespace("team_child"),
+		NewTool(
+			&threadHistoryAgent{name: "team/child"}, WithResumableSubAgents(),
+			WithSubAgentNamespace("team_child"),
 		)
 	})
 }
 
 // --- Concurrency -----------------------------------------------------------
 
-// Two calls on one established branch must not run the child concurrently.
-func TestNewThreadTool_SameIDSerialized(t *testing.T) {
+// Two calls for one subagent must not run the child concurrently.
+func TestNewTool_ResumableSubAgents_SameIDSerialized(t *testing.T) {
 	child := &threadGateAgent{name: "child", entered: make(chan struct{}, 4)}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, sess, _ := newThreadParent(t)
 
-	// Establish the branch first: an ID is only addressable once persisted.
+	// Create the subagent first: an ID is only addressable once persisted.
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
 	require.NoError(t, err)
-	created := requireThreadResult(t, out)
-	require.Equal(t, ThreadStatusCompleted, created.Status)
-	threadID := created.ThreadID
+	created := requireSubAgentResult(t, out)
+	require.Equal(t, subAgentStatusCompleted, created.Status)
+	threadID := created.SubAgentID
 	require.NoError(t, validateThreadID(threadID))
 	<-child.entered
 
@@ -1464,7 +1842,7 @@ func TestNewThreadTool_SameIDSerialized(t *testing.T) {
 	}
 	results := make(chan outcome, 2)
 	args := []byte(fmt.Sprintf(
-		`{"thread_id":%q,"input":{"request":"concurrent"}}`, threadID,
+		`{"subagent_id":%q,"input":{"request":"concurrent"}}`, threadID,
 	))
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -1473,35 +1851,89 @@ func TestNewThreadTool_SameIDSerialized(t *testing.T) {
 		}()
 	}
 
-	// One call is inside Run; the other must be parked on the thread lock.
+	// One call is inside Run; the other must be parked on the subagent lock.
 	<-child.entered
 	lockKey := threadLockKey(sess, threadID)
 	require.Eventually(t, func() bool {
 		return threadLockWaiters(at.threadLocks, lockKey) >= 2
 	}, eventuallyTimeout, time.Millisecond,
-		"second call must queue on the per-thread lock")
+		"second call must queue on the per-subagent lock")
 
 	close(gate)
 	for i := 0; i < 2; i++ {
 		got := <-results
 		require.NoError(t, got.err)
-		result := requireThreadResult(t, got.raw)
-		require.Equal(t, ThreadStatusCompleted, result.Status)
-		require.Equal(t, threadID, result.ThreadID)
+		result := requireSubAgentResult(t, got.raw)
+		require.Equal(t, subAgentStatusCompleted, result.Status)
+		require.Equal(t, threadID, result.SubAgentID)
 	}
 
 	runs, maxActive := child.stats()
 	require.Equal(t, 3, runs)
-	require.Equal(t, 1, maxActive, "same-thread calls must not overlap")
+	require.Equal(t, 1, maxActive, "same-subagent calls must not overlap")
 	require.Eventually(t, func() bool {
 		return threadLockWaiters(at.threadLocks, lockKey) == 0
 	}, eventuallyTimeout, time.Millisecond, "lock entry must be released")
 }
 
-// Distinct branches are independent and may run at the same time.
-func TestNewThreadTool_DistinctIDsRunConcurrently(t *testing.T) {
+// A call waiting for another call of the same subagent gives up when its
+// context is done. It never runs the wrapped agent, and it still reports the
+// subagent ID because that subagent is confirmed.
+func TestNewTool_ResumableSubAgents_SameIDWaitCanceled(t *testing.T) {
 	child := &threadGateAgent{name: "child", entered: make(chan struct{}, 4)}
-	at := NewThreadTool(child)
+	at := NewTool(child, WithResumableSubAgents())
+	ctx, sess, _ := newThreadParent(t)
+
+	out, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
+	require.NoError(t, err)
+	threadID := requireSubAgentResult(t, out).SubAgentID
+	require.NoError(t, validateThreadID(threadID))
+	<-child.entered
+
+	gate := make(chan struct{})
+	child.setGate(gate)
+	args := []byte(fmt.Sprintf(
+		`{"subagent_id":%q,"input":{"request":"two"}}`, threadID,
+	))
+	holder := make(chan any, 1)
+	go func() {
+		raw, _ := at.Call(ctx, args)
+		holder <- raw
+	}()
+	<-child.entered
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	waiter := make(chan any, 1)
+	go func() {
+		raw, _ := at.Call(waitCtx, args)
+		waiter <- raw
+	}()
+	lockKey := threadLockKey(sess, threadID)
+	require.Eventually(t, func() bool {
+		return threadLockWaiters(at.threadLocks, lockKey) >= 2
+	}, eventuallyTimeout, time.Millisecond,
+		"the second call must queue on the per-subagent lock")
+	cancel()
+
+	canceled := requireSubAgentResult(t, <-waiter)
+	require.Equal(t, subAgentStatusFailed, canceled.Status)
+	require.Contains(t, canceled.Error, context.Canceled.Error())
+	require.Equal(t, threadID, canceled.SubAgentID)
+	require.NotNil(t, canceled.Retryable)
+	require.True(t, *canceled.Retryable)
+
+	close(gate)
+	held := requireSubAgentResult(t, <-holder)
+	require.Equal(t, subAgentStatusCompleted, held.Status)
+	runs, _ := child.stats()
+	require.Equal(t, 2, runs, "the canceled call must not run the wrapped agent")
+}
+
+// Distinct subagents are independent and may run at the same time.
+func TestNewTool_ResumableSubAgents_DistinctIDsRunConcurrently(t *testing.T) {
+	child := &threadGateAgent{name: "child", entered: make(chan struct{}, 4)}
+	at := NewTool(child, WithResumableSubAgents())
 	ctx, _, _ := newThreadParent(t)
 
 	gate := make(chan struct{})
@@ -1527,14 +1959,14 @@ func TestNewThreadTool_DistinctIDsRunConcurrently(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		got := <-results
 		require.NoError(t, got.err)
-		result := requireThreadResult(t, got.raw)
-		require.Equal(t, ThreadStatusCompleted, result.Status)
-		ids[result.ThreadID] = struct{}{}
+		result := requireSubAgentResult(t, got.raw)
+		require.Equal(t, subAgentStatusCompleted, result.Status)
+		ids[result.SubAgentID] = struct{}{}
 	}
-	require.Len(t, ids, 2, "each call must create its own branch")
+	require.Len(t, ids, 2, "each call must create its own subagent")
 
 	_, maxActive := child.stats()
-	require.Equal(t, 2, maxActive, "distinct branches must not serialize")
+	require.Equal(t, 2, maxActive, "distinct subagents must not serialize")
 }
 
 func TestThreadLockSet_CancellationReleasesEntry(t *testing.T) {
@@ -1555,8 +1987,8 @@ func TestThreadLockSet_CancellationReleasesEntry(t *testing.T) {
 
 // --- Streaming -------------------------------------------------------------
 
-func TestNewThreadTool_StreamableCallEmitsSingleFinalChunk(t *testing.T) {
-	at := NewThreadTool(&threadHistoryAgent{name: "child"}, WithStreamInner(true))
+func TestNewTool_ResumableSubAgents_StreamableCallEmitsSingleFinalChunk(t *testing.T) {
+	at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents(), WithStreamInner(true))
 	ctx, _, _ := newThreadParent(t)
 
 	reader, err := at.StreamableCall(
@@ -1578,15 +2010,124 @@ func TestNewThreadTool_StreamableCallEmitsSingleFinalChunk(t *testing.T) {
 	require.Len(t, chunks, 1)
 	final, ok := chunks[0].Content.(tool.FinalResultChunk)
 	require.True(t, ok, "got %T", chunks[0].Content)
-	result := requireThreadResult(t, final.Result)
-	require.Equal(t, ThreadStatusCompleted, result.Status)
+	result := requireSubAgentResult(t, final.Result)
+	require.Equal(t, subAgentStatusCompleted, result.Status)
 	require.Equal(t, "run1", result.Output)
-	require.NoError(t, validateThreadID(result.ThreadID))
+	require.NoError(t, validateThreadID(result.SubAgentID))
 }
 
 // --- Option interactions ---------------------------------------------------
 
-func TestNewThreadTool_IgnoresParentBranchAndPersistentHistory(t *testing.T) {
+func requireConfigPanic(t *testing.T, fn func(), parts ...string) string {
+	t.Helper()
+	var text string
+	func() {
+		defer func() {
+			recovered := recover()
+			require.NotNil(t, recovered, "expected configuration panic")
+			text = fmt.Sprint(recovered)
+		}()
+		fn()
+	}()
+	for _, part := range parts {
+		require.Contains(t, text, part)
+	}
+	return text
+}
+
+func TestNewTool_ResumableSubAgents_RejectsIncompatibleOptions(t *testing.T) {
+	child := &threadHistoryAgent{name: "child"}
+	keyFunc := PersistentHistoryKeyFunc(func(
+		context.Context, *coreagent.Invocation, []byte,
+	) string {
+		return "k"
+	})
+	const prefix = "Invalid AgentTool configuration: AgentTool[child]: " +
+		"WithResumableSubAgents is incompatible with "
+	cases := []struct {
+		name     string
+		opts     []Option
+		conflict string
+	}{
+		{
+			name: "resumable then parent branch",
+			opts: []Option{
+				WithResumableSubAgents(),
+				WithHistoryScope(HistoryScopeParentBranch),
+			},
+			conflict: "HistoryScopeParentBranch",
+		},
+		{
+			name: "parent branch then resumable",
+			opts: []Option{
+				WithHistoryScope(HistoryScopeParentBranch),
+				WithResumableSubAgents(),
+			},
+			conflict: "HistoryScopeParentBranch",
+		},
+		{
+			name:     "resumable then persistent history",
+			opts:     []Option{WithResumableSubAgents(), WithPersistentHistory()},
+			conflict: "WithPersistentHistory",
+		},
+		{
+			name:     "persistent history then resumable",
+			opts:     []Option{WithPersistentHistory(), WithResumableSubAgents()},
+			conflict: "WithPersistentHistory",
+		},
+		{
+			name: "resumable then persistent key",
+			opts: []Option{
+				WithResumableSubAgents(),
+				WithPersistentHistoryKey("agenttool:child:task"),
+			},
+			conflict: "WithPersistentHistoryKey",
+		},
+		{
+			name: "persistent key then resumable",
+			opts: []Option{
+				WithPersistentHistoryKey("agenttool:child:task"),
+				WithResumableSubAgents(),
+			},
+			conflict: "WithPersistentHistoryKey",
+		},
+		{
+			name:     "resumable then key func",
+			opts:     []Option{WithResumableSubAgents(), WithPersistentHistoryKeyFunc(keyFunc)},
+			conflict: "WithPersistentHistoryKeyFunc",
+		},
+		{
+			name:     "key func then resumable",
+			opts:     []Option{WithPersistentHistoryKeyFunc(keyFunc), WithResumableSubAgents()},
+			conflict: "WithPersistentHistoryKeyFunc",
+		},
+		{
+			name: "explicit namespace does not hide a conflict",
+			opts: []Option{
+				WithSubAgentNamespace("child"),
+				WithPersistentHistory(),
+				WithResumableSubAgents(),
+			},
+			conflict: "WithPersistentHistory",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			opts := append(
+				[]Option{Option(func(*agentToolOptions) { calls++ })},
+				tc.opts...,
+			)
+			msg := requireConfigPanic(t, func() {
+				NewTool(child, opts...)
+			})
+			require.Equal(t, prefix+tc.conflict, msg)
+			require.Equal(t, 1, calls, "each Option must run exactly once")
+		})
+	}
+}
+
+func TestNewTool_ResumableSubAgents_PanicsBeforePersistentHistoryNormalization(t *testing.T) {
 	original := agentlog.Default
 	logger := &dynTestWarnLogger{}
 	agentlog.Default = logger
@@ -1594,12 +2135,132 @@ func TestNewThreadTool_IgnoresParentBranchAndPersistentHistory(t *testing.T) {
 		agentlog.Default = original
 	})
 
-	at := NewThreadTool(
+	cases := []struct {
+		name string
+		opts []Option
+		want string
+	}{
+		{
+			name: "persistent history then parent branch then resumable",
+			opts: []Option{
+				WithPersistentHistory(),
+				WithHistoryScope(HistoryScopeParentBranch),
+				WithResumableSubAgents(),
+			},
+			want: "HistoryScopeParentBranch and WithPersistentHistory",
+		},
+		{
+			name: "resumable then parent branch then persistent history",
+			opts: []Option{
+				WithResumableSubAgents(),
+				WithHistoryScope(HistoryScopeParentBranch),
+				WithPersistentHistory(),
+			},
+			want: "HistoryScopeParentBranch and WithPersistentHistory",
+		},
+		{
+			name: "parent branch then persistent key then resumable",
+			opts: []Option{
+				WithHistoryScope(HistoryScopeParentBranch),
+				WithPersistentHistoryKey("agenttool:child:task"),
+				WithResumableSubAgents(),
+			},
+			want: "HistoryScopeParentBranch and WithPersistentHistoryKey",
+		},
+		{
+			name: "resumable then key func then parent branch",
+			opts: []Option{
+				WithResumableSubAgents(),
+				WithPersistentHistoryKeyFunc(func(
+					context.Context, *coreagent.Invocation, []byte,
+				) string {
+					return "k"
+				}),
+				WithHistoryScope(HistoryScopeParentBranch),
+			},
+			want: "HistoryScopeParentBranch and WithPersistentHistoryKeyFunc",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logger.warnfCalls = 0
+			msg := requireConfigPanic(t, func() {
+				NewTool(&threadHistoryAgent{name: "child"}, tc.opts...)
+			}, "Invalid AgentTool configuration: AgentTool[child]: "+
+				"WithResumableSubAgents is incompatible with ")
+			require.True(t, strings.HasSuffix(msg, tc.want), msg)
+			require.Zero(t, logger.warnfCalls, "panic must happen before normalization warns: %s", msg)
+		})
+	}
+}
+
+func TestNewTool_ResumableSubAgents_AllowsExplicitIsolatedHistory(t *testing.T) {
+	for _, opts := range [][]Option{
+		{WithResumableSubAgents(), WithHistoryScope(HistoryScopeIsolated)},
+		{WithHistoryScope(HistoryScopeIsolated), WithResumableSubAgents()},
+	} {
+		at := NewTool(&threadHistoryAgent{name: "child"}, opts...)
+		require.True(t, at.thread)
+		require.Equal(t, HistoryScopeIsolated, at.historyScope)
+		require.Nil(t, at.persistentHistory)
+	}
+}
+
+func TestNewTool_WithoutResumableSubAgents_KeepsHistoryOptions(t *testing.T) {
+	branched := NewTool(
 		&threadHistoryAgent{name: "child"},
 		WithHistoryScope(HistoryScopeParentBranch),
-		WithPersistentHistory(),
 	)
-	require.GreaterOrEqual(t, logger.warnfCalls, 1)
-	require.Equal(t, HistoryScopeIsolated, at.historyScope)
-	require.Nil(t, at.persistentHistory)
+	require.False(t, branched.thread)
+	require.Empty(t, branched.threadNamespace)
+	require.Nil(t, branched.threadLocks)
+	require.Equal(t, HistoryScopeParentBranch, branched.historyScope)
+	require.Nil(t, branched.persistentHistory)
+	_, hasSubAgentID := branched.Declaration().InputSchema.Properties[fieldSubAgentID]
+	require.False(t, hasSubAgentID)
+
+	keyed := NewTool(
+		&threadHistoryAgent{name: "child"},
+		WithPersistentHistoryKey("agenttool:child:task-1"),
+	)
+	require.False(t, keyed.thread)
+	require.NotNil(t, keyed.persistentHistory)
+	require.True(t, keyed.persistentHistory.enabled)
+	require.Equal(t, "agenttool:child:task-1", keyed.persistentHistory.key)
+	_, hasSubAgentID = keyed.Declaration().InputSchema.Properties[fieldSubAgentID]
+	require.False(t, hasSubAgentID)
+}
+
+func TestNewDynamicTool_RejectsResumableSubAgentOptions(t *testing.T) {
+	const (
+		resumable = "Invalid Dynamic AgentTool configuration: " +
+			"WithResumableSubAgents is not supported by NewDynamicTool"
+		namespace = "Invalid Dynamic AgentTool configuration: " +
+			"WithSubAgentNamespace is not supported by NewDynamicTool"
+	)
+	for _, tc := range []struct {
+		opts []Option
+		want string
+	}{
+		{opts: []Option{WithResumableSubAgents()}, want: resumable},
+		{opts: []Option{WithName("explore"), WithResumableSubAgents()}, want: resumable},
+		{opts: []Option{WithResumableSubAgents(), WithName("explore")}, want: resumable},
+		{
+			opts: []Option{WithResumableSubAgents(), WithSubAgentNamespace("explore")},
+			want: resumable,
+		},
+		{opts: []Option{WithSubAgentNamespace("explore")}, want: namespace},
+		{opts: []Option{WithSubAgentNamespace("not valid /")}, want: namespace},
+	} {
+		calls := 0
+		withCount := append(
+			[]Option{Option(func(*agentToolOptions) { calls++ })},
+			tc.opts...,
+		)
+		msg := requireConfigPanic(t, func() {
+			NewDynamicTool(withCount...)
+		})
+		require.Equal(t, tc.want, msg)
+		require.Equal(t, 1, calls, "each Option must run exactly once")
+	}
 }

@@ -61,15 +61,15 @@ type Tool struct {
 	// when dynamic is true.
 	dynamicCfg *dynamicOptions
 
-	// thread enables the NewThreadTool mode: independently addressed
-	// conversation branches inside the parent session, each identified by a
-	// stable event-filter key.
+	// thread enables resumable subagents (WithResumableSubAgents): each
+	// subagent is the set of parent Session events under its own stable
+	// event-filter key.
 	thread bool
-	// threadNamespace is the validated identity segment of the thread
-	// event-filter key. It is empty for non-thread tools.
+	// threadNamespace is the validated namespace segment of the subagent
+	// history key. It is empty for other tools.
 	threadNamespace string
 	// threadLocks serializes in-process calls that share the same parent
-	// session and thread ID. It is nil for non-thread tools.
+	// session and subagent ID. It is nil for other tools.
 	threadLocks *threadLockSet
 }
 
@@ -94,9 +94,14 @@ type agentToolOptions struct {
 	// NewTool ignores them.
 	dynamic *dynamicOptions
 
-	// threadNamespace is only meaningful for NewThreadTool; NewTool and
-	// NewDynamicTool ignore it.
-	threadNamespace *string
+	// subAgentNamespace is set by WithSubAgentNamespace. It is only valid
+	// together with resumableSubAgents; NewTool and NewDynamicTool reject it
+	// otherwise.
+	subAgentNamespace *string
+
+	// resumableSubAgents is set by WithResumableSubAgents. It is disabled by
+	// default, and NewDynamicTool rejects it.
+	resumableSubAgents bool
 }
 
 // dynamicOptions holds the configuration knobs for the dynamic AgentTool mode.
@@ -281,6 +286,10 @@ const (
 )
 
 // WithHistoryScope sets the history inheritance behavior for AgentTool.
+//
+// HistoryScopeParentBranch is incompatible with WithResumableSubAgents:
+// NewTool panics when both are set. An explicit
+// WithHistoryScope(HistoryScopeIsolated) remains valid with it.
 func WithHistoryScope(scope HistoryScope) Option {
 	return func(opts *agentToolOptions) {
 		opts.historyScope = scope
@@ -298,6 +307,12 @@ func WithHistoryScope(scope HistoryScope) Option {
 // is incompatible with HistoryScopeParentBranch. When HistoryScopeParentBranch
 // is enabled, persistent history is ignored and the legacy UUID-suffixed child
 // filter keys are used.
+//
+// It is also incompatible with WithResumableSubAgents, which keeps a separate
+// history per subagent ID: NewTool panics when WithResumableSubAgents is
+// combined with WithPersistentHistory, WithPersistentHistoryKey, or
+// WithPersistentHistoryKeyFunc. History saved under a persistent-history key
+// is not migrated to any subagent ID.
 func WithPersistentHistory() Option {
 	return func(opts *agentToolOptions) {
 		cfg := opts.ensurePersistentHistoryOptions()
@@ -333,26 +348,95 @@ func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
 	}
 }
 
-// WithThreadNamespace sets the identity segment of the thread event-filter key
-// (agenttool:<namespace>:thread:<id>) used by NewThreadTool.
+// WithResumableSubAgents lets the model start subagents of the wrapped agent
+// and continue them in later calls. Continuing a subagent starts a new
+// invocation of the wrapped agent over the history that earlier calls saved
+// in the parent Session; it does not resume a paused execution or restore a
+// checkpoint. All subagents share the parent Session State and the same
+// Agent object, and a subagent's history lasts only as long as the parent
+// Session keeps and persists its events.
 //
-// It applies ONLY to NewThreadTool and does not change the model-facing tool
-// name, which remains the wrapped agent's name. NewTool and NewDynamicTool
-// ignore it.
+// The wrapped agent supplies the shared definition. Each subagent_id
+// identifies a logical subagent with its own saved conversation history,
+// scoped to the parent Session and the tool's namespace. A call is one tool
+// invocation. One definition can have many subagents, and one subagent can
+// receive many calls.
 //
-// The namespace defaults to the wrapped agent's name. Set it explicitly when
-// thread IDs must stay resolvable across an agent rename, or when two distinct
-// agents share a name within one session and must not share a branch
-// namespace.
+// The tool input becomes {"subagent_id"?: string, "input": <input>}, where
+// input follows the wrapped agent's own input schema and reaches it exactly
+// as the arguments of an ordinary NewTool would. An omitted, null, or blank
+// subagent_id starts a new subagent with a generated opaque ID. A supplied ID
+// must match ^[A-Za-z0-9_-]{8,128}$ and have saved history in the parent
+// Session; invalid and unknown IDs fail and are never created implicitly.
 //
-// The namespace must match ^[A-Za-z0-9_-]+$. NewThreadTool panics on an invalid
-// namespace, and on a defaulted namespace whose agent name does not match,
-// because both are static configuration errors: the key is never rewritten to
-// a "safe" form, since lossy rewriting could silently merge two namespaces.
-func WithThreadNamespace(namespace string) Option {
+// Every call returns a SubAgentResult, and most failures are reported in it
+// with Status "failed" rather than as an error. The result includes
+// subagent_id only when the parent Session holds events for that subagent
+// at the time the call returns. Continuing it later requires those events
+// to remain available; continuing after a restart also requires the parent
+// SessionService to have persisted them.
+//
+// History is saved in the parent Session under the event-filter key
+// agenttool:<namespace>:thread:<id>, which the default branch filter keeps
+// out of the root agent's history and out of other subagents. No separate
+// Session, table, or registry is created. The namespace defaults to the
+// wrapped agent's name; see WithSubAgentNamespace.
+//
+// A call requires the parent invocation Session and fails without one; there
+// is no in-memory fallback. Calls for the same subagent on one Tool run one
+// at a time, and a waiting call gives up when its context is done. This
+// guard is in-process only. Calls for different subagents may run
+// concurrently.
+//
+// Calls are synchronous. StreamableCall sends only the final SubAgentResult
+// as a tool.FinalResultChunk and does not forward inner events, even with
+// WithStreamInner. A graph interrupt in the wrapped agent, whether returned
+// as an error or signalled through graph executor events, fails the call
+// with Retryable set to false; graph checkpoints and interrupt resume are
+// not supported.
+//
+// The option does not enable RunOptions.Resume. When the caller enables it,
+// the wrapped agent may run unanswered tool calls left at the end of the
+// subagent's own history before handling the new input, so side effects of
+// those tools can happen twice. A call interrupted before its result reached
+// the parent Session may leave a subagent whose ID the model never received.
+//
+// Agents that keep conversation state outside framework history do not see
+// subagent boundaries. For example, a remote A2A agent receives the parent
+// Session ID as its context ID for every subagent. Such agents must either
+// consume the history the framework sends or map SubAgentIDFromContext to
+// their own conversations.
+//
+// NewTool panics when WithResumableSubAgents is combined with
+// WithPersistentHistory, WithPersistentHistoryKey,
+// WithPersistentHistoryKeyFunc, or HistoryScopeParentBranch, in any option
+// order. An explicit HistoryScopeIsolated is allowed. NewDynamicTool panics
+// when the option is set.
+func WithResumableSubAgents() Option {
+	return func(opts *agentToolOptions) {
+		opts.resumableSubAgents = true
+	}
+}
+
+// WithSubAgentNamespace sets the namespace that scopes subagent IDs of a
+// NewTool configured with WithResumableSubAgents. The namespace is part of
+// the saved history key, agenttool:<namespace>:thread:<id>, and defaults to
+// the wrapped agent's name.
+//
+// Set a stable namespace when saved subagents must stay reachable after the
+// wrapped agent is renamed, or to keep two tools whose agents share a name in
+// one Session from sharing subagents. Tools with the same namespace in the
+// same Session share subagents. The namespace does not change the
+// model-facing tool name.
+//
+// The namespace must match ^[A-Za-z0-9_-]+$ and is used exactly as given.
+// NewTool panics when it does not match, when the default agent name does not
+// match, and when WithSubAgentNamespace is used without
+// WithResumableSubAgents. NewDynamicTool panics when the option is set.
+func WithSubAgentNamespace(namespace string) Option {
 	return func(opts *agentToolOptions) {
 		copiedNamespace := namespace
-		opts.threadNamespace = &copiedNamespace
+		opts.subAgentNamespace = &copiedNamespace
 	}
 }
 
@@ -400,6 +484,12 @@ func WithPinStructuredOutput(enabled bool) Option {
 
 // NewTool creates a new Tool that wraps the given agent.
 //
+// WithResumableSubAgents changes the tool's input, output, and history
+// behavior as documented on that option. Without it, the tool keeps the
+// wrapped agent's input and output schemas and the existing history, stream,
+// and graph behavior. NewTool panics on invalid static configuration, such as
+// WithSubAgentNamespace without WithResumableSubAgents.
+//
 // Note: The tool name is derived from the agent's info (agent.Info().Name).
 // The agent name must comply with LLM API requirements for compatibility.
 // Some APIs (e.g., Kimi, DeepSeek) enforce strict naming patterns:
@@ -408,16 +498,20 @@ func WithPinStructuredOutput(enabled bool) Option {
 //
 // Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 func NewTool(agent agent.Agent, opts ...Option) *Tool {
-	return newFixedAgentTool(agent, applyAgentToolOptions(opts))
+	options := applyAgentToolOptions(opts)
+	namespace := resolveSubAgentConfig(agent.Info().Name, options)
+	at := newFixedAgentTool(agent, options)
+	if options.resumableSubAgents {
+		configureThreadTool(at, namespace)
+	}
+	return at
 }
 
-// applyAgentToolOptions resolves the option set shared by the fixed-agent
-// constructors.
+// applyAgentToolOptions resolves the option set for NewTool.
 //
 // Option is an exported function type, so an application-defined Option may
-// have observable side effects. Each constructor must therefore apply every
-// Option exactly once, which is why the resolved option set is passed on
-// instead of being rebuilt by a second application.
+// have observable side effects. NewTool applies every Option exactly once and
+// passes the resolved set on instead of applying it again.
 func applyAgentToolOptions(opts []Option) *agentToolOptions {
 	// Default to allowing summarization so the parent agent can perform its
 	// normal post-tool reasoning unless opt-out is requested.
@@ -432,8 +526,12 @@ func applyAgentToolOptions(opts []Option) *agentToolOptions {
 	return options
 }
 
-// newFixedAgentTool builds the wrapped-agent Tool shared by NewTool and
-// NewThreadTool from an already-resolved option set.
+// newFixedAgentTool builds the wrapped-agent Tool for NewTool from an
+// already-resolved option set.
+//
+// Resumable-subagent options must be validated before calling it. The
+// HistoryScopeParentBranch normalization below discards an enabled
+// persistent-history option, which would hide that conflict.
 func newFixedAgentTool(agent agent.Agent, options *agentToolOptions) *Tool {
 	info := agent.Info()
 	if options.name != nil {
@@ -538,12 +636,13 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 // This allows the child agent to inherit parent history based on the configured
 // history scope.
 //
-// childKeyOverride pins the child event-filter key for this call. It is used by
-// NewThreadTool to run a specific conversation branch. An empty value means the
-// key is resolved from the graph runtime and then from the tool's own history
-// configuration, which is what every non-thread caller passes. The override is
-// deliberately a parameter rather than a context value so that nested AgentTool
-// calls made by the child agent keep computing their own independent keys.
+// childKeyOverride pins the child event-filter key for this call. A NewTool
+// configured with WithResumableSubAgents uses it to run a specific subagent.
+// An empty value means the key is resolved from the graph runtime and then
+// from the tool's own history configuration, which is what every other caller
+// passes. The override is deliberately a parameter rather than a context value
+// so that nested AgentTool calls made by the child agent keep computing their
+// own independent keys.
 func (at *Tool) callWithParentInvocation(
 	ctx context.Context,
 	parentInv *agent.Invocation,
@@ -596,10 +695,11 @@ func (at *Tool) callWithParentInvocation(
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
 	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, childKey, hasGraphRuntime)
-	threadInterrupt := at.newThreadInterruptObserver()
+	threadInterrupt := at.newThreadInterruptObserver(subInv)
 	events := at.wrapWithCallSemantics(subCtx, subInv, evCh)
-	// A thread tool never carries a graph runtime, so at most one observer is
-	// ever attached and the forwarding cost is unchanged for existing callers.
+	// A resumable subagent call never carries a graph runtime, so at most one
+	// observer is ever attached and the forwarding cost is unchanged for
+	// existing callers.
 	switch {
 	case capture != nil:
 		events = wrapEventObserver(events, capture)
@@ -615,6 +715,9 @@ func (at *Tool) callWithParentInvocation(
 	}
 	if interruptErr := threadInterrupt.interruptError(); interruptErr != nil {
 		return "", interruptErr
+	}
+	if cancelErr := threadInterrupt.canceledWithoutCompletion(ctx); cancelErr != nil {
+		return "", cancelErr
 	}
 	return response, nil
 }
@@ -709,15 +812,23 @@ func (at *Tool) childInvocationOptions(
 		})
 	}
 	if at.thread {
-		// A graph agent signals an interrupt only through a graph executor
-		// event, so a thread tool must always receive those events: otherwise
-		// an interrupted branch would be reported as completed. They are
-		// force-enabled for the child run, and when the caller asked not to
-		// see them they are additionally kept out of the shared parent
-		// Session, so the branch history stays what it would have been.
+		// A graph agent may signal an interrupt only through a graph executor
+		// event, so a resumable subagent call must always receive those
+		// events: otherwise an interrupted call would be reported as
+		// completed. They are force-enabled for the child run, and when the
+		// caller asked not to see them they are additionally kept out of the
+		// shared parent Session, so the subagent history stays what it would
+		// have been.
+		//
+		// Clone has already copied the parent RunOptions, including a shared
+		// RuntimeState map. Replace it with a copy that drops parent graph
+		// checkpoint and interrupt-resume keys. Business values are kept, and
+		// RunOptions.Resume is not cleared. This applies to both Call and
+		// CallWithAgentToolGraphRuntime because both reach this option.
 		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
 			runOptions := inv.RunOptions
 			agent.WithDisableGraphExecutorEvents(false)(&runOptions)
+			runOptions.RuntimeState = threadChildRuntimeState(runOptions.RuntimeState)
 			inv.RunOptions = runOptions
 			if parentInv != nil && agent.IsGraphExecutorEventsDisabled(parentInv) {
 				inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
@@ -886,10 +997,11 @@ func (at *Tool) wrapWithCallSemantics(
 // shouldSuppressGraphSessionMirror reports whether a child graph event must be
 // kept out of the shared session.
 //
-// It applies the graph-runtime suppression rule, plus one thread-only
-// exception: a thread tool force-enables graph executor events so it can
-// observe a child interrupt, but the graph completion snapshot is the branch's
-// only record of the child's answer, so that snapshot is still mirrored.
+// It applies the graph-runtime suppression rule, plus one exception for
+// resumable subagents: their calls force-enable graph executor events to
+// observe a child interrupt, but the graph completion snapshot is the
+// subagent history's only record of the child's answer, so that snapshot is
+// still mirrored.
 func (at *Tool) shouldSuppressGraphSessionMirror(
 	inv *agent.Invocation,
 	evt *event.Event,

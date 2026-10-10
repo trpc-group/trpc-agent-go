@@ -698,15 +698,19 @@ eventChan, err := r.Run(
 
 开启 `WithResume(true)` 时，Runner 会：
 
-- 读取当前 Session 中最新的一条事件；
-- 如果最后一条是「带 `tool_calls` 的 assistant 回复」，且之后没有对应的
+- 读取当前 Agent 自己分支中最新的一条事件，即过滤键与本次调用过滤键相同的最新事件；
+  未标记过滤键的历史事件仅可由默认根调用恢复，且事件作者必须是该 Agent；它们不能
+  用来选择子 Agent 的历史。其他分支的事件（例如 AgentTool 子调用或并行子
+  Agent 的事件）会被跳过，因此 Agent 不会执行其他分支未完成的工具调用。子调用会继承
+  该选项，并对自己的分支应用同样的规则；
+- 如果这条事件是「带 `tool_calls` 的 assistant 回复」，且之后没有对应的
   工具结果事件：
   - 使用当前 Agent 注册的工具集合和回调，执行这些“未完成的工具调用”；
   - 把工具执行结果写入 Session（作为 tool 消息事件）；
 - 工具执行结束后，再按正常流程发起新一轮 LLM 调用，此时模型能看到
   “上一次的 tool_calls + 对应的工具结果”，不会重复要求调用同一工具。
 
-如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
+如果这条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
 则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
 
 #### Tool Call 参数自动修复

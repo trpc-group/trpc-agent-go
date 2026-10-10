@@ -1772,11 +1772,15 @@ change when you switch history scope:
     - Incompatible with `HistoryScopeParentBranch`: when both are set, the
       framework ignores persistent history and uses the `parent/child-uuid`
       semantics.
+    - Incompatible with `WithResumableSubAgents`, which keeps a separate
+      history per subagent: `NewTool` panics when any `WithPersistentHistory*`
+      option is combined with it. History saved under a persistent-history key
+      is not migrated to any subagent.
   - Complete example: see `examples/agenttool/` (use `-persistent-child-history` / `-persistent-child-key`).
 
 - WithHistoryScope(HistoryScope):
-  - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history.
-  - `HistoryScopeParentBranch`: Use a hierarchical `FilterKey` in the form `parent/child-uuid`. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output.
+  - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history. Explicit `HistoryScopeIsolated` is allowed together with `WithResumableSubAgents`.
+  - `HistoryScopeParentBranch`: Use a hierarchical `FilterKey` in the form `parent/child-uuid`. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output. Incompatible with `WithResumableSubAgents`: `NewTool` panics when both are set.
 
 Example:
 
@@ -1790,6 +1794,15 @@ child := agenttool.NewTool(
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
+
+- WithResumableSubAgents() / WithSubAgentNamespace(string):
+
+  - Disabled by default. `WithResumableSubAgents` lets the model start
+    subagents of a fixed `NewTool` and continue them by `subagent_id`; see
+    Resumable Subagents below. `NewDynamicTool` panics when either option is
+    set.
+  - `WithSubAgentNamespace` sets a stable namespace for subagent IDs and
+    requires `WithResumableSubAgents`; `NewTool` panics when it is used alone.
 
 ### Notes
 
@@ -1808,102 +1821,269 @@ child := agenttool.NewTool(
   `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
-### Threaded AgentTool (`NewThreadTool`)
+### Resumable Subagents (`WithResumableSubAgents`)
 
-`agenttool.NewThreadTool(agent)` is an opt-in constructor for a **fixed** wrapped
-agent. It does not change `NewTool` or `NewDynamicTool`. Use it when the parent
-model needs several **independently addressed conversation branches** with the
-same specialist inside one parent Session.
+`agenttool.WithResumableSubAgents()` lets the parent model start subagents of a
+wrapped Agent and continue them in later tool calls. It is opt-in and only
+applies to a fixed `agenttool.NewTool`. Without it, `NewTool` keeps its existing
+input, output, history, streaming, and graph behavior.
 
-It is still synchronous call-return. Each branch is exactly the set of parent
-Session events carrying a stable event-filter key
-(`agenttool:<namespace>:thread:<id>`). It adds no Controller, message queue,
-lease, background task, executor checkpointing, separate child Session, or Graph
-resume/checkpoint behavior.
+Three terms are easy to mix up:
+
+- The **wrapped Agent** is the definition: one `agent.Agent` value and its
+  configuration.
+- A **logical subagent** has its own ID and saved conversation history. Its
+  `subagent_id` is only meaningful within the same parent Session and namespace;
+  it does not represent a separate Go Agent object.
+- A **call** is one tool call. It either starts a new subagent or continues an
+  existing one.
+
+Continuing a subagent starts a **new invocation** of the wrapped Agent over the
+history that earlier calls saved in the parent Session. It does not resume a
+paused execution or restore a checkpoint. All subagents share the parent Session
+State and the same Agent object, and a subagent's history lasts only as long as
+the parent Session keeps and persists its events.
+
+Resumable and ordinary AgentTools can be mixed on one parent Agent; each keeps
+its own behavior:
 
 ```go
-childTool := agenttool.NewThreadTool(specialist)
+researcher := agenttool.NewTool(
+    researchAgent,
+    agenttool.WithResumableSubAgents(),
+)
 
-// Optional: pin the branch namespace so thread IDs stay resolvable across an
-// agent rename, or so two same-named agents do not share a namespace.
-childTool = agenttool.NewThreadTool(
-    specialist,
-    agenttool.WithThreadNamespace("billing-specialist"),
+coordinator := llmagent.New(
+    "coordinator",
+    llmagent.WithModel(m),
+    llmagent.WithTools([]tool.Tool{
+        researcher,                       // resumable subagents
+        agenttool.NewTool(summaryAgent),  // ordinary AgentTool, unchanged
+    }),
 )
 ```
 
-Model-facing input is `{thread_id?: string, input: <wrapped agent's schema>}`.
-The child receives only the JSON serialization of `input`. The result is
-`{thread_id?, status, output?, error?, retryable?}`. There is no `resume`
-boolean.
+#### Input and result
 
-**Turn semantics**
+The tool input wraps the wrapped Agent's own input:
 
-- Omit `thread_id` to start a new branch with a cryptographically strong opaque
-  ID.
-- Passing `thread_id` **appends a new message** to that branch. It never
-  replaces or retries a previous turn.
-- Supplied IDs must match `^[A-Za-z0-9_-]{8,128}$`. Unknown or invalid IDs fail
-  instead of creating a branch.
-- A branch is known only when the parent Session already holds at least one
-  event under its filter key. A call that fails before the child agent persists
-  anything returns **no** `thread_id`; retrying simply starts a new branch. Only
-  `status` is a required output field.
-- If a previous turn was interrupted, its partial tail stays in the branch. The
-  framework's orphan tool-call sanitization keeps the next request valid, but
-  there is no interrupted-turn replacement and no checkpoint recovery.
+```json
+{"subagent_id": "<optional ID from an earlier call>", "input": {"request": "..."}}
+```
 
-**Persistence and lifecycle**
+The `input` field is required. Its JSON value, including `null` when the
+wrapped Agent's schema allows null, reaches the wrapped Agent exactly as the
+arguments of an ordinary `NewTool` would. A missing `input` fails with
+`retryable: false`. The call does not validate that value against the schema
+again at runtime; the declaration remains the schema check. With the default
+schema, `input` is `{"request": "..."}`. When the wrapped Agent declares an
+input schema, `input` follows that schema, including any `$defs`:
 
-- Continuity across turns and nodes is limited by successful parent Session
-  persistence and by the parent Session's event retention window. **That window
-  is shared by the parent conversation and every branch**, so a long parent
-  Session can push older branch events out of retrieval. Size
-  `WithSessionEventLimit` on the session service accordingly.
-- Filter keys isolate event history, not Session State. Every branch still
-  shares the parent Session's State map. If the wrapped agent writes
-  conversation-local state, namespace those keys with
-  `agenttool.ThreadIDFromContext`.
-- Branches have no independent lifecycle: no TTL, no list, no delete. They live
-  and die with the parent Session.
-- The parent invocation Session is required. There is no isolated in-memory
-  runner fallback.
+```go
+planner := llmagent.New(
+    "planner",
+    llmagent.WithModel(m),
+    llmagent.WithInputSchema(map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "goal": map[string]any{"type": "string"},
+        },
+        "required": []any{"goal"},
+    }),
+)
+plannerTool := agenttool.NewTool(planner, agenttool.WithResumableSubAgents())
+// Model-facing input: {"subagent_id"?: string, "input": {"goal": string}}
+```
 
-**Concurrency and integration**
+Every call returns an `agenttool.SubAgentResult`:
 
-- Different thread IDs may run concurrently. Same-thread calls are serialized by
-  a per-`Tool` in-process guard only; there is no cross-node mutual exclusion.
-- Nested ordinary `NewTool` calls made by the wrapped agent keep their own
-  independent filter keys; they do not inherit the branch key.
-- `StreamableCall` delegates to `Call` and emits exactly one
-  `tool.FinalResultChunk` envelope (no inner events).
-- `output` is always a string. The child call path collects assistant text and
-  does not preserve a custom agent `OutputSchema` type.
-- Graph `CallWithAgentToolGraphRuntime` uses this envelope path and does not
-  participate in graph checkpoint state or interrupt resume. A child graph
-  interrupt is reported as a failed envelope with `retryable: false`, whether
-  the wrapped agent returns the interrupt as an error or only signals it
-  through a graph executor event. The event-signalled form is only observable
-  through those events, so a thread call always enables them for the child run;
-  a caller that passed `agent.WithDisableGraphExecutorEvents(true)` still gets
-  the failed envelope, and the internal `graph.*` events are not mirrored into
-  the shared Session.
-- `retryable` is omitted when retryability is unknown. It is `false` for
-  permanent validation failures (invalid input or thread ID, unknown thread,
-  missing parent Session, unsupported graph interrupt) and `true` for context
-  cancellation, deadlines, and session flush failures. Ordinary child agent
-  failures omit it.
-- Wrapped agents keep the existing `agent.Agent` interface. Read
-  `agenttool.ThreadIDFromContext` if the child needs the branch ID; it reports
-  the nearest enclosing `NewThreadTool` invocation. Full restoration requires the
-  wrapped agent to consume Session history or map this ID to a provider
-  conversation ID. Implementations must be concurrency-safe and must not keep
-  conversation-local state across calls.
-- `WithThreadNamespace` applies only to `NewThreadTool`; `NewTool` and
-  `NewDynamicTool` ignore it. It does not change the model-facing tool name. The
-  namespace defaults to the wrapped agent's name and must match
-  `^[A-Za-z0-9_-]+$`; `NewThreadTool` panics on an invalid namespace rather than
-  rewriting it, because a lossy rewrite could silently merge two namespaces.
+```json
+{"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "status": "completed", "output": "ACME reported ..."}
+{"status": "failed", "error": "unknown subagent_id: ...", "retryable": false}
+```
+
+- `status` is `completed` or `failed` and describes this call only. A subagent
+  whose call completed can still be continued; there is no closed state.
+- `output` is always a string: the assistant text the wrapped Agent produced in
+  this call, collected according to `WithResponseMode`. It may be empty. An
+  Agent with an object `OutputSchema` still yields text, typically its JSON.
+- `error` describes the failure. Most failures, including invalid arguments,
+  unknown IDs, a missing parent Session, and wrapped Agent errors, are returned
+  as a `failed` result rather than as a Go error.
+- `retryable` is `false` when retrying the same arguments cannot help (invalid
+  arguments, unknown IDs, missing parent Session, graph interrupts), `true` for
+  cancellation, deadlines, and Session flush failures, and omitted when unknown,
+  which includes ordinary wrapped Agent failures.
+  If the wrapped Agent closes its event stream because the call context is
+  canceled or reaches its deadline, and it has not produced a normal completion
+  or an earlier error, the call fails with `retryable: true`. A normal
+  completion that was already observed stays `completed` when cancellation
+  follows: an LLM final response, including one whose assistant text is empty,
+  or a graph completion snapshot of the wrapped Agent itself. Completion of a
+  nested Agent does not complete the outer call. Partial output alone is not completion. A
+  graph interrupt still takes precedence and stays `retryable: false`.
+
+#### Starting and continuing subagents
+
+The first call starts a subagent and completes. A later call with the returned
+ID continues the same subagent:
+
+```text
+call 1: {"input": {"request": "Find ACME's 2024 revenue."}}
+     -> {"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "status": "completed", "output": "ACME reported ..."}
+call 2: {"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "input": {"request": "Compare it with 2023."}}
+     -> {"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "status": "completed", "output": "Compared with 2023 ..."}
+```
+
+Call 2 runs the wrapped Agent again with call 1's input and answer in its
+history, followed by the new input. Each call appends to the subagent's history;
+nothing is replaced or retried.
+
+The model can keep several subagents of the same Agent by keeping their IDs
+apart:
+
+```text
+{"input": {"request": "Research ACME."}}    -> subagent_id "9c1e67b10a534f84a6d03752ea619cb3"
+{"input": {"request": "Research Globex."}}  -> subagent_id "4b7d612fab1841a3ad69f23c83ed740a"
+{"subagent_id": "9c1e67b10a534f84a6d03752ea619cb3", "input": {"request": "List ACME's main risks."}}
+```
+
+Under the default branch filter, each subagent's history contains only its own
+events, and the root Agent's history contains no subagent events.
+`BranchFilterModeAll` or an empty filter key on the root Agent would include
+them.
+
+ID rules:
+
+- An omitted, `null`, or blank `subagent_id` starts a new subagent with a
+  generated opaque ID.
+- A supplied ID must match `^[A-Za-z0-9_-]{8,128}$` and have saved history in
+  the parent Session. Invalid and unknown IDs fail with `retryable: false` and
+  are never created implicitly.
+- A result includes `subagent_id` only when the parent Session holds events for
+  that subagent when the call returns. Results for invalid or unknown IDs, for
+  failures before the call could run, and for new subagents that failed before
+  anything was saved carry no ID. Only `status` is always present.
+- A returned ID confirms that history exists when the call returns. Later
+  calls require that history to remain available; after a restart, the
+  SessionService must also have persisted those events.
+
+#### Namespace
+
+History is saved in the parent Session under the event-filter key
+`agenttool:<namespace>:thread:<id>`. The namespace defaults to the wrapped
+Agent's name, so renaming the Agent makes earlier IDs unknown. Set a stable
+namespace to keep them reachable, or to keep two tools whose Agents share a name
+from sharing subagents:
+
+```go
+researcher := agenttool.NewTool(
+    researchAgent,
+    agenttool.WithResumableSubAgents(),
+    agenttool.WithSubAgentNamespace("research-v1"),
+)
+```
+
+- The namespace must match `^[A-Za-z0-9_-]+$` and is used exactly as given; it
+  is never trimmed or rewritten. `NewTool` panics on an invalid namespace, and on
+  a default Agent name that does not match.
+- Tools with the same namespace share subagents within one Session.
+- `WithSubAgentNamespace` without `WithResumableSubAgents` panics, so a
+  forgotten option is not silently ignored.
+- The namespace does not change the model-facing tool name.
+
+#### Configuration conflicts
+
+A resumable tool keeps one history per subagent, so `NewTool` panics when
+`WithResumableSubAgents` is combined with `WithPersistentHistory`,
+`WithPersistentHistoryKey`, `WithPersistentHistoryKeyFunc`, or
+`WithHistoryScope(HistoryScopeParentBranch)`, in any option order. An explicit
+`WithHistoryScope(HistoryScopeIsolated)` is allowed. `NewDynamicTool` panics
+when `WithResumableSubAgents` or `WithSubAgentNamespace` is set.
+
+History saved by `WithPersistentHistory*`, for example under
+`agenttool:<toolName>:default`, is not migrated. A tool that switches to
+resumable subagents starts without any subagents.
+
+#### Storage, State, and concurrency
+
+- A call requires the parent invocation Session and fails without one; there is
+  no in-memory fallback. No separate Session, table, or registry is created per
+  subagent.
+- Event history is separated per subagent; Session State is not. All subagents
+  read and write the same parent Session State. If the wrapped Agent keeps
+  per-conversation state there, include `agenttool.SubAgentIDFromContext(ctx)` in
+  its keys.
+- The parent conversation and all subagents share one Session event retention
+  window, such as `WithSessionEventLimit`, so a long Session can push older
+  subagent events out of retrieval. Subagents have no separate TTL, list, or
+  delete; they live and die with the parent Session.
+- Calls for the same subagent on one `Tool` run one at a time. A waiting call
+  gives up with `retryable: true` when its context is done. This guard is
+  in-process only and does not coordinate across processes or nodes. Calls for
+  different subagents may run concurrently.
+- All subagents share the wrapped Agent object, which may run concurrently for
+  different IDs. It must be safe for concurrent use and must not keep
+  conversation state in its own fields.
+
+#### Interrupted calls and Runner resume
+
+A call saves events as the wrapped Agent produces them; it is not saved
+atomically.
+
+- If a call fails or is cancelled midway, its partial events stay in the
+  subagent's history and the next call continues after them. Orphaned tool calls
+  are sanitized only so that the next model request stays valid; nothing is
+  replaced or rolled back.
+- If the parent run stops before the tool result reaches the parent Session, the
+  model may never receive a new `subagent_id`. The subagent's events stay in the
+  Session but cannot be addressed; there is no pre-created ID or call registry
+  to recover it.
+- `WithResumableSubAgents` does not enable `agent.WithResume`. When the caller
+  enables it, each Agent only resumes unanswered tool calls that end its own
+  branch history, never those of another Agent or subagent. The wrapped Agent
+  may therefore run unanswered tool calls left at the end of the subagent's
+  history before handling the new input, and the parent may run a pending call
+  to this tool again. In both cases tool side effects can happen twice.
+
+#### Streaming and graphs
+
+- Calls are synchronous. `StreamableCall` sends only the final `SubAgentResult`
+  as a `tool.FinalResultChunk` and does not forward inner events, even with
+  `WithStreamInner(true)`.
+- Graph checkpoints and interrupt resume are not supported. A graph interrupt in
+  the wrapped Agent fails the call with `retryable: false`, whether the Agent
+  returns the interrupt as an error or only signals it through graph executor
+  events. To see the event form, a call enables graph executor events for the
+  wrapped Agent's run; when the caller disabled them with
+  `agent.WithDisableGraphExecutorEvents(true)`, they are kept out of the shared
+  Session. `CallWithAgentToolGraphRuntime` returns the same result and does not
+  participate in graph checkpoint state. Ordinary `NewTool` graph behavior is
+  unchanged.
+- Parent graph checkpoint and interrupt-resume values in `RunOptions.RuntimeState`
+  do not propagate into the subagent run. The omitted keys are lineage ID,
+  checkpoint ID (an empty value still counts, because its presence requests
+  resume), checkpoint namespace, command, direct resume, resume map, used
+  interrupts, and subgraph interrupt state. Other runtime values still
+  propagate. Filtering uses a new top-level map and does not modify the parent
+  map; business values, including nested maps, retain their existing sharing.
+  This is not deep state isolation. `RunOptions.Resume`, which resumes pending tool calls, is
+  separate and is left unchanged. Both `Call` and `CallWithAgentToolGraphRuntime`
+  follow this boundary. Ordinary `NewTool` graph execution still receives the
+  parent runtime state.
+
+#### Agents with their own conversation state
+
+The framework restores a subagent only by sending its saved history to the
+wrapped Agent. Agents that keep conversation state elsewhere do not see subagent
+boundaries by themselves. For example, a remote A2A Agent receives the parent
+Session ID as its context ID, so all of its subagents would share one remote
+conversation. Such Agents must rely on the history the framework sends, or map
+`agenttool.SubAgentIDFromContext(ctx)` to their own conversation IDs.
+
+`SubAgentIDFromContext` reports the nearest enclosing resumable call. A nested
+ordinary AgentTool sees the enclosing ID but keeps its own history, and a nested
+resumable AgentTool reports its own ID during its call.
 
 ### Dynamic AgentTool
 
@@ -2079,7 +2259,7 @@ Dynamic AgentTool has a different boundary from the other multi-Agent mechanisms
 | Mechanism | What the model chooses | Lifetime | Control |
 | --- | --- | --- | --- |
 | `agenttool.NewTool(agent)` | one fixed tool entrypoint | per tool call | returns a tool result to the parent Agent |
-| `agenttool.NewThreadTool(agent)` | a fixed tool entrypoint plus optional `thread_id` | per tool call, appending to one conversation branch of the parent Session | returns a `{thread_id?, status, output?, error?, retryable?}` envelope, where only `status` is always present |
+| `agenttool.NewTool(agent, agenttool.WithResumableSubAgents())` | a fixed tool entrypoint plus an optional `subagent_id` | per tool call; a subagent's history stays in the parent Session and later calls can continue it | returns a `SubAgentResult` `{subagent_id?, status, output?, error?, retryable?}`, where only `status` is always present |
 | `transfer_to_agent` | one registered sub-agent | target Agent continues the current turn | hands off control |
 | `agenttool.NewDynamicTool()` | `request`, `instruction`, a tools/skills subset, and optionally one registered model profile for this call | per tool call | returns a tool result to the parent Agent |
 

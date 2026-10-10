@@ -457,11 +457,11 @@ func flowEventWaitTimeout(ctx context.Context) time.Duration {
 	return eventCompletionTimeout
 }
 
-// maybeResumePendingToolCalls inspects the latest session events and, when
-// RunOptions.Resume is enabled, executes any pending tool calls before the
-// next LLM request. A pending tool call is defined as the latest persisted
-// event being an assistant response that contains tool calls but no tool
-// results after it.
+// maybeResumePendingToolCalls inspects the invocation's latest session event
+// and, when RunOptions.Resume is enabled, executes any pending tool calls
+// before the next LLM request. A pending tool call is defined as the latest
+// persisted event of the invocation's own branch being an assistant response
+// that contains tool calls but no tool results after it.
 func (f *Flow) maybeResumePendingToolCalls(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -486,18 +486,7 @@ func (f *Flow) maybeResumePendingToolCalls(
 		return
 	}
 
-	invocation.Session.EventMu.RLock()
-	events := invocation.Session.Events
-	var lastResp *model.Response
-	if len(events) > 0 {
-		last := events[len(events)-1]
-		if last.Response != nil && !last.IsPartial &&
-			last.IsValidContent() && last.Response.IsToolCallResponse() {
-			lastResp = last.Response
-		}
-	}
-	invocation.Session.EventMu.RUnlock()
-
+	lastResp := pendingToolCallResponse(invocation)
 	if lastResp == nil {
 		return
 	}
@@ -514,6 +503,55 @@ func (f *Flow) maybeResumePendingToolCalls(
 			break
 		}
 	}
+}
+
+// pendingToolCallResponse returns the tool-call response that is the latest
+// event of the invocation's own branch, or nil when that event is anything
+// else.
+//
+// Child invocations share the Session and inherit RunOptions.Resume, so the
+// latest Session event may belong to another branch. Judging by it would
+// replay another agent's tool calls, or miss this invocation's own pending
+// calls whenever another branch wrote last. A branch is identified by its
+// exact filter key rather than the prefix match used for history, because a
+// parent and its children share key prefixes but never their tool calls.
+// Unkeyed history can be visible in every branch, but that does not assign
+// its tool calls to every executor. Only the default root invocation can
+// resume its own unkeyed events, preserving legacy root-session behavior.
+func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
+	filterKey := invocation.GetEventFilterKey()
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	events := invocation.Session.Events
+	for i := len(events) - 1; i >= 0; i-- {
+		evt := &events[i]
+		if !isBranchEvent(evt, invocation, filterKey) {
+			continue
+		}
+		if evt.Response != nil && !evt.IsPartial &&
+			evt.IsValidContent() && evt.Response.IsToolCallResponse() {
+			return evt.Response
+		}
+		return nil
+	}
+	return nil
+}
+
+func isBranchEvent(evt *event.Event, invocation *agent.Invocation, filterKey string) bool {
+	eventKey := evt.FilterKey
+	if evt.Version != event.CurrentVersion {
+		eventKey = evt.Branch
+	}
+	if filterKey == "" {
+		return true
+	}
+	if eventKey != "" {
+		return eventKey == filterKey
+	}
+	if invocation.GetParentInvocation() != nil || evt.Author != invocation.AgentName {
+		return false
+	}
+	return filterKey == invocation.AgentName || filterKey == invocation.Session.AppName
 }
 
 func (f *Flow) maybeSyncSummaryIntraRun(

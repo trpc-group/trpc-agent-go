@@ -43,9 +43,9 @@ func (at *Tool) CallWithAgentToolGraphRuntime(
 		return at.callDynamic(ctx, jsonArgs)
 	}
 	if at.thread {
-		// Thread tools stay on the envelope call-return path: they own their
-		// branch filter key and do not participate in graph checkpoint state
-		// or interrupt resume.
+		// Resumable subagent calls stay on the SubAgentResult call-return
+		// path: they own their history key and do not participate in graph
+		// checkpoint state or interrupt resume.
 		if runtime.ParentInvocation != nil {
 			ctx = coreagent.NewInvocationContext(ctx, runtime.ParentInvocation)
 		}
