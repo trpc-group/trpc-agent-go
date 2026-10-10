@@ -25,6 +25,8 @@ const (
 	OperationWorkflow SpanOperation = itelemetry.OperationWorkflow
 	// OperationExecuteTool is the tool execution operation.
 	OperationExecuteTool SpanOperation = itelemetry.OperationExecuteTool
+	// OperationInvokeSkill is the skill activation/materialization operation.
+	OperationInvokeSkill SpanOperation = itelemetry.OperationInvokeSkill
 )
 
 // AttributeKey identifies a span attribute key for policy rules.
@@ -43,6 +45,10 @@ const (
 	AttrOutputMessages AttributeKey = semconvtrace.KeyGenAIOutputMessages
 	// AttrOutputMessagesOTel is the OTel output messages attribute key.
 	AttrOutputMessagesOTel AttributeKey = semconvtrace.KeyGenAIOutputMessagesOTel
+	// AttrInvokeSkillRequest is the invoke skill request attribute key.
+	AttrInvokeSkillRequest AttributeKey = semconvtrace.KeyGenAIInvokeSkillRequest
+	// AttrInvokeSkillResponse is the invoke skill response attribute key.
+	AttrInvokeSkillResponse AttributeKey = semconvtrace.KeyGenAIInvokeSkillResponse
 )
 
 // SpanAttributePolicy controls production-side span attribute behavior.
