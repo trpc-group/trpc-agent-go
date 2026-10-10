@@ -8412,6 +8412,41 @@ func TestSandboxProfileAndBackendConfigBranches(t *testing.T) {
 	)
 	require.True(t, enabledRuntime.Describe().NetworkAllowed)
 
+	// The default granted mode hides ungranted host files; host mode does not.
+	hostFile := filepath.Join(t.TempDir(), "host.txt")
+	require.NoError(t, os.WriteFile(hostFile, []byte("host"), 0o644))
+	for _, tc := range []struct {
+		profile  string
+		readMode string
+		readable bool
+	}{
+		{profile: sandboxProfileWorkspaceWrite, readMode: "", readable: false},
+		{profile: sandboxProfileWorkspaceWrite, readMode: sandboxReadModeGranted, readable: false},
+		{profile: sandboxProfileWorkspaceWrite, readMode: sandboxReadModeHost, readable: true},
+		{profile: sandboxProfileReadOnly, readMode: "", readable: false},
+		{profile: sandboxProfileReadOnly, readMode: sandboxReadModeGranted, readable: false},
+		{profile: sandboxProfileReadOnly, readMode: sandboxReadModeHost, readable: true},
+	} {
+		profile := sandboxPermissionProfileFromConfig(sandboxCodeExecutorOptions{
+			Profile:  tc.profile,
+			ReadMode: tc.readMode,
+		})
+		// Grant the staging destination to test source reads for both profiles.
+		profile = profile.WithWritePaths("work")
+		rt := sandboxexec.NewRuntime(
+			sandboxexec.WithWorkspaceRoot(t.TempDir()),
+			sandboxexec.WithPermissionProfile(profile),
+		)
+		ws, err := rt.CreateWorkspace(context.Background(), "read-mode", codeexecutor.WorkspacePolicy{})
+		require.NoError(t, err)
+		err = rt.StageDirectory(context.Background(), ws, hostFile, "work/host.txt", codeexecutor.StageOptions{})
+		if tc.readable {
+			require.NoError(t, err, "profile=%q read_mode=%q", tc.profile, tc.readMode)
+		} else {
+			require.ErrorContains(t, err, string(sandboxexec.ErrPathDenied), "profile=%q read_mode=%q", tc.profile, tc.readMode)
+		}
+	}
+
 	disabled := sandboxPermissionProfileFromConfig(sandboxCodeExecutorOptions{
 		Profile: sandboxProfileDisabled,
 		Network: sandboxNetworkRestricted,

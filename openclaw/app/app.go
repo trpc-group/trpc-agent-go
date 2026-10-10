@@ -3338,6 +3338,11 @@ func sandboxPermissionProfileFromConfig(
 			Mode: sandboxexec.NetworkRestricted,
 		})
 	}
+	if strings.ToLower(strings.TrimSpace(cfg.ReadMode)) == sandboxReadModeHost {
+		profile = profile.WithReadMode(sandboxexec.ReadModeHost)
+	} else {
+		profile = profile.WithReadMode(sandboxexec.ReadModeGranted)
+	}
 	return profile
 }
 

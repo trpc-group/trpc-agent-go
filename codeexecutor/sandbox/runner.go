@@ -228,6 +228,9 @@ func (r *Runtime) prepareRun(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
+	if err := validateReadMode(profile); err != nil {
+		return runPreparation{}, err
+	}
 	if err := validateProfileNetworkPolicy(profile); err != nil {
 		return runPreparation{}, err
 	}
