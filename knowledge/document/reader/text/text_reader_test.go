@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -373,6 +374,30 @@ func TestTextReader_ExtractFileNameFromURL(t *testing.T) {
 			result := rdr.extractFileNameFromURL(tt.url)
 			if result != tt.expected {
 				t.Errorf("extractFileNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestTextReader_ReadFromURLRejectsNonOKStatus verifies that an HTTP error page is
+// reported as an error instead of being read as document content.
+func TestTextReader_ReadFromURLRejectsNonOKStatus(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, http.StatusText(status), status)
+			}))
+			defer srv.Close()
+
+			docs, err := New().ReadFromURL(srv.URL + "/file.txt")
+			if err == nil {
+				t.Fatalf("expected an error for HTTP %d, got %d documents", status, len(docs))
+			}
+			if !strings.Contains(err.Error(), strconv.Itoa(status)) {
+				t.Errorf("expected the error to name HTTP %d, got %v", status, err)
+			}
+			if docs != nil {
+				t.Errorf("expected no documents, got %d", len(docs))
 			}
 		})
 	}
