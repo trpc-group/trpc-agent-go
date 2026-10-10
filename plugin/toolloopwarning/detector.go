@@ -28,34 +28,69 @@ type roundFingerprint struct {
 	ToolCalls []callFingerprint `json:"tool_calls"`
 }
 
+type actionFingerprint struct {
+	ToolCalls []actionCallFingerprint `json:"tool_calls"`
+}
+
 type callFingerprint struct {
 	ToolName  string        `json:"tool_name"`
 	Arguments string        `json:"arguments"`
 	Result    model.Message `json:"result"`
 }
 
+type actionCallFingerprint struct {
+	ToolName  string `json:"tool_name"`
+	Arguments string `json:"arguments"`
+}
+
 func matchingTrailingRoundFingerprint(
 	messages []model.Message,
 	excludedToolNames map[string]struct{},
 ) (string, bool) {
-	latest, latestStart, ok := parseTrailingToolRound(messages, len(messages))
+	latest, ok := matchingTrailingRound(messages, excludedToolNames)
 	if !ok {
-		return "", false
-	}
-	previous, _, ok := parseTrailingToolRound(messages, latestStart)
-	if !ok || roundContainsExcludedTool(latest, excludedToolNames) ||
-		roundContainsExcludedTool(previous, excludedToolNames) {
 		return "", false
 	}
 	latestFingerprint, ok := fingerprintRound(latest.toolCalls, latest.results)
 	if !ok {
 		return "", false
 	}
-	previousFingerprint, ok := fingerprintRound(previous.toolCalls, previous.results)
-	if !ok || latestFingerprint != previousFingerprint {
+	return latestFingerprint, true
+}
+
+func matchingTrailingActionFingerprint(
+	messages []model.Message,
+	excludedToolNames map[string]struct{},
+) (string, bool) {
+	latest, ok := matchingTrailingRound(messages, excludedToolNames)
+	if !ok {
 		return "", false
 	}
-	return latestFingerprint, true
+	return fingerprintToolCalls(latest.toolCalls)
+}
+
+func matchingTrailingRound(
+	messages []model.Message,
+	excludedToolNames map[string]struct{},
+) (toolRound, bool) {
+	latest, latestStart, ok := parseTrailingToolRound(messages, len(messages))
+	if !ok {
+		return toolRound{}, false
+	}
+	previous, _, ok := parseTrailingToolRound(messages, latestStart)
+	if !ok || roundContainsExcludedTool(latest, excludedToolNames) ||
+		roundContainsExcludedTool(previous, excludedToolNames) {
+		return toolRound{}, false
+	}
+	latestFingerprint, ok := fingerprintRound(latest.toolCalls, latest.results)
+	if !ok {
+		return toolRound{}, false
+	}
+	previousFingerprint, ok := fingerprintRound(previous.toolCalls, previous.results)
+	if !ok || latestFingerprint != previousFingerprint {
+		return toolRound{}, false
+	}
+	return latest, true
 }
 
 func parseTrailingToolRound(
@@ -186,6 +221,30 @@ func fingerprintRound(
 				canonicalArguments(toolCall.Function.Arguments),
 			),
 			Result: boundedResultMessage(toolResultMessages[i]),
+		})
+	}
+	encoded, err := json.Marshal(fingerprint)
+	if err != nil {
+		return "", false
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), true
+}
+
+func fingerprintToolCalls(toolCalls []model.ToolCall) (string, bool) {
+	if len(toolCalls) == 0 {
+		return "", false
+	}
+	fingerprint := actionFingerprint{
+		ToolCalls: make([]actionCallFingerprint, 0, len(toolCalls)),
+	}
+	for _, toolCall := range toolCalls {
+		if toolCall.Function.Name == "" {
+			return "", false
+		}
+		fingerprint.ToolCalls = append(fingerprint.ToolCalls, actionCallFingerprint{
+			ToolName:  toolCall.Function.Name,
+			Arguments: canonicalArguments(toolCall.Function.Arguments),
 		})
 	}
 	encoded, err := json.Marshal(fingerprint)
