@@ -396,7 +396,7 @@ func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
 	require.Contains(t, req.Tools, "t1")
 }
 
-func TestPreprocess_DowngradesOrphanToolCallBeforeModel(t *testing.T) {
+func TestPreprocess_PairsOrphanToolCallBeforeModel(t *testing.T) {
 	modelStub := &mockModel{
 		responses: []*model.Response{
 			{
@@ -446,14 +446,17 @@ func TestPreprocess_DowngradesOrphanToolCallBeforeModel(t *testing.T) {
 
 	captured := modelStub.LastRequest()
 	require.NotNil(t, captured)
-	require.Len(t, captured.Messages, 3)
+	require.Len(t, captured.Messages, 4)
 	require.Equal(t, model.RoleUser, captured.Messages[0].Role)
 	require.Equal(t, "read file", captured.Messages[0].Content)
-	require.Equal(t, model.RoleUser, captured.Messages[1].Role)
-	require.Contains(t, captured.Messages[1].Content, "[orphan_tool_call]")
-	require.Empty(t, captured.Messages[1].ToolCalls)
-	require.Equal(t, model.RoleUser, captured.Messages[2].Role)
-	require.Equal(t, "retry", captured.Messages[2].Content)
+	require.Equal(t, model.RoleAssistant, captured.Messages[1].Role)
+	require.Len(t, captured.Messages[1].ToolCalls, 1)
+	require.Equal(t, "call_orphan", captured.Messages[1].ToolCalls[0].ID)
+	require.Equal(t, model.RoleTool, captured.Messages[2].Role)
+	require.Equal(t, "call_orphan", captured.Messages[2].ToolID)
+	require.Contains(t, captured.Messages[2].Content, "[interrupted_tool_call]")
+	require.Equal(t, model.RoleUser, captured.Messages[3].Role)
+	require.Equal(t, "retry", captured.Messages[3].Content)
 }
 
 func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
