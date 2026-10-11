@@ -37,10 +37,10 @@ func (s *SessionService) readTrackEvents(ctx context.Context, key session.Key, t
 						return session.ErrTrackCursorInvalid
 					}
 					position.Generation = stored.trackGeneration
-					var count int
+					var count uint64
 					if events := snapshot.Tracks[track]; events != nil {
-						count = len(events.Events)
-						if position.Position > uint64(count) {
+						count = uint64(len(events.Events))
+						if position.Position > count {
 							return session.ErrTrackCursorInvalid
 						}
 						events.Events = events.Events[position.Position:]
@@ -50,7 +50,7 @@ func (s *SessionService) readTrackEvents(ctx context.Context, key session.Key, t
 					} else if position.Position != 0 {
 						return session.ErrTrackCursorInvalid
 					}
-					position.Position = uint64(count)
+					position.Position = count
 					return nil
 				})
 			if err != nil {
