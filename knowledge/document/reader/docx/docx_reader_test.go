@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -292,4 +293,28 @@ func createDocxWithMultipleParagraphs(t *testing.T, paragraphs []string) []byte 
 	require.NoError(t, err)
 
 	return buf.Bytes()
+}
+
+// TestDOCXReader_ReadFromURLRejectsNonOKStatus verifies that an HTTP error page is
+// reported as an error instead of being read as document content.
+func TestDOCXReader_ReadFromURLRejectsNonOKStatus(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, http.StatusText(status), status)
+			}))
+			defer srv.Close()
+
+			docs, err := New().ReadFromURL(srv.URL + "/document.docx")
+			if err == nil {
+				t.Fatalf("expected an error for HTTP %d, got %d documents", status, len(docs))
+			}
+			if !strings.Contains(err.Error(), strconv.Itoa(status)) {
+				t.Errorf("expected the error to name HTTP %d, got %v", status, err)
+			}
+			if docs != nil {
+				t.Errorf("expected no documents, got %d", len(docs))
+			}
+		})
+	}
 }
