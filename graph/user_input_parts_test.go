@@ -21,12 +21,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestRetainTypedUserMessage(t *testing.T) {
+func TestMatchesPartsUserInputOrigin(t *testing.T) {
 	hello, world := "hello", "world"
 	image, file := imagePart(), filePart()
 	original := hello + "\n" + world
 	saved := State{partsuserinput.Key: original}
-	merged := userMsg("first", textPart("annotation"), textPart(hello), textPart(world), file)
 	liveOther := State{
 		partsuserinput.Key: original,
 		StateKeyExecContext: &ExecutionContext{
@@ -39,80 +38,63 @@ func TestRetainTypedUserMessage(t *testing.T) {
 	tests := []struct {
 		name      string
 		state     State
-		last      model.Message
 		userInput string
 		want      bool
 	}{
 		{
 			name:  "empty user input",
 			state: saved,
-			last:  userMsg("", textPart(hello)),
-		},
-		{
-			name:      "last without content parts",
-			state:     saved,
-			last:      model.NewUserMessage(original),
-			userInput: original,
 		},
 		{
 			name:      "missing origin keeps legacy text override",
 			state:     invState(userMsg("", textPart(hello), textPart(world), file)),
-			last:      merged,
 			userInput: original,
 		},
 		{
 			name:      "empty origin is ignored",
 			state:     State{partsuserinput.Key: ""},
-			last:      userMsg("", textPart(hello), image),
 			userInput: hello,
 		},
 		{
 			name:      "non-string origin is ignored",
 			state:     State{partsuserinput.Key: 1},
-			last:      userMsg("", textPart(hello), image),
 			userInput: hello,
 		},
 		{
-			name:      "unchanged original keeps typed message",
+			name:      "unchanged original matches",
 			state:     saved,
-			last:      merged,
 			userInput: original,
 			want:      true,
 		},
 		{
 			name:      "saved origin overrides a different live invocation",
 			state:     liveOther,
-			last:      merged,
 			userInput: original,
 			want:      true,
 		},
 		{
 			name:      "live invocation cannot make a rewrite match",
 			state:     liveOther,
-			last:      userMsg("", textPart(hello), image),
 			userInput: "other",
 		},
 		{
-			name:      "partial text is not the original",
+			name:      "partial input is not the original",
 			state:     saved,
-			last:      userMsg("", textPart("annotation"), textPart(hello), textPart(world), file),
 			userInput: hello,
 		},
 		{
 			name:      "rewritten input falls through",
 			state:     saved,
-			last:      userMsg("", textPart(hello), image),
 			userInput: "rewritten",
 		},
 		{
 			name:      "nil state",
-			last:      userMsg("", textPart(hello), image),
 			userInput: hello,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, retainTypedUserMessage(tt.state, tt.last, tt.userInput))
+			require.Equal(t, tt.want, matchesPartsUserInputOrigin(tt.state, tt.userInput))
 		})
 	}
 }

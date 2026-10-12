@@ -2501,6 +2501,120 @@ func TestGraphAgent_RunSessionContentPartsReachLLM(t *testing.T) {
 	}
 }
 
+func TestGraphAgent_RunEventProjectedContentPartsPreservesUserMessage(t *testing.T) {
+	const (
+		agentName    = "test-agent"
+		invocationID = "inv-current"
+		requestID    = "request-current"
+		original     = "hello"
+		projected    = "projected hello"
+	)
+	imageURL := "https://example.invalid/image.png"
+	current := contentPartsUserMessage(original, imageURL)
+	for _, tt := range []struct {
+		name       string
+		merge      bool
+		stripParts bool
+		want       string
+	}{
+		{
+			name:  "synthetic error merge keeps projected current user text",
+			merge: true,
+			want:  "first\n\n" + projected,
+		},
+		{
+			name:       "content-only projector result without merge is retained",
+			stripParts: true,
+			want:       projected,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := make(chan []model.Message, 1)
+			var durableUser model.Message
+			recording := &requestRecordingGraphAgentModel{requests: requests}
+			stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
+				AddLLMNode("llm", recording, "", nil).
+				AddNode("capture", func(_ context.Context, state graph.State) (any, error) {
+					durableUser = lastUserMessage(state)
+					return nil, nil
+				}).
+				AddEdge("llm", "capture").
+				SetEntryPoint("llm").
+				SetFinishPoint("capture")
+			g, err := stateGraph.Compile()
+			require.NoError(t, err)
+
+			projector := func(_ *agent.Invocation, evt event.Event, msg model.Message) model.Message {
+				if evt.InvocationID == invocationID && msg.Role == model.RoleUser {
+					msg.Content = projected
+					if tt.stripParts {
+						msg.ContentParts = nil
+					}
+				}
+				return msg
+			}
+			graphAgent, err := New(
+				agentName,
+				g,
+				WithEventMessageProjector(projector),
+			)
+			require.NoError(t, err)
+
+			events := make([]event.Event, 0, 3)
+			if tt.merge {
+				first := event.NewResponseEvent("inv-first", "user", &model.Response{
+					Done:    true,
+					Choices: []model.Choice{{Message: model.NewUserMessage("first")}},
+				})
+				first.RequestID = "request-first"
+				first.FilterKey = agentName
+				events = append(events, *first)
+
+				synthetic := event.NewErrorEvent(
+					"inv-first",
+					agentName,
+					model.ErrorTypeFlowError,
+					"boom",
+				)
+				synthetic.RequestID = "request-first"
+				synthetic.FilterKey = agentName
+				synthetic.Response.Choices = []model.Choice{{
+					Message: model.NewAssistantMessage(errorcontent.FallbackMessage),
+				}}
+				errorcontent.MarkSynthetic(synthetic)
+				events = append(events, *synthetic)
+			}
+			currentEvent := event.NewResponseEvent(invocationID, "user", &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: current}},
+			})
+			currentEvent.RequestID = requestID
+			currentEvent.FilterKey = agentName
+			events = append(events, *currentEvent)
+
+			invocation := agent.NewInvocation(
+				agent.WithInvocationID(invocationID),
+				agent.WithInvocationMessage(current),
+				agent.WithInvocationSession(&session.Session{ID: "sid", Events: events}),
+				agent.WithInvocationEventFilterKey(agentName),
+			)
+			invocation.RunOptions.RequestID = requestID
+			runGraphAgentToCompletion(t, graphAgent, invocation)
+
+			messages := <-requests
+			require.NotEmpty(t, messages)
+			modelUser := messages[len(messages)-1]
+			want := current
+			want.Content = tt.want
+			if tt.stripParts {
+				want.ContentParts = nil
+			}
+			require.Equal(t, want, modelUser)
+			require.Equal(t, want, durableUser)
+		})
+	}
+}
+
 func TestGraphAgent_RunContentPartsRewriteUsesStringOverride(t *testing.T) {
 	const (
 		yes              = "yes"
@@ -2594,74 +2708,84 @@ func TestGraphAgent_RunContentPartsRewriteUsesStringOverride(t *testing.T) {
 		}, durableUser))
 	})
 
-	t.Run("prepared message and custom input send the custom input", func(t *testing.T) {
-		requests := make(chan []model.Message, 1)
-		var durableUser model.Message
-		recordingModel := &requestRecordingGraphAgentModel{requests: requests}
-		current := model.Message{
-			Role: model.RoleUser,
-			ContentParts: []model.ContentPart{
-				{Type: model.ContentTypeText, Text: &originalText},
-				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
-			},
-		}
-		stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
-			AddNode("prepare", func(_ context.Context, state graph.State) (any, error) {
-				messages, _ := graph.GetStateValue[[]model.Message](
-					state,
-					graph.StateKeyMessages,
-				)
-				if len(messages) == 0 || len(messages[len(messages)-1].ContentParts) == 0 {
-					return nil, errors.New("current user message has no content parts")
-				}
-				last := messages[len(messages)-1]
-				last.ContentParts[0] = model.ContentPart{
-					Type: model.ContentTypeText,
-					Text: &preparedText,
-				}
-				messages[len(messages)-1] = last
-				return graph.State{
-					customKey: fromCustom,
-					graph.StateKeyMessages: []graph.MessageOp{
-						graph.RemoveAllMessages{},
-						graph.AppendMessages{Items: messages},
-					},
-				}, nil
-			}).
-			AddLLMNode("llm", recordingModel, "", nil, graph.WithUserInputKey(customKey)).
-			AddNode("capture", func(_ context.Context, state graph.State) (any, error) {
-				durableUser = lastUserMessage(state)
-				return nil, nil
-			}).
-			AddEdge("prepare", "llm").
-			AddEdge("llm", "capture").
-			SetEntryPoint("prepare").
-			SetFinishPoint("capture")
-		g, err := stateGraph.Compile()
-		require.NoError(t, err)
-		graphAgent, err := New("test-agent", g)
-		require.NoError(t, err)
+	for _, tt := range []struct {
+		name        string
+		customInput string
+	}{
+		{name: "changed custom input overrides the prepared message", customInput: fromCustom},
+		{name: "custom input equal to origin still overrides", customInput: originalQuestion},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			customInput := tt.customInput
+			requests := make(chan []model.Message, 1)
+			var durableUser model.Message
+			recordingModel := &requestRecordingGraphAgentModel{requests: requests}
+			current := model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &originalText},
+					{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
+				},
+			}
+			stateGraph := graph.NewStateGraph(graph.MessagesStateSchema()).
+				AddNode("prepare", func(_ context.Context, state graph.State) (any, error) {
+					messages, _ := graph.GetStateValue[[]model.Message](
+						state,
+						graph.StateKeyMessages,
+					)
+					if len(messages) == 0 || len(messages[len(messages)-1].ContentParts) == 0 {
+						return nil, errors.New("current user message has no content parts")
+					}
+					last := messages[len(messages)-1]
+					last.Content = preparedQuestion
+					last.ContentParts[0] = model.ContentPart{
+						Type: model.ContentTypeText,
+						Text: &preparedText,
+					}
+					messages[len(messages)-1] = last
+					return graph.State{
+						customKey: customInput,
+						graph.StateKeyMessages: []graph.MessageOp{
+							graph.RemoveAllMessages{},
+							graph.AppendMessages{Items: messages},
+						},
+					}, nil
+				}).
+				AddLLMNode("llm", recordingModel, "", nil, graph.WithUserInputKey(customKey)).
+				AddNode("capture", func(_ context.Context, state graph.State) (any, error) {
+					durableUser = lastUserMessage(state)
+					return nil, nil
+				}).
+				AddEdge("prepare", "llm").
+				AddEdge("llm", "capture").
+				SetEntryPoint("prepare").
+				SetFinishPoint("capture")
+			g, err := stateGraph.Compile()
+			require.NoError(t, err)
+			graphAgent, err := New("test-agent", g)
+			require.NoError(t, err)
 
-		invocation := agent.NewInvocation(
-			agent.WithInvocationID("inv-current"),
-			agent.WithInvocationMessage(current),
-			agent.WithInvocationSession(&session.Session{ID: "sid"}),
-			agent.WithInvocationEventFilterKey("test-agent"),
-		)
-		invocation.RunOptions.RequestID = "request-current"
-		runGraphAgentToCompletion(t, graphAgent, invocation)
+			invocation := agent.NewInvocation(
+				agent.WithInvocationID("inv-current"),
+				agent.WithInvocationMessage(current),
+				agent.WithInvocationSession(&session.Session{ID: "sid"}),
+				agent.WithInvocationEventFilterKey("test-agent"),
+			)
+			invocation.RunOptions.RequestID = "request-current"
+			runGraphAgentToCompletion(t, graphAgent, invocation)
 
-		messages := <-requests
-		require.Equal(t, []model.Message{model.NewUserMessage(fromCustom)}, messages)
-		require.True(t, model.MessagesEqual(model.Message{
-			Role:    model.RoleUser,
-			Content: fromCustom,
-			ContentParts: []model.ContentPart{
-				{Type: model.ContentTypeText, Text: &preparedText},
-				{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
-			},
-		}, durableUser))
-	})
+			messages := <-requests
+			require.Equal(t, []model.Message{model.NewUserMessage(customInput)}, messages)
+			require.True(t, model.MessagesEqual(model.Message{
+				Role:    model.RoleUser,
+				Content: customInput,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &preparedText},
+					{Type: model.ContentTypeImage, Image: &model.Image{URL: imageB}},
+				},
+			}, durableUser))
+		})
+	}
 }
 
 func TestGraphAgent_ResumeContentPartsUsesSavedOrigin(t *testing.T) {
