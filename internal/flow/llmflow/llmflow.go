@@ -505,9 +505,9 @@ func (f *Flow) maybeResumePendingToolCalls(
 	}
 }
 
-// pendingToolCallResponse returns the tool-call response that is the latest
-// event of the invocation's own branch, or nil when that event is anything
-// else.
+// pendingToolCallResponse returns an owned tool-call response only when the
+// invocation's resume scan stops on that response. It returns nil when the
+// scan reaches a non-executable boundary or no matching event.
 //
 // Child invocations share the Session and inherit RunOptions.Resume, so the
 // latest Session event may belong to another branch. Judging by it would
@@ -515,9 +515,9 @@ func (f *Flow) maybeResumePendingToolCalls(
 // calls whenever another branch wrote last. A branch is identified by its
 // exact filter key rather than the prefix match used for history, because a
 // parent and its children share key prefixes but never their tool calls.
-// Unkeyed history can be visible in every branch, but that does not assign
-// its tool calls to every executor. Only the default root invocation can
-// resume its own unkeyed events, preserving legacy root-session behavior.
+// Scan termination and tool-call ownership are separate: an event can end
+// the scan without being executable. Only an owned assistant tool-call
+// response is resumed.
 func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
 	filterKey := invocation.GetEventFilterKey()
 	invocation.Session.EventMu.RLock()
@@ -525,10 +525,11 @@ func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
 	events := invocation.Session.Events
 	for i := len(events) - 1; i >= 0; i-- {
 		evt := &events[i]
-		if !isBranchEvent(evt, invocation, filterKey) {
+		owned, terminal := classifyBranchEvent(evt, invocation, filterKey)
+		if !terminal {
 			continue
 		}
-		if evt.Response != nil && !evt.IsPartial &&
+		if owned && evt.Response != nil && !evt.IsPartial &&
 			evt.IsValidContent() && evt.Response.IsToolCallResponse() {
 			return evt.Response
 		}
@@ -537,21 +538,47 @@ func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
 	return nil
 }
 
-func isBranchEvent(evt *event.Event, invocation *agent.Invocation, filterKey string) bool {
+// classifyBranchEvent reports resume ownership and whether evt ends the
+// backward scan.
+//
+// A keyed event uses FilterKey, or Branch when Version is not current. It is
+// owned and terminal only on an exact key match. An empty filterKey matches
+// every event and treats each one as owned.
+//
+// An unkeyed event is not a barrier for a child or for any other filter key,
+// so those invocations keep scanning for their own pending call. On the
+// default root (no parent, and filterKey is the agent name or the session app
+// name) every unkeyed event is terminal, because that history is visible to
+// the root. It is owned only when its author is the agent, so a later unkeyed
+// user message or another author's tool result stops the scan without
+// replaying an older tool call.
+func classifyBranchEvent(
+	evt *event.Event,
+	invocation *agent.Invocation,
+	filterKey string,
+) (owned bool, terminal bool) {
 	eventKey := evt.FilterKey
 	if evt.Version != event.CurrentVersion {
 		eventKey = evt.Branch
 	}
 	if filterKey == "" {
-		return true
+		return true, true
 	}
 	if eventKey != "" {
-		return eventKey == filterKey
+		match := eventKey == filterKey
+		return match, match
 	}
-	if invocation.GetParentInvocation() != nil || evt.Author != invocation.AgentName {
-		return false
+	if invocation.GetParentInvocation() != nil {
+		return false, false
 	}
-	return filterKey == invocation.AgentName || filterKey == invocation.Session.AppName
+	appName := ""
+	if invocation.Session != nil {
+		appName = invocation.Session.AppName
+	}
+	if filterKey != invocation.AgentName && filterKey != appName {
+		return false, false
+	}
+	return evt.Author == invocation.AgentName, true
 }
 
 func (f *Flow) maybeSyncSummaryIntraRun(

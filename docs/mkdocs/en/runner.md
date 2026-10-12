@@ -729,14 +729,21 @@ eventChan, err := r.Run(
 
 When `WithResume(true)` is set:
 
-- Runner inspects the latest persisted session event of the agent's own
-  branch, that is, the latest event whose filter key equals the invocation's
-  filter key. Unkeyed legacy events can be resumed only by the default root
-  invocation when their author is that agent; they never select a subagent's
-  history. Events of
+- Runner scans the session from the newest event. An event ends that scan
+  when its filter key equals the invocation's filter key. Legacy events use
+  `Branch` as that key. On the default root (no parent, and the filter key is
+  the agent name or the session app name), an unkeyed event also ends the
+  scan, because that history is visible to the root. Ending the scan and
+  owning the event are separate. A keyed event is owned by its exact key. An
+  unkeyed event is owned only when its author is that agent, so only the
+  agent's own unkeyed tool call can run. A later unkeyed user message, or
+  another author's tool result, ends the scan and leaves the older tool call
+  unexecuted. Unkeyed events do not end the scan for a child or any other
+  filter key, so they cannot hide that branch's own pending call. Events of
   other branches, such as AgentTool children or parallel sub-agents, are
-  skipped, so an agent never runs another branch's pending tool calls. Child
-  invocations inherit the option and apply the same rule to their own branch.
+  skipped. An invocation whose effective filter key is empty retains the
+  match-all behavior and considers the latest event. Child invocations inherit
+  the option and apply the same rule to their own branch.
 - If that event is an assistant response that contains `tool_calls` and
   there is no later tool result, Runner will execute those pending tools first
   (using the same tool set and callbacks as a normal step) and persist the

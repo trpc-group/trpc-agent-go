@@ -30,15 +30,21 @@ import (
 )
 
 const (
+	// SubAgentStatusCompleted is the SubAgentResult.Status of a call whose
+	// wrapped agent finished. A completed subagent can still be continued.
+	SubAgentStatusCompleted = "completed"
+	// SubAgentStatusFailed is the SubAgentResult.Status of a call that failed.
+	// SubAgentResult.Error describes the failure.
+	SubAgentStatusFailed = "failed"
+)
+
+const (
 	fieldSubAgentID = "subagent_id"
 	fieldInput      = "input"
 	fieldStatus     = "status"
 	fieldOutput     = "output"
 	fieldError      = "error"
 	fieldRetryable  = "retryable"
-
-	subAgentStatusCompleted = "completed"
-	subAgentStatusFailed    = "failed"
 
 	threadIDMinLen    = 8
 	threadIDMaxLen    = 128
@@ -87,9 +93,10 @@ type SubAgentResult struct {
 	// failures before the call could run, and when a new subagent failed
 	// before any of its events were saved.
 	SubAgentID string `json:"subagent_id,omitempty"`
-	// Status is "completed" when the wrapped agent finished this call and
-	// "failed" otherwise. It describes this call only; a subagent whose call
-	// completed can still be continued.
+	// Status is SubAgentStatusCompleted when the wrapped agent finished this
+	// call and SubAgentStatusFailed otherwise. It describes this call only; a
+	// subagent whose call completed can still be continued. The value stays a
+	// plain string so existing JSON and schema consumers keep working.
 	Status string `json:"status"`
 	// Output is the assistant text the wrapped agent produced in this call,
 	// collected as WithResponseMode configures. It is always text, even when
@@ -339,7 +346,7 @@ func subAgentOutputSchema() *tool.Schema {
 				Type: "string",
 				Description: "completed or failed. Describes this call only; " +
 					"a completed subagent can still be continued.",
-				Enum: []any{subAgentStatusCompleted, subAgentStatusFailed},
+				Enum: []any{SubAgentStatusCompleted, SubAgentStatusFailed},
 			},
 			fieldOutput: {
 				Type: "string",
@@ -448,7 +455,7 @@ func (at *Tool) executeThread(ctx context.Context, jsonArgs []byte) SubAgentResu
 	}
 	return SubAgentResult{
 		SubAgentID: resultID,
-		Status:     subAgentStatusCompleted,
+		Status:     SubAgentStatusCompleted,
 		Output:     output,
 	}
 }
@@ -712,7 +719,7 @@ func retryableForError(err error) *bool {
 func subAgentFailed(id, msg string, retryable *bool) SubAgentResult {
 	return SubAgentResult{
 		SubAgentID: id,
-		Status:     subAgentStatusFailed,
+		Status:     SubAgentStatusFailed,
 		Error:      msg,
 		Retryable:  retryable,
 	}

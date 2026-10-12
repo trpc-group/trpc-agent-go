@@ -4745,6 +4745,22 @@ func TestRun_WithResumeOnlyExecutesOwnBranchPendingToolCalls(t *testing.T) {
 		evt.Branch = branch
 		return evt
 	}
+	user := func(key, author string) event.Event {
+		evt := message(key, model.NewUserMessage("next"))
+		evt.Author = author
+		return evt
+	}
+	foreignTool := func(value string) event.Event {
+		evt := toolCall("", value)
+		evt.Author = "other"
+		return evt
+	}
+	legacyEmptyUser := user("", "user")
+	legacyEmptyUser.Version = event.InitVersion
+	legacyEmptyUser.Branch = ""
+	legacyEmptyUser.FilterKey = "stale"
+	foreignResult := toolResult("", "old")
+	foreignResult.Author = "other"
 
 	tests := []struct {
 		name      string
@@ -4838,6 +4854,65 @@ func TestRun_WithResumeOnlyExecutesOwnBranchPendingToolCalls(t *testing.T) {
 			},
 			want: []string{"legacy"},
 		},
+		{
+			name:      "unkeyed user stops default root agent",
+			filterKey: "agent",
+			events: []event.Event{
+				toolCall("", "old"),
+				user("", "user"),
+			},
+		},
+		{
+			name:      "unkeyed user stops default root app",
+			filterKey: "app",
+			events: []event.Event{
+				toolCall("", "old"),
+				user("", "user"),
+			},
+		},
+		{
+			name:      "legacy empty branch user stops default root",
+			filterKey: "agent",
+			events: []event.Event{
+				toolCall("", "old"),
+				legacyEmptyUser,
+			},
+		},
+		{
+			name:      "newer unkeyed foreign tool result stops default root",
+			filterKey: "agent",
+			events: []event.Event{
+				toolCall("", "old"),
+				foreignResult,
+			},
+		},
+		{
+			name:      "unkeyed foreign tool call does not resume default root agent",
+			filterKey: "agent",
+			events:    []event.Event{foreignTool("foreign")},
+		},
+		{
+			name:      "unkeyed foreign tool call does not resume default root app",
+			filterKey: "app",
+			events:    []event.Event{foreignTool("foreign")},
+		},
+		{
+			name:      "keyed user stops default root",
+			filterKey: "agent",
+			events: []event.Event{
+				toolCall("", "old"),
+				user("agent", "user"),
+			},
+		},
+		{
+			name:      "unkeyed user does not hide a nondefault branch",
+			filterKey: "agenttool:agent:thread:abcdefgh",
+			events: []event.Event{
+				toolCall("agenttool:agent:thread:abcdefgh", "own"),
+				user("", "user"),
+			},
+			want: []string{"own"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -4897,6 +4972,67 @@ func runResumeFlow(t *testing.T, filterKey string, events []event.Event) []strin
 		require.Nil(t, evt.Error)
 	}
 	return executed
+}
+
+func TestPendingToolCallResponse_EmptyFilterAndChildKeepScanRules(t *testing.T) {
+	toolCall := func(key, author, value string) event.Event {
+		evt := event.NewResponseEvent("inv-old", author, &model.Response{
+			Done: true,
+			Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-" + value,
+					Function: model.FunctionDefinitionParam{
+						Name:      "resume_tool",
+						Arguments: []byte(`{"value":"` + value + `"}`),
+					},
+				}},
+			}}},
+		})
+		evt.FilterKey = key
+		return *evt
+	}
+	user := event.NewResponseEvent("inv-old", "user", &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("next"),
+		}},
+	})
+
+	withAgent := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "agent"}),
+		agent.WithInvocationEventFilterKey(""),
+	)
+	require.Equal(t, "agent", withAgent.GetEventFilterKey())
+
+	empty := agent.NewInvocation()
+	require.Empty(t, empty.GetEventFilterKey())
+	empty.Session = &session.Session{AppName: "app", Events: []event.Event{
+		toolCall("", "other", "foreign"),
+		*user,
+	}}
+	require.Nil(t, pendingToolCallResponse(empty))
+
+	foreignOnly := agent.NewInvocation()
+	foreignOnly.Session = &session.Session{AppName: "app", Events: []event.Event{
+		toolCall("", "other", "foreign"),
+	}}
+	require.NotNil(t, pendingToolCallResponse(foreignOnly))
+
+	events := []event.Event{
+		toolCall("agenttool:agent:thread:abcdefgh", "agent", "own"),
+		*user,
+	}
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "root"}),
+		agent.WithInvocationSession(&session.Session{AppName: "app", Events: events}),
+	)
+	child := parent.Clone(
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "agent"}),
+		agent.WithInvocationEventFilterKey("agenttool:agent:thread:abcdefgh"),
+	)
+	require.NotNil(t, child.GetParentInvocation())
+	require.NotNil(t, pendingToolCallResponse(child))
 }
 
 type countingSessionService struct {

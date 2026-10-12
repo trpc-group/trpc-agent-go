@@ -1902,8 +1902,10 @@ Every call returns an `agenttool.SubAgentResult`:
 {"status": "failed", "error": "unknown subagent_id: ...", "retryable": false}
 ```
 
-- `status` is `completed` or `failed` and describes this call only. A subagent
-  whose call completed can still be continued; there is no closed state.
+- `status` is `completed` or `failed` and describes this call only. Go callers
+  can compare it with `agenttool.SubAgentStatusCompleted` and
+  `agenttool.SubAgentStatusFailed`. A subagent whose call completed can still
+  be continued; there is no closed state.
 - `output` is always a string: the assistant text the wrapped Agent produced in
   this call, collected according to `WithResponseMode`. It may be empty. An
   Agent with an object `OutputSchema` still yields text, typically its JSON.

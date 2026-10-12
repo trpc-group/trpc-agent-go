@@ -129,14 +129,33 @@ func shouldSuppressGraphRuntimeSessionEvent(
 	inv *coreagent.Invocation,
 	evt *event.Event,
 ) bool {
-	if inv == nil || evt == nil {
+	if inv == nil || evt == nil || !strings.HasPrefix(evt.Object, "graph.") {
 		return false
 	}
-	suppressed, _ := coreagent.GetStateValue[bool](
-		inv,
-		graphRuntimeSuppressSessionEventsStateKey,
-	)
-	return suppressed && strings.HasPrefix(evt.Object, "graph.")
+	return graphRuntimeSessionEventsSuppressed(inv)
+}
+
+// graphRuntimeSessionEventsSuppressed reports whether inv or one of its
+// ancestors asked to keep graph executor events out of the shared Session.
+//
+// The marker lives on the invocation that force-enabled those events. Later
+// Clones drop it: Invocation.Clone copies only an allowlisted subset of
+// state, and a graph task clones again before a node runs. Each Clone still
+// records its parent, so the ancestor chain reaches the invocation that set
+// the marker. It remains tool-private without changing Clone's allowlist or
+// adding a RunOptions field. Keeping it out of RuntimeState avoids merging it
+// into graph state and potentially checkpoint and completion snapshots.
+func graphRuntimeSessionEventsSuppressed(inv *coreagent.Invocation) bool {
+	for current := inv; current != nil; current = current.GetParentInvocation() {
+		suppressed, ok := coreagent.GetStateValue[bool](
+			current,
+			graphRuntimeSuppressSessionEventsStateKey,
+		)
+		if ok && suppressed {
+			return true
+		}
+	}
+	return false
 }
 
 // pregelStepInterrupt reconstructs the interrupt reported by a graph pregel

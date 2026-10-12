@@ -655,7 +655,9 @@ func TestNewTool_ResumableSubAgents_DeclarationSchema(t *testing.T) {
 	require.Equal(t, "string", decl.OutputSchema.Properties[fieldOutput].Type)
 	require.Equal(t, "string", decl.OutputSchema.Properties[fieldError].Type)
 	require.Equal(t, "boolean", decl.OutputSchema.Properties[fieldRetryable].Type)
-	require.Equal(t, []any{subAgentStatusCompleted, subAgentStatusFailed},
+	// Pin serialized values rather than deriving the expected wire contract
+	// from the constants used to build the schema.
+	require.Equal(t, []any{"completed", "failed"},
 		decl.OutputSchema.Properties[fieldStatus].Enum)
 
 	// The model-facing field names are the documented contract.
@@ -675,7 +677,7 @@ func TestNewTool_ResumableSubAgents_FirstCallReturnsIDAndPersistsHistory(t *test
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 	require.NoError(t, validateThreadID(result.SubAgentID))
 	require.Equal(t, "run1", result.Output)
 
@@ -748,7 +750,7 @@ func TestNewTool_ResumableSubAgents_UnknownAndInvalidID(t *testing.T) {
 	))
 	require.NoError(t, err)
 	got := requireSubAgentResult(t, unknown)
-	require.Equal(t, subAgentStatusFailed, got.Status)
+	require.Equal(t, SubAgentStatusFailed, got.Status)
 	require.Empty(t, got.SubAgentID, "an unknown ID must not be echoed back")
 	require.Contains(t, got.Error, errUnknownSubAgentID)
 	require.NotNil(t, got.Retryable)
@@ -772,7 +774,7 @@ func TestNewTool_ResumableSubAgents_UnknownAndInvalidID(t *testing.T) {
 		out, callErr := at.Call(ctx, raw)
 		require.NoError(t, callErr)
 		result := requireSubAgentResult(t, out)
-		require.Equal(t, subAgentStatusFailed, result.Status, "id %q", id)
+		require.Equal(t, SubAgentStatusFailed, result.Status, "id %q", id)
 		require.Empty(t, result.SubAgentID, "id %q", id)
 		require.NotNil(t, result.Retryable, "id %q", id)
 		require.False(t, *result.Retryable, "id %q", id)
@@ -801,7 +803,7 @@ func TestNewTool_ResumableSubAgents_MalformedArguments(t *testing.T) {
 		out, err := at.Call(ctx, []byte(tc.args))
 		require.NoError(t, err, "args %q", tc.args)
 		result := requireSubAgentResult(t, out)
-		require.Equal(t, subAgentStatusFailed, result.Status, "args %q", tc.args)
+		require.Equal(t, SubAgentStatusFailed, result.Status, "args %q", tc.args)
 		require.Contains(t, result.Error, tc.want, "args %q", tc.args)
 		require.Empty(t, result.SubAgentID, "args %q", tc.args)
 		require.NotNil(t, result.Retryable, "args %q", tc.args)
@@ -827,7 +829,7 @@ func TestNewTool_ResumableSubAgents_BlankIDStartsNewSubAgent(t *testing.T) {
 		out, err := at.Call(ctx, []byte(args))
 		require.NoError(t, err)
 		result := requireSubAgentResult(t, out)
-		require.Equal(t, subAgentStatusCompleted, result.Status, "args %s", args)
+		require.Equal(t, SubAgentStatusCompleted, result.Status, "args %s", args)
 		require.Equal(t, "run"+strconv.Itoa(len(ids)+1), result.Output,
 			"args %s must not continue an earlier subagent", args)
 		require.NoError(t, validateThreadID(result.SubAgentID))
@@ -841,7 +843,7 @@ func TestNewTool_ResumableSubAgents_NoParentSession(t *testing.T) {
 	out, err := at.Call(context.Background(), []byte(`{"input":{"request":"x"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Contains(t, result.Error, "parent session is required")
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable)
@@ -867,7 +869,7 @@ func TestNewTool_ResumableSubAgents_CustomInputPassedAsRawChildPayload(t *testin
 	out, err := at.Call(ctx, []byte(`{"input":{"query":"hello"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 	require.Equal(t, `{"query":"hello"}`, child.lastMessage)
 	require.Equal(t, result.SubAgentID, child.lastThread)
 	require.Equal(t, threadFilterKey("custom", result.SubAgentID), child.lastKey)
@@ -907,7 +909,7 @@ func TestNewTool_ResumableSubAgents_CustomInputDefinitionsStayResolvable(t *test
 	ctx, _, _ := newThreadParent(t)
 	out, err := at.Call(ctx, []byte(`{"input":{"item":{"name":"x"}}}`))
 	require.NoError(t, err)
-	require.Equal(t, subAgentStatusCompleted, requireSubAgentResult(t, out).Status)
+	require.Equal(t, SubAgentStatusCompleted, requireSubAgentResult(t, out).Status)
 	require.Equal(t, `{"item":{"name":"x"}}`, child.lastMessage)
 }
 
@@ -1030,7 +1032,7 @@ func TestNewTool_ResumableSubAgents_OutputAlwaysStringDespiteObjectSchema(t *tes
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 	require.Equal(t, `{"answer":"42"}`, result.Output)
 	require.Equal(t, `{"answer":"42"}`, subAgentResultJSON(t, result)[fieldOutput])
 	require.Equal(t, `{"request":"hi"}`, child.lastMessage)
@@ -1048,7 +1050,7 @@ func TestNewTool_ResumableSubAgents_PreEventRunErrorReturnsNoSubAgentID(t *testi
 	first, err := at.Call(ctx, []byte(`{"input":{"request":"first"}}`))
 	require.NoError(t, err)
 	failed := requireSubAgentResult(t, first)
-	require.Equal(t, subAgentStatusFailed, failed.Status)
+	require.Equal(t, SubAgentStatusFailed, failed.Status)
 	require.Contains(t, failed.Error, "first run failed")
 	require.Empty(t, failed.SubAgentID, "an unconfirmed subagent must not be advertised")
 	require.Empty(t, sessionFilterKeys(sess), "no event may be persisted")
@@ -1057,7 +1059,7 @@ func TestNewTool_ResumableSubAgents_PreEventRunErrorReturnsNoSubAgentID(t *testi
 	second, err := at.Call(ctx, []byte(`{"input":{"request":"retry"}}`))
 	require.NoError(t, err)
 	ok := requireSubAgentResult(t, second)
-	require.Equal(t, subAgentStatusCompleted, ok.Status)
+	require.Equal(t, SubAgentStatusCompleted, ok.Status)
 	require.NoError(t, validateThreadID(ok.SubAgentID))
 	require.Equal(t, "retry-ok", ok.Output)
 
@@ -1092,7 +1094,7 @@ func TestNewTool_ResumableSubAgents_ErrorAfterStreamStartsKeepsConfirmedSubAgent
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"boom"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.NoError(t, validateThreadID(result.SubAgentID))
 	require.Contains(t, result.Error, "child failed")
 	// An ordinary child failure is neither known-transient nor known-permanent.
@@ -1108,7 +1110,7 @@ func TestNewTool_ResumableSubAgents_ErrorAfterStreamStartsKeepsConfirmedSubAgent
 	retry := requireSubAgentResult(t, again)
 	require.Equal(t, result.SubAgentID, retry.SubAgentID,
 		"a confirmed subagent stays addressable after a failed call")
-	require.Equal(t, subAgentStatusFailed, retry.Status)
+	require.Equal(t, SubAgentStatusFailed, retry.Status)
 }
 
 // A call that fails before it can check the parent Session returns no ID, even
@@ -1132,7 +1134,7 @@ func TestNewTool_ResumableSubAgents_FlushFailureReturnsNoSubAgentID(t *testing.T
 	))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Contains(t, result.Error, "flush parent invocation session")
 	require.Empty(t, result.SubAgentID)
 	require.NotNil(t, result.Retryable)
@@ -1178,7 +1180,7 @@ func TestNewTool_ResumableSubAgents_ContinuesSubAgentAfterSessionReload(t *testi
 	)
 	require.NoError(t, err)
 	first := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, first.Status)
+	require.Equal(t, SubAgentStatusCompleted, first.Status)
 	require.Equal(t, "run1", first.Output)
 	threadID := first.SubAgentID
 	require.NoError(t, validateThreadID(threadID))
@@ -1203,7 +1205,7 @@ func TestNewTool_ResumableSubAgents_ContinuesSubAgentAfterSessionReload(t *testi
 	))
 	require.NoError(t, err)
 	second := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, second.Status)
+	require.Equal(t, SubAgentStatusCompleted, second.Status)
 	require.Equal(t, threadID, second.SubAgentID)
 	// The fresh agent's own counter restarts at 1, so "run1|run1" can only come
 	// from the reloaded subagent history.
@@ -1233,7 +1235,7 @@ func TestNewTool_ResumableSubAgents_ContinuesSubAgentAfterSessionReload(t *testi
 	)
 	require.NoError(t, err)
 	unknown := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, unknown.Status)
+	require.Equal(t, SubAgentStatusFailed, unknown.Status)
 	require.Contains(t, unknown.Error, errUnknownSubAgentID)
 	require.Empty(t, unknown.SubAgentID)
 }
@@ -1252,7 +1254,7 @@ func TestNewTool_ResumableSubAgents_NestedAgentToolKeepsOwnFilterKey(t *testing.
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"go"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 
 	threadKey := threadFilterKey("outer", result.SubAgentID)
 	ownKeys, callErr := outer.snapshot()
@@ -1294,13 +1296,13 @@ func TestNewTool_ResumableSubAgents_NestedResumableToolReportsNearestID(t *testi
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"go"}}`))
 	require.NoError(t, err)
 	outerResult := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, outerResult.Status)
+	require.Equal(t, SubAgentStatusCompleted, outerResult.Status)
 
 	before, after, nestedOut := outer.subAgentIDs()
 	require.Equal(t, []string{outerResult.SubAgentID}, before)
 	require.Equal(t, []string{outerResult.SubAgentID}, after)
 	innerResult := requireSubAgentResult(t, nestedOut)
-	require.Equal(t, subAgentStatusCompleted, innerResult.Status)
+	require.Equal(t, SubAgentStatusCompleted, innerResult.Status)
 	require.NotEqual(t, outerResult.SubAgentID, innerResult.SubAgentID)
 	require.Equal(t, []string{innerResult.SubAgentID}, innerChild.subAgentIDs())
 	require.Equal(t,
@@ -1310,7 +1312,10 @@ func TestNewTool_ResumableSubAgents_NestedResumableToolReportsNearestID(t *testi
 }
 
 func TestSubAgentIDFromContext_OutsideCall(t *testing.T) {
-	_, ok := SubAgentIDFromContext(nil)
+	// nilCtx is a typed nil. The call deliberately passes a nil context to
+	// lock the documented contract: a nil input is outside any resumable call.
+	var nilCtx context.Context
+	_, ok := SubAgentIDFromContext(nilCtx)
 	require.False(t, ok)
 	_, ok = SubAgentIDFromContext(context.Background())
 	require.False(t, ok)
@@ -1338,7 +1343,7 @@ func TestNewTool_ResumableSubAgents_NestedAgentToolKeepsOwnFilterKeyViaGraphRunt
 	)
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 
 	threadKey := threadFilterKey("outer", result.SubAgentID)
 	ownKeys, callErr := outer.snapshot()
@@ -1375,7 +1380,7 @@ func TestNewTool_ResumableSubAgents_GraphRuntimeUsesEnvelopeNotCheckpoint(t *tes
 	)
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 	require.Equal(t, "run1", result.Output)
 	require.NoError(t, validateThreadID(result.SubAgentID))
 
@@ -1409,7 +1414,7 @@ func TestNewTool_ResumableSubAgents_GraphInterruptIsUnsupportedAndNotRetryable(t
 	// graph has no child checkpoint to resume.
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable, "rerunning cannot clear an interrupt")
@@ -1447,7 +1452,7 @@ func TestNewTool_ResumableSubAgents_GraphAgentEventSignalledInterruptFails(t *te
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"approve"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable, "rerunning cannot clear an interrupt")
@@ -1476,7 +1481,7 @@ func TestNewTool_ResumableSubAgents_GraphAgentEventSignalledInterruptViaGraphRun
 	)
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable)
@@ -1542,7 +1547,7 @@ func TestNewTool_ResumableSubAgents_GraphAgentInterruptFailsWhenCallerDisabledEx
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"approve"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable, "rerunning cannot clear an interrupt")
@@ -1576,7 +1581,7 @@ func TestNewTool_ResumableSubAgents_GraphAgentCompletionSnapshotSurvivesEventSup
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"ask"}}`))
 		require.NoError(t, err)
 		result := requireSubAgentResult(t, out)
-		require.Equal(t, subAgentStatusCompleted, result.Status)
+		require.Equal(t, SubAgentStatusCompleted, result.Status)
 		require.Equal(t, answer, result.Output)
 		return sess.SnapshotState()
 	}
@@ -1596,6 +1601,200 @@ func TestNewTool_ResumableSubAgents_GraphAgentCompletionSnapshotSurvivesEventSup
 		"the completion snapshot must survive executor-event suppression")
 	require.Equal(t, answer,
 		decodeJSONString(t, disabled[graph.StateKeyLastResponse]))
+}
+
+// newNestedCallerGraphAgent builds a real GraphAgent whose only node calls
+// nested. The node runs under a graph task Clone, which drops invocation
+// state that is not on the clone allowlist.
+func newNestedCallerGraphAgent(
+	t *testing.T,
+	nested *Tool,
+	args []byte,
+	present func(any) string,
+	subAgentID *string,
+) coreagent.Agent {
+	t.Helper()
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("call", func(ctx context.Context, state graph.State) (any, error) {
+		out, err := nested.Call(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		if subAgentID != nil {
+			if result, ok := out.(SubAgentResult); ok {
+				*subAgentID = result.SubAgentID
+			}
+		}
+		return graph.State{graph.StateKeyLastResponse: present(out)}, nil
+	})
+	compiled := sg.SetEntryPoint("call").SetFinishPoint("call").MustCompile()
+	middle, err := graphagent.New("middle", compiled)
+	require.NoError(t, err)
+	return middle
+}
+
+func runOuterResumable(
+	t *testing.T,
+	middle coreagent.Agent,
+	disable bool,
+	graphRuntime bool,
+) (context.Context, *session.Session, SubAgentResult) {
+	t.Helper()
+	outer := NewTool(middle, WithResumableSubAgents())
+	var opts []coreagent.RunOption
+	if disable {
+		opts = append(opts, coreagent.WithDisableGraphExecutorEvents(true))
+	}
+	ctx, sess, parent := newThreadParentRunOptions(t, opts...)
+	payload := []byte(`{"input":{"request":"go"}}`)
+	var (
+		out any
+		err error
+	)
+	if graphRuntime {
+		out, err = outer.CallWithAgentToolGraphRuntime(
+			ctx,
+			payload,
+			agenttoolgraph.RuntimeContext{
+				ParentInvocation: parent,
+				State:            map[string]any{},
+				ParentNodeID:     "tools",
+				ToolCallID:       "call-1",
+				ToolCallKey:      "0:middle:call-1",
+			},
+		)
+	} else {
+		out, err = outer.Call(ctx, payload)
+	}
+	require.NoError(t, err)
+	return ctx, sess, requireSubAgentResult(t, out)
+}
+
+func assertCallerGraphExecutorState(
+	t *testing.T,
+	state session.StateMap,
+	disable bool,
+	answer string,
+) {
+	t.Helper()
+	require.Contains(t, state, graph.MetadataKeyCompletion)
+	require.Equal(t, answer, decodeJSONString(t, state[graph.StateKeyLastResponse]))
+	if disable {
+		requireNoGraphExecutorState(t, state)
+		return
+	}
+	require.Contains(t, state, graph.MetadataKeyPregel)
+}
+
+func TestNewTool_ResumableSubAgents_NestedGraphExecutorStateFollowsCaller(t *testing.T) {
+	answerOf := func(out any) string {
+		text, _ := out.(string)
+		return text
+	}
+	resumableAnswerOf := func(out any) string {
+		result, _ := out.(SubAgentResult)
+		return result.Output
+	}
+	interruptOf := func(out any) string {
+		result, _ := out.(SubAgentResult)
+		retryable := "nil"
+		if result.Retryable != nil {
+			retryable = strconv.FormatBool(*result.Retryable)
+		}
+		return result.Status + "|" + result.Error + "|" + retryable
+	}
+
+	t.Run("ordinary call", func(t *testing.T) {
+		for _, disable := range []bool{true, false} {
+			t.Run(fmt.Sprintf("disable=%v", disable), func(t *testing.T) {
+				nested := NewTool(newThreadAnswerGraphAgent(t, "leaf", "from-leaf"))
+				middle := newNestedCallerGraphAgent(
+					t, nested, []byte(`{"request":"ask"}`), answerOf, nil,
+				)
+				_, sess, result := runOuterResumable(t, middle, disable, false)
+				require.Equal(t, SubAgentStatusCompleted, result.Status)
+				require.Equal(t, "from-leaf", result.Output)
+				assertCallerGraphExecutorState(t, sess.SnapshotState(), disable, "from-leaf")
+			})
+		}
+	})
+
+	t.Run("resumable call", func(t *testing.T) {
+		for _, disable := range []bool{true, false} {
+			t.Run(fmt.Sprintf("disable=%v", disable), func(t *testing.T) {
+				nested := NewTool(
+					newThreadAnswerGraphAgent(t, "leaf", "from-leaf"),
+					WithResumableSubAgents(),
+				)
+				var subAgentID string
+				middle := newNestedCallerGraphAgent(
+					t,
+					nested,
+					[]byte(`{"input":{"request":"ask"}}`),
+					resumableAnswerOf,
+					&subAgentID,
+				)
+				ctx, sess, result := runOuterResumable(t, middle, disable, false)
+				require.Equal(t, SubAgentStatusCompleted, result.Status)
+				require.Equal(t, "from-leaf", result.Output)
+				assertCallerGraphExecutorState(t, sess.SnapshotState(), disable, "from-leaf")
+				if !disable {
+					return
+				}
+				require.NotEmpty(t, subAgentID)
+				continued, err := nested.Call(ctx, []byte(
+					`{"subagent_id":"`+subAgentID+`","input":{"request":"next"}}`,
+				))
+				require.NoError(t, err)
+				next := requireSubAgentResult(t, continued)
+				require.Equal(t, SubAgentStatusCompleted, next.Status)
+				require.Equal(t, "from-leaf", next.Output)
+				require.Equal(t, subAgentID, next.SubAgentID)
+				assertCallerGraphExecutorState(t, sess.SnapshotState(), true, "from-leaf")
+			})
+		}
+	})
+
+	t.Run("graph runtime", func(t *testing.T) {
+		t.Run("ordinary", func(t *testing.T) {
+			nested := NewTool(newThreadAnswerGraphAgent(t, "leaf", "from-leaf"))
+			middle := newNestedCallerGraphAgent(
+				t, nested, []byte(`{"request":"ask"}`), answerOf, nil,
+			)
+			_, sess, result := runOuterResumable(t, middle, true, true)
+			require.Equal(t, SubAgentStatusCompleted, result.Status)
+			require.Equal(t, "from-leaf", result.Output)
+			assertCallerGraphExecutorState(t, sess.SnapshotState(), true, "from-leaf")
+		})
+		t.Run("resumable", func(t *testing.T) {
+			nested := NewTool(
+				newThreadAnswerGraphAgent(t, "leaf", "from-leaf"),
+				WithResumableSubAgents(),
+			)
+			middle := newNestedCallerGraphAgent(
+				t, nested, []byte(`{"input":{"request":"ask"}}`), resumableAnswerOf, nil,
+			)
+			_, sess, result := runOuterResumable(t, middle, true, true)
+			require.Equal(t, SubAgentStatusCompleted, result.Status)
+			require.Equal(t, "from-leaf", result.Output)
+			assertCallerGraphExecutorState(t, sess.SnapshotState(), true, "from-leaf")
+		})
+	})
+
+	t.Run("resumable interrupt", func(t *testing.T) {
+		nested := NewTool(
+			newThreadInterruptGraphAgent(t, "leaf"),
+			WithResumableSubAgents(),
+		)
+		middle := newNestedCallerGraphAgent(
+			t, nested, []byte(`{"input":{"request":"approve"}}`), interruptOf, nil,
+		)
+		_, sess, result := runOuterResumable(t, middle, true, false)
+		require.Equal(t, SubAgentStatusCompleted, result.Status)
+		want := SubAgentStatusFailed + "|" + errGraphInterrupt + "|false"
+		require.Equal(t, want, result.Output)
+		requireNoGraphExecutorState(t, sess.SnapshotState())
+	})
 }
 
 // An ordinary NewTool wrapping the same agent keeps its existing behavior: the
@@ -1621,7 +1820,7 @@ func TestNewTool_ResumableSubAgents_GraphInterruptOnCallPath(t *testing.T) {
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"approve"}}`))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Equal(t, errGraphInterrupt, result.Error)
 	require.NotNil(t, result.Retryable)
 	require.False(t, *result.Retryable)
@@ -1637,7 +1836,7 @@ func TestNewTool_ResumableSubAgents_RetryableSerialization(t *testing.T) {
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
 		require.NoError(t, err)
 		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
-		require.Equal(t, subAgentStatusCompleted, decoded[fieldStatus])
+		require.Equal(t, SubAgentStatusCompleted, decoded[fieldStatus])
 		require.NotContains(t, decoded, fieldRetryable)
 		require.NotContains(t, decoded, fieldError)
 		require.Contains(t, decoded, fieldSubAgentID)
@@ -1658,7 +1857,7 @@ func TestNewTool_ResumableSubAgents_RetryableSerialization(t *testing.T) {
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
 		require.NoError(t, err)
 		result := requireSubAgentResult(t, out)
-		require.Equal(t, subAgentStatusCompleted, result.Status)
+		require.Equal(t, SubAgentStatusCompleted, result.Status)
 		require.Empty(t, result.Output)
 		require.NoError(t, validateThreadID(result.SubAgentID),
 			"the saved input alone confirms the subagent")
@@ -1672,7 +1871,7 @@ func TestNewTool_ResumableSubAgents_RetryableSerialization(t *testing.T) {
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"boom"}}`))
 		require.NoError(t, err)
 		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
-		require.Equal(t, subAgentStatusFailed, decoded[fieldStatus])
+		require.Equal(t, SubAgentStatusFailed, decoded[fieldStatus])
 		require.NotContains(t, decoded, fieldRetryable)
 	})
 
@@ -1759,14 +1958,14 @@ func TestNewTool_ResumableSubAgents_SameAgentNameDistinctNamespacesStayIsolated(
 	out, err := first.Call(ctx, []byte(`{"input":{"request":"a"}}`))
 	require.NoError(t, err)
 	created := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, created.Status)
+	require.Equal(t, SubAgentStatusCompleted, created.Status)
 
 	crossed, err := second.Call(ctx, []byte(
 		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"b"}}`, created.SubAgentID),
 	))
 	require.NoError(t, err)
 	result := requireSubAgentResult(t, crossed)
-	require.Equal(t, subAgentStatusFailed, result.Status)
+	require.Equal(t, SubAgentStatusFailed, result.Status)
 	require.Contains(t, result.Error, errUnknownSubAgentID)
 	require.Empty(t, result.SubAgentID)
 }
@@ -1784,7 +1983,7 @@ func TestNewTool_ResumableSubAgents_SameAgentNameSharedNamespaceSharesSubAgents(
 		fmt.Sprintf(`{"subagent_id":%q,"input":{"request":"b"}}`, created.SubAgentID),
 	))
 	require.NoError(t, err)
-	require.Equal(t, subAgentStatusCompleted, requireSubAgentResult(t, crossed).Status)
+	require.Equal(t, SubAgentStatusCompleted, requireSubAgentResult(t, crossed).Status)
 }
 
 // Namespaces are used exactly as given. Even surrounding spaces are rejected
@@ -1828,7 +2027,7 @@ func TestNewTool_ResumableSubAgents_SameIDSerialized(t *testing.T) {
 	out, err := at.Call(ctx, []byte(`{"input":{"request":"one"}}`))
 	require.NoError(t, err)
 	created := requireSubAgentResult(t, out)
-	require.Equal(t, subAgentStatusCompleted, created.Status)
+	require.Equal(t, SubAgentStatusCompleted, created.Status)
 	threadID := created.SubAgentID
 	require.NoError(t, validateThreadID(threadID))
 	<-child.entered
@@ -1864,7 +2063,7 @@ func TestNewTool_ResumableSubAgents_SameIDSerialized(t *testing.T) {
 		got := <-results
 		require.NoError(t, got.err)
 		result := requireSubAgentResult(t, got.raw)
-		require.Equal(t, subAgentStatusCompleted, result.Status)
+		require.Equal(t, SubAgentStatusCompleted, result.Status)
 		require.Equal(t, threadID, result.SubAgentID)
 	}
 
@@ -1917,7 +2116,7 @@ func TestNewTool_ResumableSubAgents_SameIDWaitCanceled(t *testing.T) {
 	cancel()
 
 	canceled := requireSubAgentResult(t, <-waiter)
-	require.Equal(t, subAgentStatusFailed, canceled.Status)
+	require.Equal(t, SubAgentStatusFailed, canceled.Status)
 	require.Contains(t, canceled.Error, context.Canceled.Error())
 	require.Equal(t, threadID, canceled.SubAgentID)
 	require.NotNil(t, canceled.Retryable)
@@ -1925,7 +2124,7 @@ func TestNewTool_ResumableSubAgents_SameIDWaitCanceled(t *testing.T) {
 
 	close(gate)
 	held := requireSubAgentResult(t, <-holder)
-	require.Equal(t, subAgentStatusCompleted, held.Status)
+	require.Equal(t, SubAgentStatusCompleted, held.Status)
 	runs, _ := child.stats()
 	require.Equal(t, 2, runs, "the canceled call must not run the wrapped agent")
 }
@@ -1960,7 +2159,7 @@ func TestNewTool_ResumableSubAgents_DistinctIDsRunConcurrently(t *testing.T) {
 		got := <-results
 		require.NoError(t, got.err)
 		result := requireSubAgentResult(t, got.raw)
-		require.Equal(t, subAgentStatusCompleted, result.Status)
+		require.Equal(t, SubAgentStatusCompleted, result.Status)
 		ids[result.SubAgentID] = struct{}{}
 	}
 	require.Len(t, ids, 2, "each call must create its own subagent")
@@ -2011,7 +2210,7 @@ func TestNewTool_ResumableSubAgents_StreamableCallEmitsSingleFinalChunk(t *testi
 	final, ok := chunks[0].Content.(tool.FinalResultChunk)
 	require.True(t, ok, "got %T", chunks[0].Content)
 	result := requireSubAgentResult(t, final.Result)
-	require.Equal(t, subAgentStatusCompleted, result.Status)
+	require.Equal(t, SubAgentStatusCompleted, result.Status)
 	require.Equal(t, "run1", result.Output)
 	require.NoError(t, validateThreadID(result.SubAgentID))
 }

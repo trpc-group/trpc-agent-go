@@ -1096,6 +1096,13 @@ func TestShouldSuppressGraphRuntimeSessionEvent(t *testing.T) {
 		inv,
 		event.New("inv", "author", event.WithObject("model.response")),
 	))
+
+	// Clone drops the marker. Suppression still applies through the parent
+	// chain, including a second clone such as a graph task invocation.
+	child := inv.Clone()
+	grandchild := child.Clone()
+	require.True(t, shouldSuppressGraphRuntimeSessionEvent(child, graphEvent))
+	require.True(t, shouldSuppressGraphRuntimeSessionEvent(grandchild, graphEvent))
 }
 
 func TestGraphToolInterruptCapture_ObserveAndFinish(t *testing.T) {
