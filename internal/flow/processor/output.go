@@ -37,25 +37,27 @@ func NewOutputResponseProcessor(
 	}
 }
 
-// ProcessResponse processes the model response and handles output_key and output_schema functionality.
-// This mimics the behavior of adk-python's output processing using event.actions.state_delta pattern.
+// ProcessResponse processes the model response and handles output_key and
+// output_schema functionality, following adk-python's state_delta pattern.
+// It returns the original response unchanged (output extraction does not
+// replace the published response).
 func (p *OutputResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation == nil || rsp == nil || !rsp.IsFinalResponse() ||
 		(invocation.StructuredOutput == nil && invocation.StructuredOutputType == nil &&
 			p.outputKey == "" && p.outputSchema == nil) {
-		return
+		return rsp
 	}
 	// Only process complete (non-partial) responses.
 	// Extract text content from the response.
 	content, ok := p.extractFinalContent(rsp)
 	if !ok {
-		return
+		return rsp
 	}
 	jsonObject, ok := extractFirstJSONObject(content)
 
@@ -66,6 +68,7 @@ func (p *OutputResponseProcessor) ProcessResponse(
 
 	// 2) Handle output_key functionality (raw persistence, optional schema validation).
 	p.handleOutputKey(ctx, invocation, content, jsonObject, ch)
+	return rsp
 }
 
 // extractFinalContent returns the final text content if response is complete.

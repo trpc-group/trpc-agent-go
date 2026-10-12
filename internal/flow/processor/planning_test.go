@@ -96,10 +96,14 @@ func TestPlanningResponseProcessor_AllBranches(t *testing.T) {
 	pr2 := NewPlanningResponseProcessor(&fakePlanner{})
 	pr2.ProcessResponse(ctx, &agent.Invocation{AgentName: "a"}, nil, &model.Response{}, ch)
 
-	// 5) process with choices and verify replacement
+	// 5) process with choices and verify the replacement is returned.
 	rsp := &model.Response{ID: "orig", Choices: []model.Choice{{}}}
-	pr2.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
-	assert.Equal(t, "processed", rsp.ID)
+	processed := pr2.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
+	// The shared response stays intact; the replacement carries the update.
+	assert.Equal(t, "orig", rsp.ID)
+	if assert.NotNil(t, processed) {
+		assert.Equal(t, "processed", processed.ID)
+	}
 
 	// Verify that the postprocessing event is marked as partial
 	select {
@@ -191,10 +195,14 @@ func TestPlanningResponseProcessor_EmitEventError(t *testing.T) {
 	rsp := &model.Response{ID: "test", Choices: []model.Choice{{}}}
 
 	// This should trigger the error path in agent.EmitEvent
-	pr.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
+	processed := pr.ProcessResponse(ctx, &agent.Invocation{AgentName: "a", InvocationID: "i1"}, nil, rsp, ch)
 
-	// Should have processed the response but failed to emit event
-	assert.Equal(t, "processed", rsp.ID)
+	// Should have processed the response but failed to emit event. The
+	// replacement carries the planner output; the shared response is intact.
+	assert.Equal(t, "test", rsp.ID)
+	if assert.NotNil(t, processed) {
+		assert.Equal(t, "processed", processed.ID)
+	}
 	// Channel should be empty due to EmitEvent error
 	select {
 	case <-ch:
@@ -202,4 +210,37 @@ func TestPlanningResponseProcessor_EmitEventError(t *testing.T) {
 	default:
 		// Expected - no event sent due to error
 	}
+}
+
+// nilPlanner is a test stub whose ProcessPlanningResponse always returns nil,
+// used to verify that the processor falls back to returning the original response.
+type nilPlanner struct{}
+
+// BuildPlanningInstruction returns an empty string (no planning instruction).
+func (nilPlanner) BuildPlanningInstruction(
+	ctx context.Context, inv *agent.Invocation, req *model.Request,
+) string {
+	return ""
+}
+
+// ProcessPlanningResponse always returns nil, simulating a planner that
+// produces no replacement response.
+func (nilPlanner) ProcessPlanningResponse(
+	ctx context.Context, inv *agent.Invocation, rsp *model.Response,
+) *model.Response {
+	return nil
+}
+
+func TestPlanningResponseProcessor_PlannerReturnsNil(t *testing.T) {
+	proc := NewPlanningResponseProcessor(nilPlanner{})
+	ch := make(chan *event.Event, 2)
+	rsp := &model.Response{ID: "orig", Choices: []model.Choice{{}}}
+	got := proc.ProcessResponse(
+		context.Background(),
+		&agent.Invocation{AgentName: "a", InvocationID: "i1"},
+		nil,
+		rsp,
+		ch,
+	)
+	require.Same(t, rsp, got)
 }
