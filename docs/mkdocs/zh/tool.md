@@ -1820,7 +1820,7 @@ workerTemplate := llmagent.New(
 )
 
 dynamicAgent := agenttool.NewDynamicTool(
-    // 可选：定义子 Agent 的默认模型、executor、callbacks、权限策略等执行边界。
+    // 可选：定义子 Agent 的默认模型、executor、callbacks 等执行边界。
     agenttool.WithTemplateAgent(workerTemplate),
     // 可选：限制模型最多只能从这些工具里选择。
     agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
@@ -1873,7 +1873,9 @@ profile 选择由 LLMAgent 消费；其他 Agent 实现保留自己的模型语�
 - `WithName(name)`：修改模型可见工具名。仅对 `NewDynamicTool` 生效；普通
   `NewTool(agent)` 的工具名始终来自被包装 Agent 的 `Info().Name`。
 - `WithTemplateAgent(agent)`：设置动态子 Agent 的模板，常用于固定默认模型、executor、
-  callbacks、权限策略等执行边界。
+  callbacks 等执行边界。子 Agent 仍继承父级 `ToolPermissionPolicy`，
+  每次执行工具前检查；deny/ask/error 都会阻止执行。此前模板会清空父级策略，
+  现在宿主也需要通过父级策略允许预期的子工具。
 - `WithAgentModelProfile(name, description, model)`：注册一个宿主授权的模型别名，可对
   单次子 Agent 调用覆盖模型；可重复添加。未注册任何 profile 时不会暴露 `model` 字段。
 - `WithCapabilityTools(tools)`：设置模型可选择的最大工具集合。未设置时默认从父 Agent

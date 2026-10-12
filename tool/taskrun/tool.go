@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -131,7 +132,11 @@ type toolState struct {
 	options    options
 }
 
-// NewTools creates task run control tools.
+// NewTools creates task run control tools. Spawned runs inherit the parent's
+// tool permission policy through SpawnRequest.RunOptions. RunContext marks
+// delegated input and, when a parent policy exists, carries a snapshot of visible
+// host inputs for permission reviews. Local controllers must apply both fields
+// to the child runner.
 func NewTools(
 	controller taskrunruntime.Controller,
 	opts ...Option,
@@ -330,6 +335,15 @@ func (t *spawnTool) Call(
 	if agentName == "" {
 		agentName = state.options.defaultAgentName
 	}
+	runContext := messageorigin.WithAgentInput
+	var runOptions []agent.RunOption
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.RunOptions.ToolPermissionPolicy != nil {
+		runOptions = append(runOptions, agent.WithToolPermissionPolicy(inv.RunOptions.ToolPermissionPolicy))
+		runContext, err = messageorigin.CaptureDelegation(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("taskrun: capture delegation input: %w", err)
+		}
+	}
 	run, err := state.controller.Spawn(ctx, taskrunruntime.SpawnRequest{
 		OwnerUserID:             userID,
 		ParentSessionID:         sessionID,
@@ -340,6 +354,8 @@ func (t *spawnTool) Call(
 		Timeout:                 secondsDuration(in.TimeoutSeconds),
 		RuntimeState:            cloneRuntimeState(state.options.runtimeState),
 		InjectedContextMessages: state.options.injectedContextMessages,
+		RunOptions:              runOptions,
+		RunContext:              runContext,
 	})
 	if err != nil {
 		return nil, err

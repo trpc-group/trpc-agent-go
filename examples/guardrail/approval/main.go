@@ -12,18 +12,22 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/examples/guardrail/approval/internal/hostcontext"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval/review"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -57,38 +61,63 @@ func main() {
 		streaming: *streaming,
 		baseDir:   *baseDir,
 	}
-	if err := app.run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	stopInput := context.AfterFunc(ctx, func() { _ = os.Stdin.Close() })
+	defer stopInput()
+	if err := app.run(ctx); err != nil {
 		log.Fatalf("guardrail approval demo failed: %v", err)
 	}
 }
 
 type demoApp struct {
-	modelName      string
-	streaming      bool
-	baseDir        string
-	toolSet        tool.ToolSet
-	mainRunner     runner.Runner
-	reviewerRunner runner.Runner
-	userID         string
-	sessionID      string
+	modelName        string
+	streaming        bool
+	baseDir          string
+	toolSet          tool.ToolSet
+	mainRunner       runner.Runner
+	reviewerRunner   runner.Runner
+	userID           string
+	sessionID        string
+	permissionPolicy tool.PermissionPolicy
+	reviewSessions   *sessioninmemory.SessionService
 }
 
 func (a *demoApp) run(ctx context.Context) error {
 	if err := a.setup(); err != nil {
 		return err
 	}
-	defer a.mainRunner.Close()
-	defer a.reviewerRunner.Close()
-	defer a.toolSet.Close()
+	defer a.close()
 	return a.loop(ctx)
+}
+
+func (a *demoApp) close() error {
+	return errors.Join(a.mainRunner.Close(), a.reviewerRunner.Close(), a.toolSet.Close(), a.reviewSessions.Close())
 }
 
 func (a *demoApp) setup() error {
 	modelInstance := openai.New(a.modelName)
-	reviewerAgentInstance := newReviewerAgent(modelInstance)
+	return a.setupModels(modelInstance, modelInstance)
+}
+
+func (a *demoApp) setupModels(mainModel, reviewModel model.Model) error {
+	baseDir, err := filepath.Abs(a.baseDir)
+	if err != nil {
+		return err
+	}
+	a.baseDir = baseDir
+	a.reviewSessions = sessioninmemory.NewSessionService(sessioninmemory.WithSessionTTL(time.Hour))
+	ready := false
+	defer func() {
+		if !ready {
+			_ = a.reviewSessions.Close()
+		}
+	}()
+	reviewerAgentInstance := newReviewerAgent(reviewModel)
 	a.reviewerRunner = runner.NewRunner(
 		reviewerRunner,
 		reviewerAgentInstance,
+		runner.WithSessionService(a.reviewSessions),
 	)
 	reviewerInstance, err := review.New(a.reviewerRunner, review.WithRiskThreshold(80))
 	if err != nil {
@@ -100,10 +129,10 @@ func (a *demoApp) setup() error {
 		a.reviewerRunner.Close()
 		return fmt.Errorf("create hostexec tool set: %w", err)
 	}
-	mainAgentInstance := newMainAgent(modelInstance, a.streaming, a.toolSet)
+	mainAgentInstance := newMainAgent(mainModel, a.streaming, a.toolSet, a.baseDir)
 	approvalPlugin, err := approval.New(
 		approval.WithReviewer(reviewerInstance),
-		approval.WithToolPolicy(toolWriteStdin, approval.ToolPolicySkipApproval),
+		approval.WithContextProvider(hostcontext.Provider(a.baseDir)),
 		approval.WithToolPolicy(toolKillSession, approval.ToolPolicyDenied),
 	)
 	if err != nil {
@@ -111,23 +140,15 @@ func (a *demoApp) setup() error {
 		a.reviewerRunner.Close()
 		return fmt.Errorf("create approval guardrail: %w", err)
 	}
-	guardrailPlugin, err := guardrail.New(
-		guardrail.WithApproval(approvalPlugin),
-	)
-	if err != nil {
-		a.toolSet.Close()
-		a.reviewerRunner.Close()
-		return fmt.Errorf("create guardrail plugin: %w", err)
-	}
+	a.permissionPolicy = approvalPlugin.PermissionPolicy(nil)
 	a.mainRunner = runner.NewRunner(
 		appName,
 		mainAgentInstance,
-		runner.WithSessionService(sessioninmemory.NewSessionService()),
-		runner.WithPlugins(guardrailPlugin),
 	)
 	a.userID = "guardrail-approval-demo-user"
 	a.sessionID = fmt.Sprintf("guardrail-approval-demo-session-%d", time.Now().Unix())
 	a.printBanner()
+	ready = true
 	return nil
 }
 
@@ -165,6 +186,7 @@ func (a *demoApp) runTurn(ctx context.Context, text string) error {
 		a.sessionID,
 		model.NewUserMessage(text),
 		agent.WithRequestID(uuid.NewString()),
+		agent.WithToolPermissionPolicy(a.permissionPolicy),
 	)
 	if err != nil {
 		return err

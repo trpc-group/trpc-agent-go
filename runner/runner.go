@@ -1011,6 +1011,7 @@ func (r *runner) appendMessagesAsSessionEvents(
 			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: current}}},
 		)
 		agent.InjectIntoEvent(invocation, evt)
+		messageorigin.MarkRunnerInput(ctx, evt, msg, pending.currentTurn)
 		evt = r.applyEventPlugins(ctx, invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return err
@@ -1047,6 +1048,7 @@ func (r *runner) appendIncomingMessage(
 		&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 	)
 	agent.InjectIntoEvent(invocation, evt)
+	messageorigin.MarkRunnerInput(ctx, evt, message, true)
 	evt = r.applyEventPlugins(ctx, invocation, evt)
 	return r.sessionService.AppendEvent(ctx, sess, evt)
 }
