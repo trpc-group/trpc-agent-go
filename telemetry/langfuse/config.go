@@ -13,10 +13,24 @@ package langfuse
 import (
 	"os"
 	"strconv"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 // Option is a function that configures Start options.
 type Option func(*config)
+
+// BaggageAttributeFilter is a predicate that decides whether a baggage member
+// is copied onto span attributes at span start. Integrators can replace the
+// default Langfuse allowlist or compose with WithExtraBaggageAttributeKeys.
+type BaggageAttributeFilter func(baggage.Member) bool
+
+// AttributeRewriter is a transform applied to span attributes immediately
+// before export. Returning a new slice leaves the in-memory span unchanged for
+// local processors. A nil AttributeRewriter preserves attributes as stamped by
+// the library (default).
+type AttributeRewriter func(attrs []attribute.KeyValue) []attribute.KeyValue
 
 // WithSecretKey sets the Langfuse secret key.
 func WithSecretKey(secretKey string) Option {
@@ -69,13 +83,109 @@ func WithObservationLeafValueMaxBytes(maxBytes int) Option {
 	}
 }
 
+// WithServiceName overlays the service.name resource attribute when Start
+// creates a new TracerProvider. When unset, Start keeps the detected OpenTelemetry
+// resource (including OTEL_SERVICE_NAME). Ignored when an existing SDK
+// TracerProvider is already installed.
+func WithServiceName(serviceName string) Option {
+	return func(cfg *config) {
+		cfg.serviceName = serviceName
+	}
+}
+
+// WithServiceNamespace overlays the service.namespace resource attribute when
+// Start creates a new TracerProvider. When unset, namespace stays whatever the
+// detected resource provided. Ignored when an existing SDK TracerProvider is
+// already installed.
+func WithServiceNamespace(serviceNamespace string) Option {
+	return func(cfg *config) {
+		cfg.serviceNamespace = serviceNamespace
+	}
+}
+
+// WithServiceVersion overlays the service.version resource attribute when
+// Start creates a new TracerProvider. When unset, version stays whatever the
+// detected resource provided. Ignored when an existing SDK TracerProvider is
+// already installed.
+func WithServiceVersion(serviceVersion string) Option {
+	return func(cfg *config) {
+		cfg.serviceVersion = serviceVersion
+	}
+}
+
+// WithInstrumentName overrides the OpenTelemetry instrumentation scope name
+// used for the global tracer. Defaults to the library instrument name.
+func WithInstrumentName(instrumentName string) Option {
+	return func(cfg *config) {
+		cfg.instrumentName = instrumentName
+	}
+}
+
+// WithGenAISystem overrides the gen_ai.system attribute value stamped by the
+// library on agent/tool/chat spans. Defaults to "trpc.go.agent".
+func WithGenAISystem(system string) Option {
+	return func(cfg *config) {
+		cfg.genAISystem = system
+	}
+}
+
+// WithBaggageAttributeFilter replaces the default Langfuse baggage→attribute
+// filter. When set, WithExtraBaggageAttributeKeys is ignored.
+func WithBaggageAttributeFilter(filter BaggageAttributeFilter) Option {
+	return func(cfg *config) {
+		cfg.ensureHooks().baggageFilter = filter
+	}
+}
+
+// WithExtraBaggageAttributeKeys adds baggage keys that should be copied onto
+// span attributes in addition to the default Langfuse allowlist.
+func WithExtraBaggageAttributeKeys(keys ...string) Option {
+	return func(cfg *config) {
+		h := cfg.ensureHooks()
+		h.extraBaggageKeys = append(h.extraBaggageKeys, keys...)
+	}
+}
+
+// WithAttributeRewriter registers a transform applied to span attributes
+// immediately before they are exported to Langfuse. Defaults to nil (no rewrite).
+func WithAttributeRewriter(rewriter AttributeRewriter) Option {
+	return func(cfg *config) {
+		cfg.ensureHooks().attributeRewriter = rewriter
+	}
+}
+
+// configHooks holds non-comparable Start options (funcs and slices).
+// Kept behind a pointer so config itself stays comparable for go-apidiff.
+type configHooks struct {
+	baggageFilter     BaggageAttributeFilter
+	extraBaggageKeys  []string
+	attributeRewriter AttributeRewriter
+}
+
 // config holds Langfuse configuration options.
+// Comparable fields stay on the struct; hooks live behind a pointer so
+// adding opt-in identity options does not change config comparability.
 type config struct {
 	secretKey                    string
 	publicKey                    string
 	host                         string
 	insecure                     bool
 	maxObservationLeafValueBytes *int
+	serviceName                  string
+	serviceNamespace             string
+	serviceVersion               string
+	instrumentName               string
+	genAISystem                  string
+	hooks                        *configHooks
+}
+
+// ensureHooks lazily allocates configHooks so Option helpers can set fields
+// without forcing every config literal to construct hooks.
+func (cfg *config) ensureHooks() *configHooks {
+	if cfg.hooks == nil {
+		cfg.hooks = &configHooks{}
+	}
+	return cfg.hooks
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
