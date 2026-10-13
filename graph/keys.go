@@ -10,6 +10,8 @@
 
 package graph
 
+import "trpc.group/trpc-go/trpc-agent-go/internal/state/partsuserinput"
+
 // Config map keys (used under config["configurable"])
 const (
 	CfgKeyConfigurable = "configurable"
@@ -122,6 +124,9 @@ func isInternalStateKey(key string) bool {
 		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom,
 		MetadataKeyNodeEmitter,
 		stateKeyCompletedToolMessages:
+		return true
+	case partsuserinput.Key:
+		// Checkpoints keep this value because it is not unsafe.
 		return true
 	default:
 		return false

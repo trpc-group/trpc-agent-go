@@ -706,7 +706,10 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 // mergeInitialStateNonInternal merges caller-provided initial values that are
 // not internal (do not start with "_"). By default checkpoint-restored values
 // win, but runtime-state override keys can explicitly override the restored
-// state during resume.
+// state during resume. A nonempty parts projection replaces the checkpoint
+// value only when it equals the accepted user_input. An explicit empty
+// marker removes it, including when that accepted user_input is empty.
+// Both messages and user_input must be supplied and accepted.
 func (e *Executor) mergeInitialStateNonInternal(
 	restored,
 	initial State,
@@ -724,6 +727,7 @@ func (e *Executor) mergeInitialStateNonInternal(
 			restored[key] = value
 		}
 	}
+	refreshPartsOriginOnAcceptedInput(restored, initial, resumeStateOverrideKeys)
 	return restored
 }
 
@@ -1900,6 +1904,7 @@ func getConfigKeys(config map[string]any) []string {
 // initializeState initializes the execution state with schema defaults.
 func (e *Executor) initializeState(initialState State) State {
 	execState := initialState.Clone()
+	dropEmptyPartsOrigin(execState)
 	// Add schema defaults for missing fields.
 	if e.graph.Schema() != nil {
 		for key, field := range e.graph.Schema().Fields {

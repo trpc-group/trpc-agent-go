@@ -131,6 +131,8 @@ func WithNodeType(nodeType NodeType) Option {
 
 // WithUserInputKey sets the state key used as one-shot user input for LLM and
 // Agent nodes. When empty, StateKeyUserInput is used.
+// Non-default keys keep the legacy override path and do not opt into the LLM
+// node's retention of unchanged ContentParts-derived input.
 func WithUserInputKey(key string) Option {
 	return func(node *Node) {
 		node.userInputKey = key
@@ -1370,7 +1372,11 @@ func (r *llmRunner) executeUserInputStage(
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
-			if resolved, ok := resolveProjectedCurrentUser(
+			if userInputKey == StateKeyUserInput &&
+				matchesPartsUserInputOrigin(state, userInput) {
+				// Keep the final invocation projection, including Content-only
+				// messages produced by an event projector.
+			} else if resolved, ok := resolveProjectedCurrentUser(
 				state,
 				used[len(used)-1],
 				userInput,
