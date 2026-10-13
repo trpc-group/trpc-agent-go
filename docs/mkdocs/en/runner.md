@@ -1242,18 +1242,21 @@ eventChan, err := r.Run(
 )
 ```
 
-Supported modes (some require graph workflows):
+Supported modes (graph-specific events require a graph workflow):
 
 - `messages`: model output events (for example, `chat.completion.chunk`)
+- `latency_diagnostics`: `preprocessing.status` events carrying a decodable, non-null
+  `event.LatencyDiagnostic` extension
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`: `graph.checkpoint.*`
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
 - `debug`: same as `checkpoints` + `tasks`
 - `custom`: node-emitted events (`graph.node.custom`)
-- `progress`: events with a valid `event.Progress` extension, from any producer
 
 Notes:
 
+- Modes supplied in one `WithStreamMode` call form a union; each matching event
+  is forwarded once. A later call replaces the previous mode selection.
 - When `agent.StreamModeMessages` is selected, graph-based Large Language Model
   (LLM) nodes enable final model response events automatically for that run.
   To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
@@ -1264,92 +1267,36 @@ Notes:
   are emitted only when their corresponding mode is selected.
 - Runner always emits a final `runner.completion` event.
 
-#### Unified progress
-
-Enable built-in progress production separately from stream selection:
+To receive pre-LLM progress alongside model messages, enable diagnostic emission
+and subscribe to both categories:
 
 ```go
 eventChan, err := r.Run(ctx, userID, sessionID, message,
-    agent.WithProgressEvents(true),
-    agent.WithStreamMode(agent.StreamModeMessages, agent.StreamModeProgress),
+    agent.WithLatencyDiagnostics(true),
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeLatencyDiagnostics,
+    ),
 )
 ```
 
-`WithProgressEvents` defaults to false. It does not enable compaction, latency
-diagnostics, or tracing. `StreamModeProgress` selects events carrying the common
-`event.ProgressExtensionKey` (`trpc_agent.progress`) extension regardless of
-their object type. It does not start production. With no stream selection,
-Runner forwards generated progress as usual. Modes form a union: an event
-matching both `custom` and `progress` is forwarded once. Errors and
-`runner.completion` retain their existing forwarding behavior.
+For example, context compaction emits `started` before creating a summary and a
+terminal status (`completed`, `skipped`, or `error`) afterward. Both travel on
+the same event channel as model output. Applications can read the extension
+with `event.GetExtension[event.LatencyDiagnostic]` and select the stages they
+want to display, such as `context_compaction`.
 
-Consumers can read all progress sources through the same contract:
+These are latency diagnostic status events, not OpenTelemetry spans. The current
+payload carries stage/status and context information; it does not include a
+duration field. This subscription works with an LLMAgent through Runner as well
+as graph workflows.
 
-```go
-for evt := range eventChan {
-    p, ok, err := event.GetExtension[*event.Progress](evt, event.ProgressExtensionKey)
-    if err == nil && ok && p != nil {
-        fmt.Printf("%s %s: %s\n", p.OperationID, p.Status, p.Message)
-    }
-    // Also handle messages, errors, and runner.completion as appropriate.
-}
-```
-
-The extension requires non-empty `operation_id`, `kind`, and `status`.
-`percent` is optional: absent means unknown; zero is a known zero percentage.
-Values must be in [0, 100]. Status, rather than reaching 100%, determines the
-outcome. Built-in statuses are `started`, `running`, `completed`, `skipped`,
-`failed`, and `cancelled`. Consumers should tolerate future kinds/statuses
-without treating them as success. `message` is a display hint; use kind/status
-for application logic or localization. Invalid extensions do not match the
-progress mode; they do not prevent other modes from matching the same event.
-
-Correlate operations by `(evt.InvocationID, p.OperationID)`. Each notification
-has its own `evt.ID`; retries and independent operations receive new operation
-IDs. Invocation ancestry stays on the event envelope. Different operations can
-interleave, and a consumer may first see a running snapshot. Delivery uses the
-existing event channel, timeout, and cancellation behavior, with no replay or
-guaranteed terminal notification. Reconcile unfinished operations with the
-enclosing run's outcome after cancellation or disconnection.
-
-Built-in producers:
-
-- **Context compaction**: `kind=context_compaction`, with `started` and a terminal
-  status for each synchronous summary attempt. No percentage is invented.
-  `completed` means the summary was updated, not that subsequent request rebuild
-  or the whole run succeeded. A summary error is `failed` (or `cancelled` when
-  the context was cancelled); unchanged summaries are `skipped`. This does not
-  turn recoverable summary errors into model/run errors. Compaction still needs
-  its existing agent configuration and threshold conditions. These status-only
-  events do not enter conversation history.
-- **Graph `EventEmitter.EmitProgress`**: keeps the existing `graph.node.custom`
-  payload and adds `kind=graph_node`, `status=running`, and a known percentage.
-  Retain one emitter for updates to one operation; create another for a separate
-  operation. Even 100% is a snapshot, not an inferred successful terminal state.
-  Raw `NewNodeProgressEvent` values remain legacy events unless the producer
-  explicitly adds the common extension. Existing graph persistence is unchanged.
-
-`WithLatencyDiagnostics` and `WithLatencyDiagnosticsEvents` retain their existing
-behavior. When both diagnostics and progress are enabled, compaction emits one
-event containing both extensions. Disabling diagnostic events does not disable
-progress. Progress itself does not collect latency spans or diagnostic details.
-
-Custom tools/agents can use `event.SetExtension(evt, event.ProgressExtensionKey,
-event.Progress{...})` and their existing emission path; no new emitter interface
-is required. Supply a stable operation ID and explicit lifecycle states when
-the producer knows them. Custom producers own their opt-in policy; the built-in
-production switch does not strip extensions they explicitly attach.
-
-The built-in AG-UI translator maps common progress to one `CUSTOM` event named
-`progress`, with the progress fields plus `event_id`, `invocation_id`, and
-optional `parent_invocation_id` in its value. For graph events carrying both
-formats, it emits only the common representation. Without the new extension,
-the existing graph progress wire payload remains unchanged. Configure the
-AG-UI run option resolver to supply the options above. Other transports, such
-as A2A, can use their existing event-to-part mapping hooks; this option alone
-does not add progress to their wire protocols.
-
-See the runnable, credential-free example in `examples/graph/stream_mode`.
+`latency_diagnostics` only controls forwarding: it does not enable diagnostic
+emission or trigger compaction. `WithLatencyDiagnosticsEvents(false)` still suppresses
+diagnostic events. Selecting only `messages` continues to filter diagnostics;
+omitting StreamMode preserves the default unfiltered stream. `debug` and
+`custom` do not include diagnostics. Transport-specific mappings, such as A2A
+parts or UI progress events, remain the application's responsibility.
 
 ## 💾 Session Management
 

@@ -278,7 +278,7 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 		}),
 	)
 	ch := make(chan *event.Event, 1)
-	emitPreprocessingStatusEvent(
+	emitLatencyDiagnosticEvent(
 		context.Background(),
 		inv,
 		ch,
@@ -286,7 +286,6 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 			Stage:  latencyDiagnosticStageCompact,
 			Status: latencyDiagnosticStatusStart,
 		},
-		"",
 	)
 	evt := <-ch
 	diagnostic, ok, err := event.GetExtension[event.LatencyDiagnostic](
@@ -303,12 +302,11 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 			LatencyDiagnosticsEnabled: true,
 		}),
 	)
-	emitPreprocessingStatusEvent(
+	emitLatencyDiagnosticEvent(
 		context.Background(),
 		disabled,
 		ch,
 		event.LatencyDiagnostic{Status: latencyDiagnosticStatusSkip},
-		"",
 	)
 	require.Empty(t, ch)
 

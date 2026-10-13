@@ -168,45 +168,26 @@ func latencyProcessorStageSpanName(base string, processor any) string {
 	return base + "." + name
 }
 
-func emitPreprocessingStatusEvent(
+func emitLatencyDiagnosticEvent(
 	ctx context.Context,
 	inv *agent.Invocation,
 	eventChan chan<- *event.Event,
 	diagnostic event.LatencyDiagnostic,
-	operationID string,
 ) {
-	if inv == nil || eventChan == nil {
-		return
-	}
-	diagnostics := inv.RunOptions.LatencyDiagnosticsEnabled &&
-		inv.RunOptions.LatencyDiagnosticsEmitEvents
-	progress := inv.RunOptions.ProgressEventsEnabled && operationID != ""
-	if !diagnostics && !progress {
+	if inv == nil || eventChan == nil ||
+		!inv.RunOptions.LatencyDiagnosticsEnabled ||
+		!inv.RunOptions.LatencyDiagnosticsEmitEvents {
 		return
 	}
 	evt := event.New(
 		inv.InvocationID,
 		inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingStatus),
+		event.WithExtension(
+			event.LatencyDiagnosticExtensionKey,
+			diagnostic,
+		),
 	)
-	if diagnostics {
-		_ = event.SetExtension(evt, event.LatencyDiagnosticExtensionKey, diagnostic)
-	}
-	if progress {
-		status := event.ProgressStatus(diagnostic.Status)
-		if diagnostic.Status == latencyDiagnosticStatusError {
-			status = event.ProgressStatusFailed
-			if ctx.Err() != nil {
-				status = event.ProgressStatusCancelled
-			}
-		}
-		_ = event.SetExtension(evt, event.ProgressExtensionKey, event.Progress{
-			OperationID: operationID,
-			Kind:        diagnostic.Stage,
-			Status:      status,
-			Message:     diagnostic.Summary,
-		})
-	}
 	agent.EmitEvent(ctx, inv, eventChan, evt)
 }
 

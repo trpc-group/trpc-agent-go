@@ -319,15 +319,6 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptionResolver(resolver)))
 ```
 
-## 统一进度
-
-在 `RunOptionResolver` 中返回 `agent.WithProgressEvents(true)` 和
-`agent.WithStreamMode(agent.StreamModeMessages, agent.StreamModeProgress)`，即可
-统一接收上下文压缩和 graph emitter 的进度。内置 translator 输出一条名为 `progress`
-的 `CUSTOM` 事件，包含公共进度字段和调用身份，不依赖 tracing。开启后，携带新扩展的
-graph 事件使用公共线协议；未携带扩展的旧 graph 事件保持原有表示。
-字段、生命周期、生成开关及兼容性见 [统一进度](../runner.md#统一进度)。
-
 ## 自定义 `StateResolver`
 
 默认情况下，对象类型的 `RunAgentInput.State` 会合并到本次运行的 RuntimeState 中。RuntimeState 中不冲突的已有字段会保留；如果存在同名字段，则以 AG-UI state 为准。非对象类型的 state 不会被自动投影。

@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/progressevent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -126,7 +125,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		return nil, errors.New("event is nil")
 	}
 
-	events := t.progressEvents(event)
+	var events []aguievents.Event
 	hasGraphDelta := event.StateDelta != nil &&
 		(len(event.StateDelta[graph.MetadataKeyModel]) > 0 ||
 			len(event.StateDelta[graph.MetadataKeyTool]) > 0 ||
@@ -885,9 +884,6 @@ func (t *translator) graphNodeCustomEvents(evt *agentevent.Event) []aguievents.E
 
 	switch meta.Category {
 	case graph.NodeCustomEventCategoryProgress:
-		if _, ok := progressevent.Get(evt); ok {
-			return nil
-		}
 		return t.handleProgressEvent(meta)
 	case graph.NodeCustomEventCategoryText:
 		return t.handleTextEvent(meta)
