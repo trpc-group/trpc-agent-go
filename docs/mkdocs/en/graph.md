@@ -4408,6 +4408,7 @@ Supported modes (graph workflows):
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
 - `debug`: same as `checkpoints` + `tasks`
 - `custom`: node-emitted events (`graph.node.custom`)
+- `progress`: events carrying the common `event.Progress` extension
 
 Notes:
 
@@ -4420,6 +4421,13 @@ Notes:
 - For graph workflows, some event types (for example, `graph.checkpoint.*`)
   are emitted only when their corresponding mode is selected.
 - Runner always emits a final `runner.completion` event.
+
+With `agent.WithProgressEvents(true)`, `EventEmitter.EmitProgress` also carries
+the common progress extension while preserving its existing payload. Subscribe
+to `StreamModeProgress` to consume graph and compaction progress through one
+contract. Retain the emitter across snapshots of one operation; 100% is still a
+running snapshot, not an inferred successful completion. See
+[Unified progress](runner.md#unified-progress) for lifecycle and compatibility.
 
 #### Event Metadata (StateDelta)
 

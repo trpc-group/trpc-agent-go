@@ -626,6 +626,18 @@ func WithDisableModelExecutionEvents(disable bool) RunOption {
 	}
 }
 
+// WithProgressEvents enables unified progress production for context compaction
+// and graph EventEmitter.EmitProgress notifications. It is disabled by default
+// and independent of latency diagnostics and tracing. It does not trigger
+// compaction or configure stream filtering. Compaction progress describes the
+// synchronous summary attempt, not subsequent request rebuilding. Graph progress
+// retains its legacy payload and gains an event.Progress extension when enabled.
+func WithProgressEvents(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.ProgressEventsEnabled = enabled
+	}
+}
+
 // WithLatencyDiagnostics enables pre-LLM diagnostic spans and status events.
 func WithLatencyDiagnostics(enabled bool) RunOption {
 	return func(opts *RunOptions) {
@@ -1250,6 +1262,10 @@ type RunOptions struct {
 
 	// LatencyDiagnosticsEmitEvents emits caller-visible diagnostic status events.
 	LatencyDiagnosticsEmitEvents bool
+
+	// ProgressEventsEnabled enables built-in unified progress production,
+	// independently of latency diagnostics. The default is false.
+	ProgressEventsEnabled bool
 
 	// DisablePartialEventIDs disables generating IDs for partial response events.
 	DisablePartialEventIDs bool

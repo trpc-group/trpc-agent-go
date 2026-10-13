@@ -319,6 +319,18 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptionResolver(resolver)))
 ```
 
+## Unified progress
+
+To receive common progress from context compaction and graph emitters, return
+`agent.WithProgressEvents(true)` and
+`agent.WithStreamMode(agent.StreamModeMessages, agent.StreamModeProgress)` from
+`RunOptionResolver`. The built-in translator emits a single `CUSTOM` event named
+`progress` with the common progress payload and invocation identity. This is
+independent of tracing. Enabling it opts graph consumers into the common wire
+payload; graph events without the extension keep their existing representation.
+See [Unified progress](../runner.md#unified-progress) for fields, lifecycle,
+production controls, and compatibility.
+
 ## Custom `StateResolver`
 
 By default, object-shaped `RunAgentInput.State` is merged into RuntimeState for the current run. Existing RuntimeState keys are preserved, while AG-UI state wins when the same key is present in both maps. Non-object state is not projected automatically.
