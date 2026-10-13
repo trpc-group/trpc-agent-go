@@ -29,13 +29,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// SubAgentStatus is the outcome of one call to a NewTool configured with
+// WithResumableSubAgents. It describes that call, not a lifecycle state of
+// the subagent. A subagent can be continued after a completed call. Calls use
+// SubAgentStatusCompleted or SubAgentStatusFailed, which JSON and the
+// declaration schema encode as "completed" and "failed". The zero value is
+// empty, and a call does not produce it.
+type SubAgentStatus string
+
 const (
 	// SubAgentStatusCompleted is the SubAgentResult.Status of a call whose
-	// wrapped agent finished. A completed subagent can still be continued.
-	SubAgentStatusCompleted = "completed"
+	// wrapped agent finished. The subagent can still be continued.
+	SubAgentStatusCompleted SubAgentStatus = "completed"
 	// SubAgentStatusFailed is the SubAgentResult.Status of a call that failed.
 	// SubAgentResult.Error describes the failure.
-	SubAgentStatusFailed = "failed"
+	SubAgentStatusFailed SubAgentStatus = "failed"
 )
 
 const (
@@ -93,17 +101,17 @@ type SubAgentResult struct {
 	// failures before the call could run, and when a new subagent failed
 	// before any of its events were saved.
 	SubAgentID string `json:"subagent_id,omitempty"`
-	// Status is SubAgentStatusCompleted when the wrapped agent finished this
-	// call and SubAgentStatusFailed otherwise. It describes this call only; a
-	// subagent whose call completed can still be continued. The value stays a
-	// plain string so existing JSON and schema consumers keep working.
-	Status string `json:"status"`
+	// Status is the outcome of this call: SubAgentStatusCompleted when the
+	// wrapped agent finished, and SubAgentStatusFailed otherwise. It is not a
+	// lifecycle state of the subagent. The subagent can still be continued
+	// after a completed call.
+	Status SubAgentStatus `json:"status"`
 	// Output is the assistant text the wrapped agent produced in this call,
 	// collected as WithResponseMode configures. It is always text, even when
 	// the wrapped agent declares an object output schema, and it may be
-	// empty when Status is "completed".
+	// empty when Status is SubAgentStatusCompleted.
 	Output string `json:"output,omitempty"`
-	// Error describes the failure when Status is "failed".
+	// Error describes the failure when Status is SubAgentStatusFailed.
 	Error string `json:"error,omitempty"`
 	// Retryable reports whether retrying the same call may succeed. It is nil
 	// when that is unknown, which is the case for most wrapped agent
@@ -346,7 +354,10 @@ func subAgentOutputSchema() *tool.Schema {
 				Type: "string",
 				Description: "completed or failed. Describes this call only; " +
 					"a completed subagent can still be continued.",
-				Enum: []any{SubAgentStatusCompleted, SubAgentStatusFailed},
+				Enum: []any{
+					string(SubAgentStatusCompleted),
+					string(SubAgentStatusFailed),
+				},
 			},
 			fieldOutput: {
 				Type: "string",

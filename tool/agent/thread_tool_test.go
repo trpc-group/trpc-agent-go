@@ -667,6 +667,61 @@ func TestNewTool_ResumableSubAgents_DeclarationSchema(t *testing.T) {
 	require.NotContains(t, string(raw), "thread")
 }
 
+// SubAgentResult.Status is the named outcome of one call. JSON keeps the
+// literal status strings, including the zero value, and the declaration
+// schema enumerates those same strings.
+func TestSubAgentResult_StatusContract(t *testing.T) {
+	ctx, _, _ := newThreadParent(t)
+	at := NewTool(&threadHistoryAgent{name: "child"}, WithResumableSubAgents())
+
+	out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
+	require.NoError(t, err)
+	completed := requireSubAgentResult(t, out)
+	require.Equal(t, SubAgentStatusCompleted, completed.Status)
+	require.Equal(t, "completed", subAgentResultJSON(t, completed)[fieldStatus])
+	raw, err := json.Marshal(completed)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"status":"completed"`)
+	var completedRound SubAgentResult
+	require.NoError(t, json.Unmarshal(raw, &completedRound))
+	require.Equal(t, completed, completedRound)
+
+	failedOut, err := at.Call(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	failed := requireSubAgentResult(t, failedOut)
+	require.Equal(t, SubAgentStatusFailed, failed.Status)
+	failedRaw, err := json.Marshal(failed)
+	require.NoError(t, err)
+	require.Contains(t, string(failedRaw), `"status":"failed"`)
+	var failedRound SubAgentResult
+	require.NoError(t, json.Unmarshal(failedRaw, &failedRound))
+	require.Equal(t, failed, failedRound)
+
+	var fromWire SubAgentResult
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"status":"completed","output":"ok"}`), &fromWire,
+	))
+	require.Equal(t, SubAgentStatusCompleted, fromWire.Status)
+	require.Equal(t, "ok", fromWire.Output)
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"status":"failed","error":"boom","retryable":false}`), &fromWire,
+	))
+	require.Equal(t, SubAgentStatusFailed, fromWire.Status)
+	require.Equal(t, "boom", fromWire.Error)
+	require.NotNil(t, fromWire.Retryable)
+	require.False(t, *fromWire.Retryable)
+
+	zeroRaw, err := json.Marshal(SubAgentResult{})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"status":""}`, string(zeroRaw))
+	var zero SubAgentResult
+	require.NoError(t, json.Unmarshal(zeroRaw, &zero))
+	require.Equal(t, SubAgentStatus(""), zero.Status)
+
+	require.Equal(t, []any{"completed", "failed"},
+		at.Declaration().OutputSchema.Properties[fieldStatus].Enum)
+}
+
 // --- Core subagent behavior ------------------------------------------------
 
 func TestNewTool_ResumableSubAgents_FirstCallReturnsIDAndPersistsHistory(t *testing.T) {
@@ -1701,7 +1756,7 @@ func TestNewTool_ResumableSubAgents_NestedGraphExecutorStateFollowsCaller(t *tes
 		if result.Retryable != nil {
 			retryable = strconv.FormatBool(*result.Retryable)
 		}
-		return result.Status + "|" + result.Error + "|" + retryable
+		return string(result.Status) + "|" + result.Error + "|" + retryable
 	}
 
 	t.Run("ordinary call", func(t *testing.T) {
@@ -1791,7 +1846,7 @@ func TestNewTool_ResumableSubAgents_NestedGraphExecutorStateFollowsCaller(t *tes
 		)
 		_, sess, result := runOuterResumable(t, middle, true, false)
 		require.Equal(t, SubAgentStatusCompleted, result.Status)
-		want := SubAgentStatusFailed + "|" + errGraphInterrupt + "|false"
+		want := string(SubAgentStatusFailed) + "|" + errGraphInterrupt + "|false"
 		require.Equal(t, want, result.Output)
 		requireNoGraphExecutorState(t, sess.SnapshotState())
 	})
@@ -1836,7 +1891,7 @@ func TestNewTool_ResumableSubAgents_RetryableSerialization(t *testing.T) {
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"hi"}}`))
 		require.NoError(t, err)
 		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
-		require.Equal(t, SubAgentStatusCompleted, decoded[fieldStatus])
+		require.Equal(t, "completed", decoded[fieldStatus])
 		require.NotContains(t, decoded, fieldRetryable)
 		require.NotContains(t, decoded, fieldError)
 		require.Contains(t, decoded, fieldSubAgentID)
@@ -1871,7 +1926,7 @@ func TestNewTool_ResumableSubAgents_RetryableSerialization(t *testing.T) {
 		out, err := at.Call(ctx, []byte(`{"input":{"request":"boom"}}`))
 		require.NoError(t, err)
 		decoded := subAgentResultJSON(t, requireSubAgentResult(t, out))
-		require.Equal(t, SubAgentStatusFailed, decoded[fieldStatus])
+		require.Equal(t, "failed", decoded[fieldStatus])
 		require.NotContains(t, decoded, fieldRetryable)
 	})
 

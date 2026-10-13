@@ -370,9 +370,9 @@ func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
 // Session; invalid and unknown IDs fail and are never created implicitly.
 //
 // Every call returns a SubAgentResult, and most failures are reported in it
-// with Status "failed" rather than as an error. The result includes
-// subagent_id only when the parent Session holds events for that subagent
-// at the time the call returns. Continuing it later requires those events
+// with Status SubAgentStatusFailed rather than as an error. The result
+// includes subagent_id only when the parent Session holds events for that
+// subagent at the time the call returns. Continuing it later requires those events
 // to remain available; continuing after a restart also requires the parent
 // SessionService to have persisted them.
 //

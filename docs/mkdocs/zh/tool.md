@@ -1787,9 +1787,11 @@ plannerTool := agenttool.NewTool(planner, agenttool.WithResumableSubAgents())
 {"status": "failed", "error": "unknown subagent_id: ...", "retryable": false}
 ```
 
-- `status` 为 `completed` 或 `failed`，只描述本次调用。Go 调用方可以用
-  `agenttool.SubAgentStatusCompleted` 和 `agenttool.SubAgentStatusFailed` 比较该值。
-  调用完成后该子 Agent 仍可继续，不存在“已关闭”状态。
+- `status` 为 `completed` 或 `failed`。在 `SubAgentResult` 上，Go 字段类型是
+  `agenttool.SubAgentStatus`，取值为 `agenttool.SubAgentStatusCompleted` 或
+  `agenttool.SubAgentStatusFailed`。它表示本次调用的结果，不是子 Agent 的生命周期
+  状态：一次调用完成后，仍可继续该子 Agent。
+  传给接收普通字符串的 Go API 时，使用 `string(result.Status)` 转换。
 - `output` 始终是字符串：被包装 Agent 在本次调用中产生的 assistant 文本，按
   `WithResponseMode` 收集，可以为空。即使 Agent 声明了对象类型的 `OutputSchema`，
   得到的仍是文本（通常是其 JSON）。
