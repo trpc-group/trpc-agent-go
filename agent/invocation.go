@@ -57,6 +57,9 @@ const (
 	flusherStateKey = "__flush_session__"
 	// barrierStateKey is the invocation state key used by internal barrier flag.
 	barrierStateKey = "__graph_barrier__"
+	// toolCallPersistenceStateKey carries the barrier requirement for tool
+	// callbacks that read the current assistant response from the session.
+	toolCallPersistenceStateKey = "__tool_call_persistence__"
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
@@ -1752,6 +1755,7 @@ func isCloneStateKey(key string) bool {
 	switch key {
 	case flusherStateKey,
 		barrierStateKey,
+		toolCallPersistenceStateKey,
 		appenderStateKey,
 		liveSessionStateKey,
 		streamHubStateKey,

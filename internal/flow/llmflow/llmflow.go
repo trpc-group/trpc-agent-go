@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
@@ -1002,11 +1003,16 @@ func (p *streamingResponseProcessor) process(
 		}
 		return true
 	}
-	llmResponseEvent := p.emitLLMResponse(
+	llmResponseEvent, err := p.emitLLMResponse(
 		eventInvocation,
 		response,
 		traceDetails,
 	)
+	if err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	p.lastEvent = llmResponseEvent
 	if p.tracker != nil {
 		p.tracker.SetLastEvent(p.lastEvent)
@@ -1191,13 +1197,22 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 	eventInvocation *agent.Invocation,
 	response *model.Response,
 	traceDetails bool,
-) *event.Event {
+) (*event.Event, error) {
 	llmResponseEvent := p.flow.createLLMResponseEvent(
 		eventInvocation,
 		p.currentInvocation,
 		response,
 		p.llmRequest,
 	)
+	// Agent wrappers forward events asynchronously. BeforeTool reviewers need
+	// this response in the session before callbacks run or parallel tools clone
+	// the session. Wait for this event's acknowledgement, not a channel drain.
+	waitForPersistence := barrier.Enabled(eventInvocation) &&
+		barrier.ToolCallPersistenceRequired(eventInvocation) &&
+		!response.IsPartial && response.IsToolCallResponse()
+	if waitForPersistence {
+		llmResponseEvent.RequiresCompletion = true
+	}
 	emitCtx := p.ctx
 	var emitSpan oteltrace.Span
 	emitStarted := false
@@ -1209,9 +1224,21 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 			latencyResponseAttrs(response)...,
 		)
 	}
-	agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
-	finishLatencySpan(emitSpan, emitStarted, nil)
-	return llmResponseEvent
+	err := agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
+	if !waitForPersistence {
+		// Preserve emission behavior for runs without this synchronization need.
+		finishLatencySpan(emitSpan, emitStarted, nil)
+		return llmResponseEvent, nil
+	}
+	if err == nil {
+		err = eventInvocation.AddNoticeChannelAndWait(p.ctx,
+			agent.GetAppendEventNoticeKey(llmResponseEvent.ID), flowEventWaitTimeout(p.ctx))
+	}
+	finishLatencySpan(emitSpan, emitStarted, err)
+	if err != nil {
+		return nil, fmt.Errorf("wait for tool-call event persistence: %w", err)
+	}
+	return llmResponseEvent, nil
 }
 
 func (p *streamingResponseProcessor) traceChat(
