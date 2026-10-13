@@ -577,7 +577,11 @@ func newLocalProgramCommand(
 // (which then skips appending ".exe") while path lookups still resolve
 // the dotless file on disk. Other platforms return the path unchanged.
 func localProgramLaunchPath(path string) string {
-	if runtime.GOOS != "windows" || filepath.Ext(path) != "" {
+	return localProgramLaunchPathForGOOS(path, runtime.GOOS)
+}
+
+func localProgramLaunchPathForGOOS(path string, goos string) string {
+	if goos != "windows" || filepath.Ext(path) != "" {
 		return path
 	}
 	return path + "."
@@ -624,18 +628,43 @@ func localProgramCommandPath(
 	// still be launched once resolved to a path (CreateProcess does not
 	// append ".exe" when the name contains a directory path), so try the
 	// bare name as a final candidate.
-	if runtime.GOOS == "windows" {
-		for _, dir := range dirs {
-			candidate := filepath.Join(dir, name)
-			if !filepath.IsAbs(candidate) {
-				candidate = filepath.Join(cwd, candidate)
-			}
-			if isLocalExecutableFile(candidate) {
-				return canonicalLocalProgramPath(candidate), true
-			}
-		}
+	if candidate, ok := localProgramBareNamePath(cwd, name, dirs); ok {
+		return candidate, true
 	}
 	return name, false
+}
+
+// localProgramBareNamePath returns the bare-name candidate for an
+// extensionless executable found while searching dirs. Windows launches
+// such a file once it is resolved to a path; other platforms never take
+// this fallback.
+func localProgramBareNamePath(
+	cwd string,
+	name string,
+	dirs []string,
+) (string, bool) {
+	return localProgramBareNamePathForGOOS(cwd, name, dirs, runtime.GOOS)
+}
+
+func localProgramBareNamePathForGOOS(
+	cwd string,
+	name string,
+	dirs []string,
+	goos string,
+) (string, bool) {
+	if goos != "windows" {
+		return "", false
+	}
+	for _, dir := range dirs {
+		candidate := filepath.Join(dir, name)
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(cwd, candidate)
+		}
+		if isLocalExecutableFileForGOOS(candidate, goos) {
+			return canonicalLocalProgramPathForGOOS(candidate, goos), true
+		}
+	}
+	return "", false
 }
 
 // canonicalLocalProgramPath returns the on-disk spelling of an
@@ -644,7 +673,11 @@ func localProgramCommandPath(
 // actually exists; EvalSymlinks reports the real case there. Other
 // platforms return the path unchanged.
 func canonicalLocalProgramPath(path string) string {
-	if runtime.GOOS != "windows" {
+	return canonicalLocalProgramPathForGOOS(path, runtime.GOOS)
+}
+
+func canonicalLocalProgramPathForGOOS(path string, goos string) string {
+	if goos != "windows" {
 		return path
 	}
 	if real, err := filepath.EvalSymlinks(path); err == nil {
