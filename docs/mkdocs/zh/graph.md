@@ -4337,13 +4337,12 @@ eventCh, err := r.Run(ctx, userID, sessionID, message,
 支持的模式（图式工作流）：
 
 - `messages`：模型输出事件（例如 `chat.completion.chunk`）
-- `diagnostics`：预处理耗时诊断；需另用 `agent.WithLatencyDiagnostics(true)` 开启事件产生
-  （见 [Runner](runner.md)）
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`：`graph.checkpoint.*`
 - `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
 - `debug`：等价于 `checkpoints` + `tasks`
 - `custom`：节点主动发出的自定义事件（`graph.node.custom`）
+- `progress`：携带公共 `event.Progress` 扩展的事件
 
 注意事项：
 
@@ -4354,6 +4353,11 @@ eventCh, err := r.Run(ctx, userID, sessionID, message,
   所有事件。
 - 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
 - Runner 总会额外发出一条 `runner.completion` 完成事件。
+
+启用 `agent.WithProgressEvents(true)` 后，`EventEmitter.EmitProgress` 在保留旧数据的
+同时附加公共进度扩展。订阅 `StreamModeProgress` 即可通过同一个契约消费 graph 和
+压缩进度。同一操作的多次快照应复用 emitter；100% 仍是 running 快照，不推断成功终态。
+生命周期与兼容性说明见 [统一进度](runner.md#统一进度)。
 
 #### 事件元数据（StateDelta）
 

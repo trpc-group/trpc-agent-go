@@ -12,6 +12,7 @@ package graph
 import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/progressevent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -23,7 +24,7 @@ const (
 	streamModeMaskCheckpoints
 	streamModeMaskTasks
 	streamModeMaskCustom
-	streamModeMaskDiagnostics
+	streamModeMaskProgress
 )
 
 // StreamModeFilter decides whether an event should be forwarded to callers.
@@ -63,8 +64,8 @@ func streamModeMaskFrom(modes []agent.StreamMode) streamModeMask {
 			mask |= streamModeMaskTasks
 		case agent.StreamModeCustom:
 			mask |= streamModeMaskCustom
-		case agent.StreamModeDiagnostics:
-			mask |= streamModeMaskDiagnostics
+		case agent.StreamModeProgress:
+			mask |= streamModeMaskProgress
 		case agent.StreamModeDebug:
 			mask |= streamModeMaskCheckpoints
 			mask |= streamModeMaskTasks
@@ -105,22 +106,11 @@ func (f StreamModeFilter) Allows(e *event.Event) bool {
 		isStreamModeCustomEvent(e) {
 		return true
 	}
-	if (f.mask&streamModeMaskDiagnostics) != 0 &&
-		isStreamModeDiagnosticEvent(e) {
-		return true
+	if (f.mask & streamModeMaskProgress) != 0 {
+		_, ok := progressevent.Get(e)
+		return ok
 	}
 	return false
-}
-
-func isStreamModeDiagnosticEvent(e *event.Event) bool {
-	if e == nil || e.Response == nil ||
-		e.Object != model.ObjectTypePreprocessingStatus {
-		return false
-	}
-	diagnostic, ok, err := event.GetExtension[*event.LatencyDiagnostic](
-		e, event.LatencyDiagnosticExtensionKey,
-	)
-	return err == nil && ok && diagnostic != nil
 }
 
 func isStreamModeErrorEvent(e *event.Event) bool {

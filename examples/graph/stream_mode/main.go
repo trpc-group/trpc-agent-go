@@ -54,12 +54,21 @@ func main() {
 
 	eventCh, err := r.Run(context.Background(), userID, sessionID,
 		model.NewUserMessage(userInputText),
-		agent.WithStreamMode(agent.StreamModeMessages))
+		agent.WithProgressEvents(true),
+		agent.WithStreamMode(agent.StreamModeMessages, agent.StreamModeProgress))
 	if err != nil {
 		log.Fatalf("runner run failed: %v", err)
 	}
 
 	for e := range eventCh {
+		progress, ok, err := event.GetExtension[*event.Progress](e, event.ProgressExtensionKey)
+		if err == nil && ok && progress != nil {
+			fmt.Printf("\n[%s %s] %s", progress.Kind, progress.Status, progress.Message)
+			if progress.Percent != nil {
+				fmt.Printf(" (%.0f%%)", *progress.Percent)
+			}
+			fmt.Println()
+		}
 		switch e.Object {
 		case model.ObjectTypeChatCompletionChunk:
 			if len(e.Choices) > 0 {
@@ -70,14 +79,19 @@ func main() {
 				fmt.Printf("\n(final) %s\n", e.Choices[0].Message.Content)
 			}
 		default:
-			fmt.Printf("\n[%s]\n", e.Object)
+			if progress == nil {
+				fmt.Printf("\n[%s]\n", e.Object)
+			}
 		}
 	}
 	fmt.Println()
 }
 
 func askNode(ctx context.Context, state graph.State) (any, error) {
-	emitter := graph.GetEventEmitter(state)
+	emitter := graph.GetEventEmitterWithContext(ctx, state)
+	if err := emitter.EmitProgress(0, "Preparing response"); err != nil {
+		return nil, err
+	}
 	_ = emitter.Emit(&event.Event{
 		Response: &model.Response{
 			Object:  model.ObjectTypeChatCompletionChunk,
@@ -97,5 +111,8 @@ func askNode(ctx context.Context, state graph.State) (any, error) {
 			Choices: []model.Choice{{Message: model.NewAssistantMessage(finalMsg)}},
 		},
 	})
+	if err := emitter.EmitProgress(100, "Response emitted"); err != nil {
+		return nil, err
+	}
 	return graph.State{}, nil
 }

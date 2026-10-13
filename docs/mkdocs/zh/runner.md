@@ -1170,16 +1170,15 @@ eventChan, err := r.Run(
 )
 ```
 
-支持的模式（图相关事件需要图式工作流）：
+支持的模式（部分需要图式工作流）：
 
 - `messages`：模型输出事件（例如 `chat.completion.chunk`）
-- `diagnostics`：携带可解析、非 null 的 `event.LatencyDiagnostic` 扩展的
-  `preprocessing.status` 事件
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`：`graph.checkpoint.*`
 - `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
 - `debug`：等价于 `checkpoints` + `tasks`
 - `custom`：节点主动发出的自定义事件（`graph.node.custom`）
+- `progress`：任何来源中携带有效 `event.Progress` 扩展的事件
 
 注意事项：
 
@@ -1191,27 +1190,76 @@ eventChan, err := r.Run(
 - 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
 - Runner 总会额外发出一条 `runner.completion` 完成事件。
 
-若要在接收模型消息的同时展示模型调用前的处理进度，需要开启诊断事件并订阅两种类别：
+#### 统一进度
+
+内置进度的生成与订阅分别配置：
 
 ```go
 eventChan, err := r.Run(ctx, userID, sessionID, message,
-    agent.WithLatencyDiagnostics(true),
-    agent.WithStreamMode(
-        agent.StreamModeMessages,
-        agent.StreamModeDiagnostics,
-    ),
+    agent.WithProgressEvents(true),
+    agent.WithStreamMode(agent.StreamModeMessages, agent.StreamModeProgress),
 )
 ```
 
-例如，上下文压缩在创建摘要前发出 `started`，之后发出终态
-（`completed`、`skipped` 或 `error`）。这些事件与模型输出通过同一个 channel 传递。
-业务可用 `event.GetExtension[event.LatencyDiagnostic]` 读取扩展，选择需要展示的阶段，
-例如 `context_compaction`。
+`WithProgressEvents` 默认关闭，不会开启上下文压缩、延迟诊断或 tracing。
+`StreamModeProgress` 按公共扩展 `event.ProgressExtensionKey`
+（`trpc_agent.progress`）选择事件，不依赖事件的 object，也不负责开启生成。
+未配置流过滤时，已生成的进度仍正常转发。多个模式取并集：同一条事件同时匹配
+`custom` 和 `progress` 时只转发一次。错误和 `runner.completion` 保持原有行为。
 
-`diagnostics` 只控制转发，不会开启诊断事件或触发压缩。
-`WithLatencyDiagnosticsEvents(false)` 仍会禁止诊断事件产生。
-只订阅 `messages` 时仍会过滤诊断；未配置 StreamMode 时保留默认的不过滤行为。
-`debug` 和 `custom` 不包含诊断。A2A Part 或 UI 进度事件等协议转换仍由业务完成。
+消费侧通过同一个契约读取不同来源：
+
+```go
+for evt := range eventChan {
+    p, ok, err := event.GetExtension[*event.Progress](evt, event.ProgressExtensionKey)
+    if err == nil && ok && p != nil {
+        fmt.Printf("%s %s: %s\n", p.OperationID, p.Status, p.Message)
+    }
+    // 按需继续处理消息、错误和 runner.completion。
+}
+```
+
+扩展中的 `operation_id`、`kind`、`status` 必须非空。`percent` 可选：缺省表示未知，
+0 表示已知的零进度，取值范围为 [0, 100]。是否成功由状态判断，不能仅凭 100%。
+内置状态包括 `started`、`running`、`completed`、`skipped`、`failed`、`cancelled`。
+消费者应容忍未来新增的 kind/status，不能将未知状态当作成功。`message` 是展示提示，
+业务判断或本地化应使用 kind/status。无效扩展不匹配 progress 模式，但不妨碍其他模式
+匹配同一条事件。
+
+使用 `(evt.InvocationID, p.OperationID)` 关联操作。每条通知有独立的 `evt.ID`，
+重试或新的独立操作使用新的操作 ID，调用层级保留在事件信封中。不同操作可以交错，
+消费者也可能直接收到 running 快照。交付沿用现有通道、超时和取消机制，不提供重放，
+也不保证必达终态。取消或断连后，应结合整个 run 的结果收尾未结束的操作。
+
+内置来源：
+
+- **上下文压缩**：`kind=context_compaction`，每次同步摘要尝试提供 started 和终态，
+  不虚构百分比。completed 表示摘要已更新，不代表后续请求重建或整个 run 成功。
+  摘要错误为 failed；上下文已取消时为 cancelled；摘要未更新为 skipped。
+  可恢复的摘要失败不会因此变成模型/run 错误。压缩仍需要已有的 Agent 配置和阈值条件，
+  这些仅承载状态的事件不会进入会话历史。
+- **Graph `EventEmitter.EmitProgress`**：保留原有 `graph.node.custom` 数据，补充
+  `kind=graph_node`、`status=running` 和已知百分比。同一操作应复用一个 emitter，
+  独立操作应创建新的 emitter；100% 也只是快照，不推断节点成功终态。
+  直接构造的 `NewNodeProgressEvent` 仍是旧格式，除非生成方显式附加公共扩展。
+  Graph 原有持久化行为不变。
+
+`WithLatencyDiagnostics` 和 `WithLatencyDiagnosticsEvents` 保持原有行为。
+同时开启诊断和进度时，压缩只生成一条携带两种扩展的事件；关闭诊断事件不会关闭进度。
+进度本身不采集延迟 span 或诊断细节。
+
+自定义工具/Agent 可使用 `event.SetExtension(evt, event.ProgressExtensionKey,
+event.Progress{...})`，再通过现有路径发送，无需新增 emitter 接口。生成方应分配稳定的
+操作 ID，并在确实知道生命周期时发送明确的状态。自定义来源自行决定生成开关；内置
+进度开关不会移除它们显式附加的扩展。
+
+内置 AG-UI translator 将公共进度转换成一条名为 `progress` 的 `CUSTOM` 事件，value
+包含进度字段以及 `event_id`、`invocation_id`、可选的 `parent_invocation_id`。
+Graph 同时携带两种格式时只输出公共表示；没有新扩展时，原有 graph progress 协议
+保持不变。通过 AG-UI 的 run option resolver 配置上述选项。A2A 等其他传输可以利用
+已有的 event-to-part 映射钩子适配；仅配置此选项不会自动扩展它们的线协议。
+
+可运行且无需外部凭据的示例见 `examples/graph/stream_mode`。
 
 ## 💾 会话管理
 

@@ -11,6 +11,7 @@ package graph
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -32,6 +33,10 @@ type EventEmitter interface {
 
 	// EmitProgress sends a progress event with the specified progress percentage and message.
 	// Progress should be a value between 0 and 100.
+	// With agent.WithProgressEvents, notifications also carry event.Progress.
+	// Retain the emitter for updates to one operation; a new emitter starts a
+	// distinct operation. These are running snapshots, even at 100 percent;
+	// this method does not infer lifecycle boundaries from percentages.
 	EmitProgress(progress float64, message string) error
 
 	// EmitText sends a streaming text event.
@@ -52,6 +57,8 @@ type eventEmitter struct {
 	stepNumber   int
 	branch       string
 	timeout      time.Duration
+	progressOnce sync.Once
+	progressID   string
 }
 
 // EventEmitterOption is a function that configures an eventEmitter.
@@ -202,6 +209,8 @@ func (e *eventEmitter) EmitProgress(progress float64, message string) error {
 	if e.eventBranch() != "" {
 		evt.Branch = e.eventBranch()
 	}
+
+	e.attachProgress(evt, progress, message)
 
 	return e.emitWithRecover(evt)
 }

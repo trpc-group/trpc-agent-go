@@ -1709,7 +1709,11 @@ func (f *Flow) runContextCompaction(
 	)
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
-	emitLatencyDiagnosticEvent(
+	operationID := ""
+	if invocation.RunOptions.ProgressEventsEnabled {
+		operationID = uuid.NewString()
+	}
+	emitPreprocessingStatusEvent(
 		ctx,
 		invocation,
 		eventChan,
@@ -1724,6 +1728,7 @@ func (f *Flow) runContextCompaction(
 			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 		},
+		operationID,
 	)
 	summaryCtx, summarySpan, summaryStarted := startLatencySpan(
 		ctx,
@@ -1801,7 +1806,7 @@ func (f *Flow) runContextCompaction(
 	if err != nil {
 		status = latencyDiagnosticStatusError
 	}
-	emitLatencyDiagnosticEvent(
+	emitPreprocessingStatusEvent(
 		ctx,
 		invocation,
 		eventChan,
@@ -1817,6 +1822,7 @@ func (f *Flow) runContextCompaction(
 			FilterKey:     filterKey,
 			Updated:       &updated,
 		},
+		operationID,
 	)
 	if !updated {
 		outcome := contextCompactionOutcomeNoUpdate
