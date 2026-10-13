@@ -1242,9 +1242,11 @@ eventChan, err := r.Run(
 )
 ```
 
-Supported modes (graph workflows):
+Supported modes (graph-specific events require a graph workflow):
 
 - `messages`: model output events (for example, `chat.completion.chunk`)
+- `diagnostics`: `preprocessing.status` events carrying a decodable, non-null
+  `event.LatencyDiagnostic` extension
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`: `graph.checkpoint.*`
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
@@ -1262,6 +1264,32 @@ Notes:
 - For graph workflows, some event types (for example, `graph.checkpoint.*`)
   are emitted only when their corresponding mode is selected.
 - Runner always emits a final `runner.completion` event.
+
+To receive pre-LLM progress alongside model messages, enable diagnostic emission
+and subscribe to both categories:
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithLatencyDiagnostics(true),
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeDiagnostics,
+    ),
+)
+```
+
+For example, context compaction emits `started` before creating a summary and a
+terminal status (`completed`, `skipped`, or `error`) afterward. Both travel on
+the same event channel as model output. Applications can read the extension
+with `event.GetExtension[event.LatencyDiagnostic]` and select the stages they
+want to display, such as `context_compaction`.
+
+`diagnostics` only controls forwarding: it does not enable diagnostic emission
+or trigger compaction. `WithLatencyDiagnosticsEvents(false)` still suppresses
+diagnostic events. Selecting only `messages` continues to filter diagnostics;
+omitting StreamMode preserves the default unfiltered stream. `debug` and
+`custom` do not include diagnostics. Transport-specific mappings, such as A2A
+parts or UI progress events, remain the application's responsibility.
 
 ## 💾 Session Management
 

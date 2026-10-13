@@ -1170,9 +1170,11 @@ eventChan, err := r.Run(
 )
 ```
 
-支持的模式（图式工作流）：
+支持的模式（图相关事件需要图式工作流）：
 
 - `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `diagnostics`：携带可解析、非 null 的 `event.LatencyDiagnostic` 扩展的
+  `preprocessing.status` 事件
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`：`graph.checkpoint.*`
 - `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
@@ -1188,6 +1190,28 @@ eventChan, err := r.Run(
   所有事件。
 - 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
 - Runner 总会额外发出一条 `runner.completion` 完成事件。
+
+若要在接收模型消息的同时展示模型调用前的处理进度，需要开启诊断事件并订阅两种类别：
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithLatencyDiagnostics(true),
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeDiagnostics,
+    ),
+)
+```
+
+例如，上下文压缩在创建摘要前发出 `started`，之后发出终态
+（`completed`、`skipped` 或 `error`）。这些事件与模型输出通过同一个 channel 传递。
+业务可用 `event.GetExtension[event.LatencyDiagnostic]` 读取扩展，选择需要展示的阶段，
+例如 `context_compaction`。
+
+`diagnostics` 只控制转发，不会开启诊断事件或触发压缩。
+`WithLatencyDiagnosticsEvents(false)` 仍会禁止诊断事件产生。
+只订阅 `messages` 时仍会过滤诊断；未配置 StreamMode 时保留默认的不过滤行为。
+`debug` 和 `custom` 不包含诊断。A2A Part 或 UI 进度事件等协议转换仍由业务完成。
 
 ## 💾 会话管理
 

@@ -4337,6 +4337,8 @@ eventCh, err := r.Run(ctx, userID, sessionID, message,
 支持的模式（图式工作流）：
 
 - `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `diagnostics`：预处理耗时诊断；需另用 `agent.WithLatencyDiagnostics(true)` 开启事件产生
+  （见 [Runner](runner.md)）
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`：`graph.checkpoint.*`
 - `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）

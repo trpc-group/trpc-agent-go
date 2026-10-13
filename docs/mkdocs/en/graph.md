@@ -4403,6 +4403,8 @@ eventCh, err := r.Run(ctx, userID, sessionID, message,
 Supported modes (graph workflows):
 
 - `messages`: model output events (for example, `chat.completion.chunk`)
+- `diagnostics`: preprocessing latency diagnostics; enable emission separately
+  with `agent.WithLatencyDiagnostics(true)` (see [Runner](runner.md))
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`: `graph.checkpoint.*`
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
