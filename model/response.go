@@ -9,7 +9,10 @@
 
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Error type constants for ResponseError.Type field.
 const (
@@ -130,8 +133,49 @@ type Usage struct {
 	// CompletionTokensDetails is the details of the completion tokens.
 	CompletionTokensDetails CompletionTokensDetails `json:"completion_tokens_details"`
 
+	// CostDetails is optional host-supplied USD cost with Langfuse usage_details keys.
+	// Providers do not return dollars; hosts that know model rates fill this so the
+	// Langfuse exporter can write langfuse.observation.cost_details without relying
+	// on Langfuse ingest-time pricing. The zero value means cost is unknown at call time.
+	// CostDetails is a comparable struct so Usage remains usable with ==.
+	// JSON omits the field when empty via Usage.MarshalJSON (Go omitempty does not
+	// skip zero-valued structs).
+	CostDetails CostDetails `json:"cost_details,omitempty"`
+
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+}
+
+// MarshalJSON omits zero-valued CostDetails so empty Usage matches pre-CostDetails
+// payloads. encoding/json omitempty does not skip struct values in Go 1.21.
+func (u Usage) MarshalJSON() ([]byte, error) {
+	type Alias Usage
+	aux := &struct {
+		*Alias
+		CostDetails *CostDetails `json:"cost_details,omitempty"`
+	}{
+		Alias: (*Alias)(&u),
+	}
+	if u.CostDetails != (CostDetails{}) {
+		cd := u.CostDetails
+		aux.CostDetails = &cd
+	}
+	return json.Marshal(aux)
+}
+
+// CostDetails is host-supplied USD cost keyed like Langfuse usage_details.
+// Fields are omitted from JSON when zero so exporters emit only known costs.
+type CostDetails struct {
+	// Input is USD for non-cached prompt tokens.
+	Input float64 `json:"input,omitempty"`
+	// InputCachedTokens is USD for cached prompt tokens.
+	InputCachedTokens float64 `json:"input_cached_tokens,omitempty"`
+	// Output is USD for completion tokens excluding reasoning.
+	Output float64 `json:"output,omitempty"`
+	// OutputReasoningTokens is USD for reasoning/completion reasoning tokens.
+	OutputReasoningTokens float64 `json:"output_reasoning_tokens,omitempty"`
+	// Total is the host's total USD for the call when known.
+	Total float64 `json:"total,omitempty"`
 }
 
 // PromptTokensDetails is the details of the prompt tokens.
@@ -226,6 +270,7 @@ func (rsp *Response) Clone() *Response {
 			TotalTokens:             rsp.Usage.TotalTokens,
 			PromptTokensDetails:     rsp.Usage.PromptTokensDetails,
 			CompletionTokensDetails: rsp.Usage.CompletionTokensDetails,
+			CostDetails:             rsp.Usage.CostDetails,
 		}
 		// Deep copy TimingInfo if present
 		if rsp.Usage.TimingInfo != nil {

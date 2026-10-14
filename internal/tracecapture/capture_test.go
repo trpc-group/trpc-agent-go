@@ -335,6 +335,11 @@ func TestCapture_AddStepUsageAggregatesAllFieldsAndDropsTiming(t *testing.T) {
 			CacheReadTokens:     3,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{ReasoningTokens: 4},
+		CostDetails: model.CostDetails{
+			Input:  0.01,
+			Output: 0.02,
+			Total:  0.03,
+		},
 		TimingInfo: &model.TimingInfo{
 			FirstTokenDuration: time.Second,
 		},
@@ -351,6 +356,11 @@ func TestCapture_AddStepUsageAggregatesAllFieldsAndDropsTiming(t *testing.T) {
 			CacheReadTokens:     4,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{ReasoningTokens: 5},
+		CostDetails: model.CostDetails{
+			Input:  0.04,
+			Output: 0.05,
+			Total:  0.09,
+		},
 		TimingInfo: &model.TimingInfo{
 			ReasoningDuration: time.Second,
 		},
@@ -366,6 +376,9 @@ func TestCapture_AddStepUsageAggregatesAllFieldsAndDropsTiming(t *testing.T) {
 	require.Equal(t, 5, usage.PromptTokensDetails.CacheCreationTokens)
 	require.Equal(t, 7, usage.PromptTokensDetails.CacheReadTokens)
 	require.Equal(t, 9, usage.CompletionTokensDetails.ReasoningTokens)
+	require.InDelta(t, 0.05, usage.CostDetails.Input, 1e-12)
+	require.InDelta(t, 0.07, usage.CostDetails.Output, 1e-12)
+	require.InDelta(t, 0.12, usage.CostDetails.Total, 1e-12)
 	require.Nil(t, usage.TimingInfo)
 }
 
@@ -483,4 +496,25 @@ func TestCapture_CoversNilGuardsAndMetadataFallbacks(t *testing.T) {
 	assert.Nil(t, capture.effectiveTerminalStepIDsLocked("child-inv", map[string]struct{}{"child-inv": {}}))
 	assert.Nil(t, capture.effectiveTerminalStepIDsLocked("missing", map[string]struct{}{}))
 	assert.Nil(t, cloneSnapshot(nil))
+}
+
+func TestCapture_AddStepUsageKeepsCostOnlyUsage(t *testing.T) {
+	startedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	capture := New("assistant", "root-inv", "session-1", startedAt)
+	stepID := capture.StartStep(StartStepInput{
+		InvocationID: "root-inv",
+		NodeID:       "assistant",
+	})
+	capture.addStepUsage(stepID, &model.Usage{
+		CostDetails: model.CostDetails{Total: 0.01},
+	})
+	capture.addStepUsage(stepID, &model.Usage{
+		CostDetails: model.CostDetails{Total: 0.02},
+	})
+	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(time.Second))
+	require.Len(t, trace.Steps, 1)
+	require.NotNil(t, trace.Steps[0].Usage)
+	require.InDelta(t, 0.03, trace.Steps[0].Usage.CostDetails.Total, 1e-12)
+	require.NotNil(t, trace.Usage)
+	require.InDelta(t, 0.03, trace.Usage.CostDetails.Total, 1e-12)
 }

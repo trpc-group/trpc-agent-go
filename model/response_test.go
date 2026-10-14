@@ -10,6 +10,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -1347,4 +1348,63 @@ func TestResponse_IsUserMessage(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestUsageRemainsComparableWithCostDetails(t *testing.T) {
+	a := Usage{CostDetails: CostDetails{Input: 0.1, Total: 0.1}}
+	b := Usage{CostDetails: CostDetails{Input: 0.1, Total: 0.1}}
+	c := Usage{CostDetails: CostDetails{Input: 0.2, Total: 0.2}}
+	require.True(t, a == b)
+	require.False(t, a == c)
+	_ = map[Usage]struct{}{a: {}}
+}
+
+func TestResponseClonePreservesCostDetails(t *testing.T) {
+	rsp := &Response{
+		ID: "resp-cost",
+		Usage: &Usage{
+			PromptTokens: 3,
+			CostDetails: CostDetails{
+				Input: 0.01,
+				Total: 0.01,
+			},
+		},
+	}
+	clone := rsp.Clone()
+	require.NotNil(t, clone.Usage)
+	assert.Equal(t, rsp.Usage.CostDetails, clone.Usage.CostDetails)
+	assert.NotSame(t, rsp.Usage, clone.Usage)
+}
+
+func TestUsageJSONOmitsEmptyCostDetails(t *testing.T) {
+	raw, err := json.Marshal(Usage{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "cost_details")
+
+	raw, err = json.Marshal(&Response{Usage: &Usage{}})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "cost_details")
+
+	raw, err = json.Marshal(Usage{CostDetails: CostDetails{Total: 1.5}})
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"cost_details"`)
+	require.Contains(t, string(raw), `"total":1.5`)
+}
+
+func TestCostDetailsJSONKeysMatchLangfuseCatalog(t *testing.T) {
+	raw, err := json.Marshal(CostDetails{
+		Input:                 1,
+		InputCachedTokens:     2,
+		Output:                3,
+		OutputReasoningTokens: 4,
+		Total:                 10,
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"input":1,
+		"input_cached_tokens":2,
+		"output":3,
+		"output_reasoning_tokens":4,
+		"total":10
+	}`, string(raw))
 }
