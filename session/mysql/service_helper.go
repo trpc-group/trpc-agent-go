@@ -773,7 +773,13 @@ func (s *Service) getLimitedSessionEvents(
 	eventAfterTime := maxTime(filterAfterTime, restoreAfterTime)
 	filteredEvents := filterEventsByTimestamp(events, eventAfterTime)
 	if idx := firstUserEventIndex(filteredEvents); idx >= 0 {
-		return [][]event.Event{filteredEvents[idx:]}, nil
+		filteredEvents = filteredEvents[idx:]
+		if len(filteredEvents) < len(events) {
+			// Detach once after time and user filtering so discarded payloads
+			// are not kept alive by the returned history's backing array.
+			filteredEvents = slices.Clone(filteredEvents)
+		}
+		return [][]event.Event{filteredEvents}, nil
 	}
 	if anchor, ok := lastUserEvent(events); ok {
 		return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
