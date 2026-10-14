@@ -103,9 +103,24 @@ func sessionFromContext(ctx context.Context) *session.Session {
 	return inv.Session
 }
 
+// pensieveHygieneToolNames are meta tools whose prior rounds should leave the
+// visible transcript once delete_context succeeds. Keeping their catalogs and
+// budget snapshots would re-consume the context they just freed.
+var pensieveHygieneToolNames = []string{
+	"list_context",
+	"check_budget",
+	"delete_context",
+}
+
 // NewDeleteContextTool creates a tool that allows the LLM to prune specific
 // events from its visible context. Events are soft-masked (hidden from view
 // but preserved for audit). This is the Pensieve paradigm's "deleteContext".
+//
+// After masking the requested event_ids, prior list_context, check_budget, and
+// completed delete_context tool rounds are also masked so the prune
+// meta-transcript does not linger in later LLM turns. The current
+// delete_context result is not in the session yet, so its short receipt still
+// returns to the model for this turn.
 func NewDeleteContextTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		func(ctx context.Context, input DeleteContextInput) (DeleteContextOutput, error) {
@@ -121,11 +136,15 @@ func NewDeleteContextTool() tool.CallableTool {
 				UserID:    inv.Session.UserID,
 				SessionID: inv.Session.ID,
 			}
+			ids := mergeEventIDs(
+				input.EventIDs,
+				session.EventIDsForNamedToolResults(inv.Session.Events, pensieveHygieneToolNames),
+			)
 			masked, err := inv.Session.MaskAndPersistEvents(
 				ctx,
 				inv.SessionService,
 				key,
-				input.EventIDs...,
+				ids...,
 			)
 			if err != nil {
 				return DeleteContextOutput{}, fmt.Errorf("persist masked events: %w", err)
@@ -141,9 +160,31 @@ func NewDeleteContextTool() tool.CallableTool {
 			"Remove specific events from your visible context to free up space. "+
 				"Events are soft-hidden (preserved for audit) but no longer sent to the LLM. "+
 				"Use list_context first to obtain event_ids, then call this after extracting "+
-				"key information into notes to reduce context pressure.",
+				"key information into notes to reduce context pressure. "+
+				"Also removes prior list_context, check_budget, and delete_context rounds "+
+				"from visible history so the prune cycle itself does not refill the window.",
 		),
 	)
+}
+
+// mergeEventIDs concatenates id lists while dropping empties and duplicates,
+// preserving first-seen order.
+func mergeEventIDs(parts ...[]string) []string {
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, part := range parts {
+		for _, id := range part {
+			if id == "" {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // --- list_context tool ---

@@ -1111,3 +1111,90 @@ func TestDeleteContextMasksToolRoundPair(t *testing.T) {
 		t.Fatalf("expected only keep visible, got %+v", visible)
 	}
 }
+
+func namedToolCall(id, callID, toolName string) event.Event {
+	return event.Event{
+		ID:     id,
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: callID,
+						Function: model.FunctionDefinitionParam{
+							Name: toolName,
+						},
+					}},
+				},
+			}},
+		},
+	}
+}
+
+func namedToolResult(id, callID, toolName, content string) event.Event {
+	return event.Event{
+		ID:     id,
+		Author: "tool",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   callID,
+					ToolName: toolName,
+					Content:  content,
+				},
+			}},
+		},
+	}
+}
+
+func TestDeleteContextAutoMasksPensieveHygieneRounds(t *testing.T) {
+	sess := session.NewSession("app", "user", "dc-hygiene")
+	sess.Events = []event.Event{
+		newTestEvent("user-1"),
+		namedToolCall("call-note", "tc-note", "note"),
+		namedToolResult("result-note", "tc-note", "note", `{"saved":true}`),
+		namedToolCall("call-spill", "tc-spill", "lookup"),
+		namedToolResult("result-spill", "tc-spill", "lookup", strings.Repeat("x", 200)),
+		namedToolCall("call-budget", "tc-budget", "check_budget"),
+		namedToolResult("result-budget", "tc-budget", "check_budget", `{"headroom_tokens":826}`),
+		namedToolCall("call-list", "tc-list", "list_context"),
+		namedToolResult("result-list", "tc-list", "list_context", `{"events":[{"id":"result-spill"}]}`),
+		namedToolCall("call-delete-old", "tc-delete-old", "delete_context"),
+		namedToolResult("result-delete-old", "tc-delete-old", "delete_context", `{"masked":2}`),
+		// Current delete_context call is already appended; result is not yet.
+		namedToolCall("call-delete-now", "tc-delete-now", "delete_context"),
+	}
+	ctx := ctxWithSession(sess)
+
+	result, err := NewDeleteContextTool().Call(ctx, []byte(`{"event_ids":["result-spill"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := result.(DeleteContextOutput)
+	if out.Masked < 8 {
+		t.Fatalf("expected spill + hygiene rounds masked, got %d (%s)", out.Masked, out.Message)
+	}
+
+	visible := sess.GetVisibleEvents()
+	visibleIDs := make(map[string]bool, len(visible))
+	for _, evt := range visible {
+		visibleIDs[evt.ID] = true
+	}
+	for _, id := range []string{
+		"result-budget", "call-budget",
+		"result-list", "call-list",
+		"result-delete-old", "call-delete-old",
+		"result-spill", "call-spill",
+	} {
+		if visibleIDs[id] {
+			t.Fatalf("expected %s masked from visible context, still visible: %+v", id, visibleIDs)
+		}
+	}
+	for _, id := range []string{"user-1", "result-note", "call-note", "call-delete-now"} {
+		if !visibleIDs[id] {
+			t.Fatalf("expected %s to remain visible, got %+v", id, visibleIDs)
+		}
+	}
+}

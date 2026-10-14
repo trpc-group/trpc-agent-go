@@ -408,6 +408,95 @@ func TestMaskEvents_expandsToolCallRound(t *testing.T) {
 	}
 }
 
+func newNamedToolCallEvent(id, callID, toolName string) event.Event {
+	return event.Event{
+		ID:     id,
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: callID,
+						Function: model.FunctionDefinitionParam{
+							Name: toolName,
+						},
+					}},
+				},
+			}},
+		},
+	}
+}
+
+func newNamedToolResultEvent(id, callID, toolName, content string) event.Event {
+	return event.Event{
+		ID:     id,
+		Author: "tool",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   callID,
+					ToolName: toolName,
+					Content:  content,
+				},
+			}},
+		},
+	}
+}
+
+func TestEventIDsForNamedToolResults(t *testing.T) {
+	events := []event.Event{
+		newTestEvent("user-1"),
+		newNamedToolCallEvent("call-budget", "tc-budget", "check_budget"),
+		newNamedToolResultEvent("result-budget", "tc-budget", "check_budget", `{"headroom":10}`),
+		newNamedToolCallEvent("call-list", "tc-list", "list_context"),
+		newNamedToolResultEvent("result-list", "tc-list", "list_context", `{"count":2}`),
+		newNamedToolCallEvent("call-lookup", "tc-lookup", "lookup"),
+		newNamedToolResultEvent("result-lookup", "tc-lookup", "lookup", "heavy"),
+		// In-flight delete_context call with no result yet must be ignored.
+		newNamedToolCallEvent("call-delete-inflight", "tc-delete-now", "delete_context"),
+		// Prior completed delete_context round should be selected.
+		newNamedToolCallEvent("call-delete-old", "tc-delete-old", "delete_context"),
+		newNamedToolResultEvent("result-delete-old", "tc-delete-old", "delete_context", `{"masked":2}`),
+		// ToolName empty: resolve via paired call name.
+		newNamedToolCallEvent("call-list-2", "tc-list-2", "list_context"),
+		{
+			ID:     "result-list-2",
+			Author: "tool",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "tc-list-2",
+						Content: `{"count":1}`,
+					},
+				}},
+			},
+		},
+	}
+
+	ids := EventIDsForNamedToolResults(events, []string{
+		"list_context",
+		"check_budget",
+		"delete_context",
+	})
+	want := map[string]struct{}{
+		"result-budget":     {},
+		"result-list":       {},
+		"result-delete-old": {},
+		"result-list-2":     {},
+	}
+	if len(ids) != len(want) {
+		t.Fatalf("expected %d ids, got %v", len(want), ids)
+	}
+	for _, id := range ids {
+		if _, ok := want[id]; !ok {
+			t.Fatalf("unexpected id %q in %v", id, ids)
+		}
+	}
+}
+
 func TestHydrateSkipsEmptyMaskedIDs(t *testing.T) {
 	sess := NewSession("app", "user", "sess-skip-empty-id")
 	sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}

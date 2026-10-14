@@ -17,6 +17,83 @@ type matchedToolResponseEvent struct {
 	eventIndex int
 }
 
+// EventIDsForNamedToolResults returns IDs of tool-result events whose tool
+// name is in names. Matching uses Message.ToolName, falling back to the
+// paired tool-call Function.Name when ToolName is empty.
+//
+// Only result event IDs are returned so an in-flight tool call that has not
+// produced a result yet (for example the current delete_context invocation)
+// is not selected. Callers that soft-mask should pass these IDs through
+// MaskEvents / MaskAndPersistEvents so expandMaskIDsForToolRounds pairs each
+// result with its tool-call event.
+func EventIDsForNamedToolResults(events []event.Event, names []string) []string {
+	wanted := toStringSet(names)
+	if len(wanted) == 0 || len(events) == 0 {
+		return nil
+	}
+
+	nameByCallID := toolNameByCallID(events)
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, evt := range events {
+		if evt.ID == "" || evt.Response == nil || !evt.IsToolResultResponse() {
+			continue
+		}
+		if !toolResultMatchesNames(evt, wanted, nameByCallID) {
+			continue
+		}
+		if _, dup := seen[evt.ID]; dup {
+			continue
+		}
+		seen[evt.ID] = struct{}{}
+		out = append(out, evt.ID)
+	}
+	return out
+}
+
+func toolNameByCallID(events []event.Event) map[string]string {
+	nameByCallID := make(map[string]string)
+	for _, evt := range events {
+		if evt.Response == nil || !evt.IsToolCallResponse() {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			recordToolCallNames(choice.Message.ToolCalls, nameByCallID)
+			recordToolCallNames(choice.Delta.ToolCalls, nameByCallID)
+		}
+	}
+	return nameByCallID
+}
+
+func recordToolCallNames(calls []model.ToolCall, nameByCallID map[string]string) {
+	for _, tc := range calls {
+		if tc.ID == "" || tc.Function.Name == "" {
+			continue
+		}
+		nameByCallID[tc.ID] = tc.Function.Name
+	}
+}
+
+func toolResultMatchesNames(
+	evt event.Event,
+	wanted map[string]struct{},
+	nameByCallID map[string]string,
+) bool {
+	for _, choice := range evt.Response.Choices {
+		name := choice.Message.ToolName
+		if name == "" {
+			name = nameByCallID[toolResponseIDFromChoice(choice)]
+		}
+		if name == "" {
+			continue
+		}
+		if _, ok := wanted[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // expandMaskIDsForToolRounds adds paired tool-call and tool-result event IDs so
 // masking never leaves a half-visible tool round in the transcript.
 func expandMaskIDsForToolRounds(events []event.Event, ids []string) []string {
