@@ -2120,12 +2120,13 @@ func (p *closeableTestPlugin) Close(ctx context.Context) error {
 }
 
 type chainTestPluginManager struct {
-	agentCallbacks *agent.Callbacks
-	modelCallbacks *model.Callbacks
-	toolCallbacks  *tool.Callbacks
-	eventHook      func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error)
-	afterRunHook   func(context.Context, *plugin.AfterRunArgs) error
-	closeHook      func(context.Context) error
+	agentCallbacks             *agent.Callbacks
+	modelCallbacks             *model.Callbacks
+	toolCallbacks              *tool.Callbacks
+	eventHook                  func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error)
+	beforeResponseDispatchHook func(context.Context, *plugin.BeforeResponseDispatchArgs) error
+	afterRunHook               func(context.Context, *plugin.AfterRunArgs) error
+	closeHook                  func(context.Context) error
 }
 
 func (m *chainTestPluginManager) AgentCallbacks() *agent.Callbacks {
@@ -2159,6 +2160,16 @@ func (m *chainTestPluginManager) AfterRun(
 		return nil
 	}
 	return m.afterRunHook(ctx, args)
+}
+
+func (m *chainTestPluginManager) RunBeforeResponseDispatch(
+	ctx context.Context,
+	args *plugin.BeforeResponseDispatchArgs,
+) error {
+	if m.beforeResponseDispatchHook == nil {
+		return nil
+	}
+	return m.beforeResponseDispatchHook(ctx, args)
 }
 
 func (m *chainTestPluginManager) Close(ctx context.Context) error {
@@ -2247,6 +2258,13 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 	require.True(t, ok)
 	err = afterRun.AfterRun(context.Background(), &plugin.AfterRunArgs{})
 	require.NoError(t, err)
+	beforeResponseDispatch, ok := chain.(plugin.BeforeResponseDispatchManager)
+	require.True(t, ok)
+	err = beforeResponseDispatch.RunBeforeResponseDispatch(
+		context.Background(),
+		&plugin.BeforeResponseDispatchArgs{},
+	)
+	require.NoError(t, err)
 	require.Equal(t, []string{
 		"first:before-agent",
 		"second:before-agent",
@@ -2264,7 +2282,97 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 		"second:event",
 		"first:after-run",
 		"second:after-run",
+		"first:before-response-dispatch",
+		"second:before-response-dispatch",
 	}, order)
+}
+
+func TestCombineRunPlugins_PreservesBeforeResponseDispatchCapability(t *testing.T) {
+	newManager := func(name string, withHook bool, order *[]string) *plugin.Manager {
+		return plugin.MustNewManager(&testPlugin{
+			name: name,
+			reg: func(r *plugin.Registry) {
+				if !withHook {
+					return
+				}
+				r.BeforeResponseDispatch(func(
+					context.Context,
+					*plugin.BeforeResponseDispatchArgs,
+				) error {
+					*order = append(*order, name)
+					return nil
+				})
+			},
+		})
+	}
+
+	tests := []struct {
+		name       string
+		runnerHook bool
+		runHook    bool
+		wantOrder  []string
+	}{
+		{
+			name:       "runner manager only",
+			runnerHook: true,
+			wantOrder:  []string{"runner"},
+		},
+		{
+			name:      "run manager only",
+			runHook:   true,
+			wantOrder: []string{"run"},
+		},
+		{
+			name:       "both managers",
+			runnerHook: true,
+			runHook:    true,
+			wantOrder:  []string{"runner", "run"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var order []string
+			combined := combineRunPlugins(
+				newManager("runner", tt.runnerHook, &order),
+				[]agent.PluginManager{newManager("run", tt.runHook, &order)},
+			)
+			hooks, ok := combined.(plugin.BeforeResponseDispatchManager)
+			require.True(t, ok)
+
+			err := hooks.RunBeforeResponseDispatch(
+				context.Background(),
+				&plugin.BeforeResponseDispatchArgs{Response: &model.Response{Done: true}},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantOrder, order)
+		})
+	}
+}
+
+func TestPluginManagerChain_BeforeResponseDispatchStopsOnError(t *testing.T) {
+	wantErr := errors.New("before tool execution failed")
+	called := false
+	chain := pluginManagerChain{
+		&chainTestPluginManager{
+			beforeResponseDispatchHook: func(context.Context, *plugin.BeforeResponseDispatchArgs) error {
+				return wantErr
+			},
+		},
+		&chainTestPluginManager{
+			beforeResponseDispatchHook: func(context.Context, *plugin.BeforeResponseDispatchArgs) error {
+				called = true
+				return nil
+			},
+		},
+	}
+
+	err := chain.RunBeforeResponseDispatch(
+		context.Background(),
+		&plugin.BeforeResponseDispatchArgs{},
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, called)
 }
 
 func TestPluginManagerChain_ReturnsNilWhenManagersHaveNoCallbacks(t *testing.T) {
@@ -2376,6 +2484,10 @@ func newChainTestPluginManager(name string, order *[]string) *chainTestPluginMan
 		},
 		afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
 			*order = append(*order, name+":after-run")
+			return nil
+		},
+		beforeResponseDispatchHook: func(context.Context, *plugin.BeforeResponseDispatchArgs) error {
+			*order = append(*order, name+":before-response-dispatch")
 			return nil
 		},
 	}
