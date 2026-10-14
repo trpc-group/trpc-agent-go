@@ -343,6 +343,33 @@ func TestNewLocalProgramCommand_PathMissDoesNotUseProcessPATH(t *testing.T) {
 	require.ErrorIs(t, cmd.Err, exec.ErrNotFound)
 }
 
+func TestNewLocalProgramCommand_ResolvesBareCommandFromPath(t *testing.T) {
+	cwd := t.TempDir()
+	bin := filepath.Join(cwd, "bin")
+	require.NoError(t, os.MkdirAll(bin, 0o755))
+	toolPath := filepath.Join(bin, "tool")
+	require.NoError(t, os.WriteFile(toolPath, []byte("#!/bin/sh\n"), 0o755))
+
+	cmd := newLocalProgramCommand(
+		context.Background(),
+		cwd,
+		codeexecutor.RunProgramSpec{Cmd: "tool"},
+		[]string{envPathKey + "=bin"},
+	)
+
+	require.NoError(t, cmd.Err)
+	// The resolved file is launched as-is, except on Windows where an
+	// extensionless name needs the trailing-dot marker and the on-disk
+	// spelling comes from EvalSymlinks.
+	want := toolPath
+	if runtime.GOOS == "windows" {
+		resolved, err := filepath.EvalSymlinks(toolPath)
+		require.NoError(t, err)
+		want = localProgramLaunchPath(resolved)
+	}
+	require.Equal(t, want, cmd.Path)
+}
+
 func TestLocalProgramCommandPath_NonBareCommand(t *testing.T) {
 	got, ok := localProgramCommandPath(t.TempDir(), "./tool", nil)
 
@@ -411,6 +438,88 @@ func TestIsLocalExecutableFileForGOOS(t *testing.T) {
 	require.False(t, isLocalExecutableFileForGOOS(t.TempDir(), "windows"))
 }
 
+func TestLocalProgramLaunchPathForGOOS(t *testing.T) {
+	require.Equal(t, "tool", localProgramLaunchPathForGOOS("tool", "linux"))
+	require.Equal(
+		t,
+		filepath.Join("bin", "tool.exe"),
+		localProgramLaunchPathForGOOS(filepath.Join("bin", "tool.exe"), "windows"),
+	)
+	require.Equal(
+		t,
+		filepath.Join("bin", "tool")+".",
+		localProgramLaunchPathForGOOS(filepath.Join("bin", "tool"), "windows"),
+	)
+}
+
+func TestCanonicalLocalProgramPathForGOOS(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tool")
+	require.NoError(t, os.WriteFile(file, []byte(""), 0o644))
+
+	require.Equal(t, file, canonicalLocalProgramPathForGOOS(file, "linux"))
+
+	resolved, err := filepath.EvalSymlinks(file)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		resolved,
+		canonicalLocalProgramPathForGOOS(file, "windows"),
+	)
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	require.Equal(
+		t,
+		missing,
+		canonicalLocalProgramPathForGOOS(missing, "windows"),
+	)
+}
+
+func TestLocalProgramBareNamePathForGOOS(t *testing.T) {
+	cwd := t.TempDir()
+	bin := filepath.Join(cwd, "bin")
+	require.NoError(t, os.MkdirAll(bin, 0o755))
+	toolPath := filepath.Join(bin, "tool")
+	require.NoError(t, os.WriteFile(toolPath, []byte("@echo off"), 0o644))
+
+	// A relative search directory is resolved against the working
+	// directory, and no write permission bit is required on Windows.
+	got, ok := localProgramBareNamePathForGOOS(
+		cwd,
+		"tool",
+		[]string{"bin"},
+		"windows",
+	)
+	require.True(t, ok)
+	require.Equal(t, toolPath, got)
+
+	// An absolute search directory is used as-is.
+	got, ok = localProgramBareNamePathForGOOS(
+		cwd,
+		"tool",
+		[]string{bin},
+		"windows",
+	)
+	require.True(t, ok)
+	require.Equal(t, toolPath, got)
+
+	// Other platforms never take the bare-name fallback, and a missing
+	// file is not a candidate.
+	_, ok = localProgramBareNamePathForGOOS(
+		cwd,
+		"tool",
+		[]string{"bin"},
+		"linux",
+	)
+	require.False(t, ok)
+	_, ok = localProgramBareNamePathForGOOS(
+		cwd,
+		"missing",
+		[]string{"bin"},
+		"windows",
+	)
+	require.False(t, ok)
+}
+
 func TestLocalProgramCommandPath_WindowsPathExt(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("PATHEXT lookup only applies on Windows")
@@ -436,6 +545,39 @@ func TestLocalProgramCommandPath_WindowsPathExt(t *testing.T) {
 
 	require.True(t, ok)
 	require.Equal(t, filepath.Join(bin, "tool.cmd"), got)
+}
+
+func TestNewLocalProgramCommand_ExtensionlessLaunch(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("extensionless launch path adjustment only applies on Windows")
+	}
+	cwd := t.TempDir()
+	// Copy the running test binary as an extensionless executable: it
+	// is a real PE image and exits 0 quickly with -test.list=^$.
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	data, err := os.ReadFile(exe)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cwd, "tool"),
+		data,
+		0o755,
+	))
+
+	cmd := newLocalProgramCommand(
+		context.Background(),
+		cwd,
+		codeexecutor.RunProgramSpec{
+			Cmd:  "tool",
+			Args: []string{"-test.list=^$"},
+		},
+		[]string{envPathKey + "=" + cwd},
+	)
+	require.NoError(t, cmd.Err)
+	// The resolved extensionless file must actually be runnable: Start
+	// re-runs lookExtensions on cmd.Path, which only tries PATHEXT
+	// candidates unless the path is marked extensionless.
+	require.NoError(t, cmd.Run())
 }
 
 func TestStartPipes_RejectsPresetFields(t *testing.T) {
