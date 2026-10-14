@@ -3934,7 +3934,7 @@
 <p><strong>Beta 阶段</strong>：Code RAG（仓库源 + AST 解析 + <code>code_search</code> / <code>code_graph_*</code> 检索工具）目前处于 Beta，API 与行为可能调整。</p>
 <p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">code_context_engine</a> · <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/graphrag">graphrag</a> · <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/ast">ast</a></p>
 </blockquote>
-<p>trpc-agent-go 提供了一部分<strong>代码知识库（Code RAG）</strong>能力：把代码仓库解析成带结构的语义单元，存进向量库（可选图库），让 Agent 像查文档一样检索代码，而不是在原始文本里 grep。</p>
+<p>trpc-agent-go 提供了一部分**代码知识库（Code RAG）**能力：把代码仓库解析成带结构的语义单元，存进向量库（可选图库），让 Agent 像查文档一样检索代码，而不是在原始文本里 grep。</p>
 <h2 id="_1">能力概览</h2>
 <ol>
 <li><strong>AST 语义解析</strong>：按 AST 把代码切成完整的语义实体（函数 / 方法 / 结构体 / 类 / 接口 / service / rpc 等），每个实体带结构化 metadata（签名、注释、包路径、文件位置），而不是按字符长度硬切。目前已开源 Go / Python / Proto，C++ / JavaScript 等正在逐步开放。</li>
