@@ -50,6 +50,10 @@ if _, err := embedder.GetEmbedding(ctx, "ping"); err != nil {
 
 **说明**：由于 PDF reader 依赖第三方库，为避免主模块引入不必要的依赖，PDF reader 采用独立 `go.mod` 管理。
 
+> 内置 PDF Reader 适合基础文本层提取。对于扫描件、图片型 PDF 或复杂版面
+> PDF，推荐使用 [Docling Extractor](extractor.md)，以获得
+> 更好的结构保留和 OCR 效果。
+
 **使用方式**：如需支持 PDF 文件读取，需在代码中手动引入 PDF reader 包进行注册：
 ```go
 import (
