@@ -13,6 +13,7 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -96,20 +97,26 @@ func (r *Runtime) macosSeatbeltProfile(
 	if err != nil {
 		return "", err
 	}
+	readOnlyExclusions, err := r.macosReadOnlyExclusions(profile, ws)
+	if err != nil {
+		return "", err
+	}
 	explicitReadRoots := append([]string{}, readRoots...)
-	platformRoots := macosPlatformDefaultReadRoots()
 	readRoots = append(readRoots, writeRoots...)
-	readRoots = append(readRoots, platformRoots...)
+	if profile.exposesHostRoot() {
+		readRoots = append(readRoots, "/")
+	}
 	readPolicy := macosSeatbeltAccessPolicy(
 		"file-read* file-map-executable file-test-existence",
-		macosAccessRoots(readRoots, noAccessRoots, nil),
+		r.macosProtectedAccessRoots(profile, ws, macosAccessRoots(readRoots, noAccessRoots, nil)),
 	)
 	writeExclusions := append([]string{}, noAccessRoots...)
 	writeExclusions = append(writeExclusions, macosStrictChildRoots(writeRoots, explicitReadRoots)...)
+	writeExclusions = append(writeExclusions, readOnlyExclusions...)
 	writeExclusions = append(writeExclusions, protectedRoots...)
 	writePolicy := macosSeatbeltAccessPolicy(
 		"file-write*",
-		macosAccessRoots(writeRoots, writeExclusions, protectedRoots),
+		r.macosProtectedAccessRoots(profile, ws, macosAccessRoots(writeRoots, writeExclusions, protectedRoots)),
 	)
 	globPolicy, err := r.macosNoAccessGlobPolicy(profile, ws, diagnostics)
 	if err != nil {
@@ -123,6 +130,7 @@ func (r *Runtime) macosSeatbeltProfile(
 		macosBaseSeatbeltPolicyForDiagnostics(diagnostics),
 		macosPlatformRootLiteralPolicy,
 		macosPlatformAliasPolicy,
+		macosGrantAliasPolicy(profile, ws),
 		macosPlatformTempMetadataPolicy,
 		"; allow read-only file operations",
 		readPolicy,
@@ -130,6 +138,7 @@ func (r *Runtime) macosSeatbeltProfile(
 		writePolicy,
 		"; deny glob-matched no-access paths",
 		globPolicy,
+		r.macosAncestorMutationPolicy(profile, ws, noAccessRoots, protectedRoots, readOnlyExclusions),
 		networkPolicy,
 	}
 	return strings.Join(nonEmptySections(sections), "\n\n"), nil
@@ -161,14 +170,13 @@ func macosBaseSeatbeltPolicyForDiagnostics(diagnostics sandboxDenialRun) string 
 	)
 }
 
-const macosPlatformRootLiteralPolicy = `; Allow processes to read the filesystem root itself for getcwd/path resolution.
+const macosPlatformRootLiteralPolicy = `; macOS sandbox initialization requires reading the root directory itself.
+; This literal permits root entries and metadata, without granting descendants.
 (allow file-read* file-test-existence (literal "/"))`
 
 const macosPlatformAliasPolicy = `; Preserve common macOS symlink spellings used by system shims such as xcode-select.
 (allow file-read* file-map-executable file-test-existence
-  (literal "/var")
-  (literal "/var/select")
-  (subpath "/var/select"))
+  (literal "/var"))
 (allow file-read-metadata file-test-existence
   (path-ancestors "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin"))`
 
@@ -223,10 +231,41 @@ func (r *Runtime) macosNoAccessRoots(
 			return nil, err
 		}
 		if ok {
-			roots = append(roots, target)
+			roots = append(roots, macosProtectedPathViews(target)...)
 		}
 	}
-	return dedupeCleanAbs(roots), nil
+	return roots, nil
+}
+
+// macosReadOnlyExclusions preserves the entries of effective read-only rules.
+// A write grant to the same resource removes this constraint; a child write
+// grant restores only that child through its own canonical allow filter.
+func (r *Runtime) macosReadOnlyExclusions(profile PermissionProfile, ws codeexecutor.Workspace) ([]string, error) {
+	var roots []string
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != accessRead {
+			continue
+		}
+		target, ok, err := r.macosRuleTarget(profile, ws, rule)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		rel, err := filepath.Rel(ws.Path, target)
+		if err != nil {
+			return nil, err
+		}
+		access, _, err := r.resolveAccess(profile, ws, filepath.ToSlash(rel), target)
+		if err != nil {
+			return nil, err
+		}
+		if access == accessRead {
+			roots = append(roots, macosProtectedPathViews(target)...)
+		}
+	}
+	return roots, nil
 }
 
 func (r *Runtime) macosRuleTarget(
@@ -259,6 +298,9 @@ func (r *Runtime) macosRuleTarget(
 			}
 			if rule.Access != accessNone {
 				if _, err := filepath.EvalSymlinks(target); err != nil {
+					if rule.optional && os.IsNotExist(err) {
+						return "", false, nil
+					}
 					return "", false, deniedf(
 						ErrPathDenied,
 						"grant",
@@ -303,9 +345,9 @@ func macosProtectedRoots(profile PermissionProfile, ws codeexecutor.Workspace) (
 		if strings.HasPrefix(rel, "../") {
 			return nil, deniedf(ErrPathDenied, "protect", rel, "protected path escapes workspace")
 		}
-		roots = append(roots, filepath.Join(wsAbs, filepath.FromSlash(rel)))
+		roots = append(roots, macosProtectedPathViews(filepath.Join(wsAbs, filepath.FromSlash(rel)))...)
 	}
-	return dedupeCleanAbs(roots), nil
+	return roots, nil
 }
 
 func macosAccessRoots(roots []string, exclusions []string, hardDeniedRoots []string) []macosAccessRoot {
@@ -315,14 +357,16 @@ func macosAccessRoots(roots []string, exclusions []string, hardDeniedRoots []str
 			continue
 		}
 		var rootExclusions []string
+		seenExclusions := map[string]bool{}
 		for _, exclusion := range exclusions {
-			if sameOrChild(root, exclusion) {
+			if sameOrChild(root, exclusion) && !seenExclusions[exclusion] {
+				seenExclusions[exclusion] = true
 				rootExclusions = append(rootExclusions, exclusion)
 			}
 		}
 		accessRoots = append(accessRoots, macosAccessRoot{
 			path:       root,
-			exclusions: dedupeCleanAbs(rootExclusions),
+			exclusions: rootExclusions,
 		})
 	}
 	return accessRoots
@@ -607,17 +651,33 @@ func macosPlatformDefaultReadRoots() []string {
 		"/Library/Developer",
 		"/Library/Developer/CommandLineTools",
 		"/Library/Filesystems/NetFSPlugins",
+		"/Library/Perl",
 		"/Library/Preferences",
 		"/Library/Preferences/Logging",
 		"/System/Library/CoreServices",
 		"/System/Library/Frameworks",
+		"/System/Library/Perl",
 		"/System/Library/PrivateFrameworks",
 		"/System/Library/SubFrameworks",
 		"/bin",
-		"/etc",
+		"/etc/passwd",
+		"/etc/group",
+		"/etc/hosts",
+		"/etc/resolv.conf",
+		"/etc/localtime",
+		"/etc/services",
+		"/etc/protocols",
+		"/etc/shells",
+		"/etc/paths",
+		"/etc/paths.d",
+		"/etc/ssl/cert.pem",
+		"/etc/ssl/certs",
 		"/opt/homebrew/lib",
-		"/private/etc",
-		"/private/var/db",
+		"/private/var/db/DetachedSignatures",
+		"/private/var/db/SystemPolicyConfiguration",
+		"/private/var/db/crls",
+		// /etc/localtime and /usr/share/zoneinfo resolve into this tree.
+		"/private/var/db/timezone",
 		"/private/var/select",
 		"/sbin",
 		"/usr/bin",
@@ -626,7 +686,6 @@ func macosPlatformDefaultReadRoots() []string {
 		"/usr/local/lib",
 		"/usr/sbin",
 		"/usr/share",
-		"/var/db",
 		"/var/select",
 	}
 }
@@ -693,4 +752,197 @@ func macosSandboxPath(path string) string {
 
 func sbplString(s string) string {
 	return strconv.Quote(macosSandboxPath(s))
+}
+
+func platformReadPaths() []string { return macosPlatformDefaultReadRoots() }
+
+// macosProtectedPathViews covers content operations on a resolved path and
+// entry operations beneath its resolved parent. The original location remains
+// protected if an ancestor alias is replaced.
+func macosProtectedPathViews(path string) []string {
+	var paths []string
+	seen := map[string]bool{}
+	for _, view := range []string{
+		policyCanonicalPath(path),
+		filepath.Clean(path),
+		filepath.Join(policyCanonicalPath(filepath.Dir(path)), filepath.Base(path)),
+	} {
+		if !seen[view] {
+			seen[view] = true
+			paths = append(paths, view)
+		}
+	}
+	return paths
+}
+
+// Renaming a protected path's ancestor would move its contents outside every
+// path filter. Keep those directory entries stable without making their other
+// descendants read-only.
+func (r *Runtime) macosAncestorMutationPolicy(profile PermissionProfile, ws codeexecutor.Workspace, protected ...[]string) string {
+	var paths []string
+	for _, roots := range protected {
+		paths = append(paths, roots...)
+	}
+	if sessions := r.sessionProtectionRoot(ws); sessions != "" {
+		paths = append(paths, macosProtectedPathViews(sessions)...)
+	}
+	workspace := policyCanonicalPath(ws.Path)
+	for _, credential := range defaultCredentialDenyPaths() {
+		if sameOrChild(workspace, policyCanonicalPath(credential)) || credentialExplicitlyGranted(profile, credential, credential) {
+			continue
+		}
+		paths = append(paths, macosProtectedPathViews(credential)...)
+	}
+	seen := map[string]bool{}
+	var filters []string
+	for _, path := range paths {
+		for parent := filepath.Dir(path); parent != "/" && parent != "."; parent = filepath.Dir(parent) {
+			for _, view := range macosProtectedPathViews(parent) {
+				if seen[view] {
+					continue
+				}
+				seen[view] = true
+				filters = append(filters, fmt.Sprintf("(literal %s)", sbplString(view)))
+			}
+		}
+	}
+	if len(filters) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; Preserve ancestors of protected resources against unlink and rename.\n(deny file-write-unlink\n  %s)", strings.Join(filters, "\n  "))
+}
+
+// macosProtectedAccessRoots applies mandatory protection to each allow filter.
+// A separate workspace filter restores the current scope beneath a hidden
+// session ancestor; no allow filter can reopen an unrelated session.
+func (r *Runtime) macosProtectedAccessRoots(profile PermissionProfile, ws codeexecutor.Workspace, roots []macosAccessRoot) []macosAccessRoot {
+	sessions := r.sessionProtectionRoot(ws)
+	workspace := policyCanonicalPath(ws.Path)
+	type credentialViews struct {
+		canonical string
+		paths     []string
+	}
+	var credentials []credentialViews
+	for _, credential := range defaultCredentialDenyPaths() {
+		canonical := policyCanonicalPath(credential)
+		credentials = append(credentials, credentialViews{
+			canonical: canonical,
+			paths:     macosProtectedPathViews(credential),
+		})
+	}
+	var result []macosAccessRoot
+	for _, root := range roots {
+		if sessions != "" && sameOrChild(sessions, root.path) && !sameOrChild(workspace, root.path) {
+			continue
+		}
+		if sessions != "" && sameOrChild(root.path, sessions) && !sameOrChild(workspace, root.path) {
+			root.exclusions = append(root.exclusions, sessions)
+		}
+		blocked := false
+		for _, credential := range credentials {
+			if sameOrChild(workspace, credential.canonical) {
+				continue
+			}
+			for _, cred := range credential.paths {
+				if !sameOrChild(cred, root.path) && !sameOrChild(root.path, cred) {
+					continue
+				}
+				if credentialExplicitlyGranted(profile, credential.canonical, root.path) {
+					continue
+				}
+				if sameOrChild(cred, root.path) {
+					blocked = true
+					break
+				}
+				root.exclusions = append(root.exclusions, cred)
+			}
+			if blocked {
+				break
+			}
+		}
+		if !blocked {
+			result = append(result, root)
+		}
+	}
+	return result
+}
+
+// macosGrantAliasPolicy permits resolving symlink spellings of host and
+// workspace grants. Content access remains governed by canonical root filters.
+func macosGrantAliasPolicy(profile PermissionProfile, ws codeexecutor.Workspace) string {
+	seen := map[string]bool{}
+	var filters []string
+	var ancestors []string
+	var targets []string
+	credentials := defaultCredentialDenyPaths()
+	canonicalCredentials := make(map[string]string, len(credentials))
+	for _, credential := range credentials {
+		canonicalCredentials[credential] = policyCanonicalPath(credential)
+	}
+	for _, rule := range profile.fileSystem.Rules {
+		if !accessCanRead(rule.Access) {
+			continue
+		}
+		var target string
+		switch rule.Kind {
+		case rulePath:
+			target = strings.TrimSpace(rule.Path)
+			if target == "" {
+				continue
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(ws.Path, target)
+			}
+		case ruleSpecial:
+			path, ok, err := specialPathAbs(ws, rule.Special)
+			if err != nil || !ok {
+				continue
+			}
+			target = path
+		default:
+			continue
+		}
+		targets = append(targets, target)
+		if rule.Kind != rulePath || !filepath.IsAbs(rule.Path) {
+			continue
+		}
+		canonical := policyCanonicalPath(target)
+		for _, credential := range credentials {
+			if sameOrChild(canonicalCredentials[credential], canonical) {
+				// A canonical credential grant must also permit traversing
+				// its known logical alias without reopening sibling content.
+				targets = append(targets, credential)
+			}
+		}
+	}
+	for _, target := range targets {
+		for _, path := range macosSymlinksAlongPath(target) {
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			physical := filepath.Join(policyCanonicalPath(filepath.Dir(path)), filepath.Base(path))
+			ancestors = append(ancestors, fmt.Sprintf("(path-ancestors %s)", sbplString(physical)))
+			filters = append(filters, fmt.Sprintf("(literal %s)", sbplString(path)), fmt.Sprintf("(literal %s)", sbplString(physical)))
+		}
+	}
+	if len(filters) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("(allow file-read* file-test-existence\n  %s)\n(allow file-read-metadata file-test-existence\n  %s)", strings.Join(filters, "\n  "), strings.Join(ancestors, "\n  "))
+}
+
+func macosSymlinksAlongPath(target string) []string {
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for path := filepath.Clean(target); path != "/"; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
