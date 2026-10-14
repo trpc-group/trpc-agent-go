@@ -1178,20 +1178,27 @@ eventChan, err := r.Run(
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`：`graph.checkpoint.*`
 - `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
-- `debug`：等价于 `checkpoints` + `tasks`
+- `debug`：组合 `checkpoints` + `tasks` 的预设
 - `custom`：节点主动发出的自定义事件（`graph.node.custom`）
 
 注意事项：
 
 - 同一次 `WithStreamMode` 调用中传入多个模式时取并集，每条匹配事件只转发一次。
   再次调用会覆盖前一次的模式选择。
+- `debug` 是已有类别的组合预设，不是另一个互斥的基础类别，也不包含延迟诊断。
+- 未调用 `WithStreamMode` 时不启用 StreamMode 过滤；显式调用无参数的
+  `WithStreamMode()` 会启用空选择，只转发错误事件和 Runner 生成的完成事件。
+- 选择全部支持的模式不等于关闭过滤：成功的 `tool.response` 和 `agent.transfer`
+  事件不匹配任何类别，仍会被过滤。`custom` 只匹配 `graph.node.custom`。
+- 携带 `Response.Error` 的事件不受 StreamMode 过滤限制；Runner 最终生成的
+  `runner.completion` 也不受所选类别限制。
+- StreamMode 过滤不会跳过 Runner 内部的事件处理或持久化规则。部分 Graph 事件的
+  生成逻辑也会检查所选模式，具体行为如下；这些既有生成行为与过滤是不同的环节。
 - 当选择 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件
   输出。若你需要关闭该行为，请在 `agent.WithStreamMode(...)` 之后调用
   `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
-- StreamMode 只影响 Runner 向你的 `eventChan` 转发哪些事件；Runner 内部仍会处理并持久化
-  所有事件。
-- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
-- Runner 总会额外发出一条 `runner.completion` 完成事件。
+- Graph checkpoint 生命周期事件需要选择 `checkpoints` 或 `debug` 才会生成；
+  禁用 Graph executor 事件时仍不会生成。未配置 StreamMode 不会开启这类事件的生成。
 
 若要在接收模型消息的同时展示模型调用前的处理进度，需要开启诊断事件并订阅两种类别：
 

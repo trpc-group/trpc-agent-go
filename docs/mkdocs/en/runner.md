@@ -1250,22 +1250,34 @@ Supported modes (graph-specific events require a graph workflow):
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`: `graph.checkpoint.*`
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
-- `debug`: same as `checkpoints` + `tasks`
+- `debug`: a preset combining `checkpoints` + `tasks`
 - `custom`: node-emitted events (`graph.node.custom`)
 
 Notes:
 
 - Modes supplied in one `WithStreamMode` call form a union; each matching event
   is forwarded once. A later call replaces the previous mode selection.
+- `debug` is a preset over existing categories, not another disjoint category.
+  It does not include latency diagnostics.
+- Omitting `WithStreamMode` leaves StreamMode filtering disabled. Calling
+  `WithStreamMode()` with no arguments enables an empty selection, forwarding
+  only error events plus the Runner-generated completion event.
+- Selecting every supported mode is not equivalent to disabling filtering:
+  successful `tool.response` and `agent.transfer` events match no category and
+  are still filtered out. `custom` only matches `graph.node.custom`.
+- Events carrying `Response.Error` bypass StreamMode filtering. Runner emits
+  its final `runner.completion` independently of the selected categories.
+- StreamMode filtering does not bypass Runner's internal event processing or
+  persistence rules. Some graph producers also inspect the selected modes, as
+  described below; these existing generation behaviors are separate from
+  filtering.
 - When `agent.StreamModeMessages` is selected, graph-based Large Language Model
   (LLM) nodes enable final model response events automatically for that run.
   To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
   `agent.WithStreamMode(...)`.
-- StreamMode only affects what Runner forwards to your `eventChan`. Runner still
-  processes and persists events internally.
-- For graph workflows, some event types (for example, `graph.checkpoint.*`)
-  are emitted only when their corresponding mode is selected.
-- Runner always emits a final `runner.completion` event.
+- Graph checkpoint lifecycle events require selecting `checkpoints` or `debug`;
+  disabling graph executor events still suppresses them. Omitting StreamMode
+  does not enable their generation.
 
 To receive pre-LLM progress alongside model messages, enable diagnostic emission
 and subscribe to both categories:
