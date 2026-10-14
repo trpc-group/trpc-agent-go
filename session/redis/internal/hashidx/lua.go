@@ -416,7 +416,12 @@ local toDelete = {}
 local offset = 0
 local batchSize = 100
 
-while targetReqCount < count do
+-- Selecting the target rounds and collecting their events stay separate: one
+-- pass walks the whole time index so that events of a target round are still
+-- collected when they sit behind a batch boundary or behind a foreign round
+-- interleaved with them. Stopping the scan as soon as enough rounds are seen
+-- silently leaked those events. See issue #2613.
+while true do
     local eventIDs = redis.call('ZREVRANGE', evtTimeKey, offset, offset + batchSize - 1)
     if #eventIDs == 0 then break end
 
@@ -427,15 +432,15 @@ while targetReqCount < count do
             local rid = evt.requestID or ''
             if rid ~= '' then
                 if not targetReqIDs[rid] then
-                    if targetReqCount >= count then break end
-                    targetReqIDs[rid] = true
-                    targetReqCount = targetReqCount + 1
+                    if targetReqCount < count then
+                        targetReqIDs[rid] = true
+                        targetReqCount = targetReqCount + 1
+                    end
                 end
                 if targetReqIDs[rid] then table.insert(toDelete, eid) end
             end
         end
     end
-    if targetReqCount >= count then break end
     offset = offset + batchSize
 end
 
