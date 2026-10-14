@@ -26,15 +26,16 @@ import (
 )
 
 const (
-	invalidToolCallTag   = "[invalid_tool_call]"
-	invalidToolResultTag = "[invalid_tool_result]"
-	orphanToolCallTag    = "[orphan_tool_call]"
-	orphanToolResultTag  = "[orphan_tool_result]"
+	invalidToolCallTag     = "[invalid_tool_call]"
+	invalidToolResultTag   = "[invalid_tool_result]"
+	orphanToolResultTag    = "[orphan_tool_result]"
+	interruptedToolCallTag = "[interrupted_tool_call]"
 )
 
 var (
 	errArgumentsNotValidJSON = errors.New("arguments are not valid JSON")
 	errFunctionNameEmpty     = errors.New("function name is empty")
+	errDuplicateToolCallID   = errors.New("tool call id is duplicated in the same assistant message")
 )
 
 // SanitizeMessagesWithTools downgrades invalid tool calls and tool results into user messages.
@@ -46,8 +47,14 @@ var (
 // (e.g., HTTP 400 Bad Request). This function removes such tool calls from assistant messages
 // and emits equivalent user messages that preserve the original payload for context.
 //
-// This function also downgrades orphan tool calls that are not associated with a kept
-// tool result message, and orphan tool result messages that are not associated with a
+// A valid tool call whose result never arrived — typically because the run was interrupted
+// before the tool finished — is instead PAIRED with a synthetic tool-role result tagged
+// [interrupted_tool_call], so the conversation keeps a valid assistant(tool_calls) →
+// tool(result) round and the model sees the interruption as a tool outcome rather than as
+// user text. Downgrading such calls to user messages distorted the conversation roles and
+// was repeated on every request that replayed the interrupted history.
+//
+// This function also downgrades orphan tool result messages that are not associated with a
 // kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
 // The context is used to attach request-scoped metadata to downgrade warnings.
 func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, tools map[string]tool.Tool) []model.Message {
@@ -177,11 +184,6 @@ type toolResultSplit struct {
 	orphan      []indexedMessage
 }
 
-type toolCallSplit struct {
-	kept   []model.ToolCall
-	orphan []model.ToolCall
-}
-
 // sanitizeToolRound sanitizes a single assistant tool-call round with its following tool results.
 func sanitizeToolRound(
 	ctx context.Context,
@@ -197,16 +199,39 @@ func sanitizeToolRound(
 		validation.validIDs,
 		validation.invalidIDs,
 	)
-	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
+	// A valid call is answered when one of the kept results carries its ID.
+	// Classification walks validation.validToolCalls in ORIGINAL order so the
+	// assistant message's tool_calls sequence is preserved whether a call is
+	// answered or orphaned (an orphan-first batch must not be reordered to
+	// answered-first).
+	respondedIDs := make(map[string]struct{}, len(split.kept))
+	for _, tr := range split.kept {
+		if tr.message.ToolID != "" {
+			respondedIDs[tr.message.ToolID] = struct{}{}
+		}
+	}
+	var orphansInOrder []model.ToolCall
 	filteredAssistant := assistant.message
-	filteredAssistant.ToolCalls = toolCallSplit.kept
+	filteredAssistant.ToolCalls = append(
+		[]model.ToolCall(nil),
+		validation.validToolCalls...,
+	)
+	for _, tc := range validation.validToolCalls {
+		if tc.ID == "" {
+			orphansInOrder = append(orphansInOrder, tc)
+			continue
+		}
+		if _, answered := respondedIDs[tc.ID]; !answered {
+			orphansInOrder = append(orphansInOrder, tc)
+		}
+	}
 	if len(filteredAssistant.ToolCalls) == 0 {
 		filteredAssistant.ToolCalls = nil
 	}
 	out := make(
 		[]indexedMessage,
 		0,
-		1+len(toolResults)+len(validation.invalidToolCalls)+len(toolCallSplit.orphan)+len(split.orphan),
+		1+len(toolResults)+len(validation.invalidToolCalls)+len(orphansInOrder)+len(split.orphan),
 	)
 	if !message.IsEmptyAssistantMessage(filteredAssistant) {
 		out = append(out, indexedMessage{
@@ -214,12 +239,19 @@ func sanitizeToolRound(
 			sourceIndex: assistant.sourceIndex,
 		})
 		out = append(out, split.kept...)
-	}
-	for _, orphanCall := range toolCallSplit.orphan {
-		out = append(out, indexedMessage{
-			message:     downgradeOrphanToolCall(ctx, orphanCall),
-			sourceIndex: assistant.sourceIndex,
-		})
+		// Orphan tool calls — valid calls whose result never arrived,
+		// typically because the run was interrupted mid-execution — stay in
+		// the assistant message above and are answered here by synthetic
+		// interrupted results, in the same original order. This keeps a
+		// wire-valid tool round and the correct role for the model, instead
+		// of downgrading the call to a user message on every request that
+		// replays the interrupted history.
+		for _, orphanCall := range orphansInOrder {
+			out = append(out, indexedMessage{
+				message:     synthesizeInterruptedToolResult(ctx, orphanCall),
+				sourceIndex: assistant.sourceIndex,
+			})
+		}
 	}
 	for _, invalid := range validation.invalidToolCalls {
 		out = append(out, indexedMessage{
@@ -246,37 +278,30 @@ func sanitizeToolRound(
 	return out
 }
 
-func splitToolCalls(toolCalls []model.ToolCall, toolResults []indexedMessage) toolCallSplit {
-	out := toolCallSplit{
-		kept: make([]model.ToolCall, 0, len(toolCalls)),
-	}
-	respondedIDs := make(map[string]struct{}, len(toolResults))
-	for _, tr := range toolResults {
-		if tr.message.ToolID == "" {
-			continue
-		}
-		respondedIDs[tr.message.ToolID] = struct{}{}
-	}
-	for _, tc := range toolCalls {
-		if tc.ID != "" {
-			if _, ok := respondedIDs[tc.ID]; ok {
-				out.kept = append(out.kept, tc)
-				continue
-			}
-		}
-		out.orphan = append(out.orphan, tc)
-	}
-	return out
-}
-
 // validateToolCalls validates tool call arguments and groups tool calls by validity.
+// A non-empty call ID may be claimed only once per assistant message: later
+// calls repeating a claimed ID are reported invalid so the sanitizer
+// downgrades them, keeping the retained tool calls (and any synthetic
+// results paired with them) unique by ID on the wire.
 func validateToolCalls(toolCalls []model.ToolCall, tools map[string]tool.Tool) toolCallValidation {
 	out := toolCallValidation{
 		validToolCalls: make([]model.ToolCall, 0, len(toolCalls)),
 		validIDs:       make(map[string]struct{}),
 		invalidIDs:     make(map[string]struct{}),
 	}
+	seenIDs := make(map[string]struct{}, len(toolCalls))
 	for _, tc := range toolCalls {
+		if tc.ID != "" {
+			if _, dup := seenIDs[tc.ID]; dup {
+				out.invalidToolCalls = append(out.invalidToolCalls, invalidToolCall{
+					call:   tc,
+					reason: errDuplicateToolCallID.Error(),
+				})
+				out.invalidIDs[tc.ID] = struct{}{}
+				continue
+			}
+			seenIDs[tc.ID] = struct{}{}
+		}
 		validated, ok, reason := validateToolCall(tc, tools)
 		if ok {
 			out.validToolCalls = append(out.validToolCalls, validated)
@@ -583,23 +608,32 @@ func downgradeInvalidToolCall(ctx context.Context, call model.ToolCall, reason s
 	}
 }
 
-// downgradeOrphanToolCall converts a tool call without a matching tool result into a user message.
-func downgradeOrphanToolCall(ctx context.Context, call model.ToolCall) model.Message {
+// synthesizeInterruptedToolResult answers an orphan tool call — a valid call
+// whose result never arrived — with a synthetic tool-role result, keeping a
+// valid tool round in the conversation. The result deliberately does NOT
+// claim the call did not complete: a missing result only proves the result
+// is unavailable, and the tool may have taken effect before the result was
+// lost, so the model is told the execution status is unknown and must
+// verify any effects before re-issuing a side-effecting call. The result
+// carries the call id and tool name but not the original arguments: the
+// assistant message already preserves them, and repeating the payload on
+// every request that replays this history would bloat the context and
+// could re-emit sensitive argument content.
+func synthesizeInterruptedToolResult(ctx context.Context, call model.ToolCall) model.Message {
 	log.WarnfContext(ctx,
-		"toolcall: downgraded orphan tool call to user message: name=%q id=%q",
+		"toolcall: paired orphan tool call with synthetic interrupted result: name=%q id=%q",
 		call.Function.Name,
 		call.ID,
 	)
 	content := fmt.Sprintf(
-		"%s Tool call was downgraded to a user message because no matching tool result exists.\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
-		orphanToolCallTag,
-		call.Function.Name,
-		call.ID,
-		string(call.Function.Arguments),
+		"%s The result of this tool call is unavailable: execution was interrupted or the result was lost before it was delivered. The execution status of the call is unknown, so verify any effects before re-issuing a side-effecting call. The call and its arguments are preserved in the preceding assistant message.",
+		interruptedToolCallTag,
 	)
 	return model.Message{
-		Role:    model.RoleUser,
-		Content: content,
+		Role:     model.RoleTool,
+		ToolID:   call.ID,
+		ToolName: call.Function.Name,
+		Content:  content,
 	}
 }
 
