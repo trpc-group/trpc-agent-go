@@ -470,11 +470,11 @@ func flowEventWaitTimeout(ctx context.Context) time.Duration {
 	return eventCompletionTimeout
 }
 
-// maybeResumePendingToolCalls inspects the latest session events and, when
-// RunOptions.Resume is enabled, executes any pending tool calls before the
-// next LLM request. A pending tool call is defined as the latest persisted
-// event being an assistant response that contains tool calls but no tool
-// results after it.
+// maybeResumePendingToolCalls inspects the invocation's latest session event
+// and, when RunOptions.Resume is enabled, executes any pending tool calls
+// before the next LLM request. A pending tool call is defined as the latest
+// persisted event of the invocation's own branch being an assistant response
+// that contains tool calls but no tool results after it.
 func (f *Flow) maybeResumePendingToolCalls(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -499,18 +499,7 @@ func (f *Flow) maybeResumePendingToolCalls(
 		return
 	}
 
-	invocation.Session.EventMu.RLock()
-	events := invocation.Session.Events
-	var lastResp *model.Response
-	if len(events) > 0 {
-		last := events[len(events)-1]
-		if last.Response != nil && !last.IsPartial &&
-			last.IsValidContent() && last.Response.IsToolCallResponse() {
-			lastResp = last.Response
-		}
-	}
-	invocation.Session.EventMu.RUnlock()
-
+	lastResp := pendingToolCallResponse(invocation)
 	if lastResp == nil {
 		return
 	}
@@ -527,6 +516,82 @@ func (f *Flow) maybeResumePendingToolCalls(
 			break
 		}
 	}
+}
+
+// pendingToolCallResponse returns an owned tool-call response only when the
+// invocation's resume scan stops on that response. It returns nil when the
+// scan reaches a non-executable boundary or no matching event.
+//
+// Child invocations share the Session and inherit RunOptions.Resume, so the
+// latest Session event may belong to another branch. Judging by it would
+// replay another agent's tool calls, or miss this invocation's own pending
+// calls whenever another branch wrote last. A branch is identified by its
+// exact filter key rather than the prefix match used for history, because a
+// parent and its children share key prefixes but never their tool calls.
+// Scan termination and tool-call ownership are separate: an event can end
+// the scan without being executable. Only an owned assistant tool-call
+// response is resumed.
+func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
+	filterKey := invocation.GetEventFilterKey()
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	events := invocation.Session.Events
+	for i := len(events) - 1; i >= 0; i-- {
+		evt := &events[i]
+		owned, terminal := classifyBranchEvent(evt, invocation, filterKey)
+		if !terminal {
+			continue
+		}
+		if owned && evt.Response != nil && !evt.IsPartial &&
+			evt.IsValidContent() && evt.Response.IsToolCallResponse() {
+			return evt.Response
+		}
+		return nil
+	}
+	return nil
+}
+
+// classifyBranchEvent reports resume ownership and whether evt ends the
+// backward scan.
+//
+// A keyed event uses FilterKey, or Branch when Version is not current. It is
+// owned and terminal only on an exact key match. An empty filterKey matches
+// every event and treats each one as owned.
+//
+// An unkeyed event is not a barrier for a child or for any other filter key,
+// so those invocations keep scanning for their own pending call. On the
+// default root (no parent, and filterKey is the agent name or the session app
+// name) every unkeyed event is terminal, because that history is visible to
+// the root. It is owned only when its author is the agent, so a later unkeyed
+// user message or another author's tool result stops the scan without
+// replaying an older tool call.
+func classifyBranchEvent(
+	evt *event.Event,
+	invocation *agent.Invocation,
+	filterKey string,
+) (owned bool, terminal bool) {
+	eventKey := evt.FilterKey
+	if evt.Version != event.CurrentVersion {
+		eventKey = evt.Branch
+	}
+	if filterKey == "" {
+		return true, true
+	}
+	if eventKey != "" {
+		match := eventKey == filterKey
+		return match, match
+	}
+	if invocation.GetParentInvocation() != nil {
+		return false, false
+	}
+	appName := ""
+	if invocation.Session != nil {
+		appName = invocation.Session.AppName
+	}
+	if filterKey != invocation.AgentName && filterKey != appName {
+		return false, false
+	}
+	return evt.Author == invocation.AgentName, true
 }
 
 func (f *Flow) maybeSyncSummaryIntraRun(
