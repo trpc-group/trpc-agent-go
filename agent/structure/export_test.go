@@ -447,6 +447,13 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 		Type: "object",
 		Properties: map[string]*tool.Schema{
 			"name": {Type: "string", Pattern: "^[a-z]+$"},
+			"page_size": {
+				Type:             "integer",
+				Minimum:          json.Number("1"),
+				Maximum:          json.Number("9007199254740993"),
+				ExclusiveMinimum: json.Number("0"),
+				ExclusiveMaximum: json.Number("9007199254740994"),
+			},
 		},
 		AdditionalProperties: &tool.Schema{Type: "string"},
 		Default: map[string]any{
@@ -491,6 +498,14 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 	require.NotSame(t, outputSchema, exported.OutputSchema)
 	require.NotNil(t, exported.InputSchema.Properties["name"])
 	assert.Equal(t, "^[a-z]+$", exported.InputSchema.Properties["name"].Pattern)
+	pageSize := exported.InputSchema.Properties["page_size"]
+	require.NotNil(t, pageSize)
+	assert.Equal(t, json.Number("1"), pageSize.Minimum)
+	assert.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
+	assert.Equal(t, json.Number("0"), pageSize.ExclusiveMinimum)
+	assert.Equal(t, json.Number("9007199254740994"), pageSize.ExclusiveMaximum)
+	inputSchema.Properties["page_size"].Maximum = json.Number("10")
+	assert.Equal(t, json.Number("9007199254740993"), pageSize.Maximum)
 	require.NotNil(t, exported.OutputSchema.Items)
 	inputSchema.Properties["name"].Type = "integer"
 	assert.Equal(t, "string", exported.InputSchema.Properties["name"].Type)

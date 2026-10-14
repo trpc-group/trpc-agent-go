@@ -1722,7 +1722,9 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 			continue
 		}
 		var parameters shared.FunctionParameters
-		if err := json.Unmarshal(schemaBytes, &parameters); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(schemaBytes))
+		decoder.UseNumber()
+		if err := decoder.Decode(&parameters); err != nil {
 			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
 			continue
 		}

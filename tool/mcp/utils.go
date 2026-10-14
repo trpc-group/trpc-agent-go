@@ -10,6 +10,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -17,7 +18,7 @@ import (
 
 // convertMCPSchemaToSchema converts MCP's JSON schema to our Schema format.
 func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
-	schemaBytes, err := json.Marshal(mcpSchema)
+	schemaBytes, err := schemaJSONBytes(mcpSchema)
 	if err != nil {
 		return &tool.Schema{
 			Type: "object",
@@ -25,7 +26,9 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	}
 
 	var schemaMap map[string]any
-	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(schemaBytes))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schemaMap); err != nil {
 		return &tool.Schema{
 			Type: "object",
 		}
@@ -41,6 +44,10 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	if patternVal, ok := schemaMap["pattern"].(string); ok {
 		schema.Pattern = patternVal
 	}
+	schema.Minimum = schemaNumber(schemaMap, "minimum")
+	schema.Maximum = schemaNumber(schemaMap, "maximum")
+	schema.ExclusiveMinimum = schemaNumber(schemaMap, "exclusiveMinimum")
+	schema.ExclusiveMaximum = schemaNumber(schemaMap, "exclusiveMaximum")
 	if propsVal, ok := schemaMap["properties"].(map[string]any); ok {
 		schema.Properties = convertProperties(propsVal)
 	}
@@ -93,12 +100,16 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			if patternVal, ok := propMap["pattern"].(string); ok {
 				propSchema.Pattern = patternVal
 			}
+			propSchema.Minimum = schemaNumber(propMap, "minimum")
+			propSchema.Maximum = schemaNumber(propMap, "maximum")
+			propSchema.ExclusiveMinimum = schemaNumber(propMap, "exclusiveMinimum")
+			propSchema.ExclusiveMaximum = schemaNumber(propMap, "exclusiveMaximum")
 			if defaultVal, exists := propMap["default"]; exists {
-				propSchema.Default = defaultVal
+				propSchema.Default = legacyJSONValue(defaultVal)
 			}
 			if enumVal, exists := propMap["enum"]; exists {
 				if enumArr, ok := enumVal.([]any); ok {
-					propSchema.Enum = enumArr
+					propSchema.Enum = legacyJSONValues(enumArr)
 				}
 			}
 			// Recursively process nested properties.
@@ -123,7 +134,7 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			}
 			// Handle additionalProperties field.
 			if additionalPropsVal, exists := propMap["additionalProperties"]; exists {
-				propSchema.AdditionalProperties = additionalPropsVal
+				propSchema.AdditionalProperties = legacyJSONValue(additionalPropsVal)
 			}
 			if refVal, ok := propMap["$ref"].(string); ok {
 				propSchema.Ref = refVal
@@ -135,4 +146,75 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 		}
 	}
 	return result
+}
+
+// schemaJSONBytes returns the JSON encoding of mcpSchema.
+// json.RawMessage is returned as-is so MCP RawInputSchema/RawOutputSchema
+// keep exact number tokens without a re-marshal through float64.
+func schemaJSONBytes(mcpSchema any) ([]byte, error) {
+	if raw, ok := mcpSchema.(json.RawMessage); ok {
+		return raw, nil
+	}
+	return json.Marshal(mcpSchema)
+}
+
+// schemaNumber converts a generic numeric JSON Schema keyword to json.Number.
+// The surrounding MCP schema is decoded into map[string]any, so a JSON round
+// trip avoids lossy type assertions while preserving integer and decimal forms.
+func schemaNumber(schema map[string]any, keyword string) json.Number {
+	value, ok := schema[keyword]
+	if !ok {
+		return ""
+	}
+	return anyToSchemaNumber(value)
+}
+
+// anyToSchemaNumber converts a decoded JSON value to json.Number.
+// Non-numeric values, including Draft-4 boolean exclusive bounds, become empty.
+func anyToSchemaNumber(value any) json.Number {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	var number json.Number
+	if err := json.Unmarshal(encoded, &number); err != nil {
+		return ""
+	}
+	return number
+}
+
+// legacyJSONValue restores pre-UseNumber map semantics for public any fields.
+// Numeric values that UseNumber decoded as json.Number become float64 so
+// Default, Enum, and AdditionalProperties keep their historical dynamic types.
+func legacyJSONValue(value any) any {
+	switch typed := value.(type) {
+	case json.Number:
+		f, err := typed.Float64()
+		if err != nil {
+			return typed
+		}
+		return f
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			out[key] = legacyJSONValue(nested)
+		}
+		return out
+	case []any:
+		return legacyJSONValues(typed)
+	default:
+		return value
+	}
+}
+
+// legacyJSONValues restores pre-UseNumber slice semantics for enum values.
+func legacyJSONValues(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = legacyJSONValue(value)
+	}
+	return out
 }
