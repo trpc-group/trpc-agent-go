@@ -8,7 +8,7 @@ This example demonstrates Anthropic prompt caching with **three independent cont
 |--------|---------------|-------------|
 | `WithCacheSystemPrompt(true)` | System prompt | System prompt is stable and > 1024 tokens |
 | `WithCacheTools(true)` | Tool definitions | Tools don't change frequently |
-| `WithCacheMessages(true)` | Conversation history | Multi-turn conversations with 3+ turns |
+| `WithCacheMessages(true)` | Conversation history: the last assistant message, plus the newest tool results in the request that carries them | Multi-turn conversations with 3+ turns |
 
 All options default to `false`. Enable them individually based on your use case.
 
@@ -93,6 +93,22 @@ Turn N: breakpoint keeps moving forward, more tokens served from cache
 | 6 | ~2544 | Most tokens from cache |
 
 `cache_read` increases each turn as the breakpoint moves forward, covering more conversation history.
+
+#### Tool-Result Breakpoint
+
+When a turn runs tools, the request that carries the tool results gets a second message breakpoint, on the newest tool-result message:
+
+```
+Tool turn: [system] [tools] [user1] [asst1] [user2] [asst2: tool_use ← breakpoint] [tool results ← breakpoint]
+         → Tool output is written to the cache in the request that carries it,
+           instead of waiting for the next turn's assistant breakpoint
+```
+
+Without it, every tool result is sent uncached once and only written when the assistant breakpoint moves past it in the next request. This breakpoint is conditional:
+
+- It is placed on the serialized request body, after the request callback and any client or request options (such as `option.WithJSONSet`) have been applied, and only when one of Anthropic's four `cache_control` slots is still free on that body. The system, tools, and last-assistant markers and any marker you add yourself all count. When no slot is left, the tool results are cached one request later instead.
+- A marker you already placed on that block, through the callback or a request option, is left untouched, TTL included.
+- It is inserted ahead of any middleware you register, so a middleware that hashes or signs the body sees the final bytes.
 
 ## Sample Output
 
