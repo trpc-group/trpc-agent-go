@@ -3645,7 +3645,11 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 		Metadata:    tool.MetadataOf(semanticTool),
 	}
 	if checker, ok := semanticTool.(tool.PermissionChecker); ok {
-		decision, err := checker.CheckPermission(ctx, req)
+		snapshot, err := itool.SnapshotPermissionRequest(req)
+		if err != nil {
+			return nil, err
+		}
+		decision, err := checker.CheckPermission(ctx, snapshot)
 		result, err := normalizeToolPermissionResult(req, decision, err)
 		if result != nil || err != nil {
 			return result, err
@@ -3654,7 +3658,11 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
 		return nil, nil
 	}
-	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	snapshot, err := itool.SnapshotPermissionRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, snapshot)
 	return normalizeToolPermissionResult(req, decision, err)
 }
 

@@ -74,6 +74,10 @@ func WithUserIDSupplier(supplier UserIDSupplier) Option {
 }
 
 // WithSessionIDSupplier overrides the session ID supplier for reviewer runs.
+// By default, requests with Context receive a fresh session ID; legacy requests
+// reuse the parent session ID when available. Custom suppliers are responsible
+// for preventing old review decisions from entering a new review's history.
+// The application owns session retention/cleanup through its runner's service.
 func WithSessionIDSupplier(supplier SessionIDSupplier) Option {
 	return func(opts *options) {
 		opts.sessionIDSupplier = supplier
@@ -89,6 +93,11 @@ func defaultUserIDSupplier(ctx context.Context, req *Request) (string, error) {
 }
 
 func defaultSessionIDSupplier(ctx context.Context, req *Request) (string, error) {
+	// Evidence-bearing requests already contain their review history. Isolate
+	// their reviewer sessions so earlier decisions cannot become new evidence.
+	if req != nil && req.Context != nil {
+		return reviewerSessionIDPrefix + uuid.NewString(), nil
+	}
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if ok && invocation != nil && invocation.Session != nil && invocation.Session.ID != "" {
 		return reviewerSessionIDPrefix + invocation.Session.ID, nil

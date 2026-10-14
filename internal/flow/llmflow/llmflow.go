@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
@@ -431,6 +432,9 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 			),
 		)
 		evt.RequiresCompletion = true
+		// This queue accepts host user input even when a child invocation
+		// consumes it. Its source is independent of invocation ancestry.
+		messageorigin.MarkInput(evt, messageorigin.UserInput)
 
 		if err := agent.EmitEvent(
 			ctx,

@@ -1938,7 +1938,7 @@ workerTemplate := llmagent.New(
 
 dynamicAgent := agenttool.NewDynamicTool(
     // Optional: define the child Agent execution boundary: default model,
-    // executor, callbacks, permission policy, and similar runtime settings.
+    // executor, callbacks, and similar runtime settings.
     agenttool.WithTemplateAgent(workerTemplate),
     // Optional: restrict the maximum tool set the model can choose from.
     agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
@@ -1949,7 +1949,10 @@ dynamicAgent := agenttool.NewDynamicTool(
 cannot use `dynamic_agent` to choose arbitrary Agents, provider model names, or
 executors. It can only fill `request`, optionally set `instruction`, optionally
 narrow the tools/skills subset, and select an explicitly registered model
-profile inside the boundary configured by the developer.
+profile inside the boundary configured by the developer. The parent run's
+`ToolPermissionPolicy` remains in force for child tools, including template-based
+children. Earlier versions cleared it for templates; hosts must now allow intended
+child tools through the parent policy as well.
 
 To let the parent choose among host-approved model roles, register stable
 aliases with descriptions:
@@ -2002,8 +2005,9 @@ Common options:
   `NewDynamicTool`; regular `NewTool(agent)` always uses the wrapped Agent's
   `Info().Name`.
 - `WithTemplateAgent(agent)`: set the dynamic child Agent template, commonly used
-  to fix the default model, executor, callbacks, permission policy, and other
-  runtime boundaries.
+  to fix the default model, executor, callbacks, and other runtime boundaries.
+  The parent run's `ToolPermissionPolicy` is still inherited and checked before
+  each child tool executes; deny/ask/error results prevent execution.
 - `WithAgentModelProfile(name, description, model)`: register one
   host-authorized model alias that may override the model for one child call.
   Repeat the option to add profiles. No `model` field is exposed when no profile
