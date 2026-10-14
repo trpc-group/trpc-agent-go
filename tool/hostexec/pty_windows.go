@@ -12,12 +12,19 @@
 package hostexec
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 )
 
-func startPTY(cmd *exec.Cmd) (*os.File, func() error, error) {
+func startPTY(
+	ctx context.Context,
+	cmd *exec.Cmd,
+	hook PreStartHook,
+) (*os.File, func() error, error) {
+	_ = ctx
 	_ = cmd
+	_ = hook
 	return nil, nil, errors.New("pty is not supported on windows")
 }

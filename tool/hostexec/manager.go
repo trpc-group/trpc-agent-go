@@ -41,9 +41,10 @@ type manager struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 
-	maxLines int
-	jobTTL   time.Duration
-	baseEnv  map[string]string
+	maxLines     int
+	jobTTL       time.Duration
+	baseEnv      map[string]string
+	preStartHook PreStartHook
 
 	clock func() time.Time
 }
@@ -106,6 +107,7 @@ func (m *manager) exec(
 			timeout,
 			m.baseEnv,
 			m.maxLines,
+			m.preStartHook,
 		)
 		if err != nil {
 			return execResult{}, err
@@ -117,7 +119,7 @@ func (m *manager) exec(
 		}, nil
 	}
 
-	sess, err := m.startBackground(params, timeout)
+	sess, err := m.startBackground(ctx, params, timeout)
 	if err != nil {
 		return execResult{}, err
 	}
@@ -176,6 +178,7 @@ func runForeground(
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	hook PreStartHook,
 ) (string, int, error) {
 	// A foreground session is never registered with the manager, so write_stdin
 	// can never reach it and no caller can answer a prompt it raises. Detach it
@@ -185,11 +188,13 @@ func runForeground(
 	// session on Unix, no console on Windows. A prompting command then fails
 	// promptly instead of waiting out the run timeout.
 	sess, err := startSession(
+		ctx,
 		"",
 		params,
 		timeout,
 		baseEnv,
 		maxLines,
+		hook,
 		detachStdin,
 	)
 	if err != nil {
@@ -205,6 +210,21 @@ func runForeground(
 
 	out, code := sess.allOutput()
 	return out, code, nil
+}
+
+// applyPreStartHook runs the caller's pre-start hook, if any, on a fully
+// prepared command. The context is the tool call's, handed to the hook for
+// its preparation only; the command itself is never bound to it. A nil hook
+// is a no-op.
+func applyPreStartHook(
+	ctx context.Context,
+	cmd *exec.Cmd,
+	hook PreStartHook,
+) error {
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx, cmd)
 }
 
 func timeoutDuration(timeoutS int) time.Duration {
@@ -289,15 +309,18 @@ func exitCode(err error) int {
 }
 
 func (m *manager) startBackground(
+	ctx context.Context,
 	params execParams,
 	timeout time.Duration,
 ) (*session, error) {
 	sess, err := startSession(
+		ctx,
 		newSessionID(),
 		params,
 		timeout,
 		m.baseEnv,
 		m.maxLines,
+		m.preStartHook,
 		keepStdin,
 	)
 	if err != nil {
@@ -317,12 +340,18 @@ const (
 	detachStdin = true
 )
 
+// startSession builds and starts the command for a session. ctx is the tool
+// call's context and reaches only the pre-start hook: the process runs under
+// runCtx, bounded by the run timeout and the session's own cleanup, so a call
+// that returns or is cancelled does not tear down a background session.
 func startSession(
+	ctx context.Context,
 	id string,
 	params execParams,
 	timeout time.Duration,
 	baseEnv map[string]string,
 	maxLines int,
+	hook PreStartHook,
 	detach bool,
 ) (*session, error) {
 	runCtx, cancel := context.WithTimeout(
@@ -342,7 +371,7 @@ func startSession(
 	sess.cmd = cmd
 
 	if params.Pty {
-		master, closeIO, err := startPTY(cmd)
+		master, closeIO, err := startPTY(ctx, cmd, hook)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -356,12 +385,26 @@ func startSession(
 			sess.readFrom(master)
 		}()
 	} else {
+		// The hook runs before any pipe exists: a rejection then leaves nothing
+		// to close, whereas after startPipes the child ends would stay open
+		// until garbage collection. It also runs after preparePipeCommand so
+		// it sees the process attributes, and preparePipeCommand runs again
+		// afterwards to restore the exact state the mode needs: a hook that
+		// replaces SysProcAttr must not be able to drop the group leadership
+		// terminateProcessTree relies on, and one that sets the mutually
+		// exclusive counterpart (Setsid next to Setpgid, or the reverse) must
+		// not make cmd.Start fail with EPERM.
+		preparePipeCommand(cmd, detach)
+		if err := applyPreStartHook(ctx, cmd, hook); err != nil {
+			cancel()
+			return nil, err
+		}
+		preparePipeCommand(cmd, detach)
 		stdin, stdout, stderr, err := startPipes(cmd, detach)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
-		preparePipeCommand(cmd, detach)
 		sess.stdin = stdin
 		sess.closeIO = func() error {
 			if stdin != nil {
