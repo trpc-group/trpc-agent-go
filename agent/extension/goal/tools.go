@@ -54,6 +54,7 @@ type goalTool struct {
 }
 
 var _ tool.CallableTool = (*goalTool)(nil)
+var _ tool.ConcurrencyAware = (*goalTool)(nil)
 
 func newGoalTool(kind int, name string, stateKey string) *goalTool {
 	t := &goalTool{kind: kind, name: name, stateKey: stateKey}
@@ -150,6 +151,19 @@ func goalOutputSchema() *tool.Schema {
 		},
 		Required: []string{"message"},
 	}
+}
+
+// IsConcurrencySafe keeps the mutating goal tools off the parallel path.
+//
+// create_goal and update_goal are read-modify-write transitions over the
+// session: create refuses while a goal is active, update requires one. A
+// parallel worker reads a session snapshot cloned before any sibling started,
+// so two create calls in one batch both see "no active goal" and both succeed,
+// where the second must fail; the result is decided before StateDelta runs, so
+// merging deltas afterwards cannot repair it. get_goal only reads and raises
+// no objection.
+func (t *goalTool) IsConcurrencySafe() bool {
+	return t.kind == toolKindGet
 }
 
 func (t *goalTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
