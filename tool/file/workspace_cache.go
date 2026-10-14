@@ -56,11 +56,18 @@ func buildWorkspaceIndex(ctx context.Context) workspaceIndex {
 	return workspaceIndex{files: files, dirs: dirs}
 }
 
+// matchWorkspacePaths lists the workspace files and directories under dir
+// whose path relative to dir matches pattern. A positive limit bounds the
+// work: collection stops as soon as more than limit entries have matched, so
+// a caller that refuses over-wide results sees limit+1 entries at most and
+// never pays for a broad pattern's full listing. A limit of zero or less
+// lists everything.
 func matchWorkspacePaths(
 	ctx context.Context,
 	dir string,
 	pattern string,
 	caseSensitive bool,
+	limit int,
 ) ([]string, []string, error) {
 	if strings.TrimSpace(pattern) == "" {
 		return nil, nil, nil
@@ -90,6 +97,9 @@ func matchWorkspacePaths(
 		}
 		if ok {
 			files = append(files, fileref.WorkspaceRef(p))
+			if limit > 0 && len(files) > limit {
+				return files, nil, nil
+			}
 		}
 	}
 
@@ -114,6 +124,9 @@ func matchWorkspacePaths(
 		}
 		if ok {
 			folders = append(folders, fileref.WorkspaceRef(d))
+			if limit > 0 && len(files)+len(folders) > limit {
+				return files, folders, nil
+			}
 		}
 	}
 
