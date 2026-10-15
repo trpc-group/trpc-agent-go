@@ -1,0 +1,38 @@
+diff --git a/review_risks.go b/review_risks.go
+--- a/review_risks.go
++++ b/review_risks.go
+@@ -1,3 +1,30 @@
+ package sample
+ 
++func Review(ctx context.Context, name string, mu *sync.Mutex, files []io.Closer) error {
++	resp, err := http.Get("https://example.com")
++	if err != nil {
++		return err
++	}
++	_ = resp
++
++	query := "SELECT * FROM users WHERE name = '" + name + "'"
++	_ = query
++
++	cmd := exec.Command("sh", "-c", name)
++	_ = cmd
++
++	child := context.Background()
++	_ = child
++
++	mu.Lock()
++	apply()
++
++	for _, file := range files {
++		defer file.Close()
++	}
++
++	if err := persist(); err != nil {
++		return err
++	}
++	out := ""
++	for _, file := range files {
++		out += fileName(file)
++	}
++	return nil
++}
