@@ -187,6 +187,82 @@ func TestInvalidateBindingCopiesMetadataAndSharesImmutableItems(t *testing.T) {
 	)
 }
 
+func TestRebaseFailureCopiesMetadataAndSharesImmutableItems(t *testing.T) {
+	history := []model.Message{
+		model.NewUserMessage("first"),
+		model.NewAssistantMessage("second"),
+	}
+	tests := []struct {
+		name          string
+		after         []model.Message
+		sourceIndexes []int
+		reason        string
+	}{
+		{
+			name:   "transform provenance mismatch",
+			after:  []model.Message{model.NewUserMessage("compacted")},
+			reason: BindingReasonTransformMismatch,
+		},
+		{
+			name:          "rebase failure",
+			after:         []model.Message{history[0]},
+			sourceIndexes: []int{0},
+			reason:        BindingReasonRebaseFailed,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invocation := agent.NewInvocation()
+			AttachProjection(invocation, projectionFor(history, len(history)))
+			Finalize(invocation, &model.Request{Messages: history}, 128)
+			invocationView := invocation.View()
+
+			originalState, ok := agent.GetStateValue[*invocationState](
+				invocation,
+				stateKey,
+			)
+			require.True(t, ok)
+			viewState, ok := agent.GetStateValue[*invocationState](
+				invocationView,
+				stateKey,
+			)
+			require.True(t, ok)
+			require.Same(t, originalState, viewState)
+
+			require.False(t, RebaseAfterTransform(
+				invocationView,
+				history,
+				test.after,
+				test.sourceIndexes,
+			))
+
+			failedState, ok := agent.GetStateValue[*invocationState](
+				invocationView,
+				stateKey,
+			)
+			require.True(t, ok)
+			require.NotSame(t, originalState, failedState)
+			require.NotSame(t, originalState.view, failedState.view)
+			require.Same(
+				t,
+				&originalState.view.Items[0],
+				&failedState.view.Items[0],
+			)
+
+			require.True(t, originalState.view.Bound)
+			require.Equal(t, BindingReasonBound, originalState.view.BindingReason)
+			require.Equal(t, len(history), originalState.view.ContentRequestLength)
+			require.False(t, originalState.bindingInvalidated)
+
+			require.False(t, failedState.view.Bound)
+			require.Equal(t, test.reason, failedState.view.BindingReason)
+			require.Equal(t, len(test.after), failedState.view.ContentRequestLength)
+			require.True(t, failedState.bindingInvalidated)
+		})
+	}
+}
+
 func TestBindingFromContextReportsViewState(t *testing.T) {
 	history := []model.Message{
 		model.NewUserMessage("first"),
