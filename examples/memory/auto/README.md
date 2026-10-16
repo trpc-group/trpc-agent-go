@@ -235,6 +235,7 @@ memoryService := memoryinmemory.NewMemoryService(
 | `MYSQL_USER`              | MySQL user                               | `root`                      |
 | `MYSQL_PASSWORD`          | MySQL password                           | ``                          |
 | `MYSQL_DATABASE`          | MySQL database                           | `trpc_agent_go`             |
+| `MONGODB_URI`             | MongoDB connection URI                   | `mongodb://localhost:27017` |
 
 ## Command Line Arguments
 
@@ -242,7 +243,7 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `-model`     | Name of the model for chat responses                                      | `deepseek-v4-flash`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
-| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql`, `mysqlvec`, `chromadb` | `inmemory` |
+| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql`, `mysqlvec`, `chromadb`, `mongodb` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
 | `-knowledge` | Enable a small local knowledge base with `knowledge_search`                | `false`          |
@@ -337,6 +338,10 @@ export CHROMA_BASE_URL=http://localhost:8000
 export CHROMA_COLLECTION=memories
 export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
 go run . -memory chromadb
+
+# MongoDB memory service
+export MONGODB_URI=mongodb://localhost:27017
+go run . -memory mongodb
 ```
 
 ChromaDB runs as a separate server. `CHROMA_BASE_URL` may target localhost,
@@ -393,7 +398,7 @@ Usage of ./auto:
   -knowledge
         Enable a small local knowledge base with knowledge_search
   -memory string
-        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql, mysqlvec, chromadb (default "inmemory")
+        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql, mysqlvec, chromadb, mongodb (default "inmemory")
   -model string
         Model for chat responses (default "deepseek-v4-flash")
   -streaming
