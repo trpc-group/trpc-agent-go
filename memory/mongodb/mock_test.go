@@ -47,6 +47,11 @@ type mockClient struct {
 	mu  sync.Mutex
 	ops []mockOp
 
+	// deleteOneCtxStates records the context state (Err and deadline) at the
+	// moment of each DeleteOne call, so tests can assert which context a
+	// compensation step ran on even after that context is later cancelled.
+	deleteOneCtxStates []deleteOneCtxState
+
 	insertOneFn     func(doc any) (*mongo.InsertOneResult, error)
 	updateOneFn     func(filter, update any, opts []*options.UpdateOptions) (*mongo.UpdateResult, error)
 	updateManyFn    func(filter, update any, opts []*options.UpdateOptions) (*mongo.UpdateResult, error)
@@ -62,6 +67,13 @@ type mockClient struct {
 }
 
 var _ mongoClient = (*mockClient)(nil)
+
+// deleteOneCtxState snapshots the state of the context passed to a DeleteOne
+// call at call time.
+type deleteOneCtxState struct {
+	err         error
+	hasDeadline bool
+}
 
 func (m *mockClient) record(op mockOp) {
 	m.mu.Lock()
@@ -114,9 +126,14 @@ func (m *mockClient) UpdateMany(_ context.Context, db, coll string, filter, upda
 	return &mongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}, nil
 }
 
-func (m *mockClient) DeleteOne(_ context.Context, db, coll string, filter any,
+func (m *mockClient) DeleteOne(ctx context.Context, db, coll string, filter any,
 	_ ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	m.record(mockOp{name: "DeleteOne", database: db, coll: coll, filter: filter})
+	_, hasDeadline := ctx.Deadline()
+	m.mu.Lock()
+	m.deleteOneCtxStates = append(m.deleteOneCtxStates,
+		deleteOneCtxState{err: ctx.Err(), hasDeadline: hasDeadline})
+	m.mu.Unlock()
 	if m.deleteOneFn != nil {
 		return m.deleteOneFn(filter)
 	}

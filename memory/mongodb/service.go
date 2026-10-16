@@ -32,6 +32,11 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
+// rollbackTimeout bounds the best-effort compensation that undoes a rotation
+// target after the source removal failed. It runs on a detached context, so
+// it must be short to avoid lingering operations after the caller is gone.
+const rollbackTimeout = 5 * time.Second
+
 // mongoClient is the combined client surface required by the memory service.
 // The default storage client implements both interfaces.
 type mongoClient interface {
@@ -379,12 +384,14 @@ func (s *Service) updateInPlace(
 // If removing the source fails after the target was created or revived, the
 // target mutation is rolled back best-effort (a freshly inserted target is
 // deleted again; a revived tombstone gets its original deleted_at restored),
-// so the pre-rotation state is preserved and the caller can retry. Rollback
-// errors are intentionally ignored: if the rollback also fails, both
-// documents may remain active at the same time and the duplicate does not
-// heal itself — a retry of UpdateMemory then reports "already exists" and an
-// idempotent AddMemory only refreshes the target. In that case one of the
-// two documents must be removed manually.
+// so the pre-rotation state is preserved and the caller can retry. The
+// rollback runs on a detached context with a short timeout, because a
+// cancelled caller context is a common cause of the source removal failure
+// itself. Rollback errors are intentionally ignored: if the rollback also
+// fails, both documents may remain active at the same time and the duplicate
+// does not heal itself — a retry of UpdateMemory then reports "already
+// exists" and an idempotent AddMemory only refreshes the target. In that
+// case one of the two documents must be removed manually.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -412,7 +419,7 @@ func (s *Service) rotateMemory(
 	// rollbackTarget undoes the target mutation performed by this rotation.
 	// It is nil until the target has actually been created or revived, and
 	// its own errors are ignored by design (best-effort compensation).
-	var rollbackTarget func()
+	var rollbackTarget func(ctx context.Context)
 
 	insertTarget := false
 	switch {
@@ -454,7 +461,7 @@ func (s *Service) rotateMemory(
 			return fmt.Errorf("memory with id %s not found", newID)
 		}
 		originalDeletedAt := *targetDoc.DeletedAt
-		rollbackTarget = func() {
+		rollbackTarget = func(ctx context.Context) {
 			_, _ = s.client.UpdateOne(
 				ctx,
 				s.database,
@@ -493,16 +500,22 @@ func (s *Service) rotateMemory(
 		if _, err := s.client.InsertOne(ctx, s.database, s.collection, doc); err != nil {
 			return fmt.Errorf("insert rotated memory target failed: %w", err)
 		}
-		rollbackTarget = func() {
+		rollbackTarget = func(ctx context.Context) {
 			_, _ = s.client.DeleteOne(ctx, s.database, s.collection, targetFilter)
 		}
 	}
 
 	// removeSourceFailed rolls back the target mutation best-effort and
-	// returns the error that describes why the source removal failed.
+	// returns the error that describes why the source removal failed. The
+	// rollback runs on a detached context with a short timeout: a cancelled
+	// caller context is a common cause of the source removal failure itself,
+	// and the compensation must still be able to run in that case.
 	removeSourceFailed := func(err error) error {
 		if rollbackTarget != nil {
-			rollbackTarget()
+			rbCtx, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx), rollbackTimeout)
+			defer cancel()
+			rollbackTarget(rbCtx)
 		}
 		return err
 	}

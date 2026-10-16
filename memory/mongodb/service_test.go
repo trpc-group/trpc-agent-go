@@ -553,6 +553,39 @@ func TestUpdateMemoryRotationRollback(t *testing.T) {
 		assert.Equal(t, 1, store.activeDocs())
 	})
 
+	t.Run("hard delete: rollback runs on a detached context when caller context is cancelled", func(t *testing.T) {
+		mc, store := newFakeClient()
+		svc := newServiceForTest(mc)
+
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes tea", nil))
+		entries, err := svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		teaID := entries[0].ID
+
+		// The caller context is cancelled before the rotation and the source
+		// removal fails with the cancellation cause.
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		failDeleteOneFor(mc, store, teaID, context.Canceled)
+
+		err = svc.UpdateMemory(cancelledCtx, memoryKeyOf(userKey, teaID), "User likes coffee", nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+
+		// The source removal ran on the cancelled caller context...
+		require.NotEmpty(t, mc.deleteOneCtxStates)
+		assert.ErrorIs(t, mc.deleteOneCtxStates[0].err, context.Canceled)
+
+		// ...but the compensation ran on a detached, time-bounded context.
+		rbCtx := mc.deleteOneCtxStates[len(mc.deleteOneCtxStates)-1]
+		assert.NoError(t, rbCtx.err)
+		assert.True(t, rbCtx.hasDeadline, "rollback context must be time-bounded")
+
+		// The inserted target was rolled back despite the cancellation.
+		require.Len(t, store.docs, 1)
+		assert.Equal(t, 1, store.activeDocs())
+	})
+
 	t.Run("soft delete: revived target re-tombstoned when source update fails", func(t *testing.T) {
 		mc, store := newFakeClient()
 		svc := newServiceForTest(mc, func(o *ServiceOpts) { o.softDelete = true })
