@@ -149,7 +149,7 @@ variable is unset:
 
 ```bash
 export MONGODB_INTEGRATION_URI="mongodb://localhost:27017"
-go test -tags=integration ./memory/mongodb/...
+cd memory/mongodb && go test -tags=integration ./...
 ```
 
 Each integration test uses a unique database that is dropped when the test

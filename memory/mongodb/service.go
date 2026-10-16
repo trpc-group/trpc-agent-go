@@ -374,11 +374,17 @@ func (s *Service) updateInPlace(
 // transaction: standalone MongoDB deployments do not support them and the
 // memory backend must work there. The rotation is therefore implemented as
 // two steps — create (or revive) the target document first, then delete (or
-// tombstone) the source. If the process fails between the two steps, both
-// documents temporarily coexist; the next rotation or idempotent add of the
-// same content self-heals the state because both steps are idempotent. This
-// mirrors the approach accepted upstream for other non-transactional
-// backends.
+// tombstone) the source.
+//
+// If removing the source fails after the target was created or revived, the
+// target mutation is rolled back best-effort (a freshly inserted target is
+// deleted again; a revived tombstone gets its original deleted_at restored),
+// so the pre-rotation state is preserved and the caller can retry. Rollback
+// errors are intentionally ignored: if the rollback also fails, both
+// documents may remain active at the same time and the duplicate does not
+// heal itself — a retry of UpdateMemory then reports "already exists" and an
+// idempotent AddMemory only refreshes the target. In that case one of the
+// two documents must be removed manually.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -402,6 +408,11 @@ func (s *Service) rotateMemory(
 	var targetDoc memoryDoc
 	findErr := s.client.FindOne(ctx, s.database, s.collection,
 		targetFilter).Decode(&targetDoc)
+
+	// rollbackTarget undoes the target mutation performed by this rotation.
+	// It is nil until the target has actually been created or revived, and
+	// its own errors are ignored by design (best-effort compensation).
+	var rollbackTarget func()
 
 	insertTarget := false
 	switch {
@@ -442,6 +453,21 @@ func (s *Service) rotateMemory(
 		if res.MatchedCount == 0 {
 			return fmt.Errorf("memory with id %s not found", newID)
 		}
+		originalDeletedAt := *targetDoc.DeletedAt
+		rollbackTarget = func() {
+			_, _ = s.client.UpdateOne(
+				ctx,
+				s.database,
+				s.collection,
+				bson.M{
+					"app_name":   memoryKey.AppName,
+					"user_id":    memoryKey.UserID,
+					"memory_id":  newID,
+					"deleted_at": nil,
+				},
+				bson.M{"$set": bson.M{"deleted_at": originalDeletedAt}},
+			)
+		}
 	default:
 		// Hard-delete mode: a tombstone can only exist after a mode flip;
 		// remove it before inserting the rotated target.
@@ -467,6 +493,18 @@ func (s *Service) rotateMemory(
 		if _, err := s.client.InsertOne(ctx, s.database, s.collection, doc); err != nil {
 			return fmt.Errorf("insert rotated memory target failed: %w", err)
 		}
+		rollbackTarget = func() {
+			_, _ = s.client.DeleteOne(ctx, s.database, s.collection, targetFilter)
+		}
+	}
+
+	// removeSourceFailed rolls back the target mutation best-effort and
+	// returns the error that describes why the source removal failed.
+	removeSourceFailed := func(err error) error {
+		if rollbackTarget != nil {
+			rollbackTarget()
+		}
+		return err
 	}
 
 	sourceFilter := activeFilter(memoryKey)
@@ -479,19 +517,23 @@ func (s *Service) rotateMemory(
 			bson.M{"$set": bson.M{"deleted_at": now}},
 		)
 		if err != nil {
-			return fmt.Errorf("remove rotated memory source failed: %w", err)
+			return removeSourceFailed(
+				fmt.Errorf("remove rotated memory source failed: %w", err))
 		}
 		if res.MatchedCount == 0 {
-			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+			return removeSourceFailed(
+				fmt.Errorf("memory with id %s not found", memoryKey.MemoryID))
 		}
 		return nil
 	}
 	res, err := s.client.DeleteOne(ctx, s.database, s.collection, sourceFilter)
 	if err != nil {
-		return fmt.Errorf("remove rotated memory source failed: %w", err)
+		return removeSourceFailed(
+			fmt.Errorf("remove rotated memory source failed: %w", err))
 	}
 	if res.DeletedCount == 0 {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		return removeSourceFailed(
+			fmt.Errorf("memory with id %s not found", memoryKey.MemoryID))
 	}
 	return nil
 }

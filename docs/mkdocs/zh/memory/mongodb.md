@@ -133,7 +133,7 @@ tag 和 `MONGODB_INTEGRATION_URI` 环境变量门控，未设置该变量时自�
 
 ```bash
 export MONGODB_INTEGRATION_URI="mongodb://localhost:27017"
-go test -tags=integration ./memory/mongodb/...
+cd memory/mongodb && go test -tags=integration ./...
 ```
 
 每个集成测试使用独立的数据库，并在测试结束时 drop。后端不依赖多文档事务，

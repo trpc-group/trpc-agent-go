@@ -13,6 +13,7 @@ package util
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -620,6 +621,17 @@ func GetEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+// redactURI strips any userinfo (credentials) from a connection URI so it
+// is safe to print. URIs that cannot be parsed are hidden entirely.
+func redactURI(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "(unparsable URI)"
+	}
+	u.User = nil
+	return u.String()
+}
+
 // IntPtr returns a pointer to an int.
 func IntPtr(v int) *int {
 	return &v
@@ -698,7 +710,7 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryMongoDB:
 		uri := GetEnvOrDefault("MONGODB_URI", "mongodb://localhost:27017")
-		fmt.Printf("MongoDB: %s\n", uri)
+		fmt.Printf("MongoDB: %s\n", redactURI(uri))
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	default:
 		fmt.Printf("In-memory\n")

@@ -461,6 +461,189 @@ func TestClearMemories(t *testing.T) {
 	})
 }
 
+func TestUpdateMemoryRotationRollback(t *testing.T) {
+	userKey := testUserKey()
+
+	// failDeleteOneFor injects an error for DeleteOne calls whose filter
+	// targets the given memory ID; all other calls delegate to the store.
+	failDeleteOneFor := func(mc *mockClient, store *fakeStore, id string, cause error) {
+		mc.deleteOneFn = func(filter any) (*mongo.DeleteResult, error) {
+			if f, ok := filter.(bson.M); ok && f["memory_id"] == id {
+				return nil, cause
+			}
+			return store.deleteOne(filter)
+		}
+	}
+
+	// failUpdateOneFor injects an error for UpdateOne calls whose filter
+	// targets the given memory ID; all other calls delegate to the store.
+	failUpdateOneFor := func(mc *mockClient, store *fakeStore, id string, cause error) {
+		mc.updateOneFn = func(filter, update any,
+			opts []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			if f, ok := filter.(bson.M); ok && f["memory_id"] == id {
+				return nil, cause
+			}
+			return store.updateOne(filter, update, opts)
+		}
+	}
+
+	findFakeDoc := func(t *testing.T, store *fakeStore, id string) *fakeDoc {
+		t.Helper()
+		for _, doc := range store.docs {
+			if doc.memoryID == id {
+				return doc
+			}
+		}
+		t.Fatalf("fake doc with memory_id %s not found", id)
+		return nil
+	}
+
+	t.Run("hard delete: inserted target rolled back when source delete fails", func(t *testing.T) {
+		mc, store := newFakeClient()
+		svc := newServiceForTest(mc)
+
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes tea", nil))
+		entries, err := svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		teaID := entries[0].ID
+
+		cause := errors.New("delete source failed")
+		failDeleteOneFor(mc, store, teaID, cause)
+
+		err = svc.UpdateMemory(testCtx, memoryKeyOf(userKey, teaID), "User likes coffee", nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cause)
+		assert.Contains(t, err.Error(), "remove rotated memory source failed")
+
+		// The inserted target is rolled back: only the source document
+		// remains, still active and unchanged.
+		require.Len(t, store.docs, 1)
+		assert.Equal(t, 1, store.activeDocs())
+		entries, err = svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, teaID, entries[0].ID)
+		assert.Equal(t, "User likes tea", entries[0].Memory.Memory)
+	})
+
+	t.Run("hard delete: missing source rolls back inserted target", func(t *testing.T) {
+		mc, store := newFakeClient()
+		svc := newServiceForTest(mc)
+
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes tea", nil))
+		entries, err := svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		teaID := entries[0].ID
+
+		// Simulate a source that vanished between the read and the delete.
+		mc.deleteOneFn = func(filter any) (*mongo.DeleteResult, error) {
+			if f, ok := filter.(bson.M); ok && f["memory_id"] == teaID {
+				return &mongo.DeleteResult{DeletedCount: 0}, nil
+			}
+			return store.deleteOne(filter)
+		}
+
+		err = svc.UpdateMemory(testCtx, memoryKeyOf(userKey, teaID), "User likes coffee", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+
+		require.Len(t, store.docs, 1)
+		assert.Equal(t, teaID, store.docs[0].memoryID)
+		assert.Equal(t, 1, store.activeDocs())
+	})
+
+	t.Run("soft delete: revived target re-tombstoned when source update fails", func(t *testing.T) {
+		mc, store := newFakeClient()
+		svc := newServiceForTest(mc, func(o *ServiceOpts) { o.softDelete = true })
+
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes tea", nil))
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes coffee", nil))
+		entries, err := svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 2)
+		teaID := entryIDByContent(t, entries, "User likes tea")
+		coffeeID := entryIDByContent(t, entries, "User likes coffee")
+
+		// Tombstone the coffee memory; rotation will revive it.
+		require.NoError(t, svc.DeleteMemory(testCtx, memoryKeyOf(userKey, coffeeID)))
+		originalDeletedAt := findFakeDoc(t, store, coffeeID).deletedAt
+		require.NotNil(t, originalDeletedAt)
+
+		cause := errors.New("tombstone source failed")
+		failUpdateOneFor(mc, store, teaID, cause)
+
+		err = svc.UpdateMemory(testCtx, memoryKeyOf(userKey, teaID), "User likes coffee", nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cause)
+		assert.Contains(t, err.Error(), "remove rotated memory source failed")
+
+		// The revived target is re-tombstoned with its original deleted_at;
+		// the source is still the only active document.
+		require.Len(t, store.docs, 2)
+		assert.Equal(t, 1, store.activeDocs())
+		coffeeDoc := findFakeDoc(t, store, coffeeID)
+		require.NotNil(t, coffeeDoc.deletedAt)
+		assert.True(t, originalDeletedAt.Truncate(time.Millisecond).Equal(*coffeeDoc.deletedAt),
+			"rollback must restore the original deleted_at value (BSON millisecond precision)")
+		teaDoc := findFakeDoc(t, store, teaID)
+		assert.Nil(t, teaDoc.deletedAt)
+	})
+
+	t.Run("soft delete: inserted target rolled back when source update fails", func(t *testing.T) {
+		mc, store := newFakeClient()
+		svc := newServiceForTest(mc, func(o *ServiceOpts) { o.softDelete = true })
+
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes tea", nil))
+		entries, err := svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		teaID := entries[0].ID
+
+		cause := errors.New("tombstone source failed")
+		failUpdateOneFor(mc, store, teaID, cause)
+
+		err = svc.UpdateMemory(testCtx, memoryKeyOf(userKey, teaID), "User likes coffee", nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cause)
+		assert.Contains(t, err.Error(), "remove rotated memory source failed")
+
+		// The freshly inserted target is deleted again; only the source
+		// remains and it is still active.
+		require.Len(t, store.docs, 1)
+		assert.Equal(t, 1, store.activeDocs())
+		entries, err = svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, teaID, entries[0].ID)
+	})
+
+	t.Run("soft delete: missing source rolls back inserted target", func(t *testing.T) {
+		mc, store := newFakeClient()
+		svc := newServiceForTest(mc, func(o *ServiceOpts) { o.softDelete = true })
+
+		require.NoError(t, svc.AddMemory(testCtx, userKey, "User likes tea", nil))
+		entries, err := svc.ReadMemories(testCtx, userKey, 0)
+		require.NoError(t, err)
+		teaID := entries[0].ID
+
+		mc.updateOneFn = func(filter, update any,
+			opts []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			if f, ok := filter.(bson.M); ok && f["memory_id"] == teaID {
+				return &mongo.UpdateResult{MatchedCount: 0}, nil
+			}
+			return store.updateOne(filter, update, opts)
+		}
+
+		err = svc.UpdateMemory(testCtx, memoryKeyOf(userKey, teaID), "User likes coffee", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+
+		require.Len(t, store.docs, 1)
+		assert.Equal(t, teaID, store.docs[0].memoryID)
+		assert.Equal(t, 1, store.activeDocs())
+	})
+}
+
 func TestScopeIsolation(t *testing.T) {
 	mc, _ := newFakeClient()
 	svc := newServiceForTest(mc)
