@@ -122,6 +122,7 @@ defer runner.Close()
 | `MYSQLVEC_PASSWORD`       | MySQL Vector password        | ``                       |
 | `MYSQLVEC_DATABASE`       | MySQL Vector database name   | `trpc_agent_go`          |
 | `MYSQLVEC_EMBEDDER_MODEL` | MySQL Vector embedder model  | `text-embedding-3-small` |
+| `MONGODB_URI`             | MongoDB connection URI       | `mongodb://localhost:27017` |
 
 ### Embedding Environment Variables (Optional)
 
@@ -139,8 +140,8 @@ separate embedding endpoint / API key:
 | Argument       | Description                                                             | Default Value   |
 | -------------- | ----------------------------------------------------------------------- | --------------- |
 | `-model`       | Name of the model to use                                                | `deepseek-v4-flash` |
-| `-memory`      | Memory service: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `mysql`, `mysqlvec`, `postgres`, `pgvector`, or `chromadb` | `inmemory` |
-| `-soft-delete` | Enable soft delete for SQLite/SQLiteVec/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB memory service  | `false`         |
+| `-memory`      | Memory service: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `mysql`, `mysqlvec`, `postgres`, `pgvector`, `chromadb`, or `mongodb` | `inmemory` |
+| `-soft-delete` | Enable soft delete for SQLite/SQLiteVec/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB/MongoDB memory service  | `false`         |
 | `-streaming`   | Enable streaming mode for responses                                     | `true`          |
 
 ## Usage
@@ -233,6 +234,10 @@ export CHROMA_BASE_URL=http://localhost:8000
 export CHROMA_COLLECTION=memories
 export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory chromadb
+
+# MongoDB memory service
+export MONGODB_URI=mongodb://localhost:27017
+go run main.go -memory mongodb
 ```
 
 ChromaDB runs as a separate server. `CHROMA_BASE_URL` may target localhost,
@@ -331,7 +336,7 @@ The example demonstrates a custom clear tool with enhanced logging:
 
 ### Memory Service Integration
 
-- Supports in-memory, SQLite, SQLiteVec, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector, and ChromaDB backends
+- Supports in-memory, SQLite, SQLiteVec, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector, ChromaDB, and MongoDB backends
 - Uses `memoryinmemory.NewMemoryService()` for in-memory storage
 - Uses `memorysqlite.NewService()` for SQLite storage
 - Uses `memorysqlitevec.NewService()` for SQLite vector storage
@@ -341,6 +346,7 @@ The example demonstrates a custom clear tool with enhanced logging:
 - Uses `memorypostgres.NewService()` for PostgreSQL-based storage
 - Uses `memorypgvector.NewService()` for pgvector-based storage with vector similarity search
 - Uses `memorychromadb.NewService()` for ChromaDB storage with cosine and hybrid search
+- Uses `memorymongodb.NewService()` for MongoDB-based storage
 - Memory tools directly access the memory service
 - Two-step integration: Step 1 (manual tool registration) + Step 2 (runner service setup)
 

@@ -442,6 +442,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 │  • SQLite: 本地文件数据库（单机持久化）                     │
 │  • SQLiteVec: SQLite + 向量检索（本地语义搜索）             │
 │  • Redis: 高性能缓存（生产环境）                            │
+│  • MongoDB: 文档数据库（灵活 schema）                       │
 │  • MySQL: 关系型数据库（ACID 保证）                        │
 │  • MySQLVec: MySQL + 向量检索（语义搜索）                  │
 │  • PostgreSQL: 关系型数据库（JSONB 支持）                  │
@@ -468,7 +469,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 | **Memory ID**       | 记忆的唯一标识符                          | 基于内容、用户维度和规范化事件元数据的 SHA256 哈希；主题不参与身份 |
 | **Topics**          | 记忆的主题标签                            | 用于分类和检索，支持多个标签                       |
 | **Memory Tools**    | Agent 可调用的记忆操作工具                | 包括 add、update、delete、search、load、clear      |
-| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、MySQLVec、PostgreSQL、pgvector、ChromaDB |
+| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MongoDB、MySQL、MySQLVec、PostgreSQL、pgvector、ChromaDB |
 
 ### 关键流程
 
@@ -486,7 +487,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
        │
        ↓
 ┌──────────────┐
-│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB）
+│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MongoDB/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB）
 └──────┬───────┘
        │
        ↓
@@ -560,6 +561,7 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 - [SQLite](sqlite.md)
 - [SQLiteVec](sqlitevec.md)
 - [Redis](redis.md)
+- [MongoDB](mongodb.md)
 - [MySQL](mysql.md)
 - [MySQL Vector](mysqlvec.md)
 - [PostgreSQL](postgres.md)
@@ -568,17 +570,17 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 
 ## 后端对比与选择
 
-| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | MySQLVec  | PostgreSQL | pgvector | ChromaDB    |
-| ------------ | -------- | ---------- | --------- | ------ | -------- | --------- | ---------- | -------- | ----------- |
-| **持久化**   | ❌       | ✅         | ✅        | ✅     | ✅       | ✅        | ✅         | ✅       | ✅          |
-| **分布式**   | ❌       | ❌         | ❌        | ✅     | ✅       | ✅        | ✅         | ✅       | ✅          |
-| **事务**     | ❌       | ✅ ACID    | ✅ ACID   | 部分   | ✅ ACID  | ✅ ACID   | ✅ ACID    | ✅ ACID  | 尽力保证    |
-| **查询**     | 简单     | SQL        | SQL+向量  | 中等   | SQL      | SQL+向量  | SQL        | SQL+向量 | 向量+本地   |
-| **JSON**     | ❌       | 基础       | 基础      | 基础   | JSON     | JSON      | JSONB      | JSONB    | Metadata    |
-| **性能**     | 极高     | 中高       | 中高      | 高     | 中高     | 中高      | 中高       | 中高     | 高          |
-| **配置**     | 零配置   | 简单       | 中等      | 简单   | 中等     | 中等      | 中等       | 中等     | 中等        |
-| **软删除**   | ❌       | ✅         | ✅        | ❌     | ✅       | ✅        | ✅         | ✅       | ✅          |
-| **适用场景** | 开发测试 | 本地持久化 | 本地向量  | 高并发 | 企业应用 | MySQL 向量 | 高级特性   | 向量搜索 | 向量服务    |
+| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MongoDB  | MySQL    | MySQLVec  | PostgreSQL | pgvector | ChromaDB    |
+| ------------ | -------- | ---------- | --------- | ------ | -------- | -------- | --------- | ---------- | -------- | ----------- |
+| **持久化**   | ❌       | ✅         | ✅        | ✅     | ✅       | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **分布式**   | ❌       | ❌         | ❌        | ✅     | ✅       | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **事务**     | ❌       | ✅ ACID    | ✅ ACID   | 部分   | 部分     | ✅ ACID  | ✅ ACID   | ✅ ACID    | ✅ ACID  | 尽力保证    |
+| **查询**     | 简单     | SQL        | SQL+向量  | 中等   | 文档     | SQL      | SQL+向量  | SQL        | SQL+向量 | 向量+本地   |
+| **JSON**     | ❌       | 基础       | 基础      | 基础   | BSON     | JSON     | JSON      | JSONB      | JSONB    | Metadata    |
+| **性能**     | 极高     | 中高       | 中高      | 高     | 中高     | 中高     | 中高      | 中高       | 中高     | 高          |
+| **配置**     | 零配置   | 简单       | 中等      | 简单   | 中等     | 中等     | 中等      | 中等       | 中等     | 中等        |
+| **软删除**   | ❌       | ✅         | ✅        | ❌     | ✅       | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **适用场景** | 开发测试 | 本地持久化 | 本地向量  | 高并发 | 文档存储 | 企业应用 | MySQL 向量 | 高级特性   | 向量搜索 | 向量服务    |
 
 **选择建议**：
 
@@ -587,12 +589,13 @@ memoryID := SHA256(content) // 64 位十六进制字符串
 本地持久化 → SQLite（单文件数据库，易部署）
 本地向量检索 → SQLiteVec（单文件数据库 + embedding）
 高并发读写 → Redis（内存级性能）
+文档存储 → MongoDB（灵活 schema、BM25 关键词搜索、可选软删除）
 需要 ACID → SQLite/SQLiteVec/MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
 MySQL 向量检索 → MySQLVec（可用时使用原生 VECTOR，否则使用 BLOB 降级路径）
 向量搜索 → pgvector（基于 embedding 的相似度搜索）
 向量服务 → ChromaDB（基于 REST 的余弦与混合检索）
-审计追踪 → MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB/SQLite/SQLiteVec（软删除支持）
+审计追踪 → MongoDB/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB/SQLite/SQLiteVec（软删除支持）
 ```
 
 ## 常见问题
@@ -647,7 +650,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 
 搜索行为取决于后端：
 
-- 对 `inmemory` / `redis` / `mysql` / `postgres`：`SearchMemories` 使用 **BM25 风格 lexical 关键词匹配**（不是语义搜索）。
+- 对 `inmemory` / `redis` / `mongodb` / `mysql` / `postgres`：`SearchMemories` 使用 **BM25 风格 lexical 关键词匹配**（不是语义搜索）。
 - 对 `pgvector` / `mysqlvec` / `sqlitevec`：`SearchMemories` 使用**向量相似度检索**，并且需要配置 Embedder。
 - 对 `chromadb`：`SearchMemories` 使用 ChromaDB 向量检索，并支持 kind 回退和混合检索。
 
@@ -691,7 +694,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 
 **支持情况**：
 
-- ✅ MySQL、MySQLVec、PostgreSQL、pgvector、SQLite、SQLiteVec、ChromaDB：支持软删除
+- ✅ MongoDB、MySQL、MySQLVec、PostgreSQL、pgvector、SQLite、SQLiteVec、ChromaDB：支持软删除（MongoDB 为可选，默认硬删除）
 - ❌ InMemory、Redis：不支持（只有硬删除）
 
 **软删除配置**：

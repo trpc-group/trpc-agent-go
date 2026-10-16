@@ -24,6 +24,7 @@ import (
 	memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	memorymongodb "trpc.group/trpc-go/trpc-agent-go/memory/mongodb"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 	memorymysqlvec "trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec"
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
@@ -51,6 +52,8 @@ const (
 	MemoryMySQLVec  MemoryType = "mysqlvec"
 	// MemoryChromaDB selects the ChromaDB-backed memory service.
 	MemoryChromaDB MemoryType = "chromadb"
+	// MemoryMongoDB selects the MongoDB-backed memory service.
+	MemoryMongoDB MemoryType = "mongodb"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
@@ -99,7 +102,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //
 // Parameters:
 //   - memoryType: one of inmemory, sqlite, sqlitevec, redis, postgres,
-//     pgvector, mysql, mysqlvec, chromadb
+//     pgvector, mysql, mysqlvec, chromadb, mongodb
 //   - cfg: memory service configuration
 //   - SoftDelete: enable soft delete for SQL backends
 //   - Extractor: memory extractor for auto mode (nil = manual mode)
@@ -117,6 +120,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 //	mysqlvec:   MYSQLVEC_HOST, MYSQLVEC_PORT, MYSQLVEC_USER, MYSQLVEC_PASSWORD, MYSQLVEC_DATABASE, MYSQLVEC_EMBEDDER_MODEL
 //	chromadb:   CHROMA_BASE_URL, CHROMA_API_KEY, CHROMA_BEARER_TOKEN, CHROMA_TENANT, CHROMA_DATABASE, CHROMA_COLLECTION, CHROMA_EMBEDDER_MODEL
+//	mongodb:    MONGODB_URI (default: mongodb://localhost:27017)
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
 	case MemorySQLite:
@@ -135,6 +139,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newMySQLVecMemoryService(cfg)
 	case MemoryChromaDB:
 		return newChromaDBMemoryService(cfg)
+	case MemoryMongoDB:
+		return newMongoDBMemoryService(cfg)
 	case MemoryInMemory:
 		fallthrough
 	default:
@@ -547,6 +553,38 @@ func newMySQLVecMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	return memorymysqlvec.NewService(opts...)
 }
 
+// newMongoDBMemoryService creates a MongoDB memory service.
+// Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
+// Environment variables:
+//   - MONGODB_URI: MongoDB connection URI (default: mongodb://localhost:27017)
+func newMongoDBMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	uri := GetEnvOrDefault("MONGODB_URI", "mongodb://localhost:27017")
+
+	opts := []memorymongodb.ServiceOpt{
+		memorymongodb.WithMongoClientURI(uri),
+		memorymongodb.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	// Configure extractor for auto memory mode if provided.
+	if cfg.Extractor != nil {
+		opts = append(opts, memorymongodb.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorymongodb.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memorymongodb.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memorymongodb.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memorymongodb.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memorymongodb.NewService(opts...)
+}
+
 // NewRunner creates a runner with the given memory service and configuration.
 func NewRunner(memoryService memory.Service, cfg RunnerConfig) runner.Runner {
 	modelInstance := openai.New(cfg.ModelName)
@@ -657,6 +695,10 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		)
 		fmt.Printf("MySQL Vector: %s:%s/%s\n", host, port, database)
 		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryMongoDB:
+		uri := GetEnvOrDefault("MONGODB_URI", "mongodb://localhost:27017")
+		fmt.Printf("MongoDB: %s\n", uri)
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	default:
 		fmt.Printf("In-memory\n")

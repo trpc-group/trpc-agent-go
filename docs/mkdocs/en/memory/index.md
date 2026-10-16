@@ -489,6 +489,7 @@ integration, extraction modes, and tool behavior are covered in
 - [SQLite](sqlite.md)
 - [SQLiteVec](sqlitevec.md)
 - [Redis](redis.md)
+- [MongoDB](mongodb.md)
 - [MySQL](mysql.md)
 - [MySQL Vector](mysqlvec.md)
 - [PostgreSQL](postgres.md)
@@ -497,17 +498,17 @@ integration, extraction modes, and tool behavior are covered in
 
 ## Backend Comparison
 
-| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      | ChromaDB       |
-| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- | -------------- |
-| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            | ✅             |
-| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            | ✅             |
-| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       | Best effort    |
-| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  | Vector + Local |
-| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         | Metadata       |
-| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      | High           |
-| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        | Medium         |
-| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            | ✅             |
-| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search | Vector Service |
+| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MongoDB    | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      | ChromaDB       |
+| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ---------- | ----------------- | ----------------- | ------------- | -------------- |
+| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | Partial    | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       | Best effort    |
+| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | Document   | SQL        | SQL + Vector      | SQL               | SQL + Vector  | Vector + Local |
+| **JSON**          | ❌        | Basic             | Basic            | Basic            | BSON       | JSON       | JSON              | JSONB             | JSONB         | Metadata       |
+| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High   | Med-High          | Med-High          | Med-High      | High           |
+| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium     | Medium            | Medium            | Medium        | Medium         |
+| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Doc Store  | Enterprise | MySQL Vector Search | Advanced Features | Vector Search | Vector Service |
 
 **Selection guide**:
 
@@ -516,12 +517,13 @@ Development/Testing → InMemory (zero config, fast)
 Local Persistence → SQLite (single-file DB, easy setup)
 Local Vector Search → SQLiteVec (single-file DB + embeddings)
 High Concurrency → Redis (memory-level performance)
+Document Store → MongoDB (flexible schema, BM25 keyword search, optional soft delete)
 ACID Requirements → SQLite/SQLiteVec/MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
 MySQL Vector Search → mysqlvec (native VECTOR when available, BLOB fallback otherwise)
 Vector Search → pgvector (similarity search with embeddings)
 Managed Vector Service → ChromaDB (REST-based cosine and hybrid search)
-Audit Trail → MySQL/MySQL Vec/PostgreSQL/pgvector/SQLite/SQLiteVec/ChromaDB (soft delete support)
+Audit Trail → MongoDB/MySQL/MySQL Vec/PostgreSQL/pgvector/SQLite/SQLiteVec/ChromaDB (soft delete support)
 ```
 
 ## FAQ
@@ -581,7 +583,7 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"interests"})
 
 Search behavior depends on the backend:
 
-- For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **BM25-style lexical matching** (not semantic search).
+- For `inmemory` / `redis` / `mongodb` / `mysql` / `postgres`: `SearchMemories` uses **BM25-style lexical matching** (not semantic search).
 - For `pgvector` / `mysqlvec` / `sqlitevec`: `SearchMemories` uses **vector similarity search** and requires an embedder.
 - For `chromadb`: `SearchMemories` uses ChromaDB vector search and supports kind fallback and hybrid search.
 
@@ -625,7 +627,7 @@ Search: "写代码" ❌ No match (different words)
 
 **Support status**:
 
-- ✅ MySQL, MySQL Vec, PostgreSQL, pgvector, SQLite, SQLiteVec, ChromaDB: support soft delete
+- ✅ MongoDB, MySQL, MySQL Vec, PostgreSQL, pgvector, SQLite, SQLiteVec, ChromaDB: support soft delete (optional on MongoDB; hard delete is the default there)
 - ❌ InMemory, Redis: not supported (hard delete only)
 
 **Soft delete configuration**:
