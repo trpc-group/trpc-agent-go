@@ -1,6 +1,6 @@
 {
   "repository": "trpc-group/trpc-agent-go",
-  "updated": "2026-10-16",
+  "updated": "2026-10-17",
   "points": [
     {"date":"2025-07-09","stars":1},
     {"date":"2025-07-23","stars":2},
@@ -383,6 +383,7 @@
     {"date":"2026-10-13","stars":1859},
     {"date":"2026-10-14","stars":1861},
     {"date":"2026-10-15","stars":1862},
-    {"date":"2026-10-16","stars":1864}
+    {"date":"2026-10-16","stars":1864},
+    {"date":"2026-10-17","stars":1866}
   ]
 }
