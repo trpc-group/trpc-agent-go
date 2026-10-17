@@ -21,6 +21,12 @@ const (
 	ErrorTypeCancelled = "cancelled"
 )
 
+// FinishReasonLength is the finish reason reported by OpenAI-compatible
+// providers when generation stopped because the output token limit was
+// reached. A response carrying this finish reason may be cut off in the middle
+// of a message or of a tool call.
+const FinishReasonLength = "length"
+
 // Object type constants for Response.Object field.
 const (
 	ObjectTypeError = "error"
@@ -319,6 +325,60 @@ func (rsp *Response) IsToolResultResponse() bool {
 // IsToolCallResponse checks if the response is related to tool calls.
 func (rsp *Response) IsToolCallResponse() bool {
 	return rsp != nil && len(rsp.Choices) > 0 && (len(rsp.Choices[0].Message.ToolCalls) > 0 || len(rsp.Choices[0].Delta.ToolCalls) > 0)
+}
+
+// HasOutputLimitFinishReason reports whether this choice stopped because it
+// reached the model output token limit. It accepts the output-limit finish
+// reasons of the supported providers: "length" for OpenAI-compatible
+// providers, "max_tokens" for Anthropic and "MAX_TOKENS" for Gemini.
+func (c Choice) HasOutputLimitFinishReason() bool {
+	return c.FinishReason != nil && isOutputLimitFinishReason(*c.FinishReason)
+}
+
+// HasOutputLimitFinishReason reports whether a completed response has a choice
+// that reached the model output token limit. It checks all choices, unlike
+// IsTruncatedToolCallResponse, which only inspects the first choice that the
+// flow repairs and executes.
+func (rsp *Response) HasOutputLimitFinishReason() bool {
+	if rsp == nil || rsp.IsPartial {
+		return false
+	}
+	for i := range rsp.Choices {
+		if rsp.Choices[i].HasOutputLimitFinishReason() {
+			return true
+		}
+	}
+	return false
+}
+
+func isOutputLimitFinishReason(reason string) bool {
+	switch reason {
+	case FinishReasonLength, "max_tokens", "MAX_TOKENS":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTruncatedToolCallResponse reports whether a completed response stopped at
+// the output token limit while carrying tool calls in its first choice, which
+// is the choice the flow repairs and executes.
+//
+// Such tool calls are incomplete by construction: their arguments may be
+// invalid JSON, or may be valid JSON that only describes part of the intended
+// operation. Callers that must not execute a partially generated tool call can
+// use this predicate to reject the response before argument repair or tool
+// execution. Partial responses and responses finished for any other reason
+// report false.
+func (rsp *Response) IsTruncatedToolCallResponse() bool {
+	if rsp == nil || rsp.IsPartial || len(rsp.Choices) == 0 {
+		return false
+	}
+	choice := &rsp.Choices[0]
+	if !choice.HasOutputLimitFinishReason() {
+		return false
+	}
+	return len(choice.Message.ToolCalls) > 0 || len(choice.Delta.ToolCalls) > 0
 }
 
 // GetToolCallIDs gets the IDs of tool calls from the response.

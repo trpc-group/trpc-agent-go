@@ -433,6 +433,10 @@ type Options struct {
 	//   - > 0: the limit is enforced per invocation.
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
+	// TruncatedToolCallPolicy controls how a completed model response that
+	// stopped at the output token limit while carrying tool calls is handled.
+	// The zero value rejects such tool calls before argument repair.
+	TruncatedToolCallPolicy agent.TruncatedToolCallPolicy
 	// llmCallLimitFinalizationInstruction enables proactive finalization at
 	// MaxLLMCalls when non-nil. An empty value selects the framework default.
 	llmCallLimitFinalizationInstruction *string
@@ -821,6 +825,20 @@ func WithGenerationConfig(config model.GenerationConfig) Option {
 func WithMaxLLMCalls(limit int) Option {
 	return func(opts *Options) {
 		opts.MaxLLMCalls = limit
+	}
+}
+
+// WithTruncatedToolCallPolicy sets how a completed model response that stopped
+// at the output token limit while carrying tool calls is handled.
+//
+// By default (the zero value), the framework stops the run before argument
+// repair or tool execution and reports a terminal truncation error instead of
+// executing a partially generated tool call. Use
+// [agent.TruncatedToolCallPolicyIgnore] to keep the historical behavior and let
+// such calls go through argument repair and execution.
+func WithTruncatedToolCallPolicy(policy agent.TruncatedToolCallPolicy) Option {
+	return func(opts *Options) {
+		opts.TruncatedToolCallPolicy = policy
 	}
 }
 
