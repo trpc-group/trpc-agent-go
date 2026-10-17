@@ -857,6 +857,59 @@ func (f *Flow) processStreamingResponses(
 	return processor.lastEvent, nil
 }
 
+// truncatedToolCallErrorMessage is reported when the truncated-tool-call policy
+// rejects a completed response. Keep the wording stable so applications can map
+// it to their own error codes.
+const truncatedToolCallErrorMessage = "model output was truncated by the length limit; " +
+	"the partially generated tool calls were not executed"
+
+// truncatedToolCallRejector returns the invocation when a completed response
+// stopped at the output token limit while carrying tool calls and the
+// configured policy rejects them.
+func (p *streamingResponseProcessor) truncatedToolCallRejector(
+	response *model.Response,
+) *agent.Invocation {
+	if response == nil || !response.IsTruncatedToolCallResponse() {
+		return nil
+	}
+	return p.rejectingInvocation()
+}
+
+// rejectingInvocation returns the invocation when the configured policy rejects
+// truncated tool calls, and nil when the response must be processed as before.
+func (p *streamingResponseProcessor) rejectingInvocation() *agent.Invocation {
+	invocation := invocationFromContextOrDefault(p.ctx, p.currentInvocation)
+	if invocation == nil ||
+		invocation.TruncatedToolCallPolicy == agent.TruncatedToolCallPolicyIgnore {
+		return nil
+	}
+	return invocation
+}
+
+// rejectTruncatedToolCall emits the terminal truncation error and stops the
+// invocation. The rejected completed response is never emitted, so it cannot be
+// persisted as replayable history; its usage is carried on the error event so
+// callers still account for the call.
+func (p *streamingResponseProcessor) rejectTruncatedToolCall(
+	eventInvocation *agent.Invocation,
+	invocation *agent.Invocation,
+	response *model.Response,
+) {
+	errEvent := event.NewErrorEvent(
+		flowInvocationID(eventInvocation),
+		flowAgentName(eventInvocation),
+		model.ErrorTypeFlowError,
+		truncatedToolCallErrorMessage,
+	)
+	if errEvent.Response != nil && response != nil && response.Usage != nil {
+		usage := *response.Usage
+		errEvent.Response.Usage = &usage
+	}
+	agent.EmitEvent(p.ctx, eventInvocation, p.eventChan, errEvent)
+	invocation.EndInvocation = true
+	p.lastEvent = errEvent
+}
+
 type streamingResponseProcessor struct {
 	flow                    *Flow
 	ctx                     context.Context
@@ -982,8 +1035,27 @@ func (p *streamingResponseProcessor) process(
 	p.updateMetricsState()
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
+	// Remember the output-limit signal of the selected choice before any
+	// repair: text repair rewrites the finish reason to "tool_calls" once it
+	// turns visible text into structured tool calls, and later choices must not
+	// reject a valid call in the first one.
+	truncatedOutput := response != nil && !response.IsPartial &&
+		len(response.Choices) > 0 &&
+		response.Choices[0].HasOutputLimitFinishReason()
+	if rejectInvocation := p.truncatedToolCallRejector(response); rejectInvocation != nil {
+		p.rejectTruncatedToolCall(eventInvocation, rejectInvocation, response)
+		return false
+	}
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
+	// Text repair can create structured tool calls from a response that had
+	// none, so apply the same policy to the original truncation signal.
+	if truncatedOutput && response.IsToolCallResponse() {
+		if rejectInvocation := p.rejectingInvocation(); rejectInvocation != nil {
+			p.rejectTruncatedToolCall(eventInvocation, rejectInvocation, response)
+			return false
+		}
+	}
 	if err := validateCompletedToolCallNames(response); err != nil {
 		*p.err = err
 		responseErr = err
