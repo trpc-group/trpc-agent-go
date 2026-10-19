@@ -139,6 +139,15 @@ Session summary 提醒：如果你启用了会话摘要注入
   有上一轮的 `skill_load` tool result（通常是 `loaded: <name>` 这种短
   stub），框架也不会再把正文/文档物化进去。
 
+Tool-result 模式下的卸载也会影响 prompt cache。只有当前 agent 仍处于
+loaded 状态的技能才会被物化；即使另一个技能仍在加载，历史工具结果也
+不会重新激活已卸载技能。生命周期清理或 `WithMaxLoadedSkills` 淘汰后，
+下一次请求保留原始短工具结果，不再填入该技能正文/文档。对应工具结果仍
+在历史中时，此次卸载不改变 system message，但会改变对应 tool result：
+其前面的前缀仍可能复用缓存，
+后面的内容则不能复用上一请求中对应的缓存前缀。因此，上下文 token 减少
+不代表缓存命中率一定提高。
+
 实践建议（尤其是 `WithSkillsLoadedContentInToolResults(true)` 时）：
 
 - 先确认你在讨论哪种“缓存”场景：

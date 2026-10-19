@@ -217,8 +217,9 @@ func (p *SkillsToolResultRequestProcessor) applyLoadedSkillContext(
 	)
 
 	materialized := make(map[string]struct{}, len(lastToolMsgIdx))
-	for skillName, idx := range lastToolMsgIdx {
-		if idx < 0 || idx >= len(req.Messages) {
+	for _, skillName := range loaded {
+		idx, ok := lastToolMsgIdx[skillName]
+		if !ok || idx < 0 || idx >= len(req.Messages) {
 			continue
 		}
 		msg := &req.Messages[idx]
