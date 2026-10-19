@@ -334,6 +334,10 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 // ClearMemories clears all memories for a user.
 // With soft deletion enabled, every active document of the scope is
 // tombstoned in bounded batches; partial failures are reported together.
+// Hard deletion refreshes the index before and after delete-by-query and
+// requires index refresh privileges, such as maintenance. Refresh failures
+// are returned. If the final refresh fails, deletion has already run but
+// may not yet be visible to reads.
 func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -347,12 +351,10 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	}
 
 	// Make just-written documents searchable before the delete-by-query so
-	// they cannot survive the clear. The refresh API requires the index
-	// maintenance privilege that data-access roles may lack, so a failure
-	// only narrows this visibility window instead of failing the whole
-	// clear.
+	// they cannot survive the clear. If refresh fails, do not delete only
+	// the searchable subset and report a successful clear.
 	if err := s.client.Refresh(ctx, s.indexName); err != nil {
-		log.WarnfContext(ctx, "elasticsearch memory pre-clear refresh failed: %v", err)
+		return fmt.Errorf("pre-clear refresh failed: %w", err)
 	}
 	body, err := json.Marshal(buildDeleteByQueryRequest(userKey))
 	if err != nil {
@@ -363,9 +365,9 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	}
 	// Deletions are not visible to reads until Elasticsearch refreshes;
 	// make the clear effective immediately for callers reading right
-	// after. Like the pre-clear refresh, this is best-effort.
+	// after. A failure means the deletion may not yet be visible.
 	if err := s.client.Refresh(ctx, s.indexName); err != nil {
-		log.WarnfContext(ctx, "elasticsearch memory post-clear refresh failed: %v", err)
+		return fmt.Errorf("post-clear refresh failed: %w", err)
 	}
 	return nil
 }

@@ -268,6 +268,8 @@ func WithSoftDelete(enabled bool) ServiceOpt {
 // WithSkipIndexInit skips index existence checks and creation at service
 // startup. Useful when the index is managed externally or the user has no
 // index administration permissions.
+// This does not waive runtime permissions: hard-delete ClearMemories
+// still requires index refresh privileges, such as maintenance.
 func WithSkipIndexInit(skip bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.skipIndexInit = skip
