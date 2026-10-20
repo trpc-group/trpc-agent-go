@@ -987,18 +987,16 @@ agent := llmagent.New("multi-mcp",
 ### MCP Schema 兼容性
 
 MCP ToolSet 将 `{"type":["null","integer"]}` 这类 JSON Schema 类型数组映射为
-`{"anyOf":[{"type":"null"},{"type":"integer"}]}`。`tool.Schema.Type` 仍然是
-单个字符串：类型数组不会被收成其中一个成员，`null` 也会保留为自己的分支。
-转换器原本会读取 `type` 的位置都会做同样的映射，包括输入、输出 Schema 里的
-嵌套属性、数组 `items` 和 `$defs`。
+`{"anyOf":[{"type":"null"},{"type":"integer"}]}`。`tool.Schema.Type` 表示单个
+类型，`tool.Schema.AnyOf` 表示包括 `null` 在内的允许类型分支。类型数组可用于转换后的
+输入、输出 Schema，包括嵌套属性、数组元素 Schema 和 `$defs`。
 
-原本就是单个字符串 `type` 的 Schema 保持原有关键字映射。转换器以前不复制的
-关键字仍然省略，包括显式 `anyOf`，以及根级的 `default`、`enum`、`items` 和
-`additionalProperties`。可选与可空彼此独立：`required` 决定属性是否必须出现，
-`null` 分支决定属性值能否为 JSON `null`。客户端不会把字符串 `"100"` 自动转换成
-数字 `100`，这次改动也不为生成的分支增加校验。模型端点需要接受转换后的
-Schema。这不是完整的 JSON Schema 导入，也不表示兼容所有模型提供方。工具参数的
-最终校验仍由 MCP 服务端负责。
+可选与可空彼此独立：`required` 决定属性是否必须出现，`null` 分支允许属性值为
+JSON `null`。工具参数按原始类型透传，不做类型强制转换，由 MCP 服务端负责校验。
+
+Schema 转换仅支持 JSON Schema 的部分能力，不导入远端显式 `anyOf` 关键字，以及
+根级的 `default`、`enum`、`items` 和 `additionalProperties`。所选模型适配器和
+端点需要支持转换后的 Schema。
 
 ### MCP Annotations 与权限 Metadata
 

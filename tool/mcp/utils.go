@@ -63,8 +63,7 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 
 // applyJSONSchemaType copies a JSON Schema type keyword onto schema.
 // A string is stored in Type. A type array becomes one anyOf branch per
-// string member, in order, because Type holds a single type. Null stays its
-// own branch, and the array is not reduced to its first member. Non-string
+// string member, preserving order and null alternatives. Non-string array
 // members and other representations of type are ignored.
 func applyJSONSchemaType(schema *tool.Schema, typeValue any) {
 	switch typed := typeValue.(type) {
