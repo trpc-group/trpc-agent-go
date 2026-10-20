@@ -708,12 +708,18 @@ summary.WithChecksAny(
 | `WithPostSummaryHook(h PostSummaryHook)` | Post-summary hook; can modify output summary |
 | `WithSummaryHookAbortOnError(abort bool)` | Whether to abort on hook error; default `false` (ignore errors) |
 
+### Message Content
+
+For regular messages, the summarizer reads `Content` followed by non-empty text
+parts in `ContentParts`, in order. This text is used to determine summary
+eligibility and build standalone summary input. Images, audio, and other
+non-text parts are not transcribed.
+
+Cache-safe forks reuse the selected parent messages with their original content
+and part order, then append the summary instruction. The request budget rules
+described above still apply.
+
 ### Tool Call Formatting
-
-Regular messages reach the summary model in one of two forms:
-
-- **Conversation text** for standalone requests, including fallbacks from cache-safe forking: each regular message contributes its `Content` followed by its `ContentParts` of type `text`, in their original order. Non-text parts such as images or audio are not transcribed, so a message that has only such parts contributes no summarizable text.
-- **Original parent messages** for cache-safe fork requests: when no budget reduction is needed, the fork clones the selected parent messages and keeps each message's `Content` and `ContentParts`, including text, media, and order, unchanged; it only appends the summary instruction at the end. An unchanged shared prefix is the precondition for provider prompt-cache reuse, not a guarantee of a cache hit.
 
 By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
 
