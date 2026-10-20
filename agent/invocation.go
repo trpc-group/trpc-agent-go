@@ -2401,7 +2401,9 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 			close(ch)
 		}
 	}
-	inv.noticeChannels = nil
+	// Views share this registry and its mutex. Keep the map reference stable
+	// while concurrent views are created during cancellation.
+	clear(inv.noticeChannels)
 }
 
 // GetCustomAgentConfig retrieves configuration for a specific custom agent type.
