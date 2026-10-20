@@ -1733,6 +1733,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#message-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message Content
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tool-call-formatting" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Call Formatting
@@ -4235,6 +4244,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#message-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message Content
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tool-call-formatting" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Call Formatting
@@ -5602,6 +5620,14 @@ meaning:</p>
 </tr>
 </tbody>
 </table>
+<h3 id="message-content">Message Content</h3>
+<p>For regular messages, the summarizer reads <code>Content</code> followed by non-empty text
+parts in <code>ContentParts</code>, in order. This text is used to determine summary
+eligibility and build standalone summary input. Images, audio, and other
+non-text parts are not transcribed.</p>
+<p>Cache-safe forks reuse the selected parent messages with their original content
+and part order, then append the summary instruction. The request budget rules
+described above still apply.</p>
 <h3 id="tool-call-formatting">Tool Call Formatting</h3>
 <p>By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:</p>
 <ul>
@@ -7505,7 +7531,7 @@ normal Info level only the Info and Warn outcomes listed above are visible.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 23, 2026 01:56:44 UTC">2026-09-23 01:56:44</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 20, 2026 10:38:49 UTC">2026-10-20 10:38:49</span>
   </span>
 
     
