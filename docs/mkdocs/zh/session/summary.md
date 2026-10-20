@@ -652,6 +652,8 @@ summary.WithChecksAny(
 
 ### 工具调用格式化
 
+普通消息的对话文本取自 `Content`，并按原顺序追加文本类型的 `ContentParts`；图片、音频等非文本 part 不会转写为文本，因此只含此类 part 的消息不提供可摘要内容，但开启 cache-safe forking 后，fork 摘要请求仍可能携带父请求中的原始 parts。
+
 默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
 
 - 工具调用：`[Called tool: toolName with args: {"arg": "value"}]`

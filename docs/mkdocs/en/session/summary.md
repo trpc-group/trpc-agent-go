@@ -710,6 +710,8 @@ summary.WithChecksAny(
 
 ### Tool Call Formatting
 
+For regular messages, the conversation text uses `Content` followed by text `ContentParts` in their original order; non-text parts such as images or audio are not transcribed, so a message with only such parts contributes no summarizable text, although a cache-safe fork summary request may still carry the parent request's original parts.
+
 By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
 
 - Tool calls: `[Called tool: toolName with args: {"arg": "value"}]`
