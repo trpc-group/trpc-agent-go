@@ -32,9 +32,7 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	}
 
 	schema := &tool.Schema{}
-	if typeVal, ok := schemaMap["type"].(string); ok {
-		schema.Type = typeVal
-	}
+	applyJSONSchemaType(schema, schemaMap["type"])
 	if descVal, ok := schemaMap["description"].(string); ok {
 		schema.Description = descVal
 	}
@@ -63,6 +61,26 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	return schema
 }
 
+// applyJSONSchemaType copies a JSON Schema type keyword onto schema.
+// A string is stored in Type. A type array becomes one anyOf branch per
+// string member, in order, because Type holds a single type. Null stays its
+// own branch, and the array is not reduced to its first member. Non-string
+// members and other representations of type are ignored.
+func applyJSONSchemaType(schema *tool.Schema, typeValue any) {
+	switch typed := typeValue.(type) {
+	case string:
+		schema.Type = typed
+	case []any:
+		for _, value := range typed {
+			name, ok := value.(string)
+			if !ok {
+				continue
+			}
+			schema.AnyOf = append(schema.AnyOf, &tool.Schema{Type: name})
+		}
+	}
+}
+
 // convertDefs converts JSON Schema $defs definitions from map[string]any to map[string]*Schema.
 func convertDefs(defs map[string]any) map[string]*tool.Schema {
 	result := make(map[string]*tool.Schema, len(defs))
@@ -84,9 +102,7 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 	for name, prop := range props {
 		if propMap, ok := prop.(map[string]any); ok {
 			propSchema := &tool.Schema{}
-			if typeVal, ok := propMap["type"].(string); ok {
-				propSchema.Type = typeVal
-			}
+			applyJSONSchemaType(propSchema, propMap["type"])
 			if descVal, ok := propMap["description"].(string); ok {
 				propSchema.Description = descVal
 			}

@@ -14,15 +14,100 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	tmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 type dynamicHeaderContextKey struct{}
+
+func TestToolSet_HTTPTypeUnionSchema(t *testing.T) {
+	inputSchema := json.RawMessage(`{"type":"object","properties":{"limit":{"type":["null","integer"],"default":50}}}`)
+	outputSchema := json.RawMessage(`{"type":"object","properties":{"count":{"type":["integer","null"]}}}`)
+	arguments := make(chan map[string]any, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     any            `json:"id"`
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if request.ID == nil {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		var result any = map[string]any{}
+		switch request.Method {
+		case "initialize":
+			result = map[string]any{
+				"protocolVersion": "2025-03-26",
+				"serverInfo":      map[string]any{"name": "schema-test", "version": "1.0.0"},
+				"capabilities":    map[string]any{},
+			}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{
+				"name": "read_records", "inputSchema": inputSchema, "outputSchema": outputSchema,
+			}}}
+		case "tools/call":
+			args, _ := request.Params["arguments"].(map[string]any)
+			arguments <- args
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	toolSet := NewMCPToolSet(ConnectionConfig{Transport: "streamable", ServerURL: server.URL},
+		WithMCPOptions(tmcp.WithClientGetSSEEnabled(false)))
+	defer func() { require.NoError(t, toolSet.Close()) }()
+	require.NoError(t, toolSet.Init(ctx))
+	tools := toolSet.Tools(ctx)
+	require.Len(t, tools, 1)
+	declaration := tools[0].Declaration()
+	for _, schema := range []*tool.Schema{
+		declaration.InputSchema.Properties["limit"], declaration.OutputSchema.Properties["count"],
+	} {
+		require.Empty(t, schema.Type)
+		require.Len(t, schema.AnyOf, 2)
+	}
+	require.Equal(t, "null", declaration.InputSchema.Properties["limit"].AnyOf[0].Type)
+	require.Equal(t, "integer", declaration.InputSchema.Properties["limit"].AnyOf[1].Type)
+	require.Equal(t, float64(50), declaration.InputSchema.Properties["limit"].Default)
+	require.Equal(t, "integer", declaration.OutputSchema.Properties["count"].AnyOf[0].Type)
+	require.Equal(t, "null", declaration.OutputSchema.Properties["count"].AnyOf[1].Type)
+	require.Empty(t, declaration.InputSchema.Required, "optional and nullable are independent")
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	for _, tc := range []struct {
+		args string
+		want any
+	}{
+		{`{"limit":100}`, float64(100)},
+		{`{"limit":null}`, nil},
+		{`{"limit":"100"}`, "100"},
+	} {
+		_, err := callable.Call(ctx, []byte(tc.args))
+		require.NoError(t, err)
+		select {
+		case received := <-arguments:
+			require.Contains(t, received, "limit")
+			require.Equal(t, tc.want, received["limit"], "the client must not coerce argument types")
+		case <-ctx.Done():
+			t.Fatal("tools/call was not received")
+		}
+	}
+}
 
 // TestToolSet_PerRequestHeadersViaBeforeRequest verifies that a user-supplied
 // mcp.WithHTTPBeforeRequest hook (passed through WithMCPOptions) observes the

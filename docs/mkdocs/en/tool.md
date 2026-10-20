@@ -1030,6 +1030,28 @@ agent := llmagent.New("multi-mcp",
 // Model-visible names: github_search, slack_search, ...
 ```
 
+### MCP Schema Compatibility
+
+The MCP ToolSet maps a JSON Schema type array, such as
+`{"type":["null","integer"]}`, to
+`{"anyOf":[{"type":"null"},{"type":"integer"}]}`.
+`tool.Schema.Type` remains a single string. The array is not collapsed to
+one member, and a `null` member stays its own branch. The same mapping is
+used wherever the converter already reads `type`, including nested
+properties, array `items`, and `$defs` on input and output schemas.
+
+A schema that already uses a single string `type` keeps its previous keyword
+mapping. Keywords the converter did not previously copy stay omitted,
+including an explicit `anyOf` keyword and root-level `default`, `enum`,
+`items`, and `additionalProperties`. Optional and nullable stay independent:
+`required` controls whether a property must be present, and a `null` branch
+controls whether its value may be JSON `null`. The client does not coerce a
+numeric string such as `"100"` into the number `100`, and this change does
+not add validation for the generated branches. Model endpoints need to
+accept the emitted schema. This is not a full JSON Schema import and does
+not claim compatibility with every model provider. The MCP server remains
+responsible for validating tool arguments.
+
 ### MCP Annotations and Permission Metadata
 
 When a remote MCP server returns tool annotations from `tools/list`, direct
