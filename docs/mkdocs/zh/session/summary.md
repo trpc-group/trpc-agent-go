@@ -652,7 +652,10 @@ summary.WithChecksAny(
 
 ### 工具调用格式化
 
-普通消息的对话文本取自 `Content`，并按原顺序追加文本类型的 `ContentParts`；图片、音频等非文本 part 不会转写为文本，因此只含此类 part 的消息不提供可摘要内容，但开启 cache-safe forking 后，fork 摘要请求仍可能携带父请求中的原始 parts。
+普通消息以两种形式进入摘要模型：
+
+- **对话文本**，用于 standalone 请求（包括 cache-safe forking 回退到 standalone 时）：每条普通消息先取 `Content`，再按原顺序追加类型为 `text` 的 `ContentParts`。图片、音频等非文本 part 不会转写为文本，因此只含此类 part 的消息不提供可摘要内容。
+- **父请求原始消息**，用于 cache-safe fork 请求：无需预算裁剪时，fork 克隆父请求中选中的消息，每条消息的 `Content` 和 `ContentParts`（文字、媒体及顺序）保持原样，只在末尾追加摘要指令。公共前缀不变是 provider 复用 prompt cache 的前提，但不保证一定命中缓存。
 
 默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
 

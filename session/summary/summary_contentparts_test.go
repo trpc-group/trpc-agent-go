@@ -11,6 +11,7 @@ package summary
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -340,6 +342,107 @@ func TestModelVisibleViewKeepsContentPartsUserRound(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, "event-answer", string(lastEventID))
 	})
+}
+
+func TestCacheSafeForkKeepsSelectedParentPrefix(t *testing.T) {
+	const forkPrompt = "Summarize the conversation above."
+	newParent := func() *model.Request {
+		return &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("  stable system  "),
+				{
+					Role:    model.RoleUser,
+					Content: "  compare these charts\n",
+					ContentParts: []model.ContentPart{
+						contentPartsText("  compare these charts\n"),
+						contentPartsImage(),
+						contentPartsText("\tfocus on Q3  "),
+					},
+				},
+				model.NewAssistantMessage("  Revenue grew in Q3.  "),
+				model.NewUserMessage("and the cost chart?"),
+				model.NewAssistantMessage("Costs were flat."),
+				model.NewUserMessage("recent question"),
+			},
+			Tools: map[string]tool.Tool{
+				"lookup": &testTool{name: "lookup", description: "find data"},
+			},
+		}
+	}
+	want := newParent()
+	parent := newParent()
+	// Runner binds view items to a copy of the final request, so the view does
+	// not share messages with the parent request.
+	history := newParent().Messages[1:]
+	now := time.Now()
+	events := make([]event.Event, len(history))
+	items := make([]summaryview.Item, len(history))
+	for i, msg := range history {
+		author := "assistant"
+		if msg.Role == model.RoleUser {
+			author = authorUser
+		}
+		events[i] = modelVisibleTestEvent(
+			fmt.Sprintf("event-%d", i),
+			author,
+			msg,
+			now.Add(time.Duration(i)*time.Second),
+		)
+		items[i] = summaryview.Item{
+			Message:        msg,
+			EffectiveEvent: events[i],
+			Boundary: summaryview.Boundary{
+				EventID:   events[i].ID,
+				Timestamp: events[i].Timestamp,
+			},
+			RequestIndex: i + 1,
+		}
+	}
+	var report Report
+	capture := &contentPartsCaptureModel{}
+	s := NewSummarizer(
+		capture,
+		WithCacheSafeForking(true),
+		WithCacheSafeForkPrompt(forkPrompt),
+		WithSkipRecentContext(func(context.Context, []event.Event) int {
+			return 1
+		}),
+		WithReportHook(func(_ context.Context, got Report) {
+			report = got
+		}),
+	)
+	view := &summaryview.View{SessionID: "fork", Items: items, Bound: true}
+	ctx := ContextWithCacheSafeForkRequest(
+		summaryview.ContextWithView(context.Background(), view),
+		parent,
+	)
+
+	_, err := s.Summarize(ctx, &session.Session{ID: "fork", Events: events})
+	require.NoError(t, err)
+	require.Equal(t, callModeCacheSafeFork, report.Call.Mode)
+	require.Len(t, capture.requests, 1)
+	fork := capture.requests[0]
+	selected := want.Messages[:len(want.Messages)-1]
+	require.Equal(
+		t,
+		append(
+			append([]model.Message(nil), selected...),
+			model.NewUserMessage(forkPrompt),
+		),
+		fork.Messages,
+	)
+	require.Equal(t, want.Tools, fork.Tools)
+	require.Equal(t, want, parent)
+	require.NotSame(
+		t,
+		&parent.Messages[1].ContentParts[0],
+		&fork.Messages[1].ContentParts[0],
+	)
+	require.NotSame(
+		t,
+		parent.Messages[1].ContentParts[0].Text,
+		fork.Messages[1].ContentParts[0].Text,
+	)
 }
 
 func TestToolResultContentPartsStayBehindFormatter(t *testing.T) {

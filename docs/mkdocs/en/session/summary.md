@@ -710,7 +710,10 @@ summary.WithChecksAny(
 
 ### Tool Call Formatting
 
-For regular messages, the conversation text uses `Content` followed by text `ContentParts` in their original order; non-text parts such as images or audio are not transcribed, so a message with only such parts contributes no summarizable text, although a cache-safe fork summary request may still carry the parent request's original parts.
+Regular messages reach the summary model in one of two forms:
+
+- **Conversation text** for standalone requests, including fallbacks from cache-safe forking: each regular message contributes its `Content` followed by its `ContentParts` of type `text`, in their original order. Non-text parts such as images or audio are not transcribed, so a message that has only such parts contributes no summarizable text.
+- **Original parent messages** for cache-safe fork requests: when no budget reduction is needed, the fork clones the selected parent messages and keeps each message's `Content` and `ContentParts`, including text, media, and order, unchanged; it only appends the summary instruction at the end. An unchanged shared prefix is the precondition for provider prompt-cache reuse, not a guarantee of a cache hit.
 
 By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:
 
