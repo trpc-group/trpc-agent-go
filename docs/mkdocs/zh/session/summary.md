@@ -650,6 +650,15 @@ summary.WithChecksAny(
 | `WithPostSummaryHook(h PostSummaryHook)` | 摘要后的 Hook，可修改输出摘要 |
 | `WithSummaryHookAbortOnError(abort bool)` | Hook 报错时是否中断，默认 `false`（忽略错误） |
 
+### 消息内容
+
+对于普通消息，摘要器先读取 `Content`，再按顺序读取 `ContentParts` 中非空的文本
+part。这些文本用于判断消息是否可摘要，以及构造独立摘要请求的输入。图片、音频
+等非文本 part 不会转写为文本。
+
+cache-safe fork 复用选中的父请求消息，保留原始内容及 part 顺序，再追加摘要指令。
+上文所述的请求预算规则仍然适用。
+
 ### 工具调用格式化
 
 默认情况下，摘要器会将工具调用和工具结果包含在发送给 LLM 进行总结的对话文本中。默认格式为：
