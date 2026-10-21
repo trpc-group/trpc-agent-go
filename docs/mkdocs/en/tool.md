@@ -1037,8 +1037,8 @@ The MCP ToolSet maps a JSON Schema type array, such as
 `{"anyOf":[{"type":"null"},{"type":"integer"}]}`.
 `tool.Schema.Type` holds a single type; `tool.Schema.AnyOf` represents the
 allowed alternatives, including `null`. Type arrays are supported in
-converted input and output schemas, including nested properties, array item
-schemas, and `$defs`.
+converted input and output schemas, including nested properties,
+property-level array item schemas, and `$defs`.
 
 Optional and nullable are independent: `required` controls whether a property
 must be present, while a `null` branch permits a JSON `null` value. Tool

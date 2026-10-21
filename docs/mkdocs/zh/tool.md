@@ -989,7 +989,7 @@ agent := llmagent.New("multi-mcp",
 MCP ToolSet 将 `{"type":["null","integer"]}` 这类 JSON Schema 类型数组映射为
 `{"anyOf":[{"type":"null"},{"type":"integer"}]}`。`tool.Schema.Type` 表示单个
 类型，`tool.Schema.AnyOf` 表示包括 `null` 在内的允许类型分支。类型数组可用于转换后的
-输入、输出 Schema，包括嵌套属性、数组元素 Schema 和 `$defs`。
+输入、输出 Schema，包括嵌套属性、属性中的数组元素 Schema 和 `$defs`。
 
 可选与可空彼此独立：`required` 决定属性是否必须出现，`null` 分支允许属性值为
 JSON `null`。工具参数按原始类型透传，不做类型强制转换，由 MCP 服务端负责校验。
