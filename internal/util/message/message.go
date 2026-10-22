@@ -35,13 +35,15 @@ func TextContent(msg model.Message) string {
 }
 
 // IsEmptyAssistantMessage reports whether an assistant message has no visible
-// content and no tool calls. Reasoning content is metadata for provider replay;
-// by itself it is not a valid assistant history payload for strict chat APIs.
+// content, tool calls, or provider-native replay data. Reasoning content is
+// metadata for provider replay; by itself it is not a valid assistant history
+// payload for strict chat APIs.
 func IsEmptyAssistantMessage(msg model.Message) bool {
 	if msg.Role != model.RoleAssistant {
 		return false
 	}
 	return msg.Content == "" &&
 		len(msg.ContentParts) == 0 &&
-		len(msg.ToolCalls) == 0
+		len(msg.ToolCalls) == 0 &&
+		msg.Replay == nil
 }

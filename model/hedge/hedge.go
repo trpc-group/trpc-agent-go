@@ -20,15 +20,17 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type hedgeModel struct {
-	candidates    []model.Model
-	name          string
-	contextWindow int
-	launchOffsets []time.Duration
+	candidates     []model.Model
+	name           string
+	contextWindow  int
+	replayProtocol string
+	launchOffsets  []time.Duration
 }
 
 type attempt struct {
@@ -62,6 +64,8 @@ type hedgeRun struct {
 }
 
 // New creates a hedge model wrapper.
+// Native replay requires all candidates and the logical hedge name to share
+// one configured model identity and replay protocol.
 func New(opt ...Option) (model.Model, error) {
 	opts := newOptions(opt...)
 	if len(opts.candidates) == 0 {
@@ -82,23 +86,32 @@ func New(opt ...Option) (model.Model, error) {
 	if name == "" {
 		name = candidates[0].Info().Name
 	}
+	replayInfo, err := modelreplay.CandidateInfo(candidates)
+	if err != nil {
+		return nil, fmt.Errorf("hedge: %w", err)
+	}
+	if replayInfo.ReplayProtocol != "" && name != replayInfo.Name {
+		return nil, fmt.Errorf("hedge: native replay requires the logical name to match the configured model name")
+	}
 	contextWindow := opts.contextWindow
 	if contextWindow <= 0 {
 		contextWindow = stableCandidateContextWindow(candidates)
 	}
 	return &hedgeModel{
-		candidates:    candidates,
-		name:          name,
-		contextWindow: contextWindow,
-		launchOffsets: launchOffsets,
+		candidates:     candidates,
+		name:           name,
+		contextWindow:  contextWindow,
+		replayProtocol: replayInfo.ReplayProtocol,
+		launchOffsets:  launchOffsets,
 	}, nil
 }
 
 // Info returns the logical hedge model info.
 func (m *hedgeModel) Info() model.Info {
 	return model.Info{
-		Name:          m.name,
-		ContextWindow: m.contextWindow,
+		Name:           m.name,
+		ContextWindow:  m.contextWindow,
+		ReplayProtocol: m.replayProtocol,
 	}
 }
 

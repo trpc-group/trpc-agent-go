@@ -863,6 +863,7 @@ type streamingResponseProcessor struct {
 	invocation              *agent.Invocation
 	observabilityInvocation *agent.Invocation
 	currentInvocation       *agent.Invocation
+	producerInfo            model.Info
 	llmRequest              *model.Request
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
@@ -911,6 +912,15 @@ func newStreamingResponseProcessor(
 		span:                    span,
 		startedSpan:             startedSpan,
 		err:                     err,
+	}
+	// Capture the selected producer before callbacks can replace the invocation
+	// or its model. A response retains the identity of the actual model call.
+	producer := observabilityInvocation
+	if producer == nil || producer.Model == nil {
+		producer = invocation
+	}
+	if producer != nil && producer.Model != nil {
+		processor.producerInfo = producer.Model.Info()
 	}
 	if metricsInvocation != nil {
 		processor.timingInfo = responseUsageTimingInfo(currentInvocation)
@@ -984,6 +994,11 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
+	if err := p.validateResponseReplay(response); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	if err := validateCompletedToolCallNames(response); err != nil {
 		*p.err = err
 		responseErr = err
@@ -1034,6 +1049,32 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
+}
+
+// Validate after callbacks and repairs, before publishing history or executing
+// tools. Tool execution must use the same projection as the native completion.
+func (p *streamingResponseProcessor) validateResponseReplay(response *model.Response) error {
+	if response == nil {
+		return nil
+	}
+	for _, choice := range response.Choices {
+		if err := validateReplayMessages([]model.Message{choice.Message, choice.Delta}, p.producerInfo); err != nil {
+			return fmt.Errorf("invalid model response: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateReplayMessages(messages []model.Message, info model.Info) error {
+	for index, message := range messages {
+		if message.Replay == nil {
+			continue
+		}
+		if _, err := message.ReplayDataFor(info.ReplayProtocol, info.Name); err != nil {
+			return fmt.Errorf("native replay message %d: %w", index, err)
+		}
+	}
+	return nil
 }
 
 func validateCompletedToolCallNames(response *model.Response) error {
@@ -3060,6 +3101,11 @@ func (f *Flow) generateContentSeq(
 ) (model.Seq[*model.Response], error) {
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
+	}
+	if callModel != nil {
+		if err := validateReplayMessages(llmRequest.Messages, callModel.Info()); err != nil {
+			return nil, err
+		}
 	}
 	ctx, span, started := startLatencySpan(
 		ctx,

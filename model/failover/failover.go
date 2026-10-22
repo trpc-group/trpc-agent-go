@@ -19,6 +19,7 @@ import (
 	"maps"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -30,6 +31,8 @@ type failoverModel struct {
 }
 
 // New creates a failover model wrapper.
+// If any candidate supports native replay, all candidates must have the same
+// replay protocol and configured model name; mixed native routing is rejected.
 func New(opts ...Option) (model.Model, error) {
 	options := options{}
 	for _, opt := range opts {
@@ -44,6 +47,9 @@ func New(opts ...Option) (model.Model, error) {
 			return nil, fmt.Errorf("failover: candidate model at index %d is nil", i)
 		}
 		candidates = append(candidates, candidate)
+	}
+	if _, err := modelreplay.CandidateInfo(candidates); err != nil {
+		return nil, fmt.Errorf("failover: %w", err)
 	}
 	return &failoverModel{candidates: candidates}, nil
 }

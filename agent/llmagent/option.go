@@ -1930,6 +1930,9 @@ func WithPreserveForeignMessages(preserve bool) Option {
 
 // WithEventMessageProjector rewrites one event-derived message before
 // it is appended to the model request.
+// Native replay records remain attached: editing their projections causes a
+// validation error. Use a new completed-history context to intentionally rebase
+// native history instead of rewriting an active native tool turn here.
 func WithEventMessageProjector(
 	projector EventMessageProjector,
 ) Option {
