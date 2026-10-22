@@ -13,6 +13,24 @@ This example shows how to wire the top-level `guardrail` plugin with the built-i
   - `hostexec_kill_session` is denied by policy
 - Observe approval logs for approved and denied review decisions
 
+With a reviewer configured, the approval plugin makes runner-managed LLMAgents
+wait for the completed assistant/tool-call event's persistence acknowledgement
+before tool callbacks run. This includes serial and parallel tools and candidate
+attempts, so the reviewer can read the current assistant message and all tool
+calls in that response from the session. Existing transcript filters and size
+limits still apply. If synchronization fails, tool processing stops.
+
+Partial responses remain streaming. Standalone agents without a completion
+consumer and runs without a configured reviewer retain their existing behavior.
+Approval still runs in `BeforeTool`; this does not change callback ordering or
+the `Reviewer` interface.
+
+For native Graph LLM nodes, enable
+`agent.WithGraphEmitFinalModelResponses(true)` to make completed model responses
+available in the session transcript. Graph's existing node barrier orders those
+events before a subsequent tools node; its default response emission policy is
+unchanged.
+
 ## Prerequisites
 
 - Go 1.21 or later
