@@ -984,6 +984,20 @@ agent := llmagent.New("multi-mcp",
 // 模型可见名称：github_search、slack_search、...
 ```
 
+### MCP Schema 兼容性
+
+MCP ToolSet 将 `{"type":["null","integer"]}` 这类 JSON Schema 类型数组映射为
+`{"anyOf":[{"type":"null"},{"type":"integer"}]}`。`tool.Schema.Type` 表示单个
+类型，`tool.Schema.AnyOf` 表示包括 `null` 在内的允许类型分支。类型数组可用于转换后的
+输入、输出 Schema，包括嵌套属性、属性中的数组元素 Schema 和 `$defs`。
+
+可选与可空彼此独立：`required` 决定属性是否必须出现，`null` 分支允许属性值为
+JSON `null`。工具参数按原始类型透传，不做类型强制转换，由 MCP 服务端负责校验。
+
+Schema 转换仅支持 JSON Schema 的部分能力，不导入远端显式 `anyOf` 关键字，以及
+根级的 `default`、`enum`、`items` 和 `additionalProperties`。所选模型适配器和
+端点需要支持转换后的 Schema。
+
 ### MCP Annotations 与权限 Metadata
 
 当远端 MCP server 在 `tools/list` 中返回 tool annotations 时，直接通过

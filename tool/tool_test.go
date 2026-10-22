@@ -47,6 +47,33 @@ func (d *testStreamableTool) Declaration() *Declaration {
 	}
 }
 
+func TestSchemaAnyOfJSON(t *testing.T) {
+	schema := &Schema{AnyOf: []*Schema{{Type: "null"}, {Type: "integer"}}}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"anyOf":[{"type":"null"},{"type":"integer"}]}` {
+		t.Fatalf("unexpected schema JSON: %s", data)
+	}
+	var decoded Schema
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.AnyOf) != 2 || decoded.AnyOf[1].Type != "integer" || decoded.Type != "" {
+		t.Fatalf("union was not preserved: %+v", decoded)
+	}
+	for _, schema := range []*Schema{{Type: "integer"}, {Type: "integer", AnyOf: []*Schema{}}} {
+		data, err = json.Marshal(schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != `{"type":"integer"}` {
+			t.Fatalf("empty anyOf was not omitted: %s", data)
+		}
+	}
+}
+
 func TestSchemaPatternJSON(t *testing.T) {
 	schema := &Schema{Type: "string", Pattern: "^[a-z0-9_-]+$"}
 	data, err := json.Marshal(schema)

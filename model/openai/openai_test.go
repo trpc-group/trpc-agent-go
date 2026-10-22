@@ -1617,6 +1617,34 @@ func TestModel_convertTools(t *testing.T) {
 	assert.Empty(t, props, "expected empty properties for no-arg tool")
 }
 
+func TestModel_convertTools_PreservesAnyOf(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"limit": {AnyOf: []*tool.Schema{{Type: "null"}, {Type: "integer"}}, Default: 50},
+			"name":  {Type: "string"},
+		},
+	}
+	params := New("dummy").convertTools(map[string]tool.Tool{
+		"read_records": stubTool{decl: &tool.Declaration{Name: "read_records", InputSchema: schema}},
+	})
+	require.Len(t, params, 1)
+	wire, err := json.Marshal(params)
+	require.NoError(t, err)
+	var functions []struct {
+		Function struct {
+			Parameters map[string]any `json:"parameters"`
+		} `json:"function"`
+	}
+	require.NoError(t, json.Unmarshal(wire, &functions))
+	properties := functions[0].Function.Parameters["properties"].(map[string]any)
+	limit := properties["limit"].(map[string]any)
+	require.NotContains(t, limit, "type")
+	require.Equal(t, []any{map[string]any{"type": "null"}, map[string]any{"type": "integer"}}, limit["anyOf"])
+	require.Equal(t, float64(50), limit["default"])
+	require.Equal(t, map[string]any{"type": "string"}, properties["name"])
+}
+
 // TestModel_convertTools_StrictProxyTopLevelProperties validates the final JSON
 // payload shape expected by strict OpenAI-compatible proxies.
 func TestModel_convertTools_StrictProxyTopLevelProperties(t *testing.T) {

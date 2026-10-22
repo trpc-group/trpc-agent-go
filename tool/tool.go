@@ -63,6 +63,10 @@ type Schema struct {
 	//  Type Specifies the data type (e.g., "object", "array", "string", "number")
 	Type        string `json:"type,omitempty"`
 	Description string `json:"description,omitempty"`
+	// AnyOf requires a value to match at least one branch. Other fields on
+	// this schema still apply; leave Type empty to allow different types.
+	// A nil or empty slice omits the anyOf constraint.
+	AnyOf []*Schema `json:"anyOf,omitempty"`
 	// Pattern restricts string values to a regular expression.
 	Pattern  string   `json:"pattern,omitempty"`
 	Required []string `json:"required,omitempty"`
