@@ -132,6 +132,10 @@ performed. Required evidence collection must return an error when unavailable.
   the intended child tools explicitly through that policy as well.
 - Nil Context retains the legacy reviewer request semantics and does not assert
   provenance/completeness. A non-nil Context requires aligned TranscriptInfo.
+- The LLM reviewer quotes each transcript role and content, escaping line breaks
+  and control characters so marker text stays within an entry. This applies to
+  both legacy and contextual review prompts; stored messages and Request
+  payloads are unchanged.
 - The LLM reviewer rejects missing/null/out-of-range risk scores. For requests
   with Context its default session supplier creates a fresh reviewer session,
   avoiding accumulated past review prompts/decisions. Custom session suppliers
