@@ -92,6 +92,43 @@ func TestMatchingTrailingRoundFingerprintDetectsChangesAndExclusions(t *testing.
 	}
 }
 
+func TestMatchingTrailingActionFingerprintAndActionValidation(t *testing.T) {
+	_, ok := matchingTrailingActionFingerprint(nil, nil)
+	require.False(t, ok)
+
+	_, ok = matchingTrailingActionFingerprint(
+		repeatedRoundsRequest("search", 1).Messages,
+		nil,
+	)
+	require.False(t, ok)
+
+	callsA := []model.ToolCall{
+		newToolCall("call-a", "search", ` { "query": "x", "limit": 1 } `),
+		newToolCall("call-b", "read", `{"path":"a.go"}`),
+	}
+	callsB := []model.ToolCall{
+		newToolCall("call-c", "search", `{"limit":1,"query":"x"}`),
+		newToolCall("call-d", "read", ` { "path": "a.go" } `),
+	}
+	fingerprintA, ok := fingerprintToolCalls(callsA)
+	require.True(t, ok)
+	fingerprintB, ok := fingerprintToolCalls(callsB)
+	require.True(t, ok)
+	require.Equal(t, fingerprintA, fingerprintB)
+
+	reordered := []model.ToolCall{callsA[1], callsA[0]}
+	reorderedFingerprint, ok := fingerprintToolCalls(reordered)
+	require.True(t, ok)
+	require.NotEqual(t, fingerprintA, reorderedFingerprint)
+
+	_, ok = fingerprintToolCalls(nil)
+	require.False(t, ok)
+	_, ok = fingerprintToolCalls([]model.ToolCall{
+		newToolCall("call-invalid", "", `{}`),
+	})
+	require.False(t, ok)
+}
+
 func TestParseTrailingToolRoundRejectsMalformedTranscripts(t *testing.T) {
 	validCall := newToolCall("call-1", "search", `{}`)
 	validResult := model.NewToolMessage("call-1", "search", "same")
@@ -193,6 +230,21 @@ func TestFingerprintRoundCanonicalizesArgumentsAndIgnoresIDs(t *testing.T) {
 	fingerprintB, ok := fingerprintRound(callsB, resultsB)
 	require.True(t, ok)
 	require.Equal(t, fingerprintA, fingerprintB)
+}
+
+func TestFingerprintRoundRejectsInvalidShapes(t *testing.T) {
+	validCall := newToolCall("call-1", "search", `{}`)
+	validResult := model.NewToolMessage("call-1", "search", "same")
+
+	_, ok := fingerprintRound(nil, nil)
+	require.False(t, ok)
+	_, ok = fingerprintRound([]model.ToolCall{validCall}, nil)
+	require.False(t, ok)
+	_, ok = fingerprintRound(
+		[]model.ToolCall{newToolCall("call-1", "", `{}`)},
+		[]model.Message{validResult},
+	)
+	require.False(t, ok)
 }
 
 func TestCanonicalArgumentsPreservesNumbersAndInvalidJSON(t *testing.T) {
