@@ -549,6 +549,7 @@ var ModelContextWindows = map[string]int{
 	"moonshot-v1-128k-vision-preview": 131072,
 
 	// MiniMax — https://platform.minimax.io/docs/guides/text-generation
+	"minimax-m3.1-flash":     1000000,
 	"minimax-m3":             1000000,
 	"minimax-m2.7":           204800,
 	"minimax-m2.7-highspeed": 204800,
@@ -790,6 +791,10 @@ var ModelMaxOutputTokens = map[string]int{
 	"deepseek-reasoner": 393216,
 	"deepseek-v4-pro":   393216,
 	"deepseek-v4-flash": 393216,
+
+	// MiniMax — https://platform.minimax.io/docs/api-reference/text-chat-openai
+	"minimax-m3.1-flash": 524288,
+	"minimax-m3":         32768,
 }
 
 // ResolveMaxOutputTokens returns the max output tokens for a given model name.
