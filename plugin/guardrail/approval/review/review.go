@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -29,6 +30,9 @@ type Reviewer interface {
 type Request struct {
 	Action     Action
 	Transcript []TranscriptEntry
+	// Context supplements the action and transcript. Nil preserves the legacy
+	// request format and makes no claim about provenance or completeness.
+	Context *Context `json:",omitempty"`
 }
 
 // Action is the exact tool action being reviewed.
@@ -61,7 +65,7 @@ type guardianReviewer struct {
 }
 
 type decisionPayload struct {
-	RiskScore int    `json:"risk_score"`
+	RiskScore *int   `json:"risk_score"`
 	RiskLevel string `json:"risk_level"`
 	Reason    string `json:"reason"`
 }
@@ -96,6 +100,13 @@ func (r *guardianReviewer) Review(ctx context.Context, req *Request) (*Decision,
 	}
 	if req.Action.ToolName == "" {
 		return nil, fmt.Errorf("reviewing approval request: action tool name is empty")
+	}
+	if err := validateReviewContext(ctx, req); err != nil {
+		return nil, err
+	}
+	if req.Context != nil && !hasAttributableUserInput(req) {
+		return &Decision{RiskScore: 100, RiskLevel: "unknown",
+			Reason: "No attributable user intent is available in the review transcript."}, nil
 	}
 	userID, err := r.userIDSupplier(ctx, req)
 	if err != nil {
@@ -138,12 +149,15 @@ func (r *guardianReviewer) Review(ctx context.Context, req *Request) (*Decision,
 	if err != nil {
 		return nil, fmt.Errorf("reviewing approval request: collect decision: %w", err)
 	}
-	if payload.RiskScore < 0 || payload.RiskScore > 100 {
-		return nil, fmt.Errorf("reviewing approval request: risk score %d out of range", payload.RiskScore)
+	if payload.RiskScore == nil {
+		return nil, fmt.Errorf("reviewing approval request: missing risk score")
+	}
+	if *payload.RiskScore < 0 || *payload.RiskScore > 100 {
+		return nil, fmt.Errorf("reviewing approval request: risk score %d out of range", *payload.RiskScore)
 	}
 	return &Decision{
-		Approved:  payload.RiskScore < r.riskThreshold,
-		RiskScore: payload.RiskScore,
+		Approved:  *payload.RiskScore < r.riskThreshold,
+		RiskScore: *payload.RiskScore,
 		RiskLevel: payload.RiskLevel,
 		Reason:    payload.Reason,
 	}, nil
@@ -179,4 +193,27 @@ func collectDecisionPayload(ctx context.Context, events <-chan *event.Event) (*d
 			}
 		}
 	}
+}
+
+func validateReviewContext(ctx context.Context, req *Request) error {
+	if ctx == nil {
+		return fmt.Errorf("reviewing approval request: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if req.Context != nil && len(req.Context.TranscriptInfo) != len(req.Transcript) {
+		return fmt.Errorf("reviewing approval request: transcript metadata length mismatch")
+	}
+	return nil
+}
+
+func hasAttributableUserInput(req *Request) bool {
+	for i, entry := range req.Transcript {
+		if req.Context.TranscriptInfo[i].Origin == OriginUserInput && entry.Role == model.RoleUser &&
+			strings.TrimSpace(entry.Content) != "" && entry.Content != "[non-text content omitted]" {
+			return true
+		}
+	}
+	return false
 }

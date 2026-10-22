@@ -1841,11 +1841,10 @@ func fullyPopulatedChildRunOptions() agent.RunOptions {
 	}
 }
 
-// TestSanitizeChildRunOptions_TemplateBoundaryClearsAll verifies that with a
-// template boundary every run-scoped tool input AND every model/prompt/
-// execution-policy override inherited from the parent clone is cleared, so the
-// template is a true strong boundary.
-func TestSanitizeChildRunOptions_TemplateBoundaryClearsAll(t *testing.T) {
+// TestSanitizeChildRunOptions_TemplatePreservesPermissions verifies that a
+// template owns its tool/model/prompt configuration without bypassing the
+// parent invocation's execution permissions.
+func TestSanitizeChildRunOptions_TemplatePreservesPermissions(t *testing.T) {
 	at := NewDynamicTool()
 	runOpts := fullyPopulatedChildRunOptions()
 	at.sanitizeChildRunOptions(&runOpts, true, false)
@@ -1869,7 +1868,7 @@ func TestSanitizeChildRunOptions_TemplateBoundaryClearsAll(t *testing.T) {
 	// Execution boundary.
 	require.Nil(t, runOpts.CodeExecutor)
 	require.Nil(t, runOpts.ToolExecutionFilter)
-	require.Nil(t, runOpts.ToolPermissionPolicy)
+	require.NotNil(t, runOpts.ToolPermissionPolicy)
 }
 
 // TestSanitizeChildRunOptions_NoTemplateKeepsBoundaryFields verifies that

@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -899,6 +900,7 @@ func (at *Tool) ensureUserMessageForCall(
 		Choices: []model.Choice{{Index: 0, Message: inv.Message}},
 	})
 	agent.InjectIntoEvent(inv, evt)
+	messageorigin.MarkInput(evt, messageorigin.Agent)
 	at.appendEvent(ctx, inv, evt)
 }
 
@@ -1090,7 +1092,7 @@ func (at *Tool) callWithIsolatedRunner(
 		runner.WithSessionService(inmemory.NewSessionService()),
 	)
 	evCh, err := r.Run(
-		ctx,
+		messageorigin.WithAgentInput(ctx),
 		"tool_user",
 		"tool_session",
 		message,
@@ -1756,7 +1758,7 @@ func (at *Tool) streamFromFallbackRunner(
 		runner.WithSessionService(inmemory.NewSessionService()),
 	)
 	evCh, err := r.Run(
-		ctx,
+		messageorigin.WithAgentInput(ctx),
 		"tool_user",
 		"tool_session",
 		message,
@@ -1809,7 +1811,10 @@ func (at *Tool) fallbackRunnerRunOptions(ctx context.Context) []agent.RunOption 
 	if !ok || parentInv == nil {
 		return nil
 	}
-	opts := make([]agent.RunOption, 0, 3)
+	opts := make([]agent.RunOption, 0, 4)
+	if parentInv.RunOptions.ToolPermissionPolicy != nil {
+		opts = append(opts, agent.WithToolPermissionPolicy(parentInv.RunOptions.ToolPermissionPolicy))
+	}
 	if agent.IsGraphCompletionEventDisabled(parentInv) {
 		opts = append(opts, agent.WithDisableGraphCompletionEvent(true))
 	}
