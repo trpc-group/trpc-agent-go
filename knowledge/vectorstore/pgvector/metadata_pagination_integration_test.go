@@ -59,7 +59,9 @@ func runMetadataPaginationDuringUpdates(t *testing.T, dsn string, targetDocument
 		}
 	})
 	t.Cleanup(func() {
-		if _, err := vs.client.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+table); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := vs.client.ExecContext(cleanupCtx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Errorf("drop test table: %v", err)
 		}
 	})
