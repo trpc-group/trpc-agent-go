@@ -20,11 +20,11 @@ const (
 )
 
 // HasPayload reports whether the message has non-empty Content, ContentParts,
-// or ReasoningContent.
+// ReasoningContent, or provider-native replay data.
 func HasPayload(msg Message) bool {
 	return msg.Content != "" ||
 		len(msg.ContentParts) > 0 ||
-		msg.ReasoningContent != ""
+		msg.ReasoningContent != "" || msg.Replay != nil
 }
 
 func roleGroupOf(role Role) roleGroupKind {
