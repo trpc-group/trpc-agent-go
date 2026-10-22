@@ -359,6 +359,31 @@ jobs:
           EXAMPLES_SHARD_INDEX: ${{ matrix.shard_index }}
           EXAMPLES_SHARD_TOTAL: ${{ matrix.shard_total }}
         run: bash .github/scripts/check-examples-build.sh
+  check-openai-responses-example:
+    name: check OpenAI Responses example (Go 1.25)
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            model/openai/responses/go.mod
+            model/openai/responses/go.sum
+            examples/openairesponses/go.mod
+            examples/openairesponses/go.sum
+      - name: Test Responses adapter module
+        working-directory: model/openai/responses
+        run: go test ./...
+      - name: Check example module metadata and build
+        working-directory: examples/openairesponses
+        run: |
+          go mod tidy -diff
+          go build ./...
   check-lfs-excluded:
     name: check git lfs excluded
     runs-on: ubuntu-latest
