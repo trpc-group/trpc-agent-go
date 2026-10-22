@@ -292,6 +292,12 @@ func TestTransformInvokeAgent(t *testing.T) {
 				},
 			},
 			{
+				Key: semconvtrace.KeyGenAIUsageTotalTokens,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_IntValue{IntValue: 579},
+				},
+			},
+			{
 				Key: "other.attribute",
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
@@ -318,6 +324,7 @@ func TestTransformInvokeAgent(t *testing.T) {
 	for _, attr := range span.Attributes {
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageTotalTokens, attr.Key)
 	}
 }
 
@@ -611,6 +618,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 		name                string
 		inputTokens         int64
 		outputTokens        int64
+		totalTokens         int64
 		cachedTokens        int64
 		cacheReadTokens     int64
 		cacheCreationTokens int64
@@ -620,12 +628,19 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			name:          "basic input/output tokens",
 			inputTokens:   100,
 			outputTokens:  50,
-			expectedUsage: map[string]int64{"input": 100, "output": 50},
+			totalTokens:   150,
+			expectedUsage: map[string]int64{"input": 100, "output": 50, "total": 150},
+		},
+		{
+			name:          "provider total only",
+			totalTokens:   42,
+			expectedUsage: map[string]int64{"total": 42},
 		},
 		{
 			name:          "with OpenAI cached tokens",
 			inputTokens:   100,
 			outputTokens:  50,
+			totalTokens:   999,
 			cachedTokens:  30,
 			expectedUsage: map[string]int64{"input": 70, "output": 50, "input_cached": 30},
 		},
@@ -633,6 +648,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			name:            "with Anthropic cache_read tokens",
 			inputTokens:     200,
 			outputTokens:    80,
+			totalTokens:     999,
 			cacheReadTokens: 60,
 			expectedUsage:   map[string]int64{"input": 200, "output": 80, "input_cache_read": 60},
 		},
@@ -640,6 +656,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			name:                "with Anthropic cache_creation tokens",
 			inputTokens:         200,
 			outputTokens:        80,
+			totalTokens:         999,
 			cacheCreationTokens: 40,
 			expectedUsage:       map[string]int64{"input": 200, "output": 80, "input_cache_creation": 40},
 		},
@@ -703,6 +720,12 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.outputTokens}},
 				})
 			}
+			if tt.totalTokens != 0 {
+				attrs = append(attrs, &commonpb.KeyValue{
+					Key:   semconvtrace.KeyGenAIUsageTotalTokens,
+					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.totalTokens}},
+				})
+			}
 			if tt.cachedTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
 					Key:   semconvtrace.KeyGenAIUsageInputTokensCached,
@@ -729,6 +752,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			for _, attr := range span.Attributes {
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
+				assert.NotEqual(t, semconvtrace.KeyGenAIUsageTotalTokens, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCached, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheRead, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
@@ -780,6 +804,10 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 50}},
 			},
 			{
+				Key:   semconvtrace.KeyGenAIUsageTotalTokens,
+				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 150}},
+			},
+			{
 				Key:   semconvtrace.KeyGenAIUsageInputTokensCached,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 30}},
 			},
@@ -800,6 +828,7 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 	for _, attr := range span.Attributes {
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
+		assert.NotEqual(t, semconvtrace.KeyGenAIUsageTotalTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCached, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheRead, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
