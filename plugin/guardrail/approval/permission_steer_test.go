@@ -25,10 +25,16 @@ import (
 )
 
 func TestQueuedUserRestrictionSurvivesLongReviewHistory(t *testing.T) {
-	for _, longHistory := range []bool{false, true} {
+	for _, tc := range []struct{ longHistory, replace bool }{
+		{}, {longHistory: true}, {replace: true}, {longHistory: true, replace: true},
+	} {
+		longHistory := tc.longHistory
 		name, initial := "short", "Record a value."
 		if longHistory {
 			name, initial = "long", strings.Repeat("Record ordinary values. ", 20000)
+		}
+		if tc.replace {
+			name += "/replacement-plugin"
 		}
 		t.Run(name, func(t *testing.T) {
 			const restriction = "New constraint: do not record anything further."
@@ -64,7 +70,11 @@ func TestQueuedUserRestrictionSurvivesLongReviewHistory(t *testing.T) {
 			require.NoError(t, err)
 			ag := llmagent.New("main", llmagent.WithModel(callModel{"record", `{"value":"one"}`}),
 				llmagent.WithTools([]tool.Tool{leaf}), llmagent.WithMaxLLMCalls(4))
-			r = runner.NewRunner("steer-review", ag)
+			var opts []runner.Option
+			if tc.replace {
+				opts = append(opts, runner.WithPlugins(replaceUserEventPlugin{}))
+			}
+			r = runner.NewRunner("steer-review", ag, opts...)
 			defer r.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

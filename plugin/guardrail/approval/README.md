@@ -89,7 +89,10 @@ These are estimates using the framework token counter, not provider token counts
 
 Current runner user input gets framework provenance stored under the versioned
 Event.Extensions key `trpc_agent.message_origin.v1`. Host authentication remains
-application-owned. Imported/older user history without provenance stays unknown;
+application-owned. Event plugins may replace or mutate events, but the runner
+preserves the original input source through those hooks, including unknown and
+agent-authored input. Other event extensions remain under plugin control.
+Imported/older user history without provenance stays unknown;
 an agent-created user-role message is not user authorization. When a child agent
 isolates its model history, the inherited permission reviewer can still see
 attributable ancestor user inputs. This does not add that history to the child's

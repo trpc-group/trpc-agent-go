@@ -153,6 +153,14 @@ func TestFinalPermissionReviewsExecutedArguments(t *testing.T) {
 }
 
 func TestDelegatedAgentInheritsPolicyWithoutBecomingUser(t *testing.T) {
+	t.Run("original", func(t *testing.T) { testDelegatedAgentInheritsPolicy(t) })
+	t.Run("replacement-plugin", func(t *testing.T) {
+		testDelegatedAgentInheritsPolicy(t, runner.WithPlugins(replaceUserEventPlugin{}))
+	})
+}
+
+func testDelegatedAgentInheritsPolicy(t *testing.T, opts ...runner.Option) {
+	t.Helper()
 	var mu sync.Mutex
 	var reviews []*review.Request
 	var executions int
@@ -167,7 +175,7 @@ func TestDelegatedAgentInheritsPolicyWithoutBecomingUser(t *testing.T) {
 		return &review.Decision{Approved: true}, nil
 	})))
 	require.NoError(t, err)
-	r := runner.NewRunner("delegation-test", parent)
+	r := runner.NewRunner("delegation-test", parent, opts...)
 	defer r.Close()
 	consumeRun(t, r, p.PermissionPolicy(nil), "Ask the worker to record a value.")
 	mu.Lock()

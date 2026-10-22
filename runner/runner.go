@@ -1954,15 +1954,23 @@ func (r *runner) applyEventPluginsNoSpan(
 	if invocation == nil || invocation.Plugins == nil {
 		return e
 	}
+	// Input provenance belongs to the input boundary, not the event plugin.
+	// Capture it before hooks can replace or mutate the event. Unknown input
+	// must also remain unknown rather than becoming host authorization.
+	isInput := e.IsUserMessage()
+	source := messageorigin.InputSource(e)
 	updated, err := invocation.Plugins.OnEvent(ctx, invocation, e)
 	if err != nil {
 		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
-		return e
+		updated = e
 	}
 	if updated == nil {
-		return e
+		updated = e
 	}
 	backfillEventMetadata(updated, e)
+	if isInput && messageorigin.InputSource(updated) != source {
+		messageorigin.MarkInput(updated, source)
+	}
 	return updated
 }
 
