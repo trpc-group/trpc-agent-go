@@ -110,3 +110,23 @@ func TestAccumulator_BuildResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestAccumulator_UsageTakesLastChunk(t *testing.T) {
+	// Gemini repeats usageMetadata on every streamed chunk: promptTokenCount is
+	// constant and the candidate/total counts are cumulative.
+	chunks := []*model.Usage{
+		{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15},
+		{PromptTokens: 12, CompletionTokens: 7, TotalTokens: 19},
+		{
+			PromptTokens:        12,
+			CompletionTokens:    11,
+			TotalTokens:         23,
+			PromptTokensDetails: model.PromptTokensDetails{CachedTokens: 4},
+		},
+	}
+	a := &Accumulator{}
+	for _, usage := range chunks {
+		a.Accumulate(&model.Response{Usage: usage})
+	}
+	assert.Equal(t, chunks[len(chunks)-1], a.BuildResponse().Usage)
+}
