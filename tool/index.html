@@ -1888,6 +1888,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#mcp-schema-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      MCP Schema Compatibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#mcp-annotations-and-permission-metadata" class="md-nav__link">
     <span class="md-ellipsis">
       MCP Annotations and Permission Metadata
@@ -4974,6 +4983,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#mcp-schema-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      MCP Schema Compatibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#mcp-annotations-and-permission-metadata" class="md-nav__link">
     <span class="md-ellipsis">
       MCP Annotations and Permission Metadata
@@ -7002,6 +7020,22 @@ modes.</p>
 </span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7"></a><span class="p">)</span>
 </span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8"></a><span class="c1">// Model-visible names: github_search, slack_search, ...</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="mcp-schema-compatibility">MCP Schema Compatibility</h3>
+<p>The MCP ToolSet maps a JSON Schema type array, such as
+<code>{"type":["null","integer"]}</code>, to
+<code>{"anyOf":[{"type":"null"},{"type":"integer"}]}</code>.
+<code>tool.Schema.Type</code> holds a single type; <code>tool.Schema.AnyOf</code> represents the
+allowed alternatives, including <code>null</code>. Type arrays are supported in
+converted input and output schemas, including nested properties,
+property-level array item schemas, and <code>$defs</code>.</p>
+<p>Optional and nullable are independent: <code>required</code> controls whether a property
+must be present, while a <code>null</code> branch permits a JSON <code>null</code> value. Tool
+arguments are forwarded without type coercion, and the MCP server is
+responsible for validating them.</p>
+<p>Schema conversion supports a subset of JSON Schema. Explicit remote <code>anyOf</code>
+keywords and root-level <code>default</code>, <code>enum</code>, <code>items</code>, and <code>additionalProperties</code>
+are not imported. The selected model adapter and endpoint must support the
+emitted schema.</p>
 <h3 id="mcp-annotations-and-permission-metadata">MCP Annotations and Permission Metadata</h3>
 <p>When a remote MCP server returns tool annotations from <code>tools/list</code>, direct
 MCP ToolSet tools implement <code>tool.MetadataProvider</code>. Permission policies can
@@ -9826,7 +9860,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 10, 2026 12:55:34 UTC">2026-09-10 12:55:34</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 22, 2026 09:35:00 UTC">2026-10-22 09:35:00</span>
   </span>
 
     
