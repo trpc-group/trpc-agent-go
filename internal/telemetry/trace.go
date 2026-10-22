@@ -190,7 +190,7 @@ func (s *ChatTraceState) commitRequest(span trace.Span, req *model.Request, task
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, taskType))
 	}
 	if req != nil {
-		attrs = append(attrs, buildRequestAttributes(req)...)
+		attrs = append(attrs, buildRequestAttributes(req, chatAttributeObserver(span))...)
 	}
 
 	if len(attrs) > 0 {
@@ -216,7 +216,7 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 	if attributes.TimeToFirstToken > 0 {
 		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
 	}
-	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType, chatAttributeObserver(span))...)
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
 	}
@@ -594,7 +594,7 @@ func buildInvocationAttributes(invoke *agent.Invocation) []attribute.KeyValue {
 }
 
 // buildRequestAttributes builds request-related attributes.
-func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
+func buildRequestAttributes(req *model.Request, observers ...func(string, []byte)) []attribute.KeyValue {
 	if req == nil {
 		return nil
 	}
@@ -632,7 +632,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	// Add request body
 	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyLLMRequest, "<not json serializable>", func() ([]byte, error) {
 		return json.Marshal(req)
-	})
+	}, observers...)
 
 	// Add tool definitions as best-effort structured array (JSON string fallback)
 	if len(req.Tools) > 0 {
@@ -643,23 +643,27 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 		if len(definitions) > 0 {
 			attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIRequestToolDefinitions, "", func() ([]byte, error) {
 				return json.Marshal(definitions)
-			})
+			}, observers...)
 		}
+	}
+
+	if len(req.Tools) == 0 {
+		notifyAbsentChatAttribute(observers, semconvtrace.KeyGenAIRequestToolDefinitions)
 	}
 
 	// Add messages
 	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIInputMessages, "<not json serializable>", func() ([]byte, error) {
 		return marshalTelemetryMessages(req.Messages)
-	})
+	}, observers...)
 	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>", func() ([]byte, error) {
 		return marshalOTelTelemetryMessages(req.Messages)
-	})
+	}, observers...)
 
 	return attrs
 }
 
 // buildResponseAttributes builds response-related attributes.
-func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []attribute.KeyValue {
+func buildResponseAttributes(rsp *model.Response, errorTypeFallback string, observers ...func(string, []byte)) []attribute.KeyValue {
 	if rsp == nil {
 		return nil
 	}
@@ -702,10 +706,10 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	if len(rsp.Choices) > 0 {
 		attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIOutputMessages, "", func() ([]byte, error) {
 			return marshalTelemetryChoices(rsp.Choices)
-		})
+		}, observers...)
 		attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIOutputMessagesOTel, "", func() ([]byte, error) {
 			return marshalOTelTelemetryChoices(rsp.Choices)
-		})
+		}, observers...)
 
 		// Extract finish reasons
 		finishReasons := make([]string, 0, len(rsp.Choices))
@@ -719,10 +723,21 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		attrs = append(attrs, attribute.StringSlice(semconvtrace.KeyGenAIResponseFinishReasons, finishReasons))
 	}
 
+	if len(rsp.Choices) == 0 {
+		// A usage-only chunk preserves earlier messages, except when the
+		// current policy explicitly forbids retaining that source.
+		for _, key := range []string{semconvtrace.KeyGenAIOutputMessages, semconvtrace.KeyGenAIOutputMessagesOTel} {
+			rule := Resolve(OperationChat, key)
+			if rule.Action == AttributeDrop || rule.Action == AttributeOmit && rule.MaxBytes <= 0 {
+				notifyAbsentChatAttribute(observers, key)
+			}
+		}
+	}
+
 	// Add response body
 	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyLLMResponse, "<not json serializable>", func() ([]byte, error) {
 		return json.Marshal(rsp)
-	})
+	}, observers...)
 
 	return attrs
 }

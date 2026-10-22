@@ -35,9 +35,14 @@ func appendStringAttribute(
 	attrs []attribute.KeyValue,
 	operation, key, notSerializable string,
 	marshal func() ([]byte, error),
+	observers ...func(string, []byte),
 ) []attribute.KeyValue {
 	rule := Resolve(operation, key)
-	return appendStringAttributeWithRule(attrs, operation, key, notSerializable, marshal, rule)
+	var observe func(string, []byte)
+	if len(observers) > 0 {
+		observe = observers[0]
+	}
+	return appendObservedStringAttribute(attrs, key, notSerializable, marshal, rule, observe)
 }
 
 func appendStringAttributeWithRule(
@@ -46,6 +51,20 @@ func appendStringAttributeWithRule(
 	marshal func() ([]byte, error),
 	rule AttributeRule,
 ) []attribute.KeyValue {
+	return appendObservedStringAttribute(attrs, key, notSerializable, marshal, rule, nil)
+}
+
+func appendObservedStringAttribute(
+	attrs []attribute.KeyValue,
+	key, notSerializable string,
+	marshal func() ([]byte, error),
+	rule AttributeRule,
+	observe func(string, []byte),
+) []attribute.KeyValue {
+	var captured []byte
+	if observe != nil {
+		defer func() { observe(key, captured) }()
+	}
 	if rule.Action == AttributeDrop {
 		return attrs
 	}
@@ -59,6 +78,11 @@ func appendStringAttributeWithRule(
 	value, ok := formatAttributeValue(bts, rule)
 	if !ok {
 		return attrs
+	}
+	if rule.Action != AttributeOmit && rule.Action != AttributeTruncate ||
+		rule.Action == AttributeTruncate && rule.MaxBytes <= 0 ||
+		rule.MaxBytes > 0 && int64(len(bts)) <= rule.MaxBytes {
+		captured = bts
 	}
 	return append(attrs, attribute.String(key, value))
 }
