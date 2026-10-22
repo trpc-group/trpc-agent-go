@@ -272,6 +272,11 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  1000000,
 		},
 		{
+			name:      "exact match - MiniMax M3.1 Flash",
+			modelName: "minimax-m3.1-flash",
+			expected:  1000000,
+		},
+		{
 			name:      "exact match - MiniMax M2.7",
 			modelName: "minimax-m2.7",
 			expected:  204800,
@@ -624,6 +629,8 @@ func TestResolveMaxOutputTokens(t *testing.T) {
 		{name: "gemini flash", modelName: "gemini-2.5-flash", expected: 65536},
 		{name: "deepseek reasoner", modelName: "deepseek-reasoner", expected: 393216},
 		{name: "deepseek v4 pro", modelName: "deepseek-v4-pro", expected: 393216},
+		{name: "minimax m3.1 flash", modelName: "MiniMax-M3.1-Flash", expected: 524288},
+		{name: "minimax m3", modelName: "MiniMax-M3", expected: 32768},
 		{name: "unknown model", modelName: "not-a-real-model", expected: 0},
 	}
 
