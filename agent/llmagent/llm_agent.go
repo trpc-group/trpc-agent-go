@@ -1768,6 +1768,10 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+	// Propagate the per-agent truncated tool-call policy. The zero value rejects
+	// truncated tool calls; the flow enforces the policy before argument repair
+	// so a rejected call never reaches tool execution.
+	invocation.TruncatedToolCallPolicy = a.option.TruncatedToolCallPolicy
 	calllimit.Configure(
 		invocation,
 		a.option.llmCallLimitFinalizationInstruction,

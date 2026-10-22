@@ -221,6 +221,11 @@ type Invocation struct {
 	//   - <= 0: no limit is applied (default, preserves existing behavior).
 	MaxToolIterations int
 
+	// TruncatedToolCallPolicy controls what the flow does when a completed
+	// model response reports a truncation finish reason while carrying tool
+	// calls. The zero value rejects such tool calls before argument repair.
+	TruncatedToolCallPolicy TruncatedToolCallPolicy
+
 	// timingInfo stores timing information for the first LLM call in this invocation.
 	timingInfo *model.TimingInfo
 
@@ -236,6 +241,20 @@ type Invocation struct {
 	// to guard against unbounded tool_call -> LLM -> tool_call loops.
 	toolIterationCount int
 }
+
+// TruncatedToolCallPolicy controls how a completed model response that stopped
+// at the output token limit while carrying tool calls is handled.
+type TruncatedToolCallPolicy string
+
+const (
+	// TruncatedToolCallPolicyReject is the default. The invocation stops before
+	// argument repair or tool execution and reports a terminal truncation error
+	// instead of executing a partially generated tool call.
+	TruncatedToolCallPolicyReject TruncatedToolCallPolicy = ""
+	// TruncatedToolCallPolicyIgnore preserves the historical behavior: the
+	// truncated tool calls go through argument repair and execution.
+	TruncatedToolCallPolicyIgnore TruncatedToolCallPolicy = "ignore"
+)
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
 var DefaultWaitNoticeTimeoutErr = NewWaitNoticeTimeoutError("wait notice timeout.")
@@ -1648,13 +1667,14 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		entryPredecessorStepIDs: cloneStringSlice(
 			inv.entryPredecessorStepIDs,
 		),
-		traceNodeID:        traceNodeID,
-		state:              inv.cloneViewState(),
-		MaxLLMCalls:        inv.MaxLLMCalls,
-		MaxToolIterations:  inv.MaxToolIterations,
-		timingInfo:         inv.timingInfo,
-		llmCallCount:       inv.llmCallCount,
-		toolIterationCount: inv.toolIterationCount,
+		traceNodeID:             traceNodeID,
+		state:                   inv.cloneViewState(),
+		MaxLLMCalls:             inv.MaxLLMCalls,
+		MaxToolIterations:       inv.MaxToolIterations,
+		TruncatedToolCallPolicy: inv.TruncatedToolCallPolicy,
+		timingInfo:              inv.timingInfo,
+		llmCallCount:            inv.llmCallCount,
+		toolIterationCount:      inv.toolIterationCount,
 	}
 	for _, opt := range invocationOpts {
 		opt(view)
