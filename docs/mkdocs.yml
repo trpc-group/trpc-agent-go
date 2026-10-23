@@ -35,6 +35,7 @@ nav:
           - SQLite: memory/sqlite.md
           - SQLiteVec: memory/sqlitevec.md
           - Redis: memory/redis.md
+          - MongoDB: memory/mongodb.md
           - MySQL: memory/mysql.md
           - MySQL Vector: memory/mysqlvec.md
           - PostgreSQL: memory/postgres.md
@@ -169,6 +170,7 @@ plugins:
                     - SQLite: memory/sqlite.md
                     - SQLiteVec: memory/sqlitevec.md
                     - Redis: memory/redis.md
+                    - MongoDB: memory/mongodb.md
                     - MySQL: memory/mysql.md
                     - MySQL Vector: memory/mysqlvec.md
                     - PostgreSQL: memory/postgres.md

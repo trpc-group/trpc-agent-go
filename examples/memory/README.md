@@ -24,7 +24,7 @@ A simple example that demonstrates manual memory tool integration where LLM agen
   delete, clear)
 - Custom tool implementations
 - Streaming and non-streaming response modes
-- Multiple storage backends (in-memory, SQLite, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector, ChromaDB)
+- Multiple storage backends (in-memory, SQLite, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector, ChromaDB, MongoDB)
 
 **Use Cases:**
 
@@ -159,6 +159,7 @@ All examples support multiple storage backends:
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
 | `pgvector` | pgvector PostgreSQL storage with embeddings | `-memory=pgvector` |
 | `chromadb` | ChromaDB storage with cosine and hybrid search | `-memory=chromadb` |
+| `mongodb`  | MongoDB-based storage                       | `-memory=mongodb`  |
 
 ### Session Management
 
@@ -268,6 +269,7 @@ Memory provides 6 tools with different availability in each mode:
 | `MYSQLVEC_PASSWORD`       | MySQL Vector password        | (empty)                     |
 | `MYSQLVEC_DATABASE`       | MySQL Vector database        | `trpc_agent_go`             |
 | `MYSQLVEC_EMBEDDER_MODEL` | MySQL Vector embedder model  | `text-embedding-3-small`    |
+| `MONGODB_URI`             | MongoDB connection URI       | `mongodb://localhost:27017` |
 
 ## Quick Start
 
@@ -352,6 +354,10 @@ export CHROMA_BASE_URL=http://localhost:8000
 export CHROMA_COLLECTION=memories
 export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory chromadb
+
+# MongoDB memory service
+export MONGODB_URI=mongodb://localhost:27017
+go run main.go -memory mongodb
 ```
 
 The ChromaDB backend is a REST client-server adapter: run Chroma separately or

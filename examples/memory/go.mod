@@ -4,6 +4,7 @@ go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/memory/mongodb => ../../memory/mongodb
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
 	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec => ../../memory/mysqlvec
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../memory/pgvector
@@ -11,6 +12,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../../memory/sqlitevec
+	trpc.group/trpc-go/trpc-agent-go/storage/mongodb => ../../storage/mongodb
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 )
@@ -20,6 +22,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/ncruces/go-sqlite3 v0.32.0
 	trpc.group/trpc-go/trpc-agent-go v1.8.1
+	trpc.group/trpc-go/trpc-agent-go/memory/mongodb v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
@@ -41,13 +44,16 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
+	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.7.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/lib/pq v1.10.9 // indirect
+	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
@@ -59,7 +65,12 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect
+	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
+	github.com/xdg-go/scram v1.1.2 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yuin/goldmark v1.4.13 // indirect
+	go.mongodb.org/mongo-driver v1.17.7 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
@@ -82,6 +93,7 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v1.10.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.8.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.1.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
