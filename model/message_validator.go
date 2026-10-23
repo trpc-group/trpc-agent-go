@@ -95,7 +95,8 @@ func removeInvalidRoleMessages(messages []Message) []Message {
 func ensureNonEmptyContent(messages []Message) []Message {
 	result := make([]Message, 0, len(messages))
 	for _, msg := range messages {
-		if msg.Content != "" {
+		// Native records must retain their bound projection without placeholders.
+		if msg.Content != "" || msg.Replay != nil {
 			result = append(result, msg)
 			continue
 		}

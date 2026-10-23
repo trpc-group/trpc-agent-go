@@ -162,9 +162,10 @@ remote storage only; the adapter still sends full history. The caller owns its
 session service and must keep draining the response channel or cancel the
 request context.
 
-`WithExtraFields` accepts SDK JSON paths for additional parameters such as
-`reasoning.summary` and `tool_choice`. Managed model/input/tools/storage/
-continuation fields are protected. The request callback may tune other typed
+`WithExtraFields` accepts ordinary dot-separated JSON paths for additional
+parameters such as `reasoning.summary` and `tool_choice`; colon prefixes and
+backslash escapes are rejected. Managed model/input/tools/storage/continuation
+fields are protected. The request callback may tune other typed
 parameters; response and stream callbacks are read-only observers. Callbacks
 must not retain mutable arguments. Low-level `WithOpenAIOptions` middleware can
 bypass validation, so applications must preserve the managed-state contract.

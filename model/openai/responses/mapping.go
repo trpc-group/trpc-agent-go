@@ -156,8 +156,16 @@ func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams
 
 func validateExtraFields(fields map[string]any) error {
 	for key := range fields {
-		root := strings.TrimSpace(key)
-		if i := strings.IndexAny(root, ".[\\"); i >= 0 {
+		path := strings.TrimSpace(key)
+		// sjson treats a leading colon as a path modifier and backslashes as
+		// escape characters. Reject those forms instead of trying to infer the
+		// root with ordinary string splitting; they can otherwise alias managed
+		// fields such as "input".
+		if strings.HasPrefix(path, ":") || strings.Contains(path, "\\") {
+			return fmt.Errorf("openai/responses: extra field %q uses unsupported sjson path syntax", key)
+		}
+		root := path
+		if i := strings.IndexAny(root, ".["); i >= 0 {
 			root = root[:i]
 		}
 		switch root {
@@ -218,8 +226,8 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 
 		switch msg.Role {
 		case model.RoleTool:
-			callID := strings.TrimSpace(msg.ToolID)
-			if callID == "" {
+			callID := msg.ToolID
+			if strings.TrimSpace(callID) == "" {
 				return nil, fmt.Errorf("openai/responses: tool result at message %d has an empty call_id", messageIndex)
 			}
 			if _, ok := called[callID]; !ok {
@@ -315,7 +323,7 @@ func convertAssistantMessage(msg model.Message, called, completed map[string]str
 }
 
 func validateLegacyToolCall(call model.ToolCall) error {
-	if call.ID == "" {
+	if strings.TrimSpace(call.ID) == "" {
 		return fmt.Errorf("function call has an empty call_id")
 	}
 	if strings.TrimSpace(call.Function.Name) == "" {
@@ -330,8 +338,8 @@ func validateLegacyToolCall(call model.ToolCall) error {
 func trackCall(item nativeItem, called, completed map[string]struct{}) error {
 	switch item.Type {
 	case outputTypeFunctionCall:
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
+		callID := item.CallID
+		if strings.TrimSpace(callID) == "" {
 			return fmt.Errorf("function call has an empty call_id")
 		}
 		if _, ok := called[callID]; ok {
@@ -339,8 +347,8 @@ func trackCall(item nativeItem, called, completed map[string]struct{}) error {
 		}
 		called[callID] = struct{}{}
 	case "function_call_output":
-		callID := strings.TrimSpace(item.CallID)
-		if callID == "" {
+		callID := item.CallID
+		if strings.TrimSpace(callID) == "" {
 			return fmt.Errorf("function_call_output has an empty call_id")
 		}
 		if _, ok := called[callID]; !ok {
@@ -407,8 +415,11 @@ func validateNativeItem(item nativeItem, requireCompleted bool) error {
 			}
 		}
 	case outputTypeFunctionCall:
-		if strings.TrimSpace(item.CallID) == "" || strings.TrimSpace(item.Name) == "" {
-			return fmt.Errorf("function_call item %q requires call_id and name", item.ID)
+		if strings.TrimSpace(item.CallID) == "" {
+			return fmt.Errorf("function_call item %q has an empty call_id", item.ID)
+		}
+		if strings.TrimSpace(item.Name) == "" {
+			return fmt.Errorf("function_call item %q has an empty name", item.ID)
 		}
 		if !isJSONObject([]byte(item.Arguments)) {
 			return fmt.Errorf("function_call item %q has invalid JSON arguments", item.ID)

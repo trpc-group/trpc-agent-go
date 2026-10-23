@@ -129,6 +129,45 @@ func TestUnsupportedRequestsFailBeforeHTTP(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
+func TestExtraFieldPathsCannotEscapeManagedRootValidation(t *testing.T) {
+	srv, calls := rejectingServer(t)
+	managedRoots := []string{
+		"model", "input", "stream", "store", "include", "tools",
+		"previous_response_id", "conversation", "background",
+	}
+	for _, root := range managedRoots {
+		paths := []string{
+			":" + root,
+			"\\" + root,
+			root[:1] + "\\" + root[1:],
+			":\\" + root,
+		}
+		for _, path := range paths {
+			for _, source := range []string{"model option", "request field"} {
+				t.Run(source+"/"+path, func(t *testing.T) {
+					modelOpts := []Option{
+						WithAPIKey("test"), WithBaseURL(srv.URL),
+						WithOpenAIOptions(option.WithMaxRetries(0)),
+					}
+					req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
+					if source == "model option" {
+						modelOpts = append(modelOpts, WithExtraFields(map[string]any{path: "override"}))
+					} else {
+						req.ExtraFields = map[string]any{path: "override"}
+					}
+					m := New("gpt-5", modelOpts...)
+					ch, err := m.GenerateContent(context.Background(), req)
+					if err == nil {
+						_ = collect(t, ch)
+					}
+					require.ErrorContains(t, err, "unsupported sjson path syntax")
+				})
+			}
+		}
+	}
+	require.Zero(t, calls.Load(), "managed aliases must fail before HTTP")
+}
+
 func TestRequestParametersAndOptionsReachTheWire(t *testing.T) {
 	maxTokens, temperature, topP, effort := 64, 0.3, 0.9, "low"
 	var roundTrips atomic.Int32
@@ -153,13 +192,16 @@ func TestRequestParametersAndOptionsReachTheWire(t *testing.T) {
 		Headers:     map[string]string{"X-Trace-Id": "trace-1"},
 	},
 		WithStore(true),
-		WithExtraFields(map[string]any{"prompt_cache_key": "cache-1"}),
+		WithExtraFields(map[string]any{
+			"prompt_cache_key":  "cache-1",
+			"reasoning.summary": "detailed",
+		}),
 		WithHTTPClientOptions(model.WithHTTPClientTransport(transport)),
 	)
 	require.EqualValues(t, 64, got.body["max_output_tokens"])
 	require.EqualValues(t, 0.3, got.body["temperature"])
 	require.EqualValues(t, 0.9, got.body["top_p"])
-	requireJSONField(t, `{"effort":"low"}`, got.body["reasoning"])
+	requireJSONField(t, `{"effort":"low","summary":"detailed"}`, got.body["reasoning"])
 	require.Equal(t, true, got.body["store"])
 	requireJSONField(t, `{"source":"request"}`, got.body["metadata"])
 	require.Equal(t, "cache-1", got.body["prompt_cache_key"])
@@ -373,7 +415,7 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 		}, want: `unsupported content type "input_text"`},
 		{name: "replay call without name", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[{"type":"function_call","call_id":"c","arguments":"{}"}]`)}
-		}, want: "requires call_id and name"},
+		}, want: "has an empty name"},
 		{name: "replay call with non-object arguments", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[{"type":"function_call","call_id":"c","name":"f","arguments":"[]"}]`)}
 		}, want: "has invalid JSON arguments"},
