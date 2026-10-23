@@ -1096,6 +1096,13 @@ func TestShouldSuppressGraphRuntimeSessionEvent(t *testing.T) {
 		inv,
 		event.New("inv", "author", event.WithObject("model.response")),
 	))
+
+	// Clone drops the marker. Suppression still applies through the parent
+	// chain, including a second clone such as a graph task invocation.
+	child := inv.Clone()
+	grandchild := child.Clone()
+	require.True(t, shouldSuppressGraphRuntimeSessionEvent(child, graphEvent))
+	require.True(t, shouldSuppressGraphRuntimeSessionEvent(grandchild, graphEvent))
 }
 
 func TestGraphToolInterruptCapture_ObserveAndFinish(t *testing.T) {
@@ -5248,7 +5255,7 @@ func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
 	at := NewTool(&mockAgent{name: "test", description: "test"})
 	parent := agent.NewInvocation()
 
-	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"), nil)
+	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"), nil, "")
 	require.NoError(t, err)
 	require.Equal(t, "Hello from mock agent!", res)
 }
@@ -5321,6 +5328,7 @@ func TestTool_callWithParentInvocation_PreservesRunStructuredOutput(t *testing.T
 		parent,
 		model.NewUserMessage("hi"),
 		nil,
+		"",
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, res)
@@ -5359,6 +5367,7 @@ func TestTool_callWithParentInvocation_PinStructuredOutputUsesChildContract(t *t
 		parent,
 		model.NewUserMessage("hi"),
 		nil,
+		"",
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, res)
@@ -5389,6 +5398,7 @@ func TestTool_callWithParentInvocation_RestoresLiveSessionFromParallelClone(
 		parent,
 		model.NewUserMessage("hi"),
 		nil,
+		"",
 	)
 	require.NoError(t, err)
 	require.Equal(t, "saw-live-session", res)
