@@ -12,6 +12,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,27 @@ import (
 
 const replayTestProtocol = "test.responses"
 const replayTestModel = "reasoning-model"
+
+func TestInfoJSONKeepsLegacyShapeAndNativeIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		info Info
+		want string
+	}{
+		{name: "zero", want: `{"Name":"","ContextWindow":0}`},
+		{name: "legacy", info: Info{Name: "chat", ContextWindow: 8192}, want: `{"Name":"chat","ContextWindow":8192}`},
+		{name: "native", info: Info{Name: "native", ReplayProtocol: replayTestProtocol}, want: `{"Name":"native","ContextWindow":0,"ReplayProtocol":"test.responses"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tc.info)
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(encoded))
+			var restored Info
+			require.NoError(t, json.Unmarshal(encoded, &restored))
+			require.Equal(t, tc.info, restored)
+		})
+	}
+}
 
 func replayTestMessage() Message {
 	return Message{
@@ -181,6 +203,43 @@ func TestLegacyMessageDoesNotAcquireReplayState(t *testing.T) {
 	require.JSONEq(t, `{"role":"assistant","content":"legacy"}`, string(encoded))
 }
 
+func TestReplayDataRejectsCorruptRecords(t *testing.T) {
+	zero := NewAssistantMessage("answer")
+	zero.Replay = &ReplayData{}
+	_, err := zero.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.ErrorContains(t, err, "requires a protocol and model identity")
+	_, err = json.Marshal(zero)
+	require.Error(t, err, "a zero record must not be persisted")
+
+	unencodable := replayTestMessage()
+	unencodable.ToolCalls[0].ExtraFields = map[string]any{"bad": func() {}}
+	require.ErrorContains(t,
+		unencodable.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()),
+		"encode replay message projection")
+	require.Nil(t, unencodable.Replay)
+
+	msg := replayTestMessage()
+	require.NoError(t, msg.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
+	msg.ToolCalls[0].ExtraFields = map[string]any{"bad": func() {}}
+	_, err = msg.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.ErrorContains(t, err, "encode replay message projection")
+
+	for name, record := range map[string]string{
+		"not an object":    `"record"`,
+		"missing identity": `{"version":1,"provider":"","model":"m","payload":[],"projection_sha256":"00"}`,
+		"scalar payload": `{"version":1,"provider":"p","model":"m","payload":"text",` +
+			`"projection_sha256":"` + strings.Repeat("0", 64) + `"}`,
+		"short fingerprint": `{"version":1,"provider":"p","model":"m","payload":[],"projection_sha256":"00"}`,
+		"non-hex fingerprint": `{"version":1,"provider":"p","model":"m","payload":[],` +
+			`"projection_sha256":"` + strings.Repeat("z", 64) + `"}`,
+	} {
+		var restored ReplayData
+		require.Error(t, json.Unmarshal([]byte(record), &restored), name)
+		_, err := restored.MarshalJSON()
+		require.Error(t, err, "%s must leave the receiver unchanged", name)
+	}
+}
+
 func TestSimpleTokenCounterAccountsForNativeReplay(t *testing.T) {
 	msg := NewAssistantMessage("")
 	require.NoError(t, msg.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
@@ -191,4 +250,24 @@ func TestSimpleTokenCounterAccountsForNativeReplay(t *testing.T) {
 	msg.Content = "changed"
 	_, err = counter.CountTokensRange(context.Background(), []Message{msg}, 0, 1)
 	require.ErrorContains(t, err, "projection changed")
+}
+
+func TestResponseCloneIsolatesReplayDecode(t *testing.T) {
+	original := replayTestMessage()
+	require.NoError(t, original.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
+	replacement := NewAssistantMessage("replacement")
+	require.NoError(t, replacement.SetReplayData(replayTestProtocol, replayTestModel, json.RawMessage(`[]`)))
+	encoded, err := json.Marshal(replacement.Replay)
+	require.NoError(t, err)
+	response := &Response{Choices: []Choice{{Message: original, Delta: original}}}
+	cloned := response.Clone()
+	for _, msg := range []*Message{&cloned.Choices[0].Message, &cloned.Choices[0].Delta} {
+		require.NotSame(t, original.Replay, msg.Replay)
+		require.NoError(t, json.Unmarshal(encoded, msg.Replay))
+	}
+	for _, msg := range []Message{response.Choices[0].Message, response.Choices[0].Delta} {
+		payload, err := msg.ReplayDataFor(replayTestProtocol, replayTestModel)
+		require.NoError(t, err, "decoding a cloned record must not alter the source response")
+		require.JSONEq(t, string(replayTestPayload()), string(payload))
+	}
 }

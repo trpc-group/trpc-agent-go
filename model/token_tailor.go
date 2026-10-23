@@ -171,9 +171,6 @@ func (c *SimpleTokenCounter) estimateRunes(runes int) int {
 
 // isMessageNotEmpty checks if the message contains any content that should result in at least 1 token.
 func isMessageNotEmpty(message Message) bool {
-	if message.Replay != nil {
-		return true
-	}
 	// Check main content.
 	if len(message.Content) > 0 {
 		return true

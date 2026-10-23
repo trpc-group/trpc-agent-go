@@ -20,15 +20,19 @@ import (
 
 const replayVersion = 1
 
-// ReplayData stores an immutable provider-native completion together with the
-// identity of its producer and a fingerprint of its Message projection. The
-// provider owns the payload schema. Framework code must retain or remove the
-// whole record instead of editing its payload or merging its message.
+// ReplayData stores a provider-native completion together with the identity of
+// its producer and a fingerprint of its Message projection. The provider owns
+// the payload schema. Framework code must retain or remove the whole record
+// instead of editing its payload or merging its message.
 //
 // Use Message.SetReplayData to create a record and Message.ReplayDataFor to read
-// it. Neither method exposes mutable storage. JSON serialization retains the
-// binding so that persistence cannot make an edited projection replayable.
-// The zero value is invalid; a nil Message.Replay means no native replay data.
+// it. Neither method exposes mutable storage, and SetReplayData binds a new
+// record instead of changing the existing one. UnmarshalJSON overwrites its
+// receiver as a whole, so messages sharing a *ReplayData observe a decode into
+// it; copying the ReplayData value gives a message its own record. JSON
+// serialization retains the binding so that persistence cannot make an edited
+// projection replayable. The zero value is invalid; a nil Message.Replay means
+// no native replay data.
 type ReplayData struct {
 	provider   string
 	model      string
