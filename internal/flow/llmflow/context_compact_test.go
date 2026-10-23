@@ -718,8 +718,13 @@ func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
 	view, ok := summaryview.Snapshot(inv)
 	require.True(t, ok)
 	require.True(t, view.Bound)
-	require.Len(t, req.Messages, 3)
-	require.Contains(t, req.Messages[1].Content, "orphan_tool_call")
+	require.Len(t, req.Messages, 4)
+	require.Equal(t, model.RoleAssistant, req.Messages[1].Role)
+	require.Len(t, req.Messages[1].ToolCalls, 1)
+	require.Equal(t, "call_orphan", req.Messages[1].ToolCalls[0].ID)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Equal(t, "call_orphan", req.Messages[2].ToolID)
+	require.Contains(t, req.Messages[2].Content, "interrupted_tool_call")
 
 	rebuilt := f.maybeCompactContextBeforeLLM(
 		ctx,
@@ -735,7 +740,7 @@ func TestMaybeCompactContextBeforeLLM_SummarizesSanitizedOrphanToolCall(
 	require.Equal(t, "current", rebuilt.Messages[1].Content)
 	summaryRequest := summaryModel.LastRequest()
 	require.NotNil(t, summaryRequest)
-	require.Contains(t, summaryRequest.Messages[0].Content, "orphan_tool_call")
+	require.Contains(t, summaryRequest.Messages[0].Content, "interrupted_tool_call")
 	sess.SummariesMu.RLock()
 	storedSummary := sess.Summaries[""]
 	sess.SummariesMu.RUnlock()
