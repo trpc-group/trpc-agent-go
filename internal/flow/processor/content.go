@@ -1506,6 +1506,13 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		filter,
 		eventCutoff,
 	)
+	nativeToolResults := p.nativeToolResultsToRestore(
+		sessionEvents,
+		inv,
+		filter,
+		eventCutoff,
+		toolCallIDsToRestoreByEvent,
+	)
 	resumeTail := p.latestCompleteToolRoundBeforeCutoff(
 		sessionEvents,
 		inv,
@@ -1514,6 +1521,10 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		eventCutoff,
 	)
 	for i, evt := range sessionEvents {
+		if restored, ok := nativeToolResults[i]; ok {
+			events = append(events, restored)
+			continue
+		}
 		if resumed, ok := resumeTail[i]; ok {
 			events = append(events, resumed)
 			continue
@@ -1598,6 +1609,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			history.messages,
 			p.MaxHistoryRuns,
 		)
+		startIdx = pendingNativeToolRoundStart(history.messages, startIdx)
 		if len(history.items) == len(history.messages) {
 			history.items = history.items[startIdx:]
 		}
@@ -1710,6 +1722,77 @@ func (p *ContentRequestProcessor) toolCallIDsToRestoreByEvent(
 		return nil
 	}
 	return idsByEvent
+}
+
+// nativeToolResultsToRestore returns the covered tool results of native call
+// records restored across a summary cutoff. A native record is replayed as one
+// output unit, so every result that answers one of its calls must accompany it
+// instead of only the results that happen to follow the cutoff.
+func (p *ContentRequestProcessor) nativeToolResultsToRestore(
+	events []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+	restoredCallEvents map[int]map[string]struct{},
+) map[int]event.Event {
+	nativeCallRestored := false
+	for callEventIndex := range restoredCallEvents {
+		if eventHasReplay(events[callEventIndex]) {
+			nativeCallRestored = true
+			break
+		}
+	}
+	if !nativeCallRestored {
+		return nil
+	}
+	responseMatchesByCallEvent := toolResponseMatchesByCallEventFiltered(
+		events,
+		func(_ int, evt event.Event) bool {
+			return p.canMatchToolRound(evt, inv, filter)
+		},
+	)
+	choicesByResultEvent := make(map[int]map[int]struct{})
+	for callEventIndex := range restoredCallEvents {
+		if !eventHasReplay(events[callEventIndex]) {
+			continue
+		}
+		for _, match := range responseMatchesByCallEvent[callEventIndex] {
+			included, _ := p.shouldIncludeEvent(
+				events[match.eventIndex],
+				match.eventIndex,
+				inv,
+				filter,
+				cutoff,
+			)
+			if included {
+				continue
+			}
+			choices := choicesByResultEvent[match.eventIndex]
+			if choices == nil {
+				choices = make(map[int]struct{})
+				choicesByResultEvent[match.eventIndex] = choices
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				choices[choiceIndex] = struct{}{}
+			}
+		}
+	}
+	restored := make(map[int]event.Event, len(choicesByResultEvent))
+	for eventIndex, choices := range choicesByResultEvent {
+		choiceIndices := make([]int, 0, len(choices))
+		for choiceIndex := range choices {
+			choiceIndices = append(choiceIndices, choiceIndex)
+		}
+		sort.Ints(choiceIndices)
+		filtered := filterToolResponseEvent(events, matchedToolResponseEvent{
+			eventIndex:    eventIndex,
+			choiceIndices: choiceIndices,
+		})
+		if filtered.Response != nil && len(filtered.Response.Choices) > 0 {
+			restored[eventIndex] = filtered
+		}
+	}
+	return restored
 }
 
 func (p *ContentRequestProcessor) canMatchToolRound(
@@ -2251,14 +2334,16 @@ func compactResumeToolRound(
 		changed := false
 		for choiceIndex := range response.Choices {
 			choice := &response.Choices[choiceIndex]
-			if compactOversizedResumeToolCallArguments(
+			// Native call arguments are part of the replayed output record;
+			// only their tool results may be compacted.
+			if choice.Message.Replay == nil && compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Message,
 				cfg,
 			) {
 				changed = true
 			}
-			if compactOversizedResumeToolCallArguments(
+			if choice.Delta.Replay == nil && compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Delta,
 				cfg,
@@ -2599,6 +2684,26 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 	return startIdx
 }
 
+// pendingNativeToolRoundStart moves a history limit back to the latest native
+// tool-call record when every later message is a tool result. That record is
+// the active continuation: dropping it would discard opaque reasoning while
+// the model is answering its calls. Completed native rounds stay subject to the
+// ordinary limit, which removes a call together with its orphaned results.
+func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role == model.RoleTool {
+			continue
+		}
+		if i < startIdx && msg.Role == model.RoleAssistant &&
+			msg.Replay != nil && len(msg.ToolCalls) > 0 {
+			return i
+		}
+		return startIdx
+	}
+	return startIdx
+}
+
 // processReasoningContent applies reasoning content stripping based on the
 // configured mode and request boundaries.
 func (p *ContentRequestProcessor) processReasoningContent(
@@ -2607,6 +2712,12 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	currentRequestID string,
 	requestHasToolCalls bool,
 ) model.Message {
+	// A native replay is an immutable output unit. Reasoning policy applies to
+	// the legacy Chat projection only; changing either projection field would
+	// make a valid native record fail its integrity check.
+	if msg.Replay != nil {
+		return msg
+	}
 	// Only process assistant messages with reasoning content.
 	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
 		return msg
@@ -2640,7 +2751,14 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	if p == nil || p.EventMessageProjector == nil {
 		return msg
 	}
-	return p.EventMessageProjector(inv, evt, msg)
+	projected := p.EventMessageProjector(inv, evt, msg)
+	if msg.Replay != nil {
+		// Keep the original record attached even if a custom projector rewrites
+		// its Message projection. Request validation then reports the mismatch
+		// instead of silently falling back to stale native output.
+		projected.Replay = msg.Replay
+	}
+	return projected
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -2901,6 +3019,7 @@ func mergeProjectedAssistantToolCallMessages(
 
 func mergeableAssistantTextMessage(message model.Message) bool {
 	return message.Role == model.RoleAssistant && message.Content != "" &&
+		message.Replay == nil &&
 		len(message.ContentParts) == 0 && message.ToolID == "" &&
 		message.ToolName == "" && len(message.ToolCalls) == 0 &&
 		message.ReasoningContent == "" && message.ReasoningSignature == ""
@@ -2908,6 +3027,7 @@ func mergeableAssistantTextMessage(message model.Message) bool {
 
 func mergeableAssistantToolCallMessage(message model.Message) bool {
 	return message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 &&
+		message.Replay == nil &&
 		len(message.ContentParts) == 0 && message.ToolID == "" &&
 		message.ToolName == "" && message.ReasoningContent == "" &&
 		message.ReasoningSignature == ""
@@ -3209,6 +3329,11 @@ func filterToolCallChoice(
 	if len(messageToolCalls) == 0 && len(deltaToolCalls) == 0 {
 		return model.Choice{}, false
 	}
+	if choice.Message.Replay != nil || choice.Delta.Replay != nil {
+		// A native record cannot be reduced to a subset of its calls; the
+		// caller restores the remaining results with the original record.
+		return choice, true
+	}
 	filtered := model.Choice{Index: choice.Index}
 	if len(messageToolCalls) > 0 {
 		filtered.Message = minimalToolCallMessage(
@@ -3261,6 +3386,18 @@ func isEventEligibleForInclusion(evt event.Event) bool {
 		!evt.IsPartial &&
 		evt.IsValidContent() &&
 		!graph.CompletionSnapshotOnlyFromStateDelta(evt.StateDelta)
+}
+
+func eventHasReplay(evt event.Event) bool {
+	if evt.Response == nil {
+		return false
+	}
+	for _, choice := range evt.Response.Choices {
+		if choice.Message.Replay != nil || choice.Delta.Replay != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // isStrictInvocationMessage checks whether the event exactly matches the
@@ -3532,6 +3669,8 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 	// Set the converted message.
 	if len(contents) > 0 || len(contentParts) > 0 {
+		// The quotation is newly authored user context. It never inherits the
+		// quoted agent's native replay state.
 		msg := model.Message{
 			Role: model.RoleUser,
 		}
@@ -3693,8 +3832,8 @@ func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
 	response := *evt.Response
 	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
 	for _, choice := range evt.Response.Choices {
-		choice.Message.ToolCalls = nil
-		choice.Delta.ToolCalls = nil
+		choice.Message = withoutToolCalls(choice.Message)
+		choice.Delta = withoutToolCalls(choice.Delta)
 		if hasNonToolPayload(choice.Message) || hasNonToolPayload(choice.Delta) {
 			response.Choices = append(response.Choices, choice)
 		}
@@ -3704,6 +3843,19 @@ func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
 	}
 	evt.Response = &response
 	return evt, true
+}
+
+// withoutToolCalls removes the calls of a completed tool round. A native record
+// cannot keep its opaque state without those calls, so the remaining visible
+// text becomes ordinary history and its native reasoning is not replayed.
+func withoutToolCalls(msg model.Message) model.Message {
+	msg.ToolCalls = nil
+	if msg.Replay != nil {
+		msg.Replay = nil
+		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
+	}
+	return msg
 }
 
 func omitToolResultChoices(
@@ -3827,7 +3979,11 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 				i,
 				responseMatches,
 			)
-			if !allToolCallIDsMatched(callIDs, events, responseMatches) &&
+			// A native record cannot drop calls without losing its opaque
+			// reasoning, so its partial round stays intact and the provider
+			// adapter rejects the missing results explicitly.
+			if !eventHasReplay(evt) &&
+				!allToolCallIDsMatched(callIDs, events, responseMatches) &&
 				perToolCallResultRound {
 				// Keep persisted events for audit, but do not project a
 				// provider-invalid partial tool round into a later model

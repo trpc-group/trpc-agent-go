@@ -75,4 +75,10 @@ type Info struct {
 	// ContextWindow is the model context window in tokens.
 	// A non-positive value means the window is unknown for this model instance.
 	ContextWindow int
+	// ReplayProtocol identifies the native replay format consumed by this
+	// model. An empty value means native replay is unsupported. LLM flows and
+	// Graph LLM nodes reject history from another protocol or configured model
+	// before calling the adapter. Wrappers must preserve this value when
+	// forwarding Info.
+	ReplayProtocol string `json:"ReplayProtocol,omitempty"`
 }

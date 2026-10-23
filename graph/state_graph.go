@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
@@ -1667,6 +1668,14 @@ func (r *llmRunner) executeModel(
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
+	if callModel != nil && modelreplay.MessagesHaveReplay(request.Messages) {
+		if err := modelreplay.ValidateMessages(
+			request.Messages,
+			callModel.Info(),
+		); err != nil {
+			return nil, err
+		}
+	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	emittedModelStartEvent := false
@@ -2122,6 +2131,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
 	}
+	replayGuard := modelreplay.GuardResponse(config.Response)
 	callbackTimingAttachment := responseusage.AttachTimingForCallback(
 		config.Response,
 		timingInfo,
@@ -2184,6 +2194,17 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if currentInvocation != nil &&
 		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
 		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
+	}
+	// Callbacks and repairs may not change a native record before it is
+	// emitted, stored in state, or dispatched to a tools node.
+	if replayGuard.Active(config.Response) {
+		var producer model.Info
+		if config.LLMModel != nil {
+			producer = config.LLMModel.Info()
+		}
+		if err := replayGuard.Validate(config.Response, producer); err != nil {
+			return ctx, nil, err
+		}
 	}
 	llmEvent := event.NewResponseEvent(
 		config.InvocationID,
