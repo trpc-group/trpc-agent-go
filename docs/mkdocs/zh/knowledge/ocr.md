@@ -1,123 +1,88 @@
 # OCR 文字识别
 
-Knowledge 系统支持 OCR (Optical Character Recognition) 功能，能够从图片或扫描版 PDF 文档中提取文本内容，极大地扩展了知识库的数据来源范围。
+> Deprecated: 独立 OCR 接入方式已不再作为推荐路径。新代码优先使用
+> `WithExtractor(...)` 接入带 OCR 能力的内容提取器，例如
+> `knowledge/extractor/docling`。
 
-目前框架内置了 **Tesseract** OCR 引擎支持。
+Knowledge 早期通过 `knowledge/ocr` 和 `WithOCRExtractor(...)` 支持 OCR。
+这条链路会把 OCR 引擎注入到 Reader 内部，目前主要用于 PDF Reader 处理 PDF
+页面中的图片内容。
 
-## 环境准备
+现在更推荐使用 Extractor 路径：
 
-### 1. 安装 Tesseract
-
-在使用 OCR 功能之前，必须在系统上安装 Tesseract 引擎及其语言包。
-
-**Linux (Ubuntu/Debian)**:
-```bash
-sudo apt-get update
-sudo apt-get install tesseract-ocr libtesseract-dev
-# 安装中文语言包（可选）
-sudo apt-get install tesseract-ocr-chi-sim
+```text
+原始文件 / URL 响应体 -> Extractor(OCR + 文档转换) -> markdown / text -> Reader -> Chunking -> Document
 ```
 
-**macOS**:
-```bash
-brew install tesseract
-# 安装语言包
-brew install tesseract-lang
-```
-
-**Windows**:
-请从 [UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki) 下载并安装。
-
-### 2. Go Build Tag
-
-由于 Tesseract 绑定使用了 CGO，为了避免不使用 OCR 的用户引入不必要的依赖，OCR 功能被放置在 `tesseract` 构建标签下。
-
-在运行或编译包含 OCR 功能的代码时，**必须**添加 `-tags tesseract` 标签：
-
-```bash
-go run -tags tesseract main.go
-# 或
-go build -tags tesseract .
-```
-
-在代码文件的开头也建议添加构建约束：
-
-```go
-//go:build tesseract
-// +build tesseract
-```
-
-## 快速开始
-
-> **完整示例**: [examples/knowledge/features/OCR](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/OCR)
-
-### 基础用法
+对于扫描 PDF、图片型 PDF、图片和复杂版面文档，推荐使用 Docling：
 
 ```go
 package main
 
 import (
-    "trpc.group/trpc-go/trpc-agent-go/knowledge"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract"
-    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
-    dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
-    
-    // 引入 PDF reader 以支持 PDF 文件解析
-    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
 )
 
 func main() {
-    // 1. 创建 Tesseract OCR 引擎
-    ocrExtractor, err := tesseract.New(
-        tesseract.WithLanguage("eng+chi_sim"), // 支持英文和简体中文
-        tesseract.WithConfidenceThreshold(60.0), // 设置置信度阈值
+    ctx := context.Background()
+
+    ext := docling.New(
+        docling.WithEndpoint("http://localhost:5001"),
+        docling.WithOCR(true),
     )
+    defer ext.Close()
+
+    src := filesource.New(
+        []string{"./data/scanned.pdf"},
+        filesource.WithExtractor(ext),
+    )
+
+    docs, err := src.ReadDocuments(ctx)
     if err != nil {
         panic(err)
     }
 
-    // 2. 创建支持 OCR 的知识源
-    // OCR 提取器可以注入到 File Source 或 Directory Source 中
-    pdfSource := dirsource.New(
-        []string{"./data/pdfs"},
-        dirsource.WithOCRExtractor(ocrExtractor), // 启用 OCR
-        dirsource.WithName("Scanned Documents"),
-    )
-
-    // 3. 创建 Knowledge
-    kb := knowledge.New(
-        knowledge.WithSources([]source.Source{pdfSource}),
-        // ... 其他配置 (Embedder, VectorStore)
-    )
-    
-    // ... 加载和使用
+    _ = docs
 }
 ```
 
-## 配置选项
+`docling.New()` 默认开启 OCR；只有需要显式关闭 OCR 时才需要传
+`docling.WithOCR(false)`。
 
-### Tesseract 配置
+## 旧 OCR 路径
 
-`tesseract.New` 支持以下配置选项：
+旧路径仍保留兼容，但相关 API 已标记为 Deprecated：
 
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
-| `WithLanguage(lang)` | 设置识别语言，多个语言用 `+` 连接 (如 `eng+chi_sim`) | `"eng"` |
-| `WithConfidenceThreshold(score)` | 设置最低置信度阈值 (0-100)，低于此阈值的识别结果将被拒绝 | `60.0` |
-| `WithPageSegMode(mode)` | 设置页面分割模式 (PSM 0-13)，对应 Tesseract 的 `--psm` 参数 | `3` (全自动) |
+- `knowledge/ocr`
+- `knowledge/ocr/tesseract`
+- `filesource.WithOCRExtractor(...)`
+- `dirsource.WithOCRExtractor(...)`
+- `autosource.WithOCRExtractor(...)`
+- `reader.WithOCRExtractor(...)`
 
-### Source 集成
+旧路径需要 Tesseract、CGO 依赖和 `tesseract` build tag：
 
-OCR 提取器可以通过 `WithOCRExtractor` 选项集成到以下 Source 中：
+```bash
+go run -tags tesseract main.go
+go build -tags tesseract .
+```
 
-- **File Source**: `filesource.WithOCRExtractor(ocr)`
-- **Directory Source**: `dirsource.WithOCRExtractor(ocr)`
-- **Auto Source**: `autosource.WithOCRExtractor(ocr)`
+## 与 Extractor 同时配置
 
-当配置了 OCR 提取器后，Source 在处理支持的文件类型（如 PDF）时，会尝试对其中的图像或页面进行 OCR 处理。
+如果同一个 Source 同时配置 `WithExtractor(...)` 和 `WithOCRExtractor(...)`，
+并且 Extractor 支持当前文件扩展名，则 Source 会优先走 Extractor 路径。
+这时 Reader 内部的旧 OCR 路径不会被触发。
 
-## 注意事项
+因此新代码不要同时配置两套能力。需要 OCR 时，直接选择带 OCR 能力的
+Extractor。
 
-1. **性能影响**：OCR 处理是计算密集型任务，会显著增加文档加载时间。建议仅对需要 OCR 的文档源启用此功能。
-2. **CGO 依赖**：使用 OCR 功能会导致编译后的二进制文件依赖系统库（`libtesseract`），请确保部署环境已安装相应依赖。
-3. **PDF 支持**：要处理 PDF 文件，务必导入 `knowledge/document/reader/pdf` 包。该 Reader 会自动检测 PDF 中的图像内容并调用 OCR 引擎。
+## 相关文档
+
+- [Extractor 内容提取](extractor.md) - 推荐的复杂文档和 OCR 处理路径
+- [文档源](source.md) - Source 类型与配置方式
+- [Knowledge 概述](index.md) - Knowledge 模块整体结构与能力
