@@ -145,9 +145,11 @@ func handleStreamEvent(
 		if resp.Status != responses.ResponseStatusCompleted {
 			return true, emit(responseStatusError(&resp))
 		}
-		if err := validateCompletedStreamItems(acc.doneItems, resp.Output); err != nil {
+		output, err := completedStreamItems(acc.doneItems, resp.Output)
+		if err != nil {
 			return true, emit(apiErrorResponse(err))
 		}
+		resp.Output = output
 		final, err := projectResponse(&resp, modelName)
 		if err != nil {
 			return true, emit(apiErrorResponse(err))
@@ -174,32 +176,45 @@ func handleStreamEvent(
 	}
 }
 
-func validateCompletedStreamItems(
+// completedStreamItems validates the terminal snapshot and selects replayable
+// reasoning from output_item.done, as required by the streaming API. Opaque
+// ciphertext can differ in the terminal response; every other field must agree.
+func completedStreamItems(
 	doneItems map[int64]responses.ResponseOutputItemUnion,
 	finalItems []responses.ResponseOutputItemUnion,
-) error {
+) ([]responses.ResponseOutputItemUnion, error) {
 	if len(doneItems) == 0 {
-		return nil
+		return finalItems, nil
 	}
 	if len(doneItems) != len(finalItems) {
-		return fmt.Errorf("openai/responses: response.completed has %d output items, but output_item.done covered %d", len(finalItems), len(doneItems))
+		return nil, fmt.Errorf("openai/responses: response.completed has %d output items, but output_item.done covered %d", len(finalItems), len(doneItems))
 	}
+	output := append([]responses.ResponseOutputItemUnion(nil), finalItems...)
 	for index, done := range doneItems {
 		if index < 0 || int64(len(finalItems)) <= index {
-			return fmt.Errorf("openai/responses: output_item.done index %d is outside response.completed output", index)
+			return nil, fmt.Errorf("openai/responses: output_item.done index %d is outside response.completed output", index)
 		}
 		var doneValue, finalValue any
 		if err := json.Unmarshal([]byte(done.RawJSON()), &doneValue); err != nil {
-			return fmt.Errorf("openai/responses: decode output_item.done at index %d: %w", index, err)
+			return nil, fmt.Errorf("openai/responses: decode output_item.done at index %d: %w", index, err)
 		}
 		if err := json.Unmarshal([]byte(finalItems[index].RawJSON()), &finalValue); err != nil {
-			return fmt.Errorf("openai/responses: decode response.completed item %d: %w", index, err)
+			return nil, fmt.Errorf("openai/responses: decode response.completed item %d: %w", index, err)
+		}
+		if done.Type == outputTypeReasoning && finalItems[index].Type == outputTypeReasoning {
+			doneMap, _ := doneValue.(map[string]any)
+			finalMap, _ := finalValue.(map[string]any)
+			if encrypted, ok := doneMap["encrypted_content"].(string); ok && encrypted != "" {
+				delete(doneMap, "encrypted_content")
+				delete(finalMap, "encrypted_content")
+				output[index] = done
+			}
 		}
 		if !reflect.DeepEqual(doneValue, finalValue) {
-			return fmt.Errorf("openai/responses: output_item.done at index %d differs from response.completed", index)
+			return nil, fmt.Errorf("openai/responses: output_item.done at index %d differs from response.completed", index)
 		}
 	}
-	return nil
+	return output, nil
 }
 
 func projectPartial(modelName string, acc *streamAccumulator, delta, reasoningDelta string) *model.Response {

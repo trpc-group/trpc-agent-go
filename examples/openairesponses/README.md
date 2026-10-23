@@ -36,10 +36,11 @@ their partial function calls must not be executed.
 The adapter associates native Responses state with a read-only projection of
 the framework message that produced it, including function-call arguments.
 Treat that association as one history record. Projection edits fail validation;
-native tool turns must not be split. A complete older history prefix can be
-replaced by a session summary, while tool-result compaction is skipped for
-native histories. See [the adapter contract](../../model/openai/responses)
-for history, model-switching, and unsupported-feature boundaries.
+native tool turns are never split. A completed older history prefix can be
+replaced by a session summary, and the usual tool-result compaction still
+applies. Other agents receive a native agent's output as ordinary user context.
+See [the adapter contract](../../model/openai/responses) for history,
+model-switching, compatibility, and unsupported-feature boundaries.
 
 This is an independent Go module so it can use the Go version required by the
 Responses adapter without raising the root module's Go version.

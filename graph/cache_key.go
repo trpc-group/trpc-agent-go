@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // sanitizeForCacheKey removes volatile or unsafe keys from a State map so that
@@ -74,6 +76,9 @@ func toCanonicalValue(v any) (any, error) {
 			if f.PkgPath != "" { // unexported
 				continue
 			}
+			if isAbsentMessageReplay(t, f, rv.Field(i)) {
+				continue
+			}
 			names = append(names, f.Name)
 		}
 		sort.Strings(names)
@@ -91,6 +96,19 @@ func toCanonicalValue(v any) (any, error) {
 		// Primitive types are fine as-is.
 		return v, nil
 	}
+}
+
+var modelMessageType = reflect.TypeOf(model.Message{})
+
+// isAbsentMessageReplay reports whether f is a nil model.Message.Replay field.
+// Cache keys of messages without native replay data must not change, so the
+// absent field is not part of their canonical value.
+func isAbsentMessageReplay(
+	t reflect.Type,
+	f reflect.StructField,
+	value reflect.Value,
+) bool {
+	return t == modelMessageType && f.Name == "Replay" && value.IsNil()
 }
 
 func canonicalizeMap(m map[string]any) (any, error) {

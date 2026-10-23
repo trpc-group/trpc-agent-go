@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
@@ -228,7 +229,11 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
 		// after an assistant tool_call response but before tools executed.
-		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
+		pendingResume := pendingToolCallResponse(invocation)
+		if !modelreplay.ResponseHasReplay(pendingResume) {
+			f.resumePendingToolCalls(ctx, invocation, pendingResume, eventChan)
+			pendingResume = nil
+		}
 
 		firstIteration := true
 		for {
@@ -254,7 +259,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			}
 
 			// Run one step (one LLM call cycle).
-			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
+			lastEvent, err := f.runOneStepWithResume(ctx, invocation, eventChan, pendingResume)
+			pendingResume = nil
 			if err != nil {
 				runErr = err
 				steer.Close(invocation)
@@ -470,14 +476,30 @@ func flowEventWaitTimeout(ctx context.Context) time.Duration {
 	return eventCompletionTimeout
 }
 
-// maybeResumePendingToolCalls inspects the latest session events and, when
-// RunOptions.Resume is enabled, executes any pending tool calls before the
-// next LLM request. A pending tool call is defined as the latest persisted
-// event being an assistant response that contains tool calls but no tool
-// results after it.
-func (f *Flow) maybeResumePendingToolCalls(
+// pendingToolCallResponse retains the existing last-event resume boundary.
+// Native calls are validated against the first selected model before execution.
+func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
+	if invocation == nil || !invocation.RunOptions.Resume || invocation.Session == nil {
+		return nil
+	}
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	events := invocation.Session.Events
+	if len(events) == 0 {
+		return nil
+	}
+	last := events[len(events)-1]
+	if last.Response != nil && !last.IsPartial &&
+		last.IsValidContent() && last.Response.IsToolCallResponse() {
+		return last.Response
+	}
+	return nil
+}
+
+func (f *Flow) resumePendingToolCalls(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	lastResp *model.Response,
 	eventChan chan<- *event.Event,
 ) {
 	ctx, span, started := startLatencySpan(
@@ -492,25 +514,6 @@ func (f *Flow) maybeResumePendingToolCalls(
 		}
 		finishLatencySpan(span, started, nil)
 	}()
-	if invocation == nil || !invocation.RunOptions.Resume {
-		return
-	}
-	if invocation.Session == nil {
-		return
-	}
-
-	invocation.Session.EventMu.RLock()
-	events := invocation.Session.Events
-	var lastResp *model.Response
-	if len(events) > 0 {
-		last := events[len(events)-1]
-		if last.Response != nil && !last.IsPartial &&
-			last.IsValidContent() && last.Response.IsToolCallResponse() {
-			lastResp = last.Response
-		}
-	}
-	invocation.Session.EventMu.RUnlock()
-
 	if lastResp == nil {
 		return
 	}
@@ -527,6 +530,35 @@ func (f *Flow) maybeResumePendingToolCalls(
 			break
 		}
 	}
+}
+
+func (f *Flow) selectModelAndResumeTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	pending *model.Response,
+	eventChan chan<- *event.Event,
+) (model.Model, error) {
+	selected, err := f.selectModelForStep(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if pending == nil {
+		return selected, nil
+	}
+	if err := agent.CheckContextCancelled(ctx); err != nil {
+		return nil, err
+	}
+	if selected == nil {
+		return nil, errors.New("native tool resume requires a model")
+	}
+	if err := modelreplay.ValidateResponse(pending, selected.Info()); err != nil {
+		return nil, fmt.Errorf("cannot resume native tool calls: %w", err)
+	}
+	originalModel := invocation.Model
+	invocation.Model = selected
+	defer func() { invocation.Model = originalModel }()
+	f.resumePendingToolCalls(ctx, invocation, pending, eventChan)
+	return selected, agent.CheckContextCancelled(ctx)
 }
 
 func (f *Flow) maybeSyncSummaryIntraRun(
@@ -679,6 +711,15 @@ func (f *Flow) runOneStep(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+) (*event.Event, error) {
+	return f.runOneStepWithResume(ctx, invocation, eventChan, nil)
+}
+
+func (f *Flow) runOneStepWithResume(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	pendingResume *model.Response,
 ) (lastEvent *event.Event, err error) {
 	ctx, stepSpan, stepStarted := startLatencySpan(
 		ctx,
@@ -705,7 +746,7 @@ func (f *Flow) runOneStep(
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
 	}
-	callModel, err := f.selectModelForStep(ctx, invocation)
+	callModel, err := f.selectModelAndResumeTools(ctx, invocation, pendingResume, eventChan)
 	if err != nil {
 		return nil, err
 	}
@@ -964,6 +1005,7 @@ func (p *streamingResponseProcessor) process(
 	)
 	p.updateMetricsState()
 	trackModelResponseTelemetry(response, p.tracker)
+	replayGuard := modelreplay.GuardResponse(response)
 	callbackTimingAttachment := responseusage.AttachTimingForCallback(
 		response,
 		p.timingInfo,
@@ -994,7 +1036,7 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
-	if err := p.validateResponseReplay(response); err != nil {
+	if err := replayGuard.Validate(response, p.producerInfo); err != nil {
 		*p.err = err
 		responseErr = err
 		return false
@@ -1049,32 +1091,6 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
-}
-
-// Validate after callbacks and repairs, before publishing history or executing
-// tools. Tool execution must use the same projection as the native completion.
-func (p *streamingResponseProcessor) validateResponseReplay(response *model.Response) error {
-	if response == nil {
-		return nil
-	}
-	for _, choice := range response.Choices {
-		if err := validateReplayMessages([]model.Message{choice.Message, choice.Delta}, p.producerInfo); err != nil {
-			return fmt.Errorf("invalid model response: %w", err)
-		}
-	}
-	return nil
-}
-
-func validateReplayMessages(messages []model.Message, info model.Info) error {
-	for index, message := range messages {
-		if message.Replay == nil {
-			continue
-		}
-		if _, err := message.ReplayDataFor(info.ReplayProtocol, info.Name); err != nil {
-			return fmt.Errorf("native replay message %d: %w", index, err)
-		}
-	}
-	return nil
 }
 
 func validateCompletedToolCallNames(response *model.Response) error {
@@ -3102,8 +3118,8 @@ func (f *Flow) generateContentSeq(
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
-	if callModel != nil {
-		if err := validateReplayMessages(llmRequest.Messages, callModel.Info()); err != nil {
+	if callModel != nil && modelreplay.MessagesHaveReplay(llmRequest.Messages) {
+		if err := modelreplay.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
 			return nil, err
 		}
 	}

@@ -86,7 +86,7 @@ type Message struct {
 	// conversation, include the text and its signature unmodified.
 	// Currently used by AWS Bedrock (Claude) models.
 	ReasoningSignature string `json:"reasoning_signature,omitempty"`
-	// Replay preserves a provider-native completion as an immutable history unit.
+	// Replay preserves a provider-native completion as an indivisible history unit.
 	// The remaining fields are its display and tool-execution projection. A
 	// provider must validate that projection with ReplayDataFor before replaying
 	// it. Clear Replay explicitly when intentionally creating a new context from
