@@ -39,11 +39,13 @@ func (r *Runtime) PutFiles(
 	ws codeexecutor.Workspace,
 	files []codeexecutor.PutFile,
 ) error {
-	_ = ctx
 	profile := applyAdditionalPermissions(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
+	if err := validateReadMode(profile); err != nil {
+		return err
+	}
 	for _, f := range files {
 		if err := r.checkWrite(profile, ws, f.Path); err != nil {
 			return err
@@ -67,23 +69,26 @@ func (r *Runtime) PutFiles(
 }
 
 // StageDirectory copies a host directory into the workspace. Host sources need
-// an explicit read grant unless sandboxing is disabled.
+// a read grant in ReadModeGranted; ReadModeHost permits fallback reads.
+// Credential, session, and explicit path restrictions apply to every source.
 func (r *Runtime) StageDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	src, to string,
 	opt codeexecutor.StageOptions,
 ) error {
-	_ = ctx
 	profile := applyAdditionalPermissions(
 		normalizeProfile(r.profile),
 		additionalPermissionsFromContext(ctx),
 	)
+	if err := validateReadMode(profile); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(src) {
 		return deniedf(ErrPathDenied, "read", src, "host path must be absolute")
 	}
-	if profile.enforcement() != enforcementDisabled && !hostPathHasRule(profile, src, accessRead) {
-		return deniedf(ErrPathDenied, "read", src, "host path requires explicit read grant")
+	if err := r.checkHostRead(profile, ws, src); err != nil {
+		return err
 	}
 	if err := r.checkWrite(profile, ws, to); err != nil {
 		return err
@@ -92,7 +97,7 @@ func (r *Runtime) StageDirectory(
 	if err != nil {
 		return err
 	}
-	if err := r.copyPathIntoWorkspace(profile, ws, src, dst); err != nil {
+	if err := r.copyPathIntoWorkspace(ctx, profile, ws, src, dst); err != nil {
 		return err
 	}
 	if opt.ReadOnly {
@@ -120,6 +125,9 @@ func (r *Runtime) Collect(
 	patterns []string,
 ) ([]codeexecutor.File, error) {
 	_ = ctx
+	if err := validateReadMode(r.profile); err != nil {
+		return nil, err
+	}
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return nil, err
 	}
@@ -170,6 +178,9 @@ func (r *Runtime) StageInputs(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
+	if err := validateReadMode(r.profile); err != nil {
+		return err
+	}
 	return codeexecutor.WithWorkspaceMetadataLock(
 		ctx,
 		ws.Path,
@@ -234,9 +245,9 @@ func (r *Runtime) stageInput(
 	case strings.HasPrefix(sp.From, inputSchemeHost):
 		return r.stageHostInput(ctx, ws, sp, to)
 	case strings.HasPrefix(sp.From, inputSchemeWorkspace):
-		return r.stageWorkspaceInput(ws, profile, sp, to)
+		return r.stageWorkspaceInput(ctx, ws, profile, sp, to)
 	case strings.HasPrefix(sp.From, inputSchemeSkill):
-		return r.stageSkillInput(ws, profile, sp, to)
+		return r.stageSkillInput(ctx, ws, profile, sp, to)
 	default:
 		return "", nil, fmt.Errorf("unsupported input: %s", sp.From)
 	}
@@ -291,19 +302,21 @@ func (r *Runtime) stageHostInput(
 }
 
 func (r *Runtime) stageWorkspaceInput(
+	ctx context.Context,
 	ws codeexecutor.Workspace,
 	profile PermissionProfile,
 	sp codeexecutor.InputSpec,
 	to string,
 ) (string, *int, error) {
 	srcRel := strings.TrimPrefix(sp.From, inputSchemeWorkspace)
-	if err := r.stageWorkspaceRelativePath(ws, profile, srcRel, to); err != nil {
+	if err := r.stageWorkspaceRelativePath(ctx, ws, profile, srcRel, to); err != nil {
 		return "", nil, err
 	}
 	return srcRel, nil, nil
 }
 
 func (r *Runtime) stageSkillInput(
+	ctx context.Context,
 	ws codeexecutor.Workspace,
 	profile PermissionProfile,
 	sp codeexecutor.InputSpec,
@@ -311,13 +324,14 @@ func (r *Runtime) stageSkillInput(
 ) (string, *int, error) {
 	rest := strings.TrimPrefix(sp.From, inputSchemeSkill)
 	srcRel := filepath.Join(codeexecutor.DirSkills, filepath.Clean(rest))
-	if err := r.stageWorkspaceRelativePath(ws, profile, srcRel, to); err != nil {
+	if err := r.stageWorkspaceRelativePath(ctx, ws, profile, srcRel, to); err != nil {
 		return "", nil, err
 	}
 	return srcRel, nil, nil
 }
 
 func (r *Runtime) stageWorkspaceRelativePath(
+	ctx context.Context,
 	ws codeexecutor.Workspace,
 	profile PermissionProfile,
 	srcRel string,
@@ -337,7 +351,7 @@ func (r *Runtime) stageWorkspaceRelativePath(
 	if err != nil {
 		return err
 	}
-	return r.copyPathIntoWorkspace(profile, ws, src, dst)
+	return r.copyPathIntoWorkspace(ctx, profile, ws, src, dst)
 }
 
 // CollectOutputs applies the declarative output spec under the same read
@@ -347,6 +361,9 @@ func (r *Runtime) CollectOutputs(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.OutputSpec,
 ) (codeexecutor.OutputManifest, error) {
+	if err := validateReadMode(r.profile); err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
 	if _, err := codeexecutor.EnsureLayout(ws.Path); err != nil {
 		return codeexecutor.OutputManifest{}, err
 	}
@@ -633,7 +650,7 @@ func hostPathHasRule(profile PermissionProfile, target string, access fileSystem
 		if err != nil {
 			continue
 		}
-		if sameOrChild(ruleAbs, targetAbs) {
+		if sameOrChild(policyCanonicalPath(ruleAbs), policyCanonicalPath(targetAbs)) {
 			return true
 		}
 	}
@@ -641,12 +658,25 @@ func hostPathHasRule(profile PermissionProfile, target string, access fileSystem
 }
 
 func (r *Runtime) copyPathIntoWorkspace(
+	ctx context.Context,
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
 	src string,
 	dst string,
 ) error {
 	return copyPathWithValidator(src, dst, func(target string) error {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		rel, err := filepath.Rel(dst, target)
+		if err != nil {
+			return err
+		}
+		if err := r.checkHostRead(profile, ws, filepath.Join(src, rel)); err != nil {
+			return err
+		}
 		return r.checkWorkspaceWriteTarget(profile, ws, target)
 	})
 }
@@ -792,20 +822,6 @@ func readSymlinkTarget(path string) (string, error) {
 	return filepath.Abs(target)
 }
 
-func copyPath(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		return copyDir(src, dst)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	return copyFile(src, dst, info.Mode())
-}
-
 func copyPathWithValidator(src, dst string, validate func(string) error) error {
 	info, err := os.Lstat(src)
 	if err != nil {
@@ -826,27 +842,6 @@ func copyPathWithValidator(src, dst string, validate func(string) error) error {
 	return copyFileWithValidator(src, dst, info.Mode(), validate)
 }
 
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		info, err := os.Lstat(path)
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-		return copyFile(path, target, info.Mode())
-	})
-}
-
 func copyDirWithValidator(src, dst string, validate func(string) error) error {
 	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -864,34 +859,14 @@ func copyDirWithValidator(src, dst string, validate func(string) error) error {
 			return err
 		}
 		target := filepath.Join(dst, rel)
+		if err := validate(target); err != nil {
+			return err
+		}
 		if d.IsDir() {
-			if err := validate(target); err != nil {
-				return err
-			}
 			return os.MkdirAll(target, info.Mode())
 		}
 		return copyFileWithValidator(path, target, info.Mode(), validate)
 	})
-}
-
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
 }
 
 func copyFileWithValidator(src, dst string, mode os.FileMode, validate func(string) error) error {
