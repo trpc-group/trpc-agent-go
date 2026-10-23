@@ -114,7 +114,8 @@ func WithOpenAIOptions(opts ...option.RequestOption) Option {
 }
 
 // WithExtraFields merges extra JSON fields into every request body.
-// Keys use sjson paths, so "reasoning.effort" is valid.
+// Keys may use ordinary dot-separated JSON paths, so "reasoning.effort" is
+// valid. Colon prefixes and backslash escapes are rejected.
 // Managed fields such as input, tools, and previous_response_id are rejected.
 func WithExtraFields(fields map[string]any) Option {
 	return func(o *options) {

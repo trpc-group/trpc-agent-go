@@ -306,6 +306,68 @@ func TestReplayPayloadValidatesDependencyIDs(t *testing.T) {
 	}
 }
 
+func TestLegacyCallIDsRemainOpaque(t *testing.T) {
+	call := func(id string) model.Message {
+		return model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
+			ID: id, Type: "function",
+			Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)},
+		}}}
+	}
+	items, err := convertMessages([]model.Message{
+		call(" call_1 "),
+		model.NewToolMessage(" call_1 ", "f", "ok"),
+	}, "gpt-5")
+	require.NoError(t, err)
+	raw, err := json.Marshal(items)
+	require.NoError(t, err)
+	require.JSONEq(t, `[
+		{"type":"function_call","call_id":" call_1 ","name":"f","arguments":"{}"},
+		{"type":"function_call_output","call_id":" call_1 ","output":"ok"}
+	]`, string(raw))
+
+	_, err = convertMessages([]model.Message{
+		call("call_1"),
+		model.NewToolMessage(" call_1 ", "f", "ok"),
+	}, "gpt-5")
+	require.ErrorContains(t, err, "no preceding function call")
+	_, err = convertMessages([]model.Message{
+		call(" \t "),
+		model.NewToolMessage(" \t ", "f", "ok"),
+	}, "gpt-5")
+	require.ErrorContains(t, err, "empty call_id")
+}
+
+func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
+	nativeMessage := func(t *testing.T, payload string) model.Message {
+		t.Helper()
+		msg := model.NewAssistantMessage("")
+		require.NoError(t, msg.SetReplayData(responseProvider, "gpt-5", json.RawMessage(payload)))
+		return msg
+	}
+	item := `{"type":"function_call","call_id":" call_1 ","name":"f","arguments":"{}","future":true}`
+	items, err := convertMessages([]model.Message{
+		nativeMessage(t, `[`+item+`]`),
+		model.NewToolMessage(" call_1 ", "f", "ok"),
+	}, "gpt-5")
+	require.NoError(t, err)
+	raw, err := json.Marshal(items)
+	require.NoError(t, err)
+	var got []json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.JSONEq(t, item, string(got[0]), "native function call fields and call_id must be retained")
+	require.JSONEq(t, `{"type":"function_call_output","call_id":" call_1 ","output":"ok"}`, string(got[1]))
+
+	_, err = convertMessages([]model.Message{
+		nativeMessage(t, `[{"type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}]`),
+		model.NewToolMessage(" call_1 ", "f", "ok"),
+	}, "gpt-5")
+	require.ErrorContains(t, err, "no preceding function call")
+	_, err = convertMessages([]model.Message{
+		nativeMessage(t, `[{"type":"function_call","call_id":"  ","name":"f","arguments":"{}"}]`),
+	}, "gpt-5")
+	require.ErrorContains(t, err, "empty call_id")
+}
+
 func TestToolsStructuredOutputAndMultimodalInputs(t *testing.T) {
 	var body map[string]json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -252,6 +252,67 @@ func TestSimpleTokenCounterAccountsForNativeReplay(t *testing.T) {
 	require.ErrorContains(t, err, "projection changed")
 }
 
+func TestTokenTailoringPreservesNativeRecordsWithoutText(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message Message
+		payload json.RawMessage
+		results []Message
+	}{
+		{
+			name:    "opaque reasoning only",
+			message: NewAssistantMessage(""),
+			payload: json.RawMessage(`[{"type":"reasoning","summary":[],"encrypted_content":"opaque"}]`),
+		},
+		{
+			name: "reasoning projection only",
+			message: Message{
+				Role: RoleAssistant, ReasoningContent: "thinking",
+			},
+			payload: json.RawMessage(`[{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}],"encrypted_content":"opaque"}]`),
+		},
+		{
+			name: "function call only",
+			message: Message{Role: RoleAssistant, ToolCalls: []ToolCall{{
+				Type: "function", ID: "call_1",
+				Function: FunctionDefinitionParam{
+					Name: "lookup", Arguments: json.RawMessage(`{"record":1}`),
+				},
+			}}},
+			payload: json.RawMessage(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\"record\":1}"}]`),
+			results: []Message{NewToolMessage("call_1", "lookup", "result")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			native := tc.message
+			require.NoError(t, native.SetReplayData(replayTestProtocol, replayTestModel, tc.payload))
+			messages := []Message{NewUserMessage("first"), native}
+			messages = append(messages, tc.results...)
+			messages = append(messages, NewUserMessage("next"))
+			counter := NewSimpleTokenCounter()
+			budget, err := counter.CountTokensRange(context.Background(), messages, 0, len(messages))
+			require.NoError(t, err)
+			for _, strategy := range []struct {
+				name string
+				impl TailoringStrategy
+			}{
+				{name: "middle out", impl: NewMiddleOutStrategy(counter)},
+				{name: "head out", impl: NewHeadOutStrategy(counter)},
+				{name: "tail out", impl: NewTailOutStrategy(counter)},
+			} {
+				t.Run(strategy.name, func(t *testing.T) {
+					tailored, err := strategy.impl.TailorMessages(context.Background(), messages, budget+1)
+					require.NoError(t, err)
+					require.Equal(t, messages, tailored, "history within budget must preserve native records and projections")
+					payload, err := tailored[1].ReplayDataFor(replayTestProtocol, replayTestModel)
+					require.NoError(t, err)
+					require.JSONEq(t, string(tc.payload), string(payload))
+				})
+			}
+		})
+	}
+}
+
 func TestResponseCloneIsolatesReplayDecode(t *testing.T) {
 	original := replayTestMessage()
 	require.NoError(t, original.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
