@@ -607,6 +607,11 @@ a2aAgent, err := a2aagent.New(
 )
 ```
 
+When a streaming run is canceled, `A2AAgent` stops waiting for remote events
+even if the remote event channel remains open and silent. Cancellation does not
+produce a successful final response. The HTTP handler and SDK remain responsible
+for releasing their own network resources.
+
 Whether the client sends a streaming request follows this priority:
 
 1. Per-call override via `agent.WithStream(...)`
