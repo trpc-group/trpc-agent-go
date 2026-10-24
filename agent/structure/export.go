@@ -231,15 +231,48 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 		Type:                 schema.Type,
 		Description:          schema.Description,
 		Pattern:              schema.Pattern,
+		Format:               schema.Format,
+		Minimum:              cloneFloatPtr(schema.Minimum),
+		Maximum:              cloneFloatPtr(schema.Maximum),
 		Required:             append([]string(nil), schema.Required...),
 		Properties:           cloneSchemaMap(schema.Properties),
 		Items:                cloneToolSchema(schema.Items),
+		PrefixItems:          cloneSchemaSlice(schema.PrefixItems),
+		MinItems:             cloneIntPtr(schema.MinItems),
+		MaxItems:             cloneIntPtr(schema.MaxItems),
 		AdditionalProperties: cloneSchemaValue(schema.AdditionalProperties),
 		Default:              cloneSchemaValue(schema.Default),
 		Enum:                 cloneSchemaValues(schema.Enum),
 		Ref:                  schema.Ref,
 		Defs:                 cloneSchemaMap(schema.Defs),
 	}
+}
+
+func cloneSchemaSlice(in []*tool.Schema) []*tool.Schema {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*tool.Schema, len(in))
+	for i, value := range in {
+		out[i] = cloneToolSchema(value)
+	}
+	return out
+}
+
+func cloneFloatPtr(in *float64) *float64 {
+	if in == nil {
+		return nil
+	}
+	v := *in
+	return &v
+}
+
+func cloneIntPtr(in *int) *int {
+	if in == nil {
+		return nil
+	}
+	v := *in
+	return &v
 }
 
 func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {

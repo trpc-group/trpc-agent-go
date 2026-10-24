@@ -456,9 +456,12 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 			"shared": {Type: "number"},
 		},
 	}
+	minimum, minItems := 0.0, 1
 	outputSchema := &tool.Schema{
-		Type:  "array",
-		Items: &tool.Schema{Type: "string"},
+		Type:        "array",
+		Items:       &tool.Schema{Type: "string", Format: "date-time"},
+		PrefixItems: []*tool.Schema{{Type: "number", Minimum: &minimum}},
+		MinItems:    &minItems,
 	}
 	raw := &Snapshot{
 		EntryNodeID: "root",
@@ -492,6 +495,12 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 	require.NotNil(t, exported.InputSchema.Properties["name"])
 	assert.Equal(t, "^[a-z]+$", exported.InputSchema.Properties["name"].Pattern)
 	require.NotNil(t, exported.OutputSchema.Items)
+	assert.Equal(t, "date-time", exported.OutputSchema.Items.Format)
+	require.Len(t, exported.OutputSchema.PrefixItems, 1)
+	require.NotSame(t, outputSchema.PrefixItems[0], exported.OutputSchema.PrefixItems[0])
+	minimum, minItems = 5, 2
+	assert.Equal(t, 0.0, *exported.OutputSchema.PrefixItems[0].Minimum)
+	assert.Equal(t, 1, *exported.OutputSchema.MinItems)
 	inputSchema.Properties["name"].Type = "integer"
 	assert.Equal(t, "string", exported.InputSchema.Properties["name"].Type)
 	rawAdditional := inputSchema.AdditionalProperties.(*tool.Schema)

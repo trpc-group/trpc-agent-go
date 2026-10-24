@@ -192,6 +192,7 @@ func appendSchemaSearchText(
 	appendSearchPart(parts, schema.Type)
 	appendSearchPart(parts, schema.Description)
 	appendSearchPart(parts, schema.Pattern)
+	appendSearchPart(parts, schema.Format)
 	appendSearchPart(parts, schema.Ref)
 	for _, value := range schema.Enum {
 		appendSearchPart(parts, fmt.Sprint(value))
@@ -203,6 +204,9 @@ func appendSchemaSearchText(
 		appendSchemaSearchText(parts, schema.Properties[name], seen)
 	}
 	appendSchemaSearchText(parts, schema.Items, seen)
+	for _, item := range schema.PrefixItems {
+		appendSchemaSearchText(parts, item, seen)
+	}
 	defNames := sortedSchemaNames(schema.Defs)
 	for _, name := range defNames {
 		appendSearchPart(parts, name)

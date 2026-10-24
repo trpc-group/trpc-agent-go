@@ -68,12 +68,29 @@ type Schema struct {
 	// A nil or empty slice omits the anyOf constraint.
 	AnyOf []*Schema `json:"anyOf,omitempty"`
 	// Pattern restricts string values to a regular expression.
-	Pattern  string   `json:"pattern,omitempty"`
+	Pattern string `json:"pattern,omitempty"`
+	// Format describes the expected format of string or number values
+	// (e.g., "date-time", "date", "time", "int32", "float").
+	Format string `json:"format,omitempty"`
+	// Minimum is the inclusive lower bound for number and integer values.
+	// A nil value means no lower bound.
+	Minimum *float64 `json:"minimum,omitempty"`
+	// Maximum is the inclusive upper bound for number and integer values.
+	// A nil value means no upper bound.
+	Maximum  *float64 `json:"maximum,omitempty"`
 	Required []string `json:"required,omitempty"`
 	// Properties of the arguments, each with its own schema
 	Properties map[string]*Schema `json:"properties,omitempty"`
 	// For array types, defines the schema of items in the array
 	Items *Schema `json:"items,omitempty"`
+	// PrefixItems defines the schemas of the leading array items by position.
+	PrefixItems []*Schema `json:"prefixItems,omitempty"`
+	// MinItems is the minimum number of items in an array.
+	// A nil value means no minimum.
+	MinItems *int `json:"minItems,omitempty"`
+	// MaxItems is the maximum number of items in an array.
+	// A nil value means no maximum.
+	MaxItems *int `json:"maxItems,omitempty"`
 	// AdditionalProperties: Controls whether properties not defined in Properties are allowed
 	AdditionalProperties any `json:"additionalProperties,omitempty"`
 	// Default value for the parameter
