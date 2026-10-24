@@ -330,6 +330,101 @@ func TestConvertMCPSchema_RootPattern(t *testing.T) {
 	require.Equal(t, "^[a-z]+$", schema.Pattern)
 }
 
+func TestConvertMCPSchema_ValueConstraints(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"when":  map[string]any{"type": "string", "format": "date-time"},
+			"score": map[string]any{"type": "number", "minimum": 0, "maximum": 100},
+			"tags": map[string]any{
+				"type":     "array",
+				"minItems": 1,
+				"maxItems": 5,
+				"items":    map[string]any{"type": "string"},
+			},
+			"point": map[string]any{
+				"type": "array",
+				"prefixItems": []any{
+					map[string]any{"type": "number", "minimum": -90},
+					map[string]any{"type": "number", "maximum": 180},
+				},
+			},
+			"bad":  map[string]any{"type": "array", "minItems": 1.5, "maxItems": -1},
+			"huge": map[string]any{"type": "array", "minItems": 1e20},
+		},
+	}
+
+	s := convertMCPSchemaToSchema(mcpSchema)
+	require.Equal(t, "date-time", s.Properties["when"].Format)
+
+	score := s.Properties["score"]
+	require.NotNil(t, score.Minimum)
+	require.NotNil(t, score.Maximum)
+	require.Equal(t, 0.0, *score.Minimum)
+	require.Equal(t, 100.0, *score.Maximum)
+
+	tags := s.Properties["tags"]
+	require.NotNil(t, tags.MinItems)
+	require.NotNil(t, tags.MaxItems)
+	require.Equal(t, 1, *tags.MinItems)
+	require.Equal(t, 5, *tags.MaxItems)
+
+	point := s.Properties["point"]
+	require.Len(t, point.PrefixItems, 2)
+	require.Equal(t, -90.0, *point.PrefixItems[0].Minimum)
+	require.Equal(t, 180.0, *point.PrefixItems[1].Maximum)
+
+	require.Nil(t, s.Properties["bad"].MinItems)
+	require.Nil(t, s.Properties["bad"].MaxItems)
+	require.Nil(t, s.Properties["huge"].MinItems)
+}
+
+func TestConvertMCPSchema_PrefixItemsKeepPositions(t *testing.T) {
+	s := convertMCPSchemaToSchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"row": map[string]any{
+				"type": "array",
+				"prefixItems": []any{
+					true,
+					map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "integer", "minimum": 0},
+					},
+				},
+			},
+			"never": map[string]any{
+				"type":        "array",
+				"prefixItems": []any{false, map[string]any{"type": "string"}},
+			},
+		},
+	})
+
+	row := s.Properties["row"]
+	require.Len(t, row.PrefixItems, 2)
+	data, err := json.Marshal(row.PrefixItems[0])
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(data))
+	require.Equal(t, "array", row.PrefixItems[1].Type)
+	require.NotNil(t, row.PrefixItems[1].Items)
+	require.Equal(t, "integer", row.PrefixItems[1].Items.Type)
+	require.Equal(t, 0.0, *row.PrefixItems[1].Items.Minimum)
+
+	require.Nil(t, s.Properties["never"].PrefixItems)
+}
+
+func TestConvertMCPSchema_RootValueConstraints(t *testing.T) {
+	schema := convertMCPSchemaToSchema(map[string]any{
+		"type":    "integer",
+		"format":  "int32",
+		"minimum": 1,
+	})
+	require.Equal(t, "int32", schema.Format)
+	require.NotNil(t, schema.Minimum)
+	require.Equal(t, 1.0, *schema.Minimum)
+	require.Nil(t, schema.Maximum)
+}
+
 func TestConvertMCPSchema_NestedObjects(t *testing.T) {
 	// Test nested object mapping issue
 	mcpSchema := map[string]any{

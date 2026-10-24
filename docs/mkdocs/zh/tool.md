@@ -215,6 +215,11 @@ Function Tool 的入参 `req` 会自动生成对应的 JSON Schema（用于模�
 - **字段描述（推荐）**：使用 `jsonschema:"description=..."` 写入 schema 的 `properties.<field>.description`。
 - **字符串正则约束**：使用 `jsonschema:"pattern=^[a-z0-9_-]+$"` 写入 schema 的 `properties.<field>.pattern`。
 - **手写 schema**：如果直接构造 `tool.Schema`，可设置 `Pattern: "^[a-z0-9_-]+$"` 输出 JSON Schema 的 `pattern` 关键字。
+- **格式约束**：在字符串或数值字段上使用 `jsonschema:"format=date-time"` 写入 `properties.<field>.format`（例如 `date-time`、`date`、`time`、`int32`、`float`）。
+- **数值范围**：在数值或整数字段上使用 `jsonschema:"minimum=0,maximum=100"` 写入包含边界的 `minimum` 和 `maximum` 关键字。
+- **数组长度**：在切片或数组字段上使用 `jsonschema:"minItems=1,maxItems=5"` 写入 `minItems` 和 `maxItems`。
+- **元组项**：`prefixItems` 没有对应的 tag，可直接设置 `tool.Schema` 的 `PrefixItems`，或使用 `function.WithInputSchema(customInputSchema)`。MCP 工具 schema 转换时会保留 `format`、`minimum`、`maximum`、`minItems`、`maxItems` 和 `prefixItems`。
+- **运行时范围**：这些关键字只会发布给模型，框架不会在本地按 `format`、`minimum`、`maximum`、`minItems`、`maxItems` 或 `prefixItems` 校验工具调用参数。如需拒绝不合规的调用，请在工具内部自行校验。
 - **注意**：`jsonschema` tag 内部使用英文逗号 `,` 作为分隔符，因此 **description 内容中不能包含 `,`**，否则会被误解析成多个 tag。
 - **注意**：`pattern` 内容同样受逗号分隔限制；如果正则本身需要包含逗号，建议使用 `function.WithInputSchema(customInputSchema)` 自定义 schema。
 - **运行时兼容性**：工具调用清理阶段使用 Go `regexp` 校验 `pattern`，不是严格的 JSON Schema ECMA-262 正则语法；无法被 Go `regexp` 编译的 pattern 在运行时会按“不强制约束”处理。

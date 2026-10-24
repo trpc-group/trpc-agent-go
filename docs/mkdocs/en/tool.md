@@ -228,6 +228,11 @@ For Function Tools, the input `req` is automatically converted into a JSON Schem
 - **Field description (recommended)**: use `jsonschema:"description=..."` to populate `properties.<field>.description`.
 - **String pattern constraint**: use `jsonschema:"pattern=^[a-z0-9_-]+$"` to populate `properties.<field>.pattern`.
 - **Manual schemas**: when constructing `tool.Schema` directly, set `Pattern: "^[a-z0-9_-]+$"` to emit the JSON Schema `pattern` keyword.
+- **Format constraint**: on string or number fields, use `jsonschema:"format=date-time"` to populate `properties.<field>.format` (e.g., `date-time`, `date`, `time`, `int32`, `float`).
+- **Numeric bounds**: on number or integer fields, use `jsonschema:"minimum=0,maximum=100"` to populate the inclusive `minimum` and `maximum` keywords.
+- **Array length**: on slice or array fields, use `jsonschema:"minItems=1,maxItems=5"` to populate `minItems` and `maxItems`.
+- **Tuple items**: `prefixItems` has no tag form; set `PrefixItems` on `tool.Schema` directly or use `function.WithInputSchema(customInputSchema)`. MCP tool schemas keep `format`, `minimum`, `maximum`, `minItems`, `maxItems` and `prefixItems` when converted.
+- **Runtime scope**: these keywords are only published to the model. Tool-call arguments are not checked against `format`, `minimum`, `maximum`, `minItems`, `maxItems` or `prefixItems` locally, so validate them in the tool if a call must be rejected.
 - **Note**: the `jsonschema` tag uses comma `,` as the separator, so **the description value must not contain `,`**; otherwise it will be parsed as multiple tag items.
 - **Note**: `pattern` is subject to the same comma separator limitation. If the regular expression itself needs commas, use `function.WithInputSchema(customInputSchema)` to define the schema directly.
 - **Runtime compatibility**: tool-call sanitization enforces `pattern` with Go `regexp`, not strict JSON Schema ECMA-262 regular expressions. Patterns that cannot compile with Go `regexp` are treated as non-enforcing at runtime.

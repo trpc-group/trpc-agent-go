@@ -13,6 +13,7 @@ package tool
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -191,6 +192,9 @@ func applyFieldTags(fieldType reflect.Type, tag reflect.StructTag, schema *tool.
 //   - description=xxx
 //   - enum=xxx  (repeatable; type-aware conversion)
 //   - pattern=xxx
+//   - format=xxx  (string and number fields)
+//   - minimum=xxx, maximum=xxx  (number fields)
+//   - minItems=xxx, maxItems=xxx  (slice and array fields)
 //   - required  (standalone flag)
 func parseJSONSchemaTag(fieldType reflect.Type, tag reflect.StructTag, schema *tool.Schema) (bool, error) {
 	jsonSchemaTag := tag.Get("jsonschema")
@@ -229,8 +233,66 @@ func applyKVTag(fieldType reflect.Type, key, value string, schema *tool.Schema) 
 			return fmt.Errorf("pattern tag unsupported for field type: %v", fieldType)
 		}
 		schema.Pattern = value
+	case "format":
+		if !isStringFieldType(fieldType) && !isNumberFieldType(fieldType) {
+			return fmt.Errorf("format tag unsupported for field type: %v", fieldType)
+		}
+		schema.Format = value
+	case "minimum", "maximum":
+		if !isNumberFieldType(fieldType) {
+			return fmt.Errorf("%s tag unsupported for field type: %v", key, fieldType)
+		}
+		v, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("parse %s value %v to float64 failed: %w", key, value, err)
+		}
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Errorf("%s value %v must be a finite number", key, value)
+		}
+		if key == "minimum" {
+			schema.Minimum = &v
+		} else {
+			schema.Maximum = &v
+		}
+	case "minItems", "maxItems":
+		if !isArrayFieldType(fieldType) {
+			return fmt.Errorf("%s tag unsupported for field type: %v", key, fieldType)
+		}
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse %s value %v to int failed: %w", key, value, err)
+		}
+		if v < 0 {
+			return fmt.Errorf("%s value %v must not be negative", key, value)
+		}
+		if key == "minItems" {
+			schema.MinItems = &v
+		} else {
+			schema.MaxItems = &v
+		}
 	}
 	return nil
+}
+
+func isNumberFieldType(fieldType reflect.Type) bool {
+	for fieldType.Kind() == reflect.Ptr {
+		fieldType = fieldType.Elem()
+	}
+	switch fieldType.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func isArrayFieldType(fieldType reflect.Type) bool {
+	for fieldType.Kind() == reflect.Ptr {
+		fieldType = fieldType.Elem()
+	}
+	return fieldType.Kind() == reflect.Slice || fieldType.Kind() == reflect.Array
 }
 
 func isStringFieldType(fieldType reflect.Type) bool {

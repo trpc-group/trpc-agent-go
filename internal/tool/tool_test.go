@@ -11,6 +11,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -741,6 +742,70 @@ func TestGenerateJSONSchema_JSONSchemaTag_PatternNonStringIgnored(t *testing.T) 
 	countSchema := result.Properties["count"]
 	require.Equal(t, "integer", countSchema.Type)
 	require.Empty(t, countSchema.Pattern)
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_ValueConstraints(t *testing.T) {
+	type TestStruct struct {
+		When  string    `json:"when" jsonschema:"format=date-time"`
+		Count *int      `json:"count,omitempty" jsonschema:"format=int32,minimum=0,maximum=100"`
+		Ratio float64   `json:"ratio" jsonschema:"minimum=-1.5"`
+		Tags  []string  `json:"tags" jsonschema:"minItems=0,maxItems=5"`
+		Point [2]string `json:"point" jsonschema:"minItems=2"`
+	}
+
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	require.Equal(t, "date-time", result.Properties["when"].Format)
+
+	count := result.Properties["count"]
+	require.Equal(t, "int32", count.Format)
+	require.NotNil(t, count.Minimum)
+	require.NotNil(t, count.Maximum)
+	require.Equal(t, 0.0, *count.Minimum)
+	require.Equal(t, 100.0, *count.Maximum)
+
+	ratio := result.Properties["ratio"]
+	require.NotNil(t, ratio.Minimum)
+	require.Equal(t, -1.5, *ratio.Minimum)
+	require.Nil(t, ratio.Maximum)
+
+	tags := result.Properties["tags"]
+	require.NotNil(t, tags.MinItems)
+	require.NotNil(t, tags.MaxItems)
+	require.Equal(t, 0, *tags.MinItems)
+	require.Equal(t, 5, *tags.MaxItems)
+
+	require.NotNil(t, result.Properties["point"].MinItems)
+	require.Equal(t, 2, *result.Properties["point"].MinItems)
+
+	data, err := json.Marshal(count)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"type":"integer","format":"int32","minimum":0,"maximum":100}`, string(data))
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_ValueConstraintsWrongTypeIgnored(t *testing.T) {
+	type TestStruct struct {
+		Name  string  `json:"name" jsonschema:"minimum=1"`
+		Count int     `json:"count" jsonschema:"minItems=1"`
+		Flag  bool    `json:"flag" jsonschema:"format=date"`
+		Tags  []int   `json:"tags" jsonschema:"maxItems=-1"`
+		Ratio float64 `json:"ratio" jsonschema:"minimum=NaN,maximum=Inf"`
+	}
+
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	require.Nil(t, result.Properties["name"].Minimum)
+	require.Nil(t, result.Properties["count"].MinItems)
+	require.Empty(t, result.Properties["flag"].Format)
+	require.Nil(t, result.Properties["tags"].MaxItems)
+	require.Nil(t, result.Properties["ratio"].Minimum)
+	require.Nil(t, result.Properties["ratio"].Maximum)
+	_, err := json.Marshal(result)
+	require.NoError(t, err)
+
+	data, err := json.Marshal(result.Properties["name"])
+	require.NoError(t, err)
+	require.JSONEq(t, `{"type":"string"}`, string(data))
 }
 
 func TestGenerateJSONSchema_JSONSchemaTag_IntEnum(t *testing.T) {
