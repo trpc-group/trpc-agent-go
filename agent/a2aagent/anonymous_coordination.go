@@ -155,7 +155,7 @@ func (s *anonymousCookieState) stateInitializer() (
 	if s == nil || s.sessionService == nil {
 		return nil, session.Key{}, false
 	}
-	initializer, ok := s.sessionService.(session.StateInitializationService)
+	initializer, ok := availableStateInitializationService(s.sessionService)
 	if !ok {
 		return nil, session.Key{}, false
 	}
@@ -164,6 +164,20 @@ func (s *anonymousCookieState) stateInitializer() (
 		return nil, session.Key{}, false
 	}
 	return initializer, key, true
+}
+
+func availableStateInitializationService(
+	service session.Service,
+) (session.StateInitializationService, bool) {
+	initializer, ok := service.(session.StateInitializationService)
+	if !ok {
+		return nil, false
+	}
+	availability, reportsAvailability := service.(session.StateInitializationAvailability)
+	if reportsAvailability && !availability.StateInitializationAvailable() {
+		return nil, false
+	}
+	return initializer, true
 }
 
 func (s *anonymousCookieState) usesCanonicalRecord() bool {

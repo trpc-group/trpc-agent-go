@@ -297,6 +297,10 @@ func wrapOptionalInterfaces(base *Service, inner session.Service) session.Servic
 	if !ok {
 		return wrapped
 	}
+	if availability, ok := inner.(session.StateInitializationAvailability); ok &&
+		!availability.StateInitializationAvailable() {
+		return wrapped
+	}
 	return wrapStateInitializationInterface(wrapped, initializer)
 }
 

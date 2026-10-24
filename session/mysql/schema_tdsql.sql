@@ -1,8 +1,12 @@
 -- TDSQL MySQL Session Service Schema
 -- Replace {{PREFIX}} with the configured table prefix.
+-- The Go initializer keeps prefixed index names up to MySQL's 64-character
+-- limit and uses deterministic table-scoped fallback names when a prefix would
+-- make an index name longer (for example,
+-- idx_session_states_state_init_active).
 --
 -- Sharding strategy:
---   - 5 session/user scoped tables: shardkey = user_id
+--   - 6 session/user scoped tables: shardkey = user_id
 --   - app_states: broadcast table (noshardkey_allset), full copy on every node.
 --     Small dataset, infrequently updated, no need to shard.
 --
@@ -34,10 +38,29 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
     `deleted_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    `state_initialization_active` TINYINT NULL DEFAULT NULL,
     PRIMARY KEY (`id`, `user_id`),
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
+    UNIQUE KEY `idx_{{PREFIX}}session_states_state_init_active` (`app_name`,`user_id`,`session_id`,`state_initialization_active`),
     KEY `idx_{{PREFIX}}session_states_list` (`app_name`,`user_id`,`updated_at`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
+
+-- ============================================================================
+-- Table: state_initialization_leases
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`, `user_id`),
+    UNIQUE KEY `idx_{{PREFIX}}state_initialization_leases_uniq` (`coordination_key`,`user_id`),
+    KEY `idx_{{PREFIX}}state_initialization_leases_exp` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
 
 -- ============================================================================

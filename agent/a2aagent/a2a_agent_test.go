@@ -819,6 +819,18 @@ func TestA2AAgent_CoordinatedCookieStateUsesPrivateSessionSnapshots(
 		)
 	require.Same(t, transientSession, transientSnapshot)
 	require.Same(t, transientSession, transientPersistentSnapshot)
+
+	unavailableService := &unavailableStateInitializationService{
+		Service: service,
+	}
+	unavailableSnapshot, unavailablePersistentSnapshot :=
+		isolateCoordinatedAnonymousCookieSessions(
+			persistentSession,
+			persistentSession,
+			unavailableService,
+		)
+	require.Same(t, persistentSession, unavailableSnapshot)
+	require.Same(t, persistentSession, unavailablePersistentSnapshot)
 }
 
 func TestA2AAgent_TransientAnonymousCookieRemainsSharedWithCapableService(
@@ -1870,6 +1882,18 @@ func TestAnonymousCookieRequestHandlerStrictCoordinationPreflight(t *testing.T) 
 				session.NewSession("app", "user-1", "session-a"),
 				session.NewSession("app", "user-1", "session-a"),
 				&sessionServiceWithoutStateInitialization{
+					Service: sessionmemory.NewSessionService(),
+				},
+				stateKey,
+				scope,
+			),
+		},
+		{
+			name: "unavailable session service",
+			state: newAnonymousCookieState(
+				session.NewSession("app", "user-1", "session-a"),
+				session.NewSession("app", "user-1", "session-a"),
+				&unavailableStateInitializationService{
 					Service: sessionmemory.NewSessionService(),
 				},
 				stateKey,
@@ -7427,6 +7451,27 @@ type observingStateInitializationService struct {
 
 type sessionServiceWithoutStateInitialization struct {
 	session.Service
+}
+
+type unavailableStateInitializationService struct {
+	session.Service
+	calls atomic.Int32
+}
+
+func (s *unavailableStateInitializationService) StateInitializationAvailable() bool {
+	return false
+}
+
+func (s *unavailableStateInitializationService) LoadOrInitializeSessionState(
+	context.Context,
+	session.Key,
+	string,
+	func([]byte) bool,
+	func(context.Context) ([]byte, error),
+	...session.StateInitializationProjection,
+) ([]byte, bool, error) {
+	s.calls.Add(1)
+	return nil, false, errors.New("unavailable initializer was called")
 }
 
 type failingStateInitializationService struct {
