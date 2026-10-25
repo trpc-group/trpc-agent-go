@@ -39,9 +39,8 @@ type ServiceOpts struct {
 	maxSearchResults int
 	// keyPrefix is the prefix for all redis keys.
 	// If set, all keys will be prefixed with this value
-	// followed by a colon. For example, if keyPrefix is
-	// "myapp", key "mem:{app:user}" becomes
-	// "myapp:mem:{app:user}".
+	// followed by a colon. For example, "myapp" prefixes every
+	// memory key with "myapp:".
 	keyPrefix string
 
 	// Tool related settings.
@@ -263,9 +262,8 @@ func WithDisableAutoMemoryOnExternalContext(disable bool) ServiceOpt {
 
 // WithKeyPrefix sets the prefix for all redis keys.
 // If set, all keys will be prefixed with this value
-// followed by a colon. For example, if keyPrefix is
-// "myapp", key "mem:{app:user}" becomes
-// "myapp:mem:{app:user}".
+// followed by a colon. For example, "myapp" prefixes every memory
+// key with "myapp:". A prefix ending in a colon does not add another colon.
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix
