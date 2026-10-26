@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
@@ -625,7 +626,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 			p.attachmentBudget,
 		)
 	}
-	toolCalls := llmResponse.Choices[0].Message.ToolCalls
+	toolCalls := modelreplay.ToolCallsForExecution(llmResponse.Choices[0].Message)
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
 	if p.enableParallelTools {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
@@ -818,7 +819,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			p.attachmentBudget,
 		)
 	}
-	toolCalls := llmResponse.Choices[0].Message.ToolCalls
+	toolCalls := modelreplay.ToolCallsForExecution(llmResponse.Choices[0].Message)
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
 	if p.enableParallelTools && len(toolCalls) > 1 {

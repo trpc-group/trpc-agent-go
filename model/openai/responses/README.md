@@ -95,7 +95,13 @@ repair, before it is emitted, stored, or used to execute tools. After-model
 callbacks and plugins may observe a native response, but editing, rebinding,
 moving, dropping, or replacing its native records fails the call before any
 tool runs. Adding or removing choices is also rejected. Return an error from
-the callback to block such a response. Legacy
+the callback to block such a response. Before-model callbacks receive detached
+native history projections: edits to those projections leave the stored native
+records and Graph input unchanged, and retaining Replay on an edited projection
+rejects the request. Before-tool callbacks receive separate execution
+arguments, so in-place edits and `ModifiedArguments` can affect the tool without
+rewriting the original native call or its replay binding. The next model request
+retains the original call and pairs its result with the same call ID. Legacy
 responses keep the existing callback override behavior. Graph state
 copies, checkpoints, and cache keys preserve native records. Direct callers of
 other adapters must also avoid passing native records they cannot consume. A

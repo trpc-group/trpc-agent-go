@@ -2287,6 +2287,13 @@ func generateModelStream(
 	request *model.Request,
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
+	if request != nil && modelreplay.MessagesHaveReplay(request.Messages) {
+		if err := modelreplay.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return modelResponseStream{}, err
+		}
+	}
 	// Generate content.
 	if iterModel, ok := llmModel.(model.IterModel); ok {
 		seq, err := iterModel.GenerateContentIter(ctx, request)
@@ -5544,7 +5551,7 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 		switch m.Role {
 		case model.RoleAssistant:
 			if len(m.ToolCalls) > 0 {
-				return m.ToolCalls, nil
+				return modelreplay.ToolCallsForExecution(m), nil
 			}
 		case model.RoleUser:
 			// Stop scanning when we encounter a user message.

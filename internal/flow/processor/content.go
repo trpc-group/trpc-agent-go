@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
@@ -1645,6 +1646,11 @@ func cloneEventForContentSnapshot(evt event.Event) event.Event {
 	cloned := evt
 	if evt.Response != nil {
 		cloned.Response = evt.Response.Clone()
+		for i := range cloned.Response.Choices {
+			choice := &cloned.Response.Choices[i]
+			choice.Message = modelreplay.CloneMessage(choice.Message)
+			choice.Delta = modelreplay.CloneMessage(choice.Delta)
+		}
 	}
 	if evt.LongRunningToolIDs != nil {
 		cloned.LongRunningToolIDs = make(map[string]struct{}, len(evt.LongRunningToolIDs))
