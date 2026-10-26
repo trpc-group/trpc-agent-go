@@ -50,6 +50,10 @@ after JSON persistence. This detects inconsistent edits; it is not an
 authentication signature. Applications should treat replay data as sensitive
 conversation state despite its opaque encoding.
 
+Persisted replay metadata with an unsupported version or invalid format must
+not be silently dropped. Redis readers return these decoding errors while
+keeping their existing skip policy for malformed legacy history.
+
 History processing treats each native record as one output unit: empty
 records, item order, reasoning, call order, and call IDs are preserved, native
 assistant messages are not merged with their neighbors, and their reasoning is
