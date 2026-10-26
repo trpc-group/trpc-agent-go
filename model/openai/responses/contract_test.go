@@ -33,6 +33,36 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestInvalidSchemaEncodingReturnsSynchronousError(t *testing.T) {
+	for _, callback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("request_callback=%t", callback), func(t *testing.T) {
+			var calls atomic.Int32
+			opts := []Option{WithAPIKey("test"), WithOpenAIOptions(
+				option.WithMaxRetries(0),
+				option.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					calls.Add(1)
+					return nil, fmt.Errorf("unexpected HTTP request")
+				})}),
+			)}
+			if callback {
+				opts = append(opts, WithRequestCallback(func(context.Context, *responses.ResponseNewParams) {}))
+			}
+			m := New("test-model", opts...)
+			request := &model.Request{Messages: []model.Message{model.NewUserMessage("hello")}}
+			request.StructuredOutput = &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{Schema: map[string]any{
+					"type": "object", "invalid": func() {},
+				}},
+			}
+			ch, err := m.GenerateContent(context.Background(), request)
+			require.Error(t, err)
+			require.Nil(t, ch)
+			require.Zero(t, calls.Load())
+		})
+	}
+}
+
 type capturedRequest struct {
 	body   map[string]any
 	header http.Header

@@ -91,9 +91,11 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: snapshot request parameters: %w", err)
 	}
-	m.runRequestCallback(ctx, &params)
-	if err := validateCallbackParams(beforeCallback, params); err != nil {
-		return nil, err
+	if m.requestCallback != nil {
+		m.runRequestCallback(ctx, &params)
+		if err := validateCallbackParams(beforeCallback, params); err != nil {
+			return nil, err
+		}
 	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
