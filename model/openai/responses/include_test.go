@@ -52,7 +52,11 @@ func TestExtraIncludeUnionIsSentAndLeavesCallerDataUnchanged(t *testing.T) {
 	var sawCacheKey, sawMetadata bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]json.RawMessage
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode responses request: %v", err)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
 		includes = append(includes, append(json.RawMessage(nil), body["include"]...))
 		if string(body["prompt_cache_key"]) == `"cache-1"` {
 			sawCacheKey = true
@@ -60,11 +64,7 @@ func TestExtraIncludeUnionIsSentAndLeavesCallerDataUnchanged(t *testing.T) {
 		if string(body["metadata"]) == `{"source":"request"}` {
 			sawMetadata = true
 		}
-		var request struct {
-			Stream bool `json:"stream"`
-		}
-		require.NoError(t, json.Unmarshal(mustJSON(t, body), &request))
-		if request.Stream {
+		if string(body["stream"]) == "true" {
 			writeSSE(w, `{"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}`)
 			return
 		}
