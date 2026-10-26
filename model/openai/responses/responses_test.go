@@ -243,7 +243,7 @@ func TestNonStreamingIncompleteDoesNotBecomeSuccessful(t *testing.T) {
 }
 
 func TestExtraFieldsAndCallbackCannotOverrideManagedState(t *testing.T) {
-	for _, key := range []string{"model", "input", "stream", "store", "include", "tools.0", "previous_response_id", "conversation.id", "background"} {
+	for _, key := range []string{"model", "input", "stream", "store", "tools.0", "previous_response_id", "conversation.id", "background"} {
 		m := New("gpt-5", WithExtraFields(map[string]any{key: "bad"}))
 		_, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 		require.ErrorContains(t, err, "cannot override managed request state")

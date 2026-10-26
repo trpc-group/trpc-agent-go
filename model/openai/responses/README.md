@@ -18,8 +18,13 @@ See [the chat and Runner examples](../../../examples/openairesponses).
 - Text, reasoning summaries, refusals, and ordered local function calls.
 - Input text, images, and files; JSON schema output and supported generation
   parameters. Tool declarations are sent as non-strict function schemas.
-- Streaming text/reasoning previews, followed by one authoritative completed
-  response. Tool calls are exposed only in that completed response.
+- Streaming text, refusal, and reasoning previews, followed by one
+  authoritative completed response. Tool calls are exposed only in that
+  completed response. A completed response whose output array is empty is
+  valid only when the stream has not already shown output. Non-empty text,
+  refusal, and reasoning deltas, and native or function-call output events,
+  make that empty completion an error. Earlier previews remain previews; they
+  are not rebuilt into the final message, native items, or tool calls.
 - API errors and incomplete/failed/cancelled responses produce error responses.
   Malformed streams and EOF without a terminal response are errors. Cancelling
   the request context closes the stream without committing partial calls.
@@ -39,9 +44,11 @@ all other item fields must agree. The adapter still waits for a valid
 
 Each completed response stores its entire ordered output array, including
 opaque encrypted reasoning, annotations, item IDs, and message phase, in
-`Message.Replay`. The adapter never synthesizes reasoning IDs or rebuilds
-native output from a reasoning summary. It explicitly requests encrypted
-reasoning so stateless continuation can retain provider state.
+`Message.Replay`. The adapter never synthesizes reasoning IDs, native items,
+or tool calls from streamed deltas or a reasoning summary. It explicitly
+requests encrypted reasoning so stateless continuation can retain provider
+state. Additional include names are unioned with that required item and cannot
+replace it.
 
 The other `Message` fields are read-only projections for UI and local tool
 execution. The framework records a fingerprint when binding native output;
@@ -172,13 +179,36 @@ remote storage only; the adapter still sends full history. The caller owns its
 session service and must keep draining the response channel or cancel the
 request context.
 
-`WithExtraFields` accepts ordinary dot-separated JSON paths for additional
-parameters such as `reasoning.summary` and `tool_choice`; colon prefixes and
-backslash escapes are rejected. Managed model/input/tools/storage/continuation
-fields are protected. The request callback may tune other typed
-parameters; response and stream callbacks are read-only observers. Callbacks
-must not retain mutable arguments. Low-level `WithOpenAIOptions` middleware can
-bypass validation, so applications must preserve the managed-state contract.
+`WithExtraFields` and `Request.ExtraFields` accept ordinary dot-separated JSON
+paths for additional parameters such as `reasoning.summary` and `tool_choice`.
+Colon prefixes and backslash escapes are rejected. Managed model, input, tool,
+storage, and continuation fields stay protected.
+
+The exact field `include` is additive, unlike other extra fields where a
+request value replaces a model value. A missing value, nil, or an empty list
+adds no names. Any other value must be an array of nonempty strings, given as `[]string`, a
+decoded `[]any` of strings, or another slice or array of a string type. A Go
+string or byte slice is rejected. The adapter copies those names and does not
+modify the caller's maps or arrays. The wire value is
+`reasoning.encrypted_content`, then names from the model option, then names
+from the request, without duplicates; the first occurrence wins. High-level
+fields cannot remove `reasoning.encrypted_content`. Nested, indexed, and alias
+include paths are rejected before the request is sent. Supplying an include
+name does not add logprobs mapping, hosted tools, or server-managed
+conversation state.
+
+```go
+m := responses.New(modelName, responses.WithExtraFields(map[string]any{
+    "include": []string{"message.output_text.logprobs"},
+}))
+// Request.ExtraFields["include"] can add further names for one call.
+```
+
+The request callback sees that merged include list and cannot change it.
+Response and stream callbacks are read-only observers. Callbacks must not
+retain mutable arguments. Low-level `WithOpenAIOptions` can bypass validation,
+including by replacing `include`, so callers that use it must preserve the
+managed-state contract themselves.
 
 The tests use local HTTP fixtures and a real SQLite close/reopen cycle. They do
 not demonstrate access to any live model, account, or compatible gateway.

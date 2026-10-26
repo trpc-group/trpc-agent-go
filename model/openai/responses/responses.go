@@ -158,7 +158,7 @@ func (m *Model) handleNonStreaming(
 func (m *Model) requestOptions(request *model.Request) []option.RequestOption {
 	var opts []option.RequestOption
 	for key, value := range m.extraFields {
-		if key == "tool_choice" {
+		if skipJSONExtraField(key) {
 			continue
 		}
 		opts = append(opts, option.WithJSONSet(key, value))
@@ -167,7 +167,7 @@ func (m *Model) requestOptions(request *model.Request) []option.RequestOption {
 		return opts
 	}
 	for key, value := range request.ExtraFields {
-		if key == "tool_choice" {
+		if skipJSONExtraField(key) {
 			continue
 		}
 		opts = append(opts, option.WithJSONSet(key, value))
@@ -176,6 +176,13 @@ func (m *Model) requestOptions(request *model.Request) []option.RequestOption {
 		opts = append(opts, option.WithHeader(key, value))
 	}
 	return opts
+}
+
+// skipJSONExtraField reports keys consumed while building typed parameters.
+// Applying them again with sjson would replace those typed values. In
+// particular, a raw include value would discard the merged include list.
+func skipJSONExtraField(key string) bool {
+	return key == "tool_choice" || key == extraFieldInclude
 }
 
 func (m *Model) runRequestCallback(ctx context.Context, params *responses.ResponseNewParams) {

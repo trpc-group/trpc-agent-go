@@ -105,6 +105,10 @@ type streamAccumulator struct {
 	id        string
 	created   int64
 	doneItems map[int64]responses.ResponseOutputItemUnion
+	// outputObserved means a non-empty preview or native output event was
+	// seen. It is evidence only: it is not a transcript, a native item, or a
+	// tool call.
+	outputObserved bool
 }
 
 func handleStreamEvent(
@@ -124,11 +128,13 @@ func handleStreamEvent(
 		if event.Delta == "" {
 			return false, true
 		}
+		acc.outputObserved = true
 		return false, emit(projectPartial(modelName, acc, event.Delta, ""))
 	case eventResponseReasoningSummaryDelta, eventResponseReasoningTextDelta:
 		if event.Delta == "" {
 			return false, true
 		}
+		acc.outputObserved = true
 		return false, emit(projectPartial(modelName, acc, "", event.Delta))
 	case eventResponseOutputItemDone:
 		index := event.OutputIndex
@@ -140,10 +146,53 @@ func handleStreamEvent(
 		}
 		acc.doneItems[index] = event.Item
 		return false, true
+	case eventResponseCompleted, eventResponseIncomplete, eventResponseFailed, eventResponseCancelled, eventError:
+		return handleTerminalStreamEvent(modelName, acc, event, emit)
+	case eventResponseOutputItemAdded:
+		// The item stays private until response.completed. Its presence still
+		// shows that native output was produced.
+		if outputItemObserved(event.Item) {
+			acc.outputObserved = true
+		}
+		return false, true
+	case eventResponseFunctionCallArgsDelta:
+		if event.Delta != "" {
+			acc.outputObserved = true
+		}
+		return false, true
+	case eventResponseFunctionCallArgsDone:
+		// Arguments stay private until response.completed supplies the complete
+		// item. A call name, argument payload, or item ID still shows that a
+		// function call was produced.
+		if event.Name != "" || event.Arguments != "" || event.ItemID != "" {
+			acc.outputObserved = true
+		}
+		return false, true
+	default:
+		// Non-terminal extension and keepalive events do not affect the projection.
+		return false, true
+	}
+}
+
+// handleTerminalStreamEvent projects a terminal stream event. A response is
+// committed only for a valid completed snapshot.
+func handleTerminalStreamEvent(
+	modelName string,
+	acc *streamAccumulator,
+	event *responses.ResponseStreamEventUnion,
+	emit func(*model.Response) bool,
+) (bool, bool) {
+	switch event.Type {
 	case eventResponseCompleted:
 		resp := event.Response
 		if resp.Status != responses.ResponseStatusCompleted {
 			return true, emit(responseStatusError(&resp))
+		}
+		// Done-item mismatches keep their existing errors. When no done item
+		// was recorded, an empty snapshot cannot override output already seen.
+		// The preview is not promoted into a message, native item, or tool call.
+		if len(acc.doneItems) == 0 && len(resp.Output) == 0 && acc.outputObserved {
+			return true, emit(apiErrorResponse(errors.New("openai/responses: response.completed output is empty after streamed output")))
 		}
 		output, err := completedStreamItems(acc.doneItems, resp.Output)
 		if err != nil {
@@ -164,14 +213,7 @@ func handleStreamEvent(
 			message = "responses stream did not complete"
 		}
 		return true, emit(apiErrorResponse(errors.New(message)))
-	case eventResponseOutputItemAdded,
-		eventResponseFunctionCallArgsDelta,
-		eventResponseFunctionCallArgsDone:
-		// Function call arguments stay private until response.completed supplies
-		// the complete item and its final status.
-		return false, true
 	default:
-		// Non-terminal extension and keepalive events do not affect the projection.
 		return false, true
 	}
 }
@@ -215,6 +257,10 @@ func completedStreamItems(
 		}
 	}
 	return output, nil
+}
+
+func outputItemObserved(item responses.ResponseOutputItemUnion) bool {
+	return item.Type != "" || item.ID != "" || item.CallID != "" || item.Name != ""
 }
 
 func projectPartial(modelName string, acc *streamAccumulator, delta, reasoningDelta string) *model.Response {

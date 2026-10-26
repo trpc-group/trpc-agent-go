@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,6 +212,59 @@ func TestRunnerDoesNotExecuteOrPersistUncommittedStreamCalls(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunnerRejectsInconsistentEmptyCompletionWithoutToolSideEffects(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var toolCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeSSE(w,
+			`{"type":"response.created","response":{"id":"resp_inconsistent","status":"in_progress"}}`,
+			`{"type":"response.output_text.delta","delta":"hello"}`,
+			`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_inconsistent","call_id":"call_inconsistent","name":"calculator","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","delta":"{\"a\":1}"}`,
+			`{"type":"response.function_call_arguments.done","name":"calculator","arguments":"{\"a\":1}"}`,
+			`{"type":"response.completed","response":{"id":"resp_inconsistent","status":"completed","output":[]}}`,
+		)
+	}))
+	defer srv.Close()
+	svc := inmemory.NewSessionService()
+	defer svc.Close()
+	a := llmagent.New("native",
+		llmagent.WithModel(New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+		llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}),
+	)
+	r := runner.NewRunner("native", a, runner.WithSessionService(svc))
+	defer r.Close()
+	var sawInconsistent bool
+	for _, evt := range runIntegration(t, r, ctx, "calculate") {
+		if evt.Error != nil && strings.Contains(evt.Error.Message, "empty after streamed output") {
+			sawInconsistent = true
+		}
+	}
+	require.True(t, sawInconsistent)
+	require.Zero(t, toolCalls.Load())
+	sess, err := svc.GetSession(ctx, session.Key{AppName: "native", UserID: "user", SessionID: "session"})
+	require.NoError(t, err)
+	encoded, err := json.Marshal(sess.Events)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "call_inconsistent")
+	require.NotContains(t, string(encoded), "fc_inconsistent")
+	for _, evt := range sess.Events {
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			require.Empty(t, choice.Message.ToolCalls)
+			require.Empty(t, choice.Delta.ToolCalls)
+			require.Nil(t, choice.Message.Replay)
+			require.Nil(t, choice.Delta.Replay)
+			require.NotEqual(t, model.RoleTool, choice.Message.Role)
+			require.NotEqual(t, model.RoleTool, choice.Delta.Role)
+		}
 	}
 }
 

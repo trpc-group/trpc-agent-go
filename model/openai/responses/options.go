@@ -20,8 +20,9 @@ import (
 const defaultChannelBufferSize = 256
 
 // RequestCallbackFunc is invoked with the Responses request params
-// before the HTTP call. Changes to managed history, model, storage, tool, and
-// continuation fields are rejected. Callbacks must not retain mutable params.
+// before the HTTP call. Changes to managed history, model, storage, tool,
+// include, and continuation fields are rejected. Include is already the merged
+// list that will be sent. Callbacks must not retain mutable params.
 type RequestCallbackFunc func(ctx context.Context, params *responses.ResponseNewParams)
 
 // ResponseCallbackFunc observes the non-stream Responses object before mapping.
@@ -117,6 +118,17 @@ func WithOpenAIOptions(opts ...option.RequestOption) Option {
 // Keys may use ordinary dot-separated JSON paths, so "reasoning.effort" is
 // valid. Colon prefixes and backslash escapes are rejected.
 // Managed fields such as input, tools, and previous_response_id are rejected.
+//
+// The exact key "include" is additive. A nil value or empty list adds no names.
+// Any other value must be an array of nonempty strings: []string, []any
+// containing strings, or another slice or array whose elements are strings.
+// A Go string or []byte is not an include list. Names are copied; the caller's
+// maps and arrays are left unchanged. The sent list is
+// reasoning.encrypted_content, then names from this option, then names from
+// Request.ExtraFields, keeping the first occurrence of each name. These fields
+// cannot remove reasoning.encrypted_content. Nested, indexed, and escaped
+// include paths are rejected. Forwarding an include name does not add logprobs
+// mapping, hosted tools, or server-managed conversation state.
 func WithExtraFields(fields map[string]any) Option {
 	return func(o *options) {
 		if o.extraFields == nil {

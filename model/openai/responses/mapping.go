@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -39,6 +40,10 @@ const (
 	outputTypeReasoning    = "reasoning"
 	contentTypeOutputText  = "output_text"
 	contentTypeRefusal     = "refusal"
+
+	// extraFieldInclude is the only extra-field key consumed as an additive
+	// include list. Nested and indexed paths keep the managed-field rejection.
+	extraFieldInclude = "include"
 )
 
 var officialReasoningEfforts = map[string]shared.ReasoningEffort{
@@ -110,12 +115,14 @@ func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
+	include, err := mergeIncludes(m.extraFields, request.ExtraFields)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
 	params := responses.ResponseNewParams{
-		Model: shared.ResponsesModel(m.name),
-		Store: openai.Bool(m.store),
-		Include: []responses.ResponseIncludable{
-			responses.ResponseIncludableReasoningEncryptedContent,
-		},
+		Model:   shared.ResponsesModel(m.name),
+		Store:   openai.Bool(m.store),
+		Include: include,
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: items,
 		},
@@ -156,6 +163,11 @@ func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams
 
 func validateExtraFields(fields map[string]any) error {
 	for key := range fields {
+		// The exact key is parsed into the typed include list. A trimmed,
+		// nested, indexed, or escaped variant is not that key.
+		if key == extraFieldInclude {
+			continue
+		}
 		path := strings.TrimSpace(key)
 		// sjson treats a leading colon as a path modifier and backslashes as
 		// escape characters. Reject those forms instead of trying to infer the
@@ -175,6 +187,77 @@ func validateExtraFields(fields map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// mergeIncludes returns the include list sent on the wire. The required
+// encrypted-reasoning item is first, then model-level names, then
+// request-level names. Duplicates keep the earliest occurrence. Nil and empty
+// additions contribute nothing. Caller-owned maps and arrays are not modified.
+func mergeIncludes(modelFields, requestFields map[string]any) ([]responses.ResponseIncludable, error) {
+	names := []string{string(responses.ResponseIncludableReasoningEncryptedContent)}
+	seen := map[string]struct{}{names[0]: {}}
+	for _, fields := range []map[string]any{modelFields, requestFields} {
+		extra, err := extraIncludeNames(fields)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range extra {
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	include := make([]responses.ResponseIncludable, len(names))
+	for i, name := range names {
+		include[i] = responses.ResponseIncludable(name)
+	}
+	return include, nil
+}
+
+func extraIncludeNames(fields map[string]any) ([]string, error) {
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	raw, ok := fields[extraFieldInclude]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	return parseIncludeNames(raw)
+}
+
+// parseIncludeNames accepts a JSON string array represented as []string,
+// []any containing strings, or any other slice or array whose elements are
+// strings. It copies the names and does not retain or modify raw.
+func parseIncludeNames(raw any) ([]string, error) {
+	value := reflect.ValueOf(raw)
+	if !value.IsValid() {
+		return nil, nil
+	}
+	switch value.Kind() {
+	case reflect.Slice, reflect.Array:
+	default:
+		return nil, fmt.Errorf("openai/responses: include must be an array of nonempty strings")
+	}
+	if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.Uint8 {
+		return nil, fmt.Errorf("openai/responses: include must be an array of nonempty strings")
+	}
+	names := make([]string, 0, value.Len())
+	for i := 0; i < value.Len(); i++ {
+		elem := value.Index(i)
+		if elem.Kind() == reflect.Interface {
+			if elem.IsNil() {
+				return nil, fmt.Errorf("openai/responses: include[%d] must be a nonempty string", i)
+			}
+			elem = elem.Elem()
+		}
+		if !elem.IsValid() || elem.Kind() != reflect.String || elem.String() == "" {
+			return nil, fmt.Errorf("openai/responses: include[%d] must be a nonempty string", i)
+		}
+		names = append(names, elem.String())
+	}
+	return names, nil
 }
 
 func applyToolChoice(params *responses.ResponseNewParams, fields map[string]any) error {
