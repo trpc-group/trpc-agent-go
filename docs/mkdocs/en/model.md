@@ -2219,11 +2219,15 @@ to preserve the default clean text-streaming behavior.
 
 ## OpenAI Responses API
 
-Use `responses.New` for the OpenAI Responses API, including client-managed history and local function tools. Keep `openai.New` for Chat Completions. The adapter is opt-in and lives in an independent module that requires Go 1.25. The root module stays on Go 1.21, and existing Chat Completions defaults stay in place. Import the adapter from a module whose `go` line is 1.25 or newer.
+Use `model/openai/responses` to access the OpenAI Responses API for conversations, streaming output, and function calling. Create a model with `responses.New` and pass it to `LLMAgent`.
+
+The adapter is a separate Go module that requires Go 1.25 or newer. For the Chat Completions API, continue using `openai.New` from `model/openai`.
 
 ### Environment and minimal integration
 
-The OpenAI SDK reads `OPENAI_API_KEY` when `responses.WithAPIKey` is omitted, and `OPENAI_BASE_URL` when `responses.WithBaseURL` is omitted. The SDK default base URL is `https://api.openai.com/v1`. The complete program below disables streaming and prints the completed assistant message. The runnable examples cover streaming, non-streaming, and a local calculator. Keep draining the event channel until it closes, or cancel the run context.
+The OpenAI SDK reads `OPENAI_API_KEY` when `responses.WithAPIKey` is omitted, and `OPENAI_BASE_URL` when `responses.WithBaseURL` is omitted. The default base URL is `https://api.openai.com/v1`.
+
+The example below creates a non-streaming chat agent and prints the assistant's reply. When using Runner, keep reading the event channel until it closes, or cancel the run context.
 
 ```go
 package main
@@ -2302,7 +2306,7 @@ Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Ca
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.Replay`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
 - Downstream modules need a root release that contains `Message.Replay` and `Info.ReplayProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
-- `Runner` executes local calls from the completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
+- Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, and recovery are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/responses/README.md).
 
 ## Anthropic Model

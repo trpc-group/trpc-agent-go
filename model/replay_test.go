@@ -12,6 +12,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -79,6 +80,30 @@ func TestReplayDataSurvivesMessageJSON(t *testing.T) {
 	require.JSONEq(t, string(payload), string(replayed))
 	require.Equal(t, msg.Content, restored.Content)
 	require.Equal(t, msg.ToolCalls, restored.ToolCalls)
+}
+
+func TestReplayDataReadsV1HistoryFixture(t *testing.T) {
+	// Keep this fixture and its fingerprint fixed. Generating both with the
+	// current encoder would miss changes that invalidate persisted v1 history.
+	stored, err := os.ReadFile("testdata/replay_v1.json")
+	require.NoError(t, err)
+	var restored Message
+	require.NoError(t, json.Unmarshal(stored, &restored))
+	payload, err := restored.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.NoError(t, err)
+	require.JSONEq(t, string(replayTestPayload()), string(payload))
+	projection := restored
+	projection.Replay = nil
+	require.Equal(t, replayTestMessage(), projection)
+
+	encoded, err := json.Marshal(restored)
+	require.NoError(t, err)
+	require.JSONEq(t, string(stored), string(encoded))
+	var roundTrip Message
+	require.NoError(t, json.Unmarshal(encoded, &roundTrip))
+	replayed, err := roundTrip.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.NoError(t, err)
+	require.JSONEq(t, string(payload), string(replayed))
 }
 
 func TestReplayDataRejectsProjectionEdits(t *testing.T) {
