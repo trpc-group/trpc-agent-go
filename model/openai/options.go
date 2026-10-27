@@ -423,13 +423,21 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 }
 
 // completionUsageToModelUsage converts openai.CompletionUsage to model.Usage.
+//
+// Besides the OpenAI-standard cached_tokens, the conversion surfaces the prompt
+// cache read and cache write counts that gateways report in
+// prompt_tokens_details. Those counts stay 0 for providers that follow the
+// OpenAI schema strictly.
 func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
+	cacheReadTokens, cacheCreationTokens := usageCacheTokens(usage)
 	return model.Usage{
 		PromptTokens:     int(usage.PromptTokens),
 		CompletionTokens: int(usage.CompletionTokens),
 		TotalTokens:      int(usage.TotalTokens),
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
+			CachedTokens:        int(usage.PromptTokensDetails.CachedTokens),
+			CacheReadTokens:     cacheReadTokens,
+			CacheCreationTokens: cacheCreationTokens,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(usage.CompletionTokensDetails.ReasoningTokens),

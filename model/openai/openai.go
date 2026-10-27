@@ -1827,6 +1827,9 @@ func (m *Model) handleStreamingResponseWithEmitter(
 	}
 
 	// Call the stream complete callback before the final response is emitted.
+	// Provider-specific cache usage is stamped onto the accumulated usage first
+	// so that both the callback and the final response observe it.
+	acc.applyCacheTokens()
 	m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, stream.Err())
 
 	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
@@ -2196,6 +2199,7 @@ func (m *Model) accumulateChunk(
 		sanitizedChunk := sanitizeChunkForAccumulator(chunkForAccumulator)
 		if acc.addChunk(sanitizedChunk) {
 			applyOpenAISDKTokenDetailsAccumulationFix(&acc.acc, chunk)
+			acc.recordCacheTokens(chunk.Usage)
 		}
 
 		if m.accumulateChunkUsage != nil {

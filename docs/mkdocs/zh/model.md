@@ -668,8 +668,8 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 | `CompletionTokens` | 服务方上报的模型输出 token 总量 |
 | `TotalTokens` | 服务方上报的总 token，通常等于 prompt 加 completion |
 | `PromptTokensDetails.CachedTokens` | OpenAI-compatible Prompt Cache 命中的输入 token，通常是 `PromptTokens` 的子集 |
-| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token，主要对应 Anthropic 风格缓存 |
-| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token，主要对应 Anthropic 风格缓存 |
+| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token。网关上报 `prompt_tokens_details.cache_creation_tokens` 时填充 |
+| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token。网关上报 `prompt_tokens_details.cache_read_tokens` 时填充 |
 | `CompletionTokensDetails.ReasoningTokens` | Completion usage 中服务方上报的推理 token |
 | `TimingInfo` | 可选的框架耗时信息，不属于计费 token |
 | `TimingInfo.FirstTokenDuration` | 每次模型调用从请求开始到第一个有效 reasoning、content 或 tool-call chunk 的耗时，多个模型调用会累加 |
@@ -679,6 +679,12 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 `WithAccumulateChunkTokenUsage` 属于 OpenAI-compatible adapter，因此回调
 只会收到上游 OpenAI-compatible 响应和 adapter 映射支持的字段；其他服务方
 专用字段保持为零。
+
+OpenAI-compatible adapter 还会读取网关放在 `prompt_tokens_details` 里的
+Prompt Cache 计数：`cache_read_tokens` 映射到
+`PromptTokensDetails.CacheReadTokens`，`cache_creation_tokens` 映射到
+`PromptTokensDetails.CacheCreationTokens`。严格遵循 OpenAI schema 的服务方
+这两个值保持为 `0`。
 
 `TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
 OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator

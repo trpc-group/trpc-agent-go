@@ -683,8 +683,8 @@ The accumulator state is a complete `model.Usage` value:
 | `CompletionTokens` | Total generated output tokens reported by the provider |
 | `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
 | `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
-| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache, primarily for Anthropic-style caching |
-| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache, primarily for Anthropic-style caching |
+| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache. Populated from `prompt_tokens_details.cache_creation_tokens` when a gateway reports it |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. Populated from `prompt_tokens_details.cache_read_tokens` when a gateway reports it |
 | `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
 | `TimingInfo` | Optional framework timing metadata, not billable token usage |
 | `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
@@ -694,6 +694,12 @@ These fields form a provider-agnostic structure.
 `WithAccumulateChunkTokenUsage` belongs to the OpenAI-compatible adapter, so
 its callback only receives fields that the upstream OpenAI-compatible response
 and adapter mapping support. Other provider-specific fields remain zero.
+
+The OpenAI-compatible adapter also surfaces prompt cache counts that gateways
+report in `prompt_tokens_details`: `cache_read_tokens` maps to
+`PromptTokensDetails.CacheReadTokens`, and `cache_creation_tokens` maps to
+`PromptTokensDetails.CacheCreationTokens`. Providers that follow the OpenAI
+schema strictly leave both counts at `0`.
 
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
