@@ -7,6 +7,8 @@
 //
 //
 
+// Package main demonstrates a local function tool through the OpenAI Responses
+// adapter, LLMAgent, and an in-memory Runner session.
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -30,30 +33,21 @@ import (
 )
 
 func main() {
-	modelName := flag.String("model", envOr("OPENAI_MODEL", "gpt-5"), "OpenAI model name")
-	apiKey := flag.String("api-key", os.Getenv("OPENAI_API_KEY"), "OpenAI API key")
-	baseURL := flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI API base URL")
+	modelName := flag.String("model", "gpt-5", "OpenAI model name")
 	streaming := flag.Bool("streaming", true, "Enable streaming responses")
 	flag.Parse()
-	if strings.TrimSpace(*apiKey) == "" {
-		log.Fatal("set OPENAI_API_KEY or pass -api-key")
-	}
 
-	modelOptions := []responses.Option{
-		responses.WithAPIKey(*apiKey),
-		responses.WithStore(false),
-	}
-	if *baseURL != "" {
-		modelOptions = append(modelOptions, responses.WithBaseURL(*baseURL))
-	}
+	// WithStore(false) is the adapter default: each request sends the full
+	// client-managed history. The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
 	toolAgent := llmagent.New(
 		"responses-tool-agent",
-		llmagent.WithModel(responses.New(*modelName, modelOptions...)),
+		llmagent.WithModel(responses.New(*modelName, responses.WithStore(false))),
 		llmagent.WithDescription("An assistant that can use a local calculator."),
 		llmagent.WithInstruction("Use the calculator for arithmetic. Each call performs one operation; use another call when the answer needs multiple operations."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming}),
 		llmagent.WithTools([]tool.Tool{calculatorTool()}),
 	)
+	// The in-memory session lives only until this process exits.
 	sessions := sessioninmemory.NewSessionService()
 	defer sessions.Close()
 	r := runner.NewRunner(
@@ -83,7 +77,7 @@ func main() {
 			log.Printf("run: %v", err)
 			continue
 		}
-		printEvents(ch, *streaming)
+		printEvents(os.Stdout, ch, *streaming)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("read input: %v", err)
@@ -115,12 +109,30 @@ func calculatorTool() tool.Tool {
 	)
 }
 
-func printEvents(ch <-chan *event.Event, streaming bool) {
-	fmt.Print("Assistant: ")
+// printEvents writes assistant text and committed local tool activity.
+// Streaming assistant text is taken from deltas. The aggregated assistant
+// message is written only when that text was not already streamed. Tool
+// calls are shown only from a completed Message.ToolCalls list, and tool
+// results only from the committed tool message. Partial tool calls, partial
+// tool-result previews, reasoning text, and native Replay payloads are not
+// displayed as completed tool activity.
+func printEvents(w io.Writer, ch <-chan *event.Event, streaming bool) {
+	assistantOpen := false
 	streamedText := false
+	closeAssistant := func() {
+		if !assistantOpen {
+			return
+		}
+		fmt.Fprintln(w)
+		assistantOpen = false
+	}
 	for evt := range ch {
+		if evt == nil {
+			continue
+		}
 		if evt.Error != nil {
-			fmt.Printf("\nError: %s\n", evt.Error.Message)
+			closeAssistant()
+			fmt.Fprintf(w, "Error: %s\n", evt.Error.Message)
 			continue
 		}
 		if evt.Response == nil || len(evt.Response.Choices) == 0 {
@@ -128,23 +140,81 @@ func printEvents(ch <-chan *event.Event, streaming bool) {
 		}
 		choice := evt.Response.Choices[0]
 		if streaming && evt.IsPartial {
-			fmt.Print(choice.Delta.Content)
-			streamedText = streamedText || choice.Delta.Content != ""
+			// A partial tool result carries its preview in Delta.Content.
+			// The committed result is printed later from Message.
+			if choice.Delta.Content != "" && !evt.IsToolResultResponse() {
+				if !assistantOpen {
+					fmt.Fprint(w, "Assistant: ")
+					assistantOpen = true
+				}
+				fmt.Fprint(w, choice.Delta.Content)
+				streamedText = true
+			}
 		} else if choice.Message.Role == model.RoleAssistant {
-			if !streaming || !streamedText {
-				fmt.Print(choice.Message.Content)
+			if (!streaming || !streamedText) && choice.Message.Content != "" {
+				if !assistantOpen {
+					fmt.Fprint(w, "Assistant: ")
+					assistantOpen = true
+				}
+				fmt.Fprint(w, choice.Message.Content)
 			}
 			streamedText = false
 		}
+		if hasCommittedToolOutput(evt) {
+			closeAssistant()
+			writeCommittedToolCalls(w, evt)
+			writeCommittedToolResults(w, evt)
+			streamedText = false
+		}
 		if evt.IsFinalResponse() {
-			fmt.Println()
+			closeAssistant()
 		}
 	}
 }
 
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
+func hasCommittedToolOutput(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil || evt.IsPartial {
+		return false
 	}
-	return fallback
+	for _, choice := range evt.Response.Choices {
+		if len(choice.Message.ToolCalls) > 0 {
+			return true
+		}
+		if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func writeCommittedToolCalls(w io.Writer, evt *event.Event) {
+	if evt == nil || evt.Response == nil || evt.IsPartial {
+		return
+	}
+	for _, choice := range evt.Response.Choices {
+		for _, call := range choice.Message.ToolCalls {
+			fmt.Fprintf(w, "Tool call: %s (ID: %s)\n", call.Function.Name, call.ID)
+			if len(call.Function.Arguments) > 0 {
+				fmt.Fprintf(w, "  Args: %s\n", string(call.Function.Arguments))
+			}
+		}
+	}
+}
+
+func writeCommittedToolResults(w io.Writer, evt *event.Event) {
+	if evt == nil || evt.Response == nil || evt.IsPartial {
+		return
+	}
+	for _, choice := range evt.Response.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleTool || msg.ToolID == "" {
+			continue
+		}
+		result := strings.TrimSpace(msg.Content)
+		if msg.ToolName != "" {
+			fmt.Fprintf(w, "Tool result: %s (ID: %s): %s\n", msg.ToolName, msg.ToolID, result)
+			continue
+		}
+		fmt.Fprintf(w, "Tool result (ID: %s): %s\n", msg.ToolID, result)
+	}
 }

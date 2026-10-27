@@ -7,6 +7,8 @@
 //
 //
 
+// Package main demonstrates multi-turn chat through the OpenAI Responses
+// adapter, LLMAgent, and an in-memory Runner session.
 package main
 
 import (
@@ -28,23 +30,13 @@ import (
 )
 
 func main() {
-	modelName := flag.String("model", envOr("OPENAI_MODEL", "gpt-5"), "OpenAI model name")
-	apiKey := flag.String("api-key", os.Getenv("OPENAI_API_KEY"), "OpenAI API key")
-	baseURL := flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI API base URL")
+	modelName := flag.String("model", "gpt-5", "OpenAI model name")
 	streaming := flag.Bool("streaming", true, "Enable streaming responses")
 	flag.Parse()
-	if strings.TrimSpace(*apiKey) == "" {
-		log.Fatal("set OPENAI_API_KEY or pass -api-key")
-	}
 
-	modelOptions := []responses.Option{
-		responses.WithAPIKey(*apiKey),
-		responses.WithStore(false),
-	}
-	if *baseURL != "" {
-		modelOptions = append(modelOptions, responses.WithBaseURL(*baseURL))
-	}
-	chatModel := responses.New(*modelName, modelOptions...)
+	// WithStore(false) is the adapter default: each request sends the full
+	// client-managed history. The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
+	chatModel := responses.New(*modelName, responses.WithStore(false))
 	chatAgent := llmagent.New(
 		"responses-chat",
 		llmagent.WithModel(chatModel),
@@ -52,6 +44,7 @@ func main() {
 		llmagent.WithInstruction("Answer the user's questions clearly and concisely."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming}),
 	)
+	// The in-memory session lives only until this process exits.
 	sessions := sessioninmemory.NewSessionService()
 	defer sessions.Close()
 	r := runner.NewRunner(
@@ -113,11 +106,4 @@ func printEvents(ch <-chan *event.Event, streaming bool) {
 			fmt.Println()
 		}
 	}
-}
-
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
 }

@@ -1,16 +1,47 @@
 # OpenAI Responses adapter
 
-Use this independent Go 1.25 module when an application needs the OpenAI
-Responses API through `model.Model`. The root framework keeps its Go 1.21
-requirement and existing Chat Completions defaults.
+Use `responses.New` when an application needs the OpenAI Responses API through
+`model.Model`. Keep `openai.New` for Chat Completions. This adapter is
+opt-in: the root framework keeps its Go 1.21 requirement and existing Chat
+Completions defaults.
+
+The module requires Go 1.25. Downstream modules that import it must use that
+Go version or newer. When `WithAPIKey` and `WithBaseURL` are omitted, the
+OpenAI SDK reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`. Each request sends
+the full client-managed conversation and uses `store=false` by default.
+Ordinary `LLMAgent` and `Runner` use does not require reading or editing
+`Message.Replay`.
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/model/openai/responses"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/responses"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
 
-m := responses.New("gpt-5", responses.WithAPIKey(apiKey))
+llm := responses.New("gpt-5", responses.WithStore(false))
+agent := llmagent.New(
+    "responses-assistant",
+    llmagent.WithModel(llm),
+    llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+)
+// Runner uses an in-memory session until Close when none is configured.
+r := runner.NewRunner("responses-app", agent)
 ```
 
-See [the chat and Runner examples](../../../examples/openairesponses).
+`WithAPIKey` and `WithBaseURL` still set an explicit key or endpoint. Those
+options, extra fields, and lifecycle rules are under
+[Configuration and lifecycle](#configuration-and-lifecycle).
+
+Runnable programs and the user-level walkthrough:
+
+- [examples/openairesponses](../../../examples/openairesponses)
+- [Model guide (English)](../../../docs/mkdocs/en/model.md#openai-responses-api)
+- [模型指南（中文）](../../../docs/mkdocs/zh/model.md#openai-responses-api)
+
+The sections below are the detailed support, history, compatibility, and
+recovery contract.
 
 ## Supported contract
 
@@ -173,11 +204,17 @@ because dependency modules' `replace` directives are not inherited.
 
 ## Configuration and lifecycle
 
-`WithBaseURL` configures a compatible API endpoint. The SDK reads
-`OPENAI_API_KEY` when no explicit API key is supplied. `WithStore(true)` changes
-remote storage only; the adapter still sends full history. The caller owns its
-session service and must keep draining the response channel or cancel the
-request context.
+`WithBaseURL` configures a compatible API endpoint. When `WithAPIKey` is
+omitted, the SDK reads `OPENAI_API_KEY`. When `WithBaseURL` is omitted, the SDK
+reads `OPENAI_BASE_URL`.
+`WithStore(true)` changes remote storage only; the adapter still sends full
+history. The caller owns its session service and must keep draining the
+response channel or cancel the request context. The runnable examples pass an
+explicit in-memory session and close it when the process exits. User-level
+setup is in the
+[English model guide](../../../docs/mkdocs/en/model.md#openai-responses-api)
+and the
+[Chinese model guide](../../../docs/mkdocs/zh/model.md#openai-responses-api).
 
 `WithExtraFields` and `Request.ExtraFields` accept ordinary dot-separated JSON
 paths for additional parameters such as `reasoning.summary` and `tool_choice`.
