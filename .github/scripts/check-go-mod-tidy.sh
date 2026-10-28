@@ -5,10 +5,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 cd "${repo_root}"
 
-tmp_dir="$(mktemp -d)"
-trap 'chmod -R u+w "${tmp_dir}" >/dev/null 2>&1 || true; rm -rf "${tmp_dir}"' EXIT
+tmp_root="$(mktemp -d)"
+trap 'chmod -R u+w "${tmp_root}" >/dev/null 2>&1 || true; rm -rf "${tmp_root}"' EXIT
+export GOMODCACHE="${tmp_root}/gomodcache"
 
-export GOMODCACHE="${tmp_dir}/gomodcache"
 export GOPROXY="https://proxy.golang.org,direct"
 export GOSUMDB="sum.golang.org"
 # Setting these to empty does not reliably override values from `go env -w`.
@@ -24,6 +24,15 @@ else
 fi
 
 mkdir -p "${GOMODCACHE}"
+
+# Keep downloaded archives and Go toolchains reusable, but drop extracted
+# module source trees between modules.
+clear_extracted_module_cache() {
+  find "${GOMODCACHE}" \
+    -path "${GOMODCACHE}/cache/download" -prune -o \
+    -path "${GOMODCACHE}/golang.org/toolchain@*" -prune -o \
+    -type d -name '*@*' -prune -exec rm -rf {} +
+}
 
 echo "::group::Checking go.mod/go.sum are tidy for all modules"
 
@@ -65,11 +74,11 @@ for mod_file in "${go_mod_files[@]}"; do
   echo "::group::Tidying ${readable_name}"
   cd "${mod_dir}"
 
-  tmp_dir="$(mktemp -d)"
-  cp go.mod "${tmp_dir}/go.mod"
+  module_tmp_dir="$(mktemp -d "${tmp_root}/module.XXXXXX")"
+  cp go.mod "${module_tmp_dir}/go.mod"
   had_go_sum=false
   if [ -f "go.sum" ]; then
-    cp go.sum "${tmp_dir}/go.sum"
+    cp go.sum "${module_tmp_dir}/go.sum"
     had_go_sum=true
   fi
 
@@ -78,12 +87,12 @@ for mod_file in "${go_mod_files[@]}"; do
   mod_changed=false
   sum_changed=false
 
-  if ! diff -q "${tmp_dir}/go.mod" go.mod >/dev/null; then
+  if ! diff -q "${module_tmp_dir}/go.mod" go.mod >/dev/null; then
     mod_changed=true
   fi
 
   if [ "${had_go_sum}" = true ]; then
-    if ! diff -q "${tmp_dir}/go.sum" go.sum >/dev/null; then
+    if ! diff -q "${module_tmp_dir}/go.sum" go.sum >/dev/null; then
       sum_changed=true
     fi
   else
@@ -97,12 +106,12 @@ for mod_file in "${go_mod_files[@]}"; do
     issue_modules+=("${readable_name}")
     if [ "${mod_changed}" = true ]; then
       echo "::error::${readable_name}/go.mod is not up-to-date. Run 'go mod tidy' in ${readable_name}."
-      diff -u "${tmp_dir}/go.mod" go.mod | head -n 200 || true
+      diff -u "${module_tmp_dir}/go.mod" go.mod | head -n 200 || true
     fi
     if [ "${sum_changed}" = true ]; then
       echo "::error::${readable_name}/go.sum is not up-to-date. Run 'go mod tidy' in ${readable_name}."
       if [ "${had_go_sum}" = true ]; then
-        diff -u "${tmp_dir}/go.sum" go.sum | head -n 200 || true
+        diff -u "${module_tmp_dir}/go.sum" go.sum | head -n 200 || true
       else
         echo "::error::${readable_name}/go.sum was created by go mod tidy."
       fi
@@ -111,7 +120,8 @@ for mod_file in "${go_mod_files[@]}"; do
     echo "${readable_name}/go.mod and go.sum are up-to-date"
   fi
 
-  rm -rf "${tmp_dir}"
+  clear_extracted_module_cache
+  rm -rf "${module_tmp_dir}"
   cd "${repo_root}"
   echo "::endgroup::"
 done
