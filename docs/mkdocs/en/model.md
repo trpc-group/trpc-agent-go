@@ -701,6 +701,12 @@ report in `prompt_tokens_details`: `cache_read_tokens` maps to
 `PromptTokensDetails.CacheCreationTokens`. Providers that follow the OpenAI
 schema strictly leave both counts at `0`.
 
+In streaming responses both counts accumulate across chunks, matching the
+default accumulation of prompt, completion, and total tokens. When a
+`WithAccumulateChunkTokenUsage` callback is configured, its return value
+determines the final cache counts, so providers that report cumulative
+snapshots can keep the latest one.
+
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
 accumulator, so custom token accumulation normally does not need to create or

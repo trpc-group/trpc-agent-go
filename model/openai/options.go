@@ -414,7 +414,9 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 		CompletionTokens: u.CompletionTokens - delta.CompletionTokens,
 		TotalTokens:      u.TotalTokens - delta.TotalTokens,
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
+			CachedTokens:        int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
+			CacheReadTokens:     u.PromptTokensDetails.CacheReadTokens - delta.PromptTokensDetails.CacheReadTokens,
+			CacheCreationTokens: u.PromptTokensDetails.CacheCreationTokens - delta.PromptTokensDetails.CacheCreationTokens,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(u.CompletionTokensDetails.ReasoningTokens - delta.CompletionTokensDetails.ReasoningTokens),
@@ -446,8 +448,12 @@ func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
 }
 
 // modelUsageToCompletionUsage converts model.Usage to openai.CompletionUsage.
+//
+// The prompt cache read and write counts are carried through the same
+// prompt_tokens_details extra fields that completionUsageToModelUsage reads,
+// so a custom WithAccumulateChunkTokenUsage result keeps them.
 func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
-	return openai.CompletionUsage{
+	converted := openai.CompletionUsage{
 		PromptTokens:     int64(usage.PromptTokens),
 		CompletionTokens: int64(usage.CompletionTokens),
 		TotalTokens:      int64(usage.TotalTokens),
@@ -458,6 +464,9 @@ func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
 			ReasoningTokens: int64(usage.CompletionTokensDetails.ReasoningTokens),
 		},
 	}
+	setUsageCacheTokens(&converted, usage.PromptTokensDetails.CacheReadTokens,
+		usage.PromptTokensDetails.CacheCreationTokens)
+	return converted
 }
 
 // WithTokenCounter sets the TokenCounter used for token tailoring.

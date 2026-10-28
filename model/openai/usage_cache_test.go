@@ -130,7 +130,6 @@ func TestStreamAccumulatorCacheTokens(t *testing.T) {
 	acc := chatStreamAccumulator{}
 	m.accumulateChunk(contentChunk, &acc, &buf)
 	m.accumulateChunk(usageChunk, &acc, &buf)
-	acc.applyCacheTokens()
 
 	resp := m.createFinalResponse(acc.acc, false, nil, "")
 	require.NotNil(t, resp.Usage)
@@ -140,17 +139,64 @@ func TestStreamAccumulatorCacheTokens(t *testing.T) {
 	assert.Equal(t, 586, resp.Usage.PromptTokensDetails.CacheCreationTokens)
 }
 
-func TestStreamAccumulatorCacheTokensKeepLatestNonZero(t *testing.T) {
+// Cache counts are additive, matching the SDK accumulation for prompt,
+// completion, and total tokens: gateways that send usage once on the final
+// chunk and gateways that send independent increments per chunk both add up.
+func TestStreamAccumulatorCacheTokensAddUp(t *testing.T) {
 	acc := chatStreamAccumulator{}
-	acc.recordCacheTokens(completionUsageFromJSON(t,
+	acc.addCacheTokens(completionUsageFromJSON(t,
 		`{"prompt_tokens_details":{"cache_read_tokens":100,"cache_creation_tokens":10}}`))
-	acc.recordCacheTokens(completionUsageFromJSON(t,
+	acc.addCacheTokens(completionUsageFromJSON(t,
 		`{"prompt_tokens_details":{"cache_read_tokens":0,"cache_creation_tokens":0}}`))
-	acc.recordCacheTokens(completionUsageFromJSON(t,
-		`{"prompt_tokens_details":{"cache_read_tokens":200}}`))
+	acc.addCacheTokens(completionUsageFromJSON(t,
+		`{"prompt_tokens_details":{"cache_read_tokens":50}}`))
 
-	assert.Equal(t, 200, acc.cacheReadTokens)
-	assert.Equal(t, 10, acc.cacheCreationTokens)
+	cacheReadTokens, cacheCreationTokens := usageCacheTokens(acc.acc.Usage)
+	assert.Equal(t, 150, cacheReadTokens)
+	assert.Equal(t, 10, cacheCreationTokens)
+}
+
+// A custom WithAccumulateChunkTokenUsage result determines the final cache
+// counts: the provider-reported values must not overwrite it, and each callback
+// call receives the previous result as current.
+func TestStreamAccumulatorCacheTokensPreserveCustomUsage(t *testing.T) {
+	var callbackCurrent []model.Usage
+	accumulate := func(current, delta model.Usage) model.Usage {
+		callbackCurrent = append(callbackCurrent, current)
+		current.PromptTokens += delta.PromptTokens
+		current.CompletionTokens += delta.CompletionTokens
+		current.TotalTokens += delta.TotalTokens
+		current.PromptTokensDetails.CacheReadTokens = 7
+		current.PromptTokensDetails.CacheCreationTokens = 3
+		return current
+	}
+	m := New("claude-opus-5", WithAccumulateChunkTokenUsage(accumulate))
+
+	acc := chatStreamAccumulator{}
+	var buf bytes.Buffer
+	for _, payload := range []string{
+		`{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110,` +
+			`"prompt_tokens_details":{"cache_read_tokens":100,"cache_creation_tokens":10}}`,
+		`{"prompt_tokens":50,"completion_tokens":5,"total_tokens":55,` +
+			`"prompt_tokens_details":{"cache_read_tokens":50,"cache_creation_tokens":5}}`,
+	} {
+		var chunk openai.ChatCompletionChunk
+		require.NoError(t, json.Unmarshal([]byte(`{"choices":[],"usage":`+payload+`}`), &chunk))
+		m.accumulateChunk(chunk, &acc, &buf)
+	}
+
+	resp := m.createFinalResponse(acc.acc, false, nil, "")
+	require.NotNil(t, resp.Usage)
+	assert.Equal(t, 150, resp.Usage.PromptTokens)
+	// Provider-reported 150/15 must not replace the callback's 7/3.
+	assert.Equal(t, 7, resp.Usage.PromptTokensDetails.CacheReadTokens)
+	assert.Equal(t, 3, resp.Usage.PromptTokensDetails.CacheCreationTokens)
+
+	// The second callback call sees the first call's result as current.
+	require.Len(t, callbackCurrent, 2)
+	assert.Equal(t, 100, callbackCurrent[1].PromptTokens)
+	assert.Equal(t, 7, callbackCurrent[1].PromptTokensDetails.CacheReadTokens)
+	assert.Equal(t, 3, callbackCurrent[1].PromptTokensDetails.CacheCreationTokens)
 }
 
 // cacheUsageJSON is the usage payload returned by a gateway that exposes
@@ -221,7 +267,15 @@ func TestGenerateContentStreamingCacheTokens(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := New("claude-opus-5", WithBaseURL(server.URL), WithAPIKey("test-key"))
+	var callbackUsage *model.Usage
+	m := New("claude-opus-5", WithBaseURL(server.URL), WithAPIKey("test-key"),
+		WithChatStreamCompleteCallback(func(_ context.Context, _ *openai.ChatCompletionNewParams,
+			accumulator *openai.ChatCompletionAccumulator, streamErr error) {
+			require.NoError(t, streamErr)
+			require.NotNil(t, accumulator)
+			usage := completionUsageToModelUsage(accumulator.Usage)
+			callbackUsage = &usage
+		}))
 	responseChan, err := m.GenerateContent(context.Background(), &model.Request{
 		Messages:         []model.Message{model.NewUserMessage("hi")},
 		GenerationConfig: model.GenerationConfig{Stream: true},
@@ -240,4 +294,10 @@ func TestGenerateContentStreamingCacheTokens(t *testing.T) {
 	assert.Equal(t, 443, final.Usage.CompletionTokens)
 	assert.Equal(t, 22653, final.Usage.PromptTokensDetails.CacheReadTokens)
 	assert.Equal(t, 586, final.Usage.PromptTokensDetails.CacheCreationTokens)
+
+	// The stream complete callback observes the cache counts before the final
+	// response is emitted.
+	require.NotNil(t, callbackUsage)
+	assert.Equal(t, 22653, callbackUsage.PromptTokensDetails.CacheReadTokens)
+	assert.Equal(t, 586, callbackUsage.PromptTokensDetails.CacheCreationTokens)
 }

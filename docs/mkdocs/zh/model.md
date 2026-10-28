@@ -686,6 +686,10 @@ Prompt Cache 计数：`cache_read_tokens` 映射到
 `PromptTokensDetails.CacheCreationTokens`。严格遵循 OpenAI schema 的服务方
 这两个值保持为 `0`。
 
+流式响应中这两个计数与其他 token 字段一样按 chunk 累加；配置了
+`WithAccumulateChunkTokenUsage` 回调时，最终值由回调的返回值决定，因此
+上报累计快照的服务方可以保留最新一次快照。
+
 `TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
 OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator
 通常不需要创建或合并 `TimingInfo`。

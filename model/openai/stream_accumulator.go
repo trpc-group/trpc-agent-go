@@ -23,13 +23,6 @@ type chatStreamAccumulator struct {
 
 	choices []*chatStreamChoiceAccumulator
 
-	// cacheReadTokens and cacheCreationTokens keep provider-specific prompt
-	// cache counts, which the SDK accumulator does not track. Gateways report
-	// usage either once on the final chunk or as cumulative snapshots, so the
-	// latest non-zero count wins.
-	cacheReadTokens     int
-	cacheCreationTokens int
-
 	scratchChunk     openaigo.ChatCompletionChunk
 	scratchChoices   []openaigo.ChatCompletionChunkChoice
 	scratchToolCalls [][]openaigo.ChatCompletionChunkChoiceDeltaToolCall
@@ -80,24 +73,19 @@ func (a *chatStreamAccumulator) addChunk(chunk openaigo.ChatCompletionChunk) boo
 	return true
 }
 
-// recordCacheTokens keeps the provider-specific cache token counts reported by
-// a chunk. The SDK accumulator does not track them, and gateways report them
-// either once on the final chunk or as cumulative snapshots, so the latest
-// non-zero count is kept.
-func (a *chatStreamAccumulator) recordCacheTokens(usage openaigo.CompletionUsage) {
+// addCacheTokens adds the provider-specific cache token counts reported by a
+// chunk to the accumulated usage. The SDK accumulator only sums prompt,
+// completion, and total tokens, so the counts are added here with the same
+// additive semantics. Gateways that repeat cumulative usage snapshots should
+// use WithAccumulateChunkTokenUsage to keep the latest snapshot instead.
+func (a *chatStreamAccumulator) addCacheTokens(usage openaigo.CompletionUsage) {
 	cacheReadTokens, cacheCreationTokens := usageCacheTokens(usage)
-	if cacheReadTokens > 0 {
-		a.cacheReadTokens = cacheReadTokens
+	if cacheReadTokens == 0 && cacheCreationTokens == 0 {
+		return
 	}
-	if cacheCreationTokens > 0 {
-		a.cacheCreationTokens = cacheCreationTokens
-	}
-}
-
-// applyCacheTokens exposes the recorded cache token counts through the
-// accumulated usage so that completionUsageToModelUsage can convert them.
-func (a *chatStreamAccumulator) applyCacheTokens() {
-	setUsageCacheTokens(&a.acc.Usage, a.cacheReadTokens, a.cacheCreationTokens)
+	currentReadTokens, currentCreationTokens := usageCacheTokens(a.acc.Usage)
+	setUsageCacheTokens(&a.acc.Usage,
+		currentReadTokens+cacheReadTokens, currentCreationTokens+cacheCreationTokens)
 }
 
 func (a *chatStreamAccumulator) choiceState(index int) *chatStreamChoiceAccumulator {
