@@ -111,14 +111,15 @@ func calculatorTool() tool.Tool {
 
 // printEvents writes assistant text and committed local tool activity.
 // Streaming assistant text is taken from deltas. The aggregated assistant
-// message is written only when that text was not already streamed. Tool
-// calls are shown only from a completed Message.ToolCalls list, and tool
-// results only from the committed tool message. Partial tool calls, partial
+// message is written again with a completion label when it differs from the
+// preview. Matching text is not repeated. Tool calls are shown only from a
+// completed Message.ToolCalls list, and tool results only from the committed
+// tool message. Partial tool calls, partial
 // tool-result previews, reasoning text, and native Replay payloads are not
 // displayed as completed tool activity.
 func printEvents(w io.Writer, ch <-chan *event.Event, streaming bool) {
 	assistantOpen := false
-	streamedText := false
+	var streamedText strings.Builder
 	closeAssistant := func() {
 		if !assistantOpen {
 			return
@@ -133,6 +134,7 @@ func printEvents(w io.Writer, ch <-chan *event.Event, streaming bool) {
 		if evt.Error != nil {
 			closeAssistant()
 			fmt.Fprintf(w, "Error: %s\n", evt.Error.Message)
+			streamedText.Reset()
 			continue
 		}
 		if evt.Response == nil || len(evt.Response.Choices) == 0 {
@@ -148,23 +150,27 @@ func printEvents(w io.Writer, ch <-chan *event.Event, streaming bool) {
 					assistantOpen = true
 				}
 				fmt.Fprint(w, choice.Delta.Content)
-				streamedText = true
+				streamedText.WriteString(choice.Delta.Content)
 			}
 		} else if choice.Message.Role == model.RoleAssistant {
-			if (!streaming || !streamedText) && choice.Message.Content != "" {
+			if streaming && streamedText.Len() > 0 && streamedText.String() != choice.Message.Content {
+				closeAssistant()
+				fmt.Fprintf(w, "Assistant (completed): %s", choice.Message.Content)
+				assistantOpen = true
+			} else if (!streaming || streamedText.Len() == 0) && choice.Message.Content != "" {
 				if !assistantOpen {
 					fmt.Fprint(w, "Assistant: ")
 					assistantOpen = true
 				}
 				fmt.Fprint(w, choice.Message.Content)
 			}
-			streamedText = false
+			streamedText.Reset()
 		}
 		if hasCommittedToolOutput(evt) {
 			closeAssistant()
 			writeCommittedToolCalls(w, evt)
 			writeCommittedToolResults(w, evt)
-			streamedText = false
+			streamedText.Reset()
 		}
 		if evt.IsFinalResponse() {
 			closeAssistant()

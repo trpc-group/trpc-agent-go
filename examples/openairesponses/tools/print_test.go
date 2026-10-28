@@ -254,3 +254,57 @@ func collectPrint(t *testing.T, streaming bool, events ...*event.Event) string {
 	printEvents(&buf, ch, streaming)
 	return buf.String()
 }
+
+func TestPrintEventsCompletedText(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		streaming bool
+		deltas    []string
+		completed string
+		want      string
+	}{
+		{name: "matching", streaming: true, deltas: []string{"Hello", " world"}, completed: "Hello world", want: "Assistant: Hello world\n"},
+		{name: "revised", streaming: true, deltas: []string{"A"}, completed: "B", want: "Assistant: A\nAssistant (completed): B\n"},
+		{name: "missing_suffix", streaming: true, deltas: []string{"Hello"}, completed: "Hello world", want: "Assistant: Hello\nAssistant (completed): Hello world\n"},
+		{name: "shorter_completion", streaming: true, deltas: []string{"Hello world"}, completed: "Hello", want: "Assistant: Hello world\nAssistant (completed): Hello\n"},
+		{name: "multiple_revised_deltas", streaming: true, deltas: []string{"He", "llo"}, completed: "Goodbye", want: "Assistant: Hello\nAssistant (completed): Goodbye\n"},
+		{name: "no_text_preview", streaming: true, deltas: []string{""}, completed: "Hello", want: "Assistant: Hello\n"},
+		{name: "non_streaming", completed: "Hello", want: "Assistant: Hello\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := make(chan *event.Event, len(tc.deltas)+1)
+			for _, delta := range tc.deltas {
+				ch <- &event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: delta}}}}}
+			}
+			ch <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: tc.completed}}}}}
+			close(ch)
+			var out bytes.Buffer
+			printEvents(&out, ch, tc.streaming)
+			if got := out.String(); got != tc.want {
+				t.Fatalf("printEvents() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrintEventsRevisedTextBeforeToolCall(t *testing.T) {
+	got := collectPrint(t, true,
+		&event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: "Preview"}}}}},
+		&event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant, Content: "Calculating",
+			ToolCalls: []model.ToolCall{{ID: "call_add", Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"operation":"add","a":1,"b":2}`)}}},
+		}}}}},
+		&event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleTool, ToolID: "call_add", ToolName: "calculator", Content: `{"value":3}`}}}}},
+		&event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: "3"}}}}},
+		&event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "3"}}}}},
+	)
+	const want = "Assistant: Preview\n" +
+		"Assistant (completed): Calculating\n" +
+		"Tool call: calculator (ID: call_add)\n" +
+		"  Args: {\"operation\":\"add\",\"a\":1,\"b\":2}\n" +
+		"Tool result: calculator (ID: call_add): {\"value\":3}\n" +
+		"Assistant: 3\n"
+	if got != want {
+		t.Fatalf("printEvents() = %q, want %q", got, want)
+	}
+}

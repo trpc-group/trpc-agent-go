@@ -16,6 +16,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -74,36 +75,42 @@ func main() {
 			log.Printf("run: %v", err)
 			continue
 		}
-		printEvents(ch, *streaming)
+		printEvents(os.Stdout, ch, *streaming)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("read input: %v", err)
 	}
 }
 
-func printEvents(ch <-chan *event.Event, streaming bool) {
-	fmt.Print("Assistant: ")
-	streamedText := false
+func printEvents(w io.Writer, ch <-chan *event.Event, streaming bool) {
+	fmt.Fprint(w, "Assistant: ")
+	var streamedText strings.Builder
 	for evt := range ch {
-		if evt.Error != nil {
-			fmt.Printf("\nError: %s\n", evt.Error.Message)
+		if evt == nil || evt.Response == nil {
 			continue
 		}
-		if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		if evt.Error != nil {
+			fmt.Fprintf(w, "\nError: %s\n", evt.Error.Message)
+			streamedText.Reset()
+			continue
+		}
+		if len(evt.Response.Choices) == 0 {
 			continue
 		}
 		choice := evt.Response.Choices[0]
 		if streaming && evt.IsPartial {
-			fmt.Print(choice.Delta.Content)
-			streamedText = streamedText || choice.Delta.Content != ""
+			fmt.Fprint(w, choice.Delta.Content)
+			streamedText.WriteString(choice.Delta.Content)
 		} else if choice.Message.Role == model.RoleAssistant {
-			if !streaming || !streamedText {
-				fmt.Print(choice.Message.Content)
+			if streaming && streamedText.Len() > 0 && streamedText.String() != choice.Message.Content {
+				fmt.Fprintf(w, "\nAssistant (completed): %s", choice.Message.Content)
+			} else if !streaming || streamedText.Len() == 0 {
+				fmt.Fprint(w, choice.Message.Content)
 			}
-			streamedText = false
+			streamedText.Reset()
 		}
 		if evt.IsFinalResponse() {
-			fmt.Println()
+			fmt.Fprintln(w)
 		}
 	}
 }

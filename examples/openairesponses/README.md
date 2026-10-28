@@ -79,7 +79,8 @@ The transcript below is illustrative, not a live run. The two `You:` prompts
 are separate turns, and the process-local session still holds the first
 result for the second turn. Assistant wording and the number of calls vary
 by model. Streaming prints assistant text as tokens
-arrive and does not print that text again from the aggregated final message.
+arrive. Matching completed text is not repeated; if the completed text differs
+from the preview, it is printed on a new `Assistant (completed):` line.
 Non-streaming prints the completed assistant message once. Tool lines, when a
 call is committed, use the program's format: name, original argument string,
 and call ID come from the completed `Message.ToolCalls`, and the result line
