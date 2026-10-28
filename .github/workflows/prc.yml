@@ -262,6 +262,9 @@ jobs:
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
           cache: false
+      - name: Verify go mod tidy cache cleanup
+        shell: bash
+        run: bash .github/scripts/verify-check-go-mod-tidy-cache.sh
       - name: Check go.mod and go.sum are tidy
         shell: bash
         run: bash .github/scripts/check-go-mod-tidy.sh
