@@ -146,6 +146,15 @@ const (
 	// KeyGenAIRequestToolDefinitions is the attribute key for tool definitions.
 	KeyGenAIRequestToolDefinitions = "gen_ai.request.tool.definitions"
 
+	// KeyTraceLoopSpanKind is the OpenLLMetry compatibility attribute key for
+	// span kind. Individual tool-call spans set it to "tool". It is not part
+	// of the OpenTelemetry semantic conventions.
+	KeyTraceLoopSpanKind = "traceloop.span.kind"
+	// KeyTraceLoopEntityName is the OpenLLMetry compatibility attribute key for
+	// entity name. Individual tool-call spans set it to the tool name. It is
+	// not part of the OpenTelemetry semantic conventions.
+	KeyTraceLoopEntityName = "traceloop.entity.name"
+
 	// KeyErrorType is the attribute key for error type.
 	// Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
 	KeyErrorType = "error.type"

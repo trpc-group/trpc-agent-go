@@ -12,6 +12,29 @@ tRPC-Agent-Go provides comprehensive observability features built on the OpenTel
 - **Multi-platform Support**: Supports mainstream monitoring platforms such as Jaeger, Prometheus, Galileo, and ZhiYan Monitoring Bao.
 - **Flexible Configuration**: Supports multiple configuration methods and custom extensions.
 
+## OpenLLMetry Compatibility for Tool-Call Spans
+
+When tracing is enabled, individual tool-call spans include the following
+OpenLLMetry compatibility attributes by default. No additional configuration or
+backend-specific exporter is required.
+
+| Attribute | Value | Scope |
+| --- | --- | --- |
+| `traceloop.span.kind` | `"tool"` | Individual tool-call spans |
+| `traceloop.entity.name` | Tool declaration name, matching `gen_ai.tool.name` | Individual tool-call spans |
+
+These are OpenLLMetry conventions carried on OpenTelemetry spans, not official
+OpenTelemetry semantic-convention keys. They supplement the existing
+`gen_ai.operation.name = "execute_tool"` and `gen_ai.tool.name` attributes;
+existing span names and GenAI attributes remain unchanged.
+
+The framework does not add these compatibility attributes to synthetic merged-tool
+spans, agent spans, model spans, or workflow spans. A merged-tool span groups
+multiple tool calls and does not represent an individual tool execution.
+
+Applications that need to reference the keys can use `KeyTraceLoopSpanKind` and
+`KeyTraceLoopEntityName` from `trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace`.
+
 ## Integration with Different Monitoring Platforms
 
 ### Langfuse Integration
