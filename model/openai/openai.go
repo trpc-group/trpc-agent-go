@@ -2196,6 +2196,7 @@ func (m *Model) accumulateChunk(
 		sanitizedChunk := sanitizeChunkForAccumulator(chunkForAccumulator)
 		if acc.addChunk(sanitizedChunk) {
 			applyOpenAISDKTokenDetailsAccumulationFix(&acc.acc, chunk)
+			acc.addCacheTokens(chunk.Usage)
 		}
 
 		if m.accumulateChunkUsage != nil {
