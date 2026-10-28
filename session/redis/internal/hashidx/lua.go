@@ -574,19 +574,35 @@ local minScore = ARGV[1]
 local maxScore = ARGV[2]
 local limit = tonumber(ARGV[3])
 
--- Get event IDs in chronological order (ascending score)
-local eventIDs
+-- Include the entire boundary score group before applying the limit. Redis
+-- orders equal-score members lexically, but existing IDs are decimal strings.
+local entries
 if limit > 0 then
-    -- Get the latest N by reversing, then we reverse the result
-    eventIDs = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, limit)
-    -- Reverse to chronological order
-    local reversed = {}
-    for i = #eventIDs, 1, -1 do
-        table.insert(reversed, eventIDs[i])
+    local tail = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore,
+        'WITHSCORES', 'LIMIT', 0, limit)
+    if #tail > 0 then
+        entries = redis.call('ZRANGEBYSCORE', idxKey, tail[#tail], maxScore, 'WITHSCORES')
+    else
+        entries = {}
     end
-    eventIDs = reversed
 else
-    eventIDs = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore)
+    entries = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore, 'WITHSCORES')
+end
+local ordered = {}
+for i = 1, #entries, 2 do
+    table.insert(ordered, {id = entries[i], score = tonumber(entries[i + 1])})
+end
+table.sort(ordered, function(a, b)
+    if a.score ~= b.score then return a.score < b.score end
+    -- Compare integer strings without losing precision above 2^53.
+    if #a.id ~= #b.id then return #a.id < #b.id end
+    return a.id < b.id
+end)
+local eventIDs = {}
+local first = 1
+if limit > 0 then first = math.max(1, #ordered - limit + 1) end
+for i = first, #ordered do
+    table.insert(eventIDs, ordered[i].id)
 end
 
 local result = {}
