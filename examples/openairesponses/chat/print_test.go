@@ -12,6 +12,7 @@ package main
 import (
 	"bytes"
 	"testing"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
