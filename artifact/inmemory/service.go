@@ -30,6 +30,8 @@ type Service struct {
 	artifacts map[string][]*artifact.Artifact
 }
 
+const defaultContentType = "application/octet-stream"
+
 // NewService creates a new in-memory artifact service.
 func NewService() *Service {
 	return &Service{
@@ -76,6 +78,84 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 	}
 
 	return versions[versionIndex], nil
+}
+
+// Head returns metadata for an artifact without loading its full content.
+func (s *Service) Head(
+	ctx context.Context,
+	req *artifact.HeadRequest,
+	opts ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, fmt.Errorf("head request is nil")
+	}
+	if req.SessionInfo.AppName == "" || req.SessionInfo.UserID == "" || req.SessionInfo.SessionID == "" {
+		return nil, fmt.Errorf("session info fields cannot be empty")
+	}
+	if strings.TrimSpace(req.Filename) == "" {
+		return nil, fmt.Errorf("filename cannot be empty")
+	}
+	if req.Version != nil && *req.Version < 0 {
+		return nil, fmt.Errorf("version must be >= 0")
+	}
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	path := iartifact.BuildArtifactPath(req.SessionInfo, req.Filename)
+	versions, exists := s.artifacts[path]
+	if !exists || len(versions) == 0 {
+		return nil, nil
+	}
+
+	targetVersion := 0
+	if req.Version == nil {
+		targetVersion = len(versions) - 1
+	} else {
+		targetVersion = *req.Version
+	}
+	if targetVersion < 0 || targetVersion >= len(versions) {
+		return nil, nil
+	}
+
+	art := versions[targetVersion]
+	if art == nil {
+		return nil, nil
+	}
+
+	mt := art.MimeType
+	if mt == "" {
+		mt = defaultContentType
+	}
+	name := strings.TrimSpace(art.Name)
+	if name == "" {
+		name = req.Filename
+	}
+
+	o := artifact.HeadOptions{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&o)
+	}
+
+	url := ""
+	if o.IncludeURL {
+		url = art.URL
+	}
+
+	return &artifact.HeadResponse{
+		Filename: req.Filename,
+		Version:  targetVersion,
+		Size:     int64(len(art.Data)),
+		MimeType: mt,
+		URL:      url,
+		Name:     name,
+	}, nil
 }
 
 // ListArtifactKeys lists all the artifact filenames within a session.
