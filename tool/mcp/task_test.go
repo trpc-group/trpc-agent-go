@@ -151,3 +151,15 @@ func TestToolTaskDeadlineAcrossReconnect(t *testing.T) {
 		})
 	}
 }
+
+// Match the released transport wording without using the new SDK's types.
+type missingTaskSession struct{ interruptedTask }
+
+func (e *missingTaskSession) Error() string { return "server returned status code 404" }
+
+func TestToolTaskMissingSessionReconnect(t *testing.T) {
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, &SessionReconnectConfig{EnableAutoReconnect: true, MaxReconnectAttempts: 2})
+	require.True(t, manager.shouldAttemptSessionReconnect(&missingTaskSession{interruptedTask{id: "task-1"}}))
+	require.False(t, manager.shouldAttemptSessionReconnect(&missingTaskSession{}))
+	require.False(t, manager.shouldAttemptSessionReconnect(errors.New("server returned status code 404")))
+}
