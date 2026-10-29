@@ -390,3 +390,11 @@ func setupCustomExporter() error {
 - [tRPC-Agent-Go Telemetry 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry)
 
 通过合理使用可观测功能，你可以建立完善的 Agent 应用监控体系，及时发现和解决问题，持续优化系统性能。
+
+## 在 SDK 限制之前采集导出数据
+
+`trace.RegisterChatAttributeObserver` 允许 exporter 在 OpenTelemetry SDK 应用属性长度和数量限制之前，观察框架生成的 chat JSON。回调接收 `(span, key, value)`；只有生产侧 `SpanAttributePolicy` 允许完整采集时，`value` 才包含完整 JSON。被禁止、省略、截断或无法序列化的值以 `nil` 通知，消费者应清除该来源的旧快照。没有更新则保留旧状态。原始 span 属性和其他 exporter 的行为不变。
+
+请在 exporter 初始化时注册，关闭前调用返回的注销函数。回调同步执行，不同 span 可以并发调用；span 和借用的字节均只读，保留数据时必须复制，并限制处理和存储规模。注销后，已经开始的回调仍可能完成。注册不会重放进行中调用已经缓存的请求。
+
+推荐配合 `SpanProcessor`：仅追踪 `OnStart` 收到的 span，在 `OnEnd` 清除状态，并将独立的 `ReadOnlySpan` 快照交给批处理器。不要把派生字段回写共享 span。这样错误、取消以及队列丢弃都复用现有结束清理机制；关闭时还应清除进行中的状态。消费者负责处理流式增量、最终快照、仅 usage 的更新，以及自己的字段长度和总量限制。该接口观察框架 chat 遥测，不拦截任意 `SetAttributes` 调用；直接模型调用需要启用已有的 chat 遥测。

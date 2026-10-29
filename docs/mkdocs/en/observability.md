@@ -390,3 +390,31 @@ func setupCustomExporter() error {
 - tRPC-Agent-Go telemetry examples.
 
 By using observability features properly, you can establish a complete monitoring system for Agent applications, discover and resolve issues in time, and continuously optimize system performance.
+
+## Exporter access before SDK payload limits
+
+`trace.RegisterChatAttributeObserver` lets an exporter observe the framework's
+serialized chat JSON before the OpenTelemetry SDK applies attribute length or
+count limits. The callback receives `(span, key, value)`. `value` is complete JSON
+only when the production `SpanAttributePolicy` allows it; denied, omitted,
+truncated, or unserializable values are reported as `nil`. This avoids recovering
+policy-restricted content from the original model objects. Ordinary span
+attributes and other exporters keep their existing behavior.
+
+Register during exporter initialization and call the returned unregister function
+before shutdown. Callbacks are synchronous and can run concurrently for different
+spans. Treat the span and borrowed bytes as read-only, copy retained data, and
+keep work bounded. Unregister prevents future observation; callbacks already in
+flight can finish. Registration does not replay requests already cached by an
+active chat call.
+
+Pair the observer with a `SpanProcessor`: track only spans seen in `OnStart`,
+discard state in `OnEnd`, and pass a private `ReadOnlySpan` snapshot to the batch
+processor. Never write derived attributes back to a shared span. This lifecycle
+also cleans up when a call fails or is canceled, or when the export queue drops
+an ended span. Clear active state on shutdown. Response updates may contain
+streaming deltas, final snapshots, or usage-only chunks; the consumer is responsible
+for their aggregation and independent field/total limits. A `nil` value invalidates
+previous data for that source key; an absent update leaves that source unchanged.
+The extension observes framework chat tracing, not arbitrary `SetAttributes`
+calls. Direct model calls must have their existing chat telemetry enabled.
