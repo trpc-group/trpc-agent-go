@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -59,6 +60,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		boolToInt(c.cfg.TrackEventTTL != nil),
 		tracksVal,
 		string(track),
+		uuid.NewString(),
 	}
 
 	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()

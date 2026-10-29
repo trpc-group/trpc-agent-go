@@ -501,6 +501,7 @@ return 1
 // ARGV[4] = track TTL override set (1 or 0)
 // ARGV[5] = updated tracks value (base64-encoded JSON array, to set as state.tracks)
 // ARGV[6] = track name
+// ARGV[7] = epoch assigned when the track Hash is first written
 // Returns: generated eventID (integer) on success, 0 if session not found.
 var luaAppendTrackEvent = redis.NewScript(`
 local dataKey = KEYS[1]
@@ -530,7 +531,9 @@ if not metaJSON then
 end
 
 -- Generate auto-increment ID via reserved "_seq" field in the data Hash
-local id = redis.call('HINCRBY', dataKey, '_seq', 1)
+redis.call('HSETNX', dataKey, '_epoch', ARGV[7])
+redis.call('HINCRBY', dataKey, '_seq', 1)
+local id = redis.call('HGET', dataKey, '_seq')
 
 -- Store event data and time index
 redis.call('HSET', dataKey, id, payload)
@@ -574,19 +577,56 @@ local minScore = ARGV[1]
 local maxScore = ARGV[2]
 local limit = tonumber(ARGV[3])
 
--- Get event IDs in chronological order (ascending score)
-local eventIDs
+-- Read the complete boundary score group in bounded batches. Keep only the
+-- latest limit entries in a min-heap, including numeric ID ordering for ties.
+local lower = minScore
 if limit > 0 then
-    -- Get the latest N by reversing, then we reverse the result
-    eventIDs = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, limit)
-    -- Reverse to chronological order
-    local reversed = {}
-    for i = #eventIDs, 1, -1 do
-        table.insert(reversed, eventIDs[i])
+    local tail = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore,
+        'WITHSCORES', 'LIMIT', limit - 1, 1)
+    if #tail > 0 then lower = tail[2] end
+end
+local function less(a, b)
+    if a.score ~= b.score then return a.score < b.score end
+    if #a.id ~= #b.id then return #a.id < #b.id end
+    return a.id < b.id
+end
+local ordered = {}
+local function retain(entry)
+    if limit <= 0 then table.insert(ordered, entry); return end
+    if #ordered < limit then
+        table.insert(ordered, entry)
+        local i = #ordered
+        while i > 1 do
+            local parent = math.floor(i / 2)
+            if not less(ordered[i], ordered[parent]) then break end
+            ordered[i], ordered[parent] = ordered[parent], ordered[i]
+            i = parent
+        end
+    elseif less(ordered[1], entry) then
+        ordered[1] = entry
+        local i = 1
+        while i * 2 <= #ordered do
+            local child = i * 2
+            if child < #ordered and less(ordered[child + 1], ordered[child]) then child = child + 1 end
+            if not less(ordered[child], ordered[i]) then break end
+            ordered[i], ordered[child] = ordered[child], ordered[i]
+            i = child
+        end
     end
-    eventIDs = reversed
-else
-    eventIDs = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore)
+end
+local offset = 0
+while true do
+    local entries = redis.call('ZRANGEBYSCORE', idxKey, lower, maxScore, 'WITHSCORES', 'LIMIT', offset, 512)
+    for i = 1, #entries, 2 do retain({id = entries[i], score = tonumber(entries[i + 1])}) end
+    if #entries < 1024 then break end
+    offset = offset + 512
+end
+table.sort(ordered, less)
+local eventIDs = {}
+local first = 1
+if limit > 0 then first = math.max(1, #ordered - limit + 1) end
+for i = first, #ordered do
+    table.insert(eventIDs, ordered[i].id)
 end
 
 local result = {}
@@ -607,5 +647,34 @@ if #eventIDs > 0 then
     end
 end
 
+if KEYS[3] then
+    local raw = redis.call('GET', KEYS[3])
+    if not raw then return redis.error_reply('track cursor session expired') end
+    local meta = cjson.decode(raw)
+    -- An empty track also needs an epoch; otherwise expiry before the first
+    -- continuation could silently discard unread events. Existing TTLs stay unchanged.
+    local dataExists = redis.call('EXISTS', dataKey) == 1
+    redis.call('HSETNX', dataKey, '_epoch', ARGV[4])
+    if not dataExists then
+        local ttl = tonumber(ARGV[5])
+        local namesTTL = redis.call('PTTL', KEYS[4])
+        redis.call('SADD', KEYS[4], ARGV[6])
+        if ttl > 0 then
+            redis.call('PEXPIRE', dataKey, math.max(1, ttl))
+            if namesTTL == -2 or (namesTTL >= 0 and namesTTL < ttl) then
+                redis.call('PEXPIRE', KEYS[4], math.max(1, ttl))
+            end
+        else
+            redis.call('PERSIST', KEYS[4])
+        end
+    end
+    local generation = meta.generation
+    if not generation or generation == '' then generation = meta.createdAt end
+    table.insert(result, 1, cjson.encode({
+        Generation = generation,
+        Epoch = redis.call('HGET', dataKey, '_epoch') or '',
+        Position = redis.call('HGET', dataKey, '_seq') or '0'
+    }))
+end
 return result
 `)

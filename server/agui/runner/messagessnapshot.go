@@ -137,7 +137,11 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 // In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
-	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey)
+	var opts []session.Option
+	if r.messagesSnapshotFollowEnabled {
+		opts = append(opts, session.WithTrackCursor(""))
+	}
+	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
@@ -211,6 +215,7 @@ func (r *runner) messagesSnapshotFollow(
 	initial *session.TrackEvents,
 ) {
 	cursorTime := lastTrackTimestamp(initial)
+	storageCursor := initial.Cursor
 	pollInterval := r.flushInterval
 	if pollInterval <= 0 {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow requires a positive flush interval",
@@ -221,26 +226,38 @@ func (r *runner) messagesSnapshotFollow(
 	if maxDuration <= 0 {
 		maxDuration = r.timeout
 	}
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	var timer *time.Timer
-	var timeout <-chan time.Time
+	followCtx := ctx
 	if maxDuration > 0 {
-		timer = time.NewTimer(maxDuration)
-		defer timer.Stop()
-		timeout = timer.C
+		var cancel context.CancelFunc
+		followCtx, cancel = context.WithTimeout(ctx, maxDuration)
+		defer cancel()
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timeout:
+	defer func() {
+		if ctx.Err() == nil && errors.Is(followCtx.Err(), context.DeadlineExceeded) {
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow timeout",
 				aguievents.WithRunID(input.runID)), input)
+		}
+	}()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-followCtx.Done():
 			return
 		case <-ticker.C:
-			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime) {
+		}
+		for {
+			if followCtx.Err() != nil {
 				return
+			}
+			previousCursor := storageCursor
+			if !r.handleMessagesSnapshotFollowTick(followCtx, input, events, &cursorTime, &storageCursor) {
+				return
+			}
+			// Drain cursor pages immediately, including empty pages that advance
+			// past filtered records. Legacy reads and caught-up cursors poll again.
+			if storageCursor == "" || storageCursor == previousCursor {
+				break
 			}
 		}
 	}
@@ -264,21 +281,40 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 	input *runInput,
 	events chan<- aguievents.Event,
 	cursorTime *time.Time,
+	storageCursor *string,
 ) bool {
-	trackEvents, err := r.tracker.GetEvents(ctx, input.key, session.WithEventTime(*cursorTime))
+	cursorMode := storageCursor != nil && *storageCursor != ""
+	opts := []session.Option{session.WithEventTime(*cursorTime)}
+	if cursorMode {
+		opts = []session.Option{session.WithTrackCursor(*storageCursor)}
+	}
+	trackEvents, err := r.tracker.GetEvents(ctx, input.key, opts...)
+	if ctx.Err() != nil {
+		return false
+	}
 	if err != nil {
-		if isEmptyTrackEventsError(err) {
+		if !cursorMode && isEmptyTrackEventsError(err) {
 			return true
 		}
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("follow track events: %v", err),
 			aguievents.WithRunID(input.runID)), input)
 		return false
 	}
+	if cursorMode {
+		if trackEvents == nil || trackEvents.Cursor == "" {
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("follow track cursor unavailable", aguievents.WithRunID(input.runID)), input)
+			return false
+		}
+		*storageCursor = trackEvents.Cursor
+	}
 	if trackEvents == nil || len(trackEvents.Events) == 0 {
 		return true
 	}
 	for _, trackEvent := range trackEvents.Events {
-		if !trackEvent.Timestamp.After(*cursorTime) {
+		if ctx.Err() != nil {
+			return false
+		}
+		if !cursorMode && !trackEvent.Timestamp.After(*cursorTime) {
 			continue
 		}
 		*cursorTime = trackEvent.Timestamp
@@ -312,19 +348,24 @@ func isEmptyTrackEventsError(err error) bool {
 }
 
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	if len(events) == 0 {
-		return false
+	// A trailing activity event must not reopen a completed run. Stop at the
+	// newest RUN_STARTED so a previous run's terminal event cannot close it.
+	for i := len(events) - 1; i >= 0; i-- {
+		if isUserMessageTrackEvent(events[i]) {
+			return false
+		}
+		evt, err := aguievents.EventFromJSON(events[i].Payload)
+		if err != nil {
+			continue
+		}
+		if _, ok := evt.(*aguievents.RunStartedEvent); ok {
+			return false
+		}
+		if terminal, _ := terminalRunSignal(evt); terminal {
+			return true
+		}
 	}
-	last := events[len(events)-1]
-	if len(last.Payload) == 0 {
-		return false
-	}
-	evt, err := aguievents.EventFromJSON(last.Payload)
-	if err != nil {
-		return false
-	}
-	terminal, _ := terminalRunSignal(evt)
-	return terminal
+	return false
 }
 
 func terminalRunSignal(evt aguievents.Event) (terminal bool, errMessage string) {
