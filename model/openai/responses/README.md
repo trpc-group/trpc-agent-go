@@ -66,6 +66,25 @@ input, hosted tools, tool search, background execution, approval interactions,
 `conversation`, `previous_response_id`, and provider compaction are outside this
 initial contract. Unsupported Chat-specific parameters fail validation.
 
+## Unknown field, event, and item compatibility
+
+These three cases have different contracts:
+
+- Unknown JSON fields on supported native output items remain in the
+  provider-owned replay payload. They survive `Message` JSON persistence and
+  are sent unchanged with that native item on the next request. Treat them as
+  opaque provider state; this adapter does not interpret them.
+- Keepalives and unknown SSE event extensions remain observable through the SDK
+  stream-event callback, including their raw event JSON. They are ignored by
+  model projection and cannot commit content, tool calls, or replay state. Only
+  a known `response.completed` event with a completed status and fully
+  validated supported output commits a response. EOF after unknown events is an
+  error.
+- An unknown output-item type or nested message content-part type is a schema
+  addition, not an unknown field. The adapter rejects the completion
+  explicitly rather than dropping the item or treating it as executable
+  output. Add adapter support before relying on a new item or content type.
+
 ## Native history and ownership
 
 Streaming reasoning replay uses the complete item from `response.output_item.done`.
@@ -87,6 +106,12 @@ editing text, roles, tool names, or arguments invalidates that binding, even
 after JSON persistence. This detects inconsistent edits; it is not an
 authentication signature. Applications should treat replay data as sensitive
 conversation state despite its opaque encoding.
+
+Replay v1 uses a fixed encoding for its message projection, including nested
+content parts and tool-call data. This release keeps the persisted replay
+format and fingerprint unchanged. If a future field can affect replay or tool
+execution, define its binding explicitly and version the binding when needed;
+serializing every `Message` field does not automatically change v1.
 
 Persisted replay metadata with an unsupported version or invalid format must
 not be silently dropped. Redis readers return these decoding errors while
@@ -196,6 +221,11 @@ omitted from JSON, preserving the existing encoding for legacy models.
 An older framework that reads and rewrites a replay-bearing session can drop
 the unknown replay field. Do not route native sessions through older writers;
 readers that reject unknown JSON fields also need to be upgraded first.
+Retaining unknown fields inside a native payload does not make a new native
+item type compatible with old readers, even when the replay format version is
+unchanged. Upgrade every reader and writer that handles replay-bearing history
+before enabling a feature that emits a new item type. An older binary may strip
+replay state, so resuming that history with the old binary cannot be promised.
 
 This adapter requires a root module version containing `Message.Replay` and
 `Info.ReplayProtocol`. Repository-relative `replace` directives support local

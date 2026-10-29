@@ -164,9 +164,7 @@ func (r ReplayData) validate() error {
 }
 
 func messageProjection(m *Message) (string, error) {
-	projection := *m
-	projection.Replay = nil
-	data, err := json.Marshal(projection)
+	data, err := marshalReplayProjectionV1(m)
 	if err != nil {
 		return "", fmt.Errorf("encode replay message projection: %w", err)
 	}

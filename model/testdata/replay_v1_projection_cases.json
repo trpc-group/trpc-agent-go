@@ -1,0 +1,109 @@
+[
+  {
+    "role": "assistant"
+  },
+  {
+    "role": "assistant"
+  },
+  {
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "type": "",
+        "function": {
+          "name": ""
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "type": "",
+        "function": {
+          "arguments": "\ninvalid JSON remains a string\n",
+          "name": ""
+        },
+        "index": 0
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content_parts": [
+      {
+        "type": "text",
+        "text": ""
+      },
+      {
+        "type": "",
+        "image": {
+          "url": "",
+          "data": null
+        }
+      },
+      {
+        "type": "",
+        "audio": {
+          "data": null,
+          "format": ""
+        }
+      },
+      {
+        "type": "",
+        "video": {
+          "data": null
+        }
+      },
+      {
+        "type": "",
+        "file": {
+          "filename": "",
+          "data": null,
+          "file_id": ""
+        }
+      },
+      {
+        "type": "",
+        "content_ref": {
+          "artifact_ref": "",
+          "artifact_version": 0
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content_parts": [
+      {
+        "type": "",
+        "image": {
+          "url": "",
+          "data": ""
+        }
+      },
+      {
+        "type": "",
+        "audio": {
+          "data": "",
+          "format": ""
+        }
+      },
+      {
+        "type": "",
+        "video": {
+          "data": ""
+        }
+      },
+      {
+        "type": "",
+        "file": {
+          "filename": "",
+          "data": "",
+          "file_id": ""
+        }
+      }
+    ]
+  }
+]
