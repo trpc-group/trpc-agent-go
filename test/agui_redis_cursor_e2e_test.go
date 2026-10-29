@@ -124,3 +124,107 @@ func TestAGUIRedisCursorHistory(t *testing.T) {
 		}
 	}
 }
+
+// backlogSessionService inserts a deterministic backlog after Redis captures the
+// initial snapshot, before follow starts. All reads and writes still use Redis.
+type backlogSessionService struct {
+	*redisservice.Service
+	appendBacklog func(context.Context) error
+}
+
+func (s *backlogSessionService) GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error) {
+	result, err := s.Service.GetTrackEvents(ctx, key, track, opts...)
+	if err != nil {
+		return nil, err
+	}
+	var options session.Options
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.TrackCursor != nil && *options.TrackCursor == "" {
+		if err := s.appendBacklog(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func TestAGUIRedisCursorBacklog(t *testing.T) {
+	url := os.Getenv("TRPC_TEST_REDIS_URL")
+	if url == "" {
+		t.Skip("set TRPC_TEST_REDIS_URL to run against a standalone Redis server")
+	}
+	for _, mode := range []redisservice.CompatMode{redisservice.CompatModeNone, redisservice.CompatModeTransition} {
+		for _, async := range []bool{false, true} {
+			t.Run(fmt.Sprintf("mode=%d/async=%t", mode, async), func(t *testing.T) {
+				svc, err := redisservice.NewService(redisservice.WithRedisClientURL(url), redisservice.WithCompatMode(mode), redisservice.WithEnableAsyncPersist(async), redisservice.WithKeyPrefix("backlog-e2e-"+uuid.NewString()))
+				require.NoError(t, err)
+				ctx := context.Background()
+				key := session.Key{AppName: testAppName, UserID: "user", SessionID: "thread"}
+				sess, err := svc.CreateSession(ctx, key, session.StateMap{})
+				require.NoError(t, err)
+				appendEvent := func(ctx context.Context, evt aguievents.Event) error {
+					raw, err := evt.ToJSON()
+					if err != nil {
+						return err
+					}
+					return svc.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "agui", Timestamp: time.Unix(1700000000, 0), Payload: json.RawMessage(raw)})
+				}
+				require.NoError(t, appendEvent(ctx, aguievents.NewRunStartedEvent("thread", "original")))
+				require.NoError(t, appendEvent(ctx, aguievents.NewTextMessageStartEvent("user-message", aguievents.WithRole("user"))))
+				require.NoError(t, appendEvent(ctx, aguievents.NewTextMessageContentEvent("user-message", "hello")))
+				require.NoError(t, appendEvent(ctx, aguievents.NewTextMessageEndEvent("user-message")))
+				require.Eventually(t, func() bool {
+					stored, err := svc.GetTrackEvents(ctx, key, "agui")
+					return err == nil && len(stored.Events) == 4
+				}, 3*time.Second, time.Millisecond)
+				const backlog = 1025 // Three Redis pages, with the terminal event in the last.
+				wrapped := &backlogSessionService{Service: svc, appendBacklog: func(ctx context.Context) error {
+					for i := 0; i < backlog; i++ {
+						if err := appendEvent(ctx, aguievents.NewCustomEvent(fmt.Sprintf("backlog-%d", i))); err != nil {
+							return err
+						}
+					}
+					if err := appendEvent(ctx, aguievents.NewRunFinishedEvent("thread", "original")); err != nil {
+						return err
+					}
+					waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					defer cancel()
+					for {
+						stored, err := svc.GetTrackEvents(waitCtx, key, "agui")
+						if err != nil {
+							return err
+						}
+						if len(stored.Events) == 4+backlog+1 {
+							return nil
+						}
+						select {
+						case <-waitCtx.Done():
+							return waitCtx.Err()
+						case <-time.After(time.Millisecond):
+						}
+					}
+				}}
+				// Only two ticks fit before the deadline. One page per tick cannot
+				// reach the already persisted terminal event; immediate draining can.
+				server := newAGUIHTTPServerWithOptions(t, &QueueModel{}, wrapped,
+					agui.WithMessagesSnapshotFollowEnabled(true), agui.WithFlushInterval(500*time.Millisecond), agui.WithMessagesSnapshotFollowMaxDuration(1250*time.Millisecond))
+				t.Cleanup(func() { require.NoError(t, svc.DeleteSession(ctx, key)) })
+				res := postJSON(t, server.Client(), server.URL+"/history",
+					`{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`, 10*time.Second)
+				events := readSSEEvents(t, res.Body)
+				require.Len(t, events, 2+backlog+1)
+				require.IsType(t, &aguievents.RunStartedEvent{}, events[0])
+				require.IsType(t, &aguievents.MessagesSnapshotEvent{}, events[1])
+				for i := 0; i < backlog; i++ {
+					evt, ok := events[i+2].(*aguievents.CustomEvent)
+					require.True(t, ok)
+					require.Equal(t, fmt.Sprintf("backlog-%d", i), evt.Name)
+				}
+				terminal, ok := events[len(events)-1].(*aguievents.RunFinishedEvent)
+				require.True(t, ok)
+				require.Equal(t, "snapshot", terminal.RunID())
+			})
+		}
+	}
+}

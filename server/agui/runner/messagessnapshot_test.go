@@ -2437,3 +2437,152 @@ func TestMessagesSnapshotDropsRunFinishedWhenChannelFullAndContextDone(t *testin
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
 	assert.IsType(t, (*aguievents.MessagesSnapshotEvent)(nil), collected[1])
 }
+
+// cursorFollowTracker lets each read exercise the continuation contract directly.
+type cursorFollowTracker struct {
+	sequenceTracker
+	get func(context.Context, ...session.Option) (*session.TrackEvents, error)
+}
+
+func (s *cursorFollowTracker) GetEvents(ctx context.Context, _ session.Key, opts ...session.Option) (*session.TrackEvents, error) {
+	return s.get(ctx, opts...)
+}
+
+func TestMessagesSnapshotFollowDrainsCursorPages(t *testing.T) {
+	calls := 0
+	tracker := &cursorFollowTracker{get: func(ctx context.Context, opts ...session.Option) (*session.TrackEvents, error) {
+		var options session.Options
+		for _, opt := range opts {
+			opt(&options)
+		}
+		require.NotNil(t, options.TrackCursor)
+		require.Equal(t, fmt.Sprint(calls), *options.TrackCursor)
+		calls++
+		page := &session.TrackEvents{Cursor: fmt.Sprint(calls)}
+		// An empty page may still advance the cursor past filtered records.
+		if calls == 2 {
+			return page, nil
+		}
+		if calls == 4 {
+			page.Events = []session.TrackEvent{newTrackEvent(t, aguievents.NewRunFinishedEvent("thread", "original"))}
+			return page, nil
+		}
+		for i := 0; i < 512; i++ {
+			page.Events = append(page.Events, newTrackEvent(t, aguievents.NewCustomEvent(fmt.Sprintf("%d-%d", calls, i))))
+		}
+		return page, nil
+	}}
+	r := &runner{tracker: tracker, flushInterval: 400 * time.Millisecond, messagesSnapshotFollowMaxDuration: time.Second}
+	events := make(chan aguievents.Event, 1025)
+	r.messagesSnapshotFollow(context.Background(), &runInput{threadID: "thread", runID: "snapshot"}, events, &session.TrackEvents{Cursor: "0"})
+	require.Equal(t, 4, calls)
+	for _, page := range []int{1, 3} {
+		for i := 0; i < 512; i++ {
+			evt := <-events
+			require.IsType(t, &aguievents.CustomEvent{}, evt)
+			require.Equal(t, fmt.Sprintf("%d-%d", page, i), evt.(*aguievents.CustomEvent).Name)
+		}
+	}
+	require.IsType(t, &aguievents.RunFinishedEvent{}, <-events)
+	require.Empty(t, events)
+}
+
+func TestMessagesSnapshotFollowCursorDrainStops(t *testing.T) {
+	for _, mode := range []string{"deadline", "blocked-read", "cancel", "caught-up"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			calls := 0
+			tracker := &cursorFollowTracker{get: func(readCtx context.Context, _ ...session.Option) (*session.TrackEvents, error) {
+				calls++
+				switch mode {
+				case "blocked-read":
+					<-readCtx.Done()
+					return nil, readCtx.Err()
+				case "cancel":
+					cancel()
+				case "caught-up":
+					return &session.TrackEvents{Cursor: "0"}, nil
+				}
+				return &session.TrackEvents{Cursor: fmt.Sprint(calls)}, nil
+			}}
+			r := &runner{tracker: tracker, flushInterval: 20 * time.Millisecond, messagesSnapshotFollowMaxDuration: 200 * time.Millisecond}
+			events := make(chan aguievents.Event, 1)
+			r.messagesSnapshotFollow(ctx, &runInput{runID: "snapshot"}, events, &session.TrackEvents{Cursor: "0"})
+			require.Positive(t, calls)
+			if mode == "cancel" {
+				require.Equal(t, 1, calls)
+				require.Empty(t, events)
+				return
+			}
+			require.NoError(t, ctx.Err(), "follow deadline must interrupt a pending read")
+			require.Len(t, events, 1)
+			failure, ok := (<-events).(*aguievents.RunErrorEvent)
+			require.True(t, ok)
+			require.Equal(t, "messages snapshot follow timeout", failure.Message)
+			if mode == "caught-up" {
+				require.LessOrEqual(t, calls, 11, "a stable cursor must wait for the next poll")
+			}
+		})
+	}
+}
+
+func TestMessagesSnapshotFollowDeadlineInterruptsDelivery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	timeoutReady := make(chan struct{})
+	payload := newTrackEvent(t, aguievents.NewCustomEvent("blocked"))
+	tracker := &cursorFollowTracker{get: func(ctx context.Context, _ ...session.Option) (*session.TrackEvents, error) {
+		return &session.TrackEvents{Cursor: "1", Events: []session.TrackEvent{payload}}, nil
+	}}
+	r := &runner{
+		tracker: tracker, flushInterval: time.Millisecond, messagesSnapshotFollowMaxDuration: 200 * time.Millisecond,
+		translateCallbacks: translator.NewCallbacks().RegisterAfterTranslate(func(_ context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			if _, ok := evt.(*aguievents.RunErrorEvent); ok {
+				close(timeoutReady)
+			}
+			return nil, nil
+		}),
+	}
+	events := make(chan aguievents.Event)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.messagesSnapshotFollow(ctx, &runInput{runID: "snapshot"}, events, &session.TrackEvents{Cursor: "0"})
+	}()
+	// Leave delivery blocked until the follow deadline has elapsed. The parent
+	// request remains live so it can receive the terminal timeout notification.
+	select {
+	case <-timeoutReady:
+	case <-ctx.Done():
+		t.Fatal("follow deadline did not interrupt event delivery")
+	}
+	select {
+	case evt := <-events:
+		failure, ok := evt.(*aguievents.RunErrorEvent)
+		require.True(t, ok)
+		require.Equal(t, "messages snapshot follow timeout", failure.Message)
+	case <-ctx.Done():
+		t.Fatal("follow deadline did not interrupt event delivery")
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("follow did not stop after the timeout notification")
+	}
+}
+
+func TestMessagesSnapshotFollowRejectsUnavailableCursor(t *testing.T) {
+	for _, result := range []*session.TrackEvents{nil, {}} {
+		tracker := &cursorFollowTracker{get: func(context.Context, ...session.Option) (*session.TrackEvents, error) {
+			return result, nil
+		}}
+		r := &runner{tracker: tracker, flushInterval: time.Millisecond, messagesSnapshotFollowMaxDuration: time.Second}
+		events := make(chan aguievents.Event, 1)
+		r.messagesSnapshotFollow(context.Background(), &runInput{runID: "snapshot"}, events, &session.TrackEvents{Cursor: "cursor"})
+		require.Len(t, events, 1)
+		failure, ok := (<-events).(*aguievents.RunErrorEvent)
+		require.True(t, ok)
+		require.Equal(t, "follow track cursor unavailable", failure.Message)
+	}
+}

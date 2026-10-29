@@ -226,26 +226,38 @@ func (r *runner) messagesSnapshotFollow(
 	if maxDuration <= 0 {
 		maxDuration = r.timeout
 	}
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	var timer *time.Timer
-	var timeout <-chan time.Time
+	followCtx := ctx
 	if maxDuration > 0 {
-		timer = time.NewTimer(maxDuration)
-		defer timer.Stop()
-		timeout = timer.C
+		var cancel context.CancelFunc
+		followCtx, cancel = context.WithTimeout(ctx, maxDuration)
+		defer cancel()
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timeout:
+	defer func() {
+		if ctx.Err() == nil && errors.Is(followCtx.Err(), context.DeadlineExceeded) {
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow timeout",
 				aguievents.WithRunID(input.runID)), input)
+		}
+	}()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-followCtx.Done():
 			return
 		case <-ticker.C:
-			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime, &storageCursor) {
+		}
+		for {
+			if followCtx.Err() != nil {
 				return
+			}
+			previousCursor := storageCursor
+			if !r.handleMessagesSnapshotFollowTick(followCtx, input, events, &cursorTime, &storageCursor) {
+				return
+			}
+			// Drain cursor pages immediately, including empty pages that advance
+			// past filtered records. Legacy reads and caught-up cursors poll again.
+			if storageCursor == "" || storageCursor == previousCursor {
+				break
 			}
 		}
 	}
@@ -277,6 +289,9 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 		opts = []session.Option{session.WithTrackCursor(*storageCursor)}
 	}
 	trackEvents, err := r.tracker.GetEvents(ctx, input.key, opts...)
+	if ctx.Err() != nil {
+		return false
+	}
 	if err != nil {
 		if !cursorMode && isEmptyTrackEventsError(err) {
 			return true
@@ -296,6 +311,9 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 		return true
 	}
 	for _, trackEvent := range trackEvents.Events {
+		if ctx.Err() != nil {
+			return false
+		}
 		if !cursorMode && !trackEvent.Timestamp.After(*cursorTime) {
 			continue
 		}

@@ -253,9 +253,9 @@ Redis continuation uses an atomic snapshot cursor and append-order pages, so eve
 
 Zset writes now store an additional sequence field in each track JSON member and maintain a `trackcursor` sorted-set index with the same track TTL. Existing readers can decode these JSON members. Existing unsequenced records remain readable, but their original order within equal timestamps cannot be recovered; new records at that timestamp follow legacy records in append order. Upgrade all writers before relying on cursor continuation: adding unsequenced records during a continuation is detected and rejected. The extra index duplicates track payload storage and is deleted with the session. The global per-session sequence is allocated in the same transaction as the event write.
 
-Hashidx limited snapshots scan tied boundary IDs in batches with bounded selection memory. A very large tied group still requires scanning the group inside the atomic Redis script. Continuation reads use pages of at most 512 sequence positions; they do not scan that timestamp group again.
+Hashidx limited snapshots scan tied boundary IDs in batches with bounded selection memory. A very large tied group still requires scanning the group inside the atomic Redis script. Continuation reads use pages of at most 512 sequence positions; they do not scan that timestamp group again. While the cursor advances, follow drains successive pages immediately; it waits for the next flush tick only after catching up. Reads and event delivery honor the follow deadline and request cancellation.
 
-To run the HTTP/SSE regression with a standalone Redis server, use `cd test && TRPC_TEST_REDIS_URL=redis://127.0.0.1:6379 go test -race -run TestAGUIRedisCursorHistory`. It covers both storage modes, synchronous/asynchronous persistence, equal timestamps across polls, terminal delivery, and session recreation. Each case uses a unique Redis prefix.
+To run the HTTP/SSE regression with a standalone Redis server, use `cd test && TRPC_TEST_REDIS_URL=redis://127.0.0.1:6379 go test -race -run TestAGUIRedisCursor`. It covers both storage modes, synchronous/asynchronous persistence, equal timestamps across polls, multi-page backlogs, terminal delivery, and session recreation. Each case uses a unique Redis prefix.
 
 Related configuration:
 
