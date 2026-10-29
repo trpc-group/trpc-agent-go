@@ -155,6 +155,8 @@ func TestTraceWorkflow(t *testing.T) {
 
 		TraceWorkflow(span, wf)
 
+		require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyTraceLoopSpanKind))
+		require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyTraceLoopEntityName))
 		if !hasAttr(span.attrs, semconvtrace.KeyGenAIOperationName, OperationWorkflow) {
 			t.Fatalf("missing operation name attribute")
 		}
@@ -284,6 +286,8 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	inv := &agent.Invocation{AgentName: "alpha", InvocationID: "inv-1", Session: &session.Session{ID: "sess-1", UserID: "u-1"}}
 	s := newRecordingSpan()
 	TraceBeforeInvokeAgent(s, inv, "desc", "inst", gc)
+	require.False(t, hasAttrKey(s.attrs, semconvtrace.KeyTraceLoopSpanKind))
+	require.False(t, hasAttrKey(s.attrs, semconvtrace.KeyTraceLoopEntityName))
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
 	}
@@ -324,11 +328,15 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	if !hasAttr(s3.attrs, semconvtrace.KeyGenAIToolCallID, "c1") {
 		t.Fatalf("missing call id")
 	}
+	require.True(t, hasAttr(s3.attrs, semconvtrace.KeyTraceLoopSpanKind, "tool"))
+	require.True(t, hasAttr(s3.attrs, semconvtrace.KeyTraceLoopEntityName, decl.Name))
 	s4 := newRecordingSpan()
 	TraceMergedToolCalls(s4, evt2)
 	if !hasAttr(s4.attrs, semconvtrace.KeyGenAIToolName, ToolNameMergedTools) {
 		t.Fatalf("missing merged tool name")
 	}
+	require.False(t, hasAttrKey(s4.attrs, semconvtrace.KeyTraceLoopSpanKind))
+	require.False(t, hasAttrKey(s4.attrs, semconvtrace.KeyTraceLoopEntityName))
 
 	// Chat
 	inv2 := &agent.Invocation{InvocationID: "i1", Session: &session.Session{ID: "s1"}}
@@ -341,6 +349,8 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 		EventID:          "e1",
 		TimeToFirstToken: 0,
 	})
+	require.False(t, hasAttrKey(s5.attrs, semconvtrace.KeyTraceLoopSpanKind))
+	require.False(t, hasAttrKey(s5.attrs, semconvtrace.KeyTraceLoopEntityName))
 	if !hasAttr(s5.attrs, semconvtrace.KeyInvocationID, "i1") {
 		t.Fatalf("missing invocation id")
 	}
@@ -599,6 +609,8 @@ func TestTraceToolCall_NilPaths(t *testing.T) {
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent))
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIOperationName, OperationExecuteTool))
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolName, "test_tool"))
+			require.True(t, hasAttr(span.attrs, "traceloop.span.kind", "tool"))
+			require.True(t, hasAttr(span.attrs, "traceloop.entity.name", decl.Name))
 
 			// Verify error status when err is provided
 			if tt.err != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil && tt.rspEvent.Response.Error == nil {
@@ -1171,6 +1183,8 @@ func TestTraceToolCall_UsesFormattedErrorType(t *testing.T) {
 
 	require.Equal(t, codes.Error, span.status)
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyErrorType, "api_error_42"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyTraceLoopSpanKind, "tool"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyTraceLoopEntityName, decl.Name))
 }
 
 func TestTraceMergedToolCalls_WithError(t *testing.T) {

@@ -13,6 +13,21 @@ tRPC-Agent-Go 框架内置了全面的可观测（Observability）功能，基�
 - **多平台支持**：支持 Jaeger、Prometheus、Galileo、智研监控宝 等主流监控平台
 - **灵活配置**：支持多种配置方式和自定义扩展
 
+## 工具调用 Span 的 OpenLLMetry 兼容性
+
+启用链路追踪后，单个工具调用 span 默认会包含以下 OpenLLMetry 兼容属性，无需额外配置或使用特定后端的 exporter。
+
+| 属性 | 值 | 适用范围 |
+| --- | --- | --- |
+| `traceloop.span.kind` | `"tool"` | 单个工具调用 span |
+| `traceloop.entity.name` | 工具声明名称，与 `gen_ai.tool.name` 相同 | 单个工具调用 span |
+
+这些属性是 OpenTelemetry span 上携带的 OpenLLMetry 约定，并非官方 OpenTelemetry 语义约定中的键。它们会补充现有的 `gen_ai.operation.name = "execute_tool"` 和 `gen_ai.tool.name` 属性；现有 span 名称和 GenAI 属性保持不变。
+
+框架不会为合成的合并工具 span、agent span、model span 或 workflow span 添加这些兼容属性。合并工具 span 会对多个工具调用进行分组，并不代表单个工具的执行。
+
+应用如需引用这些键，可使用 `trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace` 中的 `KeyTraceLoopSpanKind` 和 `KeyTraceLoopEntityName`。
+
 ## 与不同的监控平台集成
 
 ### Langfuse 集成
