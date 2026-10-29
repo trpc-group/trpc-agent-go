@@ -85,9 +85,11 @@ type SessionState struct {
 	State session.StateMap `json:"state"`
 	// Generation fences coordinated state initialization across session recreation.
 	// An empty value identifies a legacy record and is populated on first use.
-	Generation string    `json:"generation,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	Generation string `json:"generation,omitempty"`
+	// TrackSequence allocates exact sorted-set scores in the event write transaction.
+	TrackSequence uint64    `json:"trackSequence,omitempty,string"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 func buildListedSession(
@@ -376,7 +378,7 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 		return fmt.Errorf("list tracks: %w", err)
 	}
 	for _, track := range tracks {
-		txPipe.Del(ctx, c.trackKey(key, track))
+		txPipe.Del(ctx, c.trackKey(key, track), c.trackCursorKey(key, track))
 	}
 	txPipe.Del(ctx, c.trackIndexKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
@@ -387,6 +389,7 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 
 // AppendTrackEvent persists a track event to ZSet storage.
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	var sequence uint64
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
@@ -396,6 +399,23 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		ctx,
 		key,
 		func(sessState *SessionState) error {
+			// Legacy writers can drop unknown session metadata. Recover the
+			// track's high-water mark before allocating another sequence.
+			sequence, err = c.nextTrackSequence(ctx, key, trackEvent.Track, sessState.TrackSequence)
+			if err != nil {
+				return err
+			}
+			sessState.TrackSequence = sequence
+
+			// The leading field sorts after legacy {"track":...} members and
+			// orders equal timestamps by a fixed-width append sequence.
+			eventBytes, err = json.Marshal(struct {
+				Sequence string `json:"z_sequence"`
+				session.TrackEvent
+			}{fmt.Sprintf("%020d", sequence), *trackEvent})
+			if err != nil {
+				return err
+			}
 			sess := &session.Session{
 				ID:      key.SessionID,
 				AppName: key.AppName,
@@ -412,6 +432,8 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		func(pipe redis.Pipeliner) {
 			trackKey := c.trackKey(key, trackEvent.Track)
 			trackIndexKey := c.trackIndexKey(key)
+			cursorKey := c.trackCursorKey(key, trackEvent.Track)
+			pipe.ZAdd(ctx, cursorKey, redis.Z{Score: float64(sequence), Member: eventBytes})
 			pipe.ZAdd(ctx, trackKey, redis.Z{
 				Score:  float64(trackEvent.Timestamp.UnixNano()),
 				Member: eventBytes,
@@ -420,9 +442,11 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 			trackTTL := c.cfg.effectiveTrackEventTTL()
 			if trackTTL > 0 {
 				pipe.Expire(ctx, trackKey, trackTTL)
+				pipe.Expire(ctx, cursorKey, trackTTL)
 				pipe.Expire(ctx, trackIndexKey, trackTTL)
 			} else if c.cfg.TrackEventTTL != nil {
 				pipe.Persist(ctx, trackKey)
+				pipe.Persist(ctx, cursorKey)
 				pipe.Persist(ctx, trackIndexKey)
 			}
 		},
@@ -764,6 +788,11 @@ func (c *Client) eventKey(key session.Key) string {
 // trackKey returns the Redis key for track events (with prefix).
 func (c *Client) trackKey(key session.Key, track session.Track) string {
 	return c.prefixedKey(fmt.Sprintf("track:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
+}
+
+// trackCursorKey isolates the append-order index from user-chosen track names.
+func (c *Client) trackCursorKey(key session.Key, track session.Track) string {
+	return c.prefixedKey(fmt.Sprintf("trackcursor:{%s}:%s:%s:%s", key.AppName, key.UserID, key.SessionID, track))
 }
 
 // trackIndexKey returns the Redis key for session track names.

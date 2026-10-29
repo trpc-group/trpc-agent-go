@@ -450,20 +450,20 @@ func TestClient_TrackEventsEqualTimestampOrder(t *testing.T) {
 	_, err := c.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
 	timestamp := time.Unix(1700000000, 0)
-	for i := 1; i <= 105; i++ {
+	for i := 1; i <= 1105; i++ {
 		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{Track: "alpha", Timestamp: timestamp, Payload: json.RawMessage(fmt.Sprint(i))}, nil))
 	}
 	for _, limit := range []int{0, 1, 7, 100, 110} {
 		t.Run(fmt.Sprint(limit), func(t *testing.T) {
 			events, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, limit, time.Time{})
 			require.NoError(t, err)
-			count := 105
+			count := 1105
 			if limit > 0 && limit < count {
 				count = limit
 			}
 			require.Len(t, events["alpha"], count)
 			for i, evt := range events["alpha"] {
-				require.Equal(t, fmt.Sprint(106-count+i), string(evt.Payload))
+				require.Equal(t, fmt.Sprint(1106-count+i), string(evt.Payload))
 			}
 		})
 	}
@@ -503,5 +503,29 @@ func TestClient_TrackEventsBoundaryScoreOrder(t *testing.T) {
 		for i, evt := range got["alpha"] {
 			require.JSONEq(t, fmt.Sprintf("%q", want[i]), string(evt.Payload))
 		}
+	}
+}
+
+func TestTrackCursorAppendBeyondFloatPrecision(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "large-sequence"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, c.keys.TrackDataKey(key, "track"), "_seq", "9007199254740991").Err())
+	opts := &session.Options{}
+	session.WithTrackCursor("")(opts)
+	snapshot, err := c.ReadTrackCursor(ctx, key, "track", opts)
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{Track: "track", Timestamp: time.Unix(1700000000, 0), Payload: json.RawMessage(fmt.Sprint(i))}, nil))
+	}
+	session.WithTrackCursor(snapshot.Cursor)(opts)
+	page, err := c.ReadTrackCursor(ctx, key, "track", opts)
+	require.NoError(t, err)
+	require.Len(t, page.Events, 3)
+	for i, evt := range page.Events {
+		require.Equal(t, fmt.Sprint(i), string(evt.Payload))
 	}
 }

@@ -1310,7 +1310,9 @@ func TestTrackEndsWithTerminalRunEvent(t *testing.T) {
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{}))
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{{Track: track.TrackAGUI, Timestamp: base}}))
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{{Track: track.TrackAGUI, Payload: []byte("{"), Timestamp: base}}))
-	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, nonTerminal}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, nonTerminal}))
+	started := newTrackEventAt(t, aguievents.NewRunStartedEvent("thread", "next-run"), base.Add(3*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, started, nonTerminal}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{nonTerminal, finished}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{nonTerminal, runErr}))
 }

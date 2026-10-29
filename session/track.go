@@ -41,6 +41,9 @@ type TrackEvent struct {
 type TrackEvents struct {
 	Track  Track        `json:"track"`
 	Events []TrackEvent `json:"events"`
+	// Cursor is an opaque continuation token, returned only when requested with
+	// WithTrackCursor by a supporting backend. It is not part of the wire format.
+	Cursor string `json:"-"`
 }
 
 // TracksFromState returns the tracks stored in the session state.
@@ -78,4 +81,15 @@ func ensureTrackExists(state StateMap, track Track) error {
 	}
 	state[tracksStateKey] = encoded
 	return nil
+}
+
+// WithTrackCursor requests an atomic track snapshot and continuation token when
+// cursor is empty, or events persisted after a previously returned token otherwise.
+// Tokens are scoped to the backend, session generation and track. Callers must not
+// modify them. Cursor continuation ignores EventTime and EventNum and may return
+// a bounded page; an empty page can still carry an updated token. Unsupported
+// backends return no Cursor; callers must check it before continuing in this mode.
+// Expired or invalid tokens must produce an error instead of silently restarting.
+func WithTrackCursor(cursor string) Option {
+	return func(o *Options) { o.TrackCursor = &cursor }
 }
