@@ -381,6 +381,18 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 // Returns the full CallToolResult including Meta field for metadata access.
 func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) (*mcp.CallToolResult, error) {
 	var result *mcp.CallToolResult
+	var attempt toolCallAttempt
+	m.mu.RLock()
+	taskClient, supportsTasks := m.client.(toolTaskClient)
+	tasksEnabled := supportsTasks && taskClient.TasksEnabled()
+	m.mu.RUnlock()
+	if tasksEnabled {
+		// Task recovery shares one deadline; ordinary clients keep their existing
+		// per-attempt timeout behavior.
+		var cancel context.CancelFunc
+		ctx, cancel = m.createTimeoutContext(ctx, "callTool")
+		defer cancel()
+	}
 
 	// Execute with session reconnection support
 	operationErr := m.executeWithSessionReconnect(ctx, func() error {
@@ -393,13 +405,13 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 
 		log.DebugContext(ctx, "Calling tool", "name", name, "arguments", arguments)
 
-		toolCtx, cancel := m.createTimeoutContext(ctx, "callTool")
-		defer cancel()
 		callReq := &mcp.CallToolRequest{}
 		callReq.Params.Name = name
 		callReq.Params.Arguments = arguments
 
-		callResp, callErr := m.client.CallTool(toolCtx, callReq)
+		callCtx, cancel := m.createTimeoutContext(ctx, "callTool")
+		defer cancel()
+		callResp, callErr := attempt.call(callCtx, m.client, callReq)
 		if callErr != nil {
 			// Enhanced error with parameter information.
 			enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, callErr)
@@ -495,7 +507,7 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 		if ctx.Err() != nil {
 			log.DebugfContext(ctx, "Context cancelled or timed out, stopping reconnection attempts "+
 				"(attempt=%d, error=%v)", attempt, ctx.Err())
-			return fmt.Errorf("reconnection aborted: %w", ctx.Err())
+			return fmt.Errorf("reconnection aborted: %w", errors.Join(ctx.Err(), err))
 		}
 
 		log.DebugfContext(ctx,
@@ -557,6 +569,18 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 
 	if err == nil {
 		return false
+	}
+
+	var taskErr toolTaskFailure
+	if errors.As(err, &taskErr) && !taskErr.ToolCallReplaySafe() {
+		if taskErr.TaskID() == "" {
+			return false
+		}
+		// The SDK's HTTP transport reports expired sessions with this wording.
+		// Only task polling may use this fallback; never replay tools/call.
+		if strings.Contains(err.Error(), "status code 404") {
+			return true
+		}
 	}
 
 	errStr := err.Error()
