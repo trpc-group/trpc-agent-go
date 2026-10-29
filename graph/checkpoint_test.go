@@ -1401,6 +1401,132 @@ func TestProcessModelResponse_RepairsToolCallArgumentsWhenEnabled(t *testing.T) 
 	require.Equal(t, "{\"a\":2}", string(rsp.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
+func TestProcessModelResponse_BeforeResponseDispatchRunsAfterRepair(t *testing.T) {
+	var seenArguments []byte
+	repairEnabled := true
+	p := &hookPlugin{
+		name: "complete-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.BeforeResponseDispatch(func(
+				_ context.Context,
+				args *plugin.BeforeResponseDispatchArgs,
+			) error {
+				seenArguments = append(
+					[]byte(nil),
+					args.Response.Choices[0].Message.ToolCalls[0].Function.Arguments...,
+				)
+				return nil
+			})
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationPlugins(plugin.MustNewManager(p)),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &repairEnabled,
+		}),
+	)
+	baseCtx := agent.NewInvocationContext(context.Background(), inv)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(baseCtx, "s")
+	defer span.End()
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool",
+						Arguments: []byte("{a:2}"),
+					},
+				}},
+			},
+		}},
+	}
+
+	_, _, err := processModelResponse(ctx, modelResponseConfig{
+		Response:     rsp,
+		Invocation:   inv,
+		EventChan:    nil,
+		InvocationID: "inv",
+		SessionID:    "sid",
+		LLMModel:     &dummyModel{},
+		Request:      &model.Request{},
+		Span:         span,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "{\"a\":2}", string(seenArguments))
+}
+
+func TestProcessModelResponse_BeforeResponseDispatchErrorStopsBeforeEvent(t *testing.T) {
+	wantErr := agent.NewStopError("stop")
+	p := &hookPlugin{
+		name: "complete-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.BeforeResponseDispatch(func(
+				_ context.Context,
+				_ *plugin.BeforeResponseDispatchArgs,
+			) error {
+				return wantErr
+			})
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationPlugins(plugin.MustNewManager(p)))
+	baseCtx := agent.NewInvocationContext(context.Background(), inv)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(baseCtx, "s")
+	defer span.End()
+	eventChan := make(chan *event.Event, 1)
+
+	_, _, err := processModelResponse(ctx, modelResponseConfig{
+		Response:     &model.Response{Done: true},
+		Invocation:   inv,
+		EventChan:    eventChan,
+		InvocationID: "inv",
+		SessionID:    "sid",
+		LLMModel:     &dummyModel{},
+		Request:      &model.Request{},
+		Span:         span,
+	})
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	select {
+	case <-eventChan:
+		t.Fatal("response event emitted after before-tool-execution error")
+	default:
+	}
+}
+
+func TestRunBeforeResponseDispatchCallbacksSkipsPartialResponses(t *testing.T) {
+	var calls int
+	p := &hookPlugin{
+		name: "complete-response-hook",
+		reg: func(r *plugin.Registry) {
+			r.BeforeResponseDispatch(func(
+				_ context.Context,
+				_ *plugin.BeforeResponseDispatchArgs,
+			) error {
+				calls++
+				return nil
+			})
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationPlugins(plugin.MustNewManager(p)),
+	)
+	request := &model.Request{}
+
+	require.NoError(t, runBeforeResponseDispatchCallbacks(
+		context.Background(), inv, request, &model.Response{IsPartial: true},
+	))
+	require.Equal(t, 0, calls)
+	require.NoError(t, runBeforeResponseDispatchCallbacks(
+		context.Background(), inv, request, &model.Response{},
+	))
+	require.Equal(t, 1, calls)
+}
+
 func TestProcessModelResponse_DoneWithContentEmitsEvent(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")

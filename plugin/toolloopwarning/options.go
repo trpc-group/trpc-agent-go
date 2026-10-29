@@ -15,6 +15,7 @@ type Option func(*options)
 type options struct {
 	warning           string
 	excludedToolNames map[string]struct{}
+	stopAfterWarning  bool
 }
 
 func newOptions(opts ...Option) *options {
@@ -52,5 +53,16 @@ func WithExcludedToolNames(names ...string) Option {
 				o.excludedToolNames[name] = struct{}{}
 			}
 		}
+	}
+}
+
+// WithStopAfterWarning stops the invocation with agent.StopError when the
+// model selects the same ordered tool bundle after the warning. The comparison
+// is made at the final execution boundary, after enabled tool-call repair. A
+// response that becomes identical only after repair is therefore stopped too.
+// Without this option, the plugin remains warning-only for compatibility.
+func WithStopAfterWarning() Option {
+	return func(o *options) {
+		o.stopAfterWarning = true
 	}
 }

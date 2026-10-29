@@ -32,6 +32,13 @@
 // WithExcludedToolNames can exclude polling or other tools whose repeated
 // results are expected.
 //
-// The plugin makes no additional model or tool calls. It does not stop or
-// retry the invocation.
+// By default the plugin is warning-only: it makes no additional model or tool
+// calls and does not stop or retry the invocation. WithStopAfterWarning arms
+// the current invocation after the warning is appended. If the next complete
+// model response selects the same ordered tool bundle, the plugin compares the
+// complete response after custom-response replacement and enabled JSON/text
+// tool-call repair, then returns an agent.StopError before any of those tools
+// execute. Ordinary complete responses also reach this boundary so the plugin
+// can disarm stale state. The stop diagnostic contains only the bounded action
+// fingerprint, not tool arguments or results.
 package toolloopwarning
