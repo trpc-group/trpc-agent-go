@@ -819,7 +819,7 @@ func TestUpdateSessionStateCAS_RetriesOnConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	attempts := 0
-	err = c.updateSessionStateCAS(ctx, key, func(sessState *SessionState) error {
+	err = c.updateSessionStateCAS(ctx, key, func(_ *redis.Tx, sessState *SessionState) error {
 		attempts++
 		sessState.State["new"] = []byte("2")
 		if attempts == 1 {
@@ -855,7 +855,7 @@ func TestUpdateSessionStateCAS_CanceledDuringRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	attempts := 0
-	err = c.updateSessionStateCAS(ctx, key, func(sessState *SessionState) error {
+	err = c.updateSessionStateCAS(ctx, key, func(_ *redis.Tx, sessState *SessionState) error {
 		attempts++
 		conflictBytes, err := json.Marshal(&SessionState{
 			ID:        key.SessionID,

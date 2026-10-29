@@ -651,7 +651,23 @@ if KEYS[3] then
     local raw = redis.call('GET', KEYS[3])
     if not raw then return redis.error_reply('track cursor session expired') end
     local meta = cjson.decode(raw)
-    if redis.call('EXISTS', dataKey) == 1 then redis.call('HSETNX', dataKey, '_epoch', ARGV[4]) end
+    -- An empty track also needs an epoch; otherwise expiry before the first
+    -- continuation could silently discard unread events. Existing TTLs stay unchanged.
+    local dataExists = redis.call('EXISTS', dataKey) == 1
+    redis.call('HSETNX', dataKey, '_epoch', ARGV[4])
+    if not dataExists then
+        local ttl = tonumber(ARGV[5])
+        local namesTTL = redis.call('PTTL', KEYS[4])
+        redis.call('SADD', KEYS[4], ARGV[6])
+        if ttl > 0 then
+            redis.call('PEXPIRE', dataKey, math.max(1, ttl))
+            if namesTTL == -2 or (namesTTL >= 0 and namesTTL < ttl) then
+                redis.call('PEXPIRE', KEYS[4], math.max(1, ttl))
+            end
+        else
+            redis.call('PERSIST', KEYS[4])
+        end
+    end
     local generation = meta.generation
     if not generation or generation == '' then generation = meta.createdAt end
     table.insert(result, 1, cjson.encode({

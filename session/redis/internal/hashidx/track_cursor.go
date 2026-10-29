@@ -26,14 +26,30 @@ func (c *Client) ReadTrackCursor(ctx context.Context, key session.Key, track ses
 	if err != nil {
 		return nil, err
 	}
-	keys := []string{c.keys.TrackDataKey(key, track), c.keys.TrackTimeIndexKey(key, track), c.keys.SessionMetaKey(key)}
+	if *opts.TrackCursor == "" {
+		// Upgrade legacy metadata before capturing the atomic snapshot. A session
+		// recreated between these calls is captured with its own generation.
+		_, _, _, exists, err := c.LoadSessionStateValue(ctx, key, "")
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, fmt.Errorf("track cursor session expired")
+		}
+	}
+	trackTTL := c.cfg.effectiveTrackEventTTL()
+	trackTTLMillis := trackTTL.Milliseconds()
+	if trackTTL > 0 && trackTTLMillis == 0 {
+		trackTTLMillis = 1
+	}
+	keys := []string{c.keys.TrackDataKey(key, track), c.keys.TrackTimeIndexKey(key, track), c.keys.SessionMetaKey(key), c.keys.TrackIndexKey(key)}
 	var raw []string
 	if *opts.TrackCursor == "" {
 		min := "-inf"
 		if !opts.EventTime.IsZero() {
 			min = fmt.Sprint(opts.EventTime.UnixNano())
 		}
-		raw, err = c.runScript(ctx, luaLoadTrackEvents, keys, min, "+inf", opts.EventNum, uuid.NewString()).StringSlice()
+		raw, err = c.runScript(ctx, luaLoadTrackEvents, keys, min, "+inf", opts.EventNum, uuid.NewString(), trackTTLMillis, string(track)).StringSlice()
 	} else {
 		if _, err := strconv.ParseUint(token.Position, 10, 63); err != nil {
 			return nil, fmt.Errorf("invalid track cursor position")
@@ -60,7 +76,7 @@ local function less(a, b)
     return a < b
 end
 if generation ~= ARGV[1] or less(high, position) or
-    (epoch ~= ARGV[2] and not (position == '0' and ARGV[2] == '')) then
+    epoch == '' or epoch ~= ARGV[2] then
     return redis.error_reply('track cursor generation expired')
 end
 local function increment(s)

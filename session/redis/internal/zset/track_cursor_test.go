@@ -71,18 +71,18 @@ func TestNextTrackSequenceRejectsCorruptionAndExhaustion(t *testing.T) {
 	for _, payload := range []string{"{", `{"z_sequence":"invalid"}`} {
 		require.NoError(t, rdb.Del(ctx, c.trackCursorKey(key, "track")).Err())
 		require.NoError(t, rdb.ZAdd(ctx, c.trackCursorKey(key, "track"), redis.Z{Score: 1, Member: payload}).Err())
-		_, err := c.nextTrackSequence(ctx, key, "track", 0)
+		_, err := nextTrackSequence(ctx, rdb, c.trackCursorKey(key, "track"), 0)
 		require.Error(t, err)
 	}
 	require.NoError(t, rdb.Del(ctx, c.trackCursorKey(key, "track")).Err())
 	require.NoError(t, rdb.ZAdd(ctx, c.trackCursorKey(key, "track"), redis.Z{Score: 7, Member: `{"z_sequence":"00000000000000000007"}`}).Err())
-	recovered, err := c.nextTrackSequence(ctx, key, "track", 0)
+	recovered, err := nextTrackSequence(ctx, rdb, c.trackCursorKey(key, "track"), 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(8), recovered)
-	_, err = c.nextTrackSequence(ctx, key, "track", 9007199254740991)
+	_, err = nextTrackSequence(ctx, rdb, c.trackCursorKey(key, "track"), 9007199254740991)
 	require.ErrorContains(t, err, "exhausted")
 	require.NoError(t, rdb.Del(ctx, c.trackCursorKey(key, "track")).Err())
 	require.NoError(t, rdb.Set(ctx, c.trackCursorKey(key, "track"), "wrong-type", 0).Err())
-	_, err = c.nextTrackSequence(ctx, key, "track", 0)
+	_, err = nextTrackSequence(ctx, rdb, c.trackCursorKey(key, "track"), 0)
 	require.ErrorContains(t, err, "read track sequence")
 }

@@ -20,10 +20,11 @@ import (
 
 // TrackCursor identifies a persisted position within one storage generation.
 type TrackCursor struct {
-	Scope      string
-	Generation string
-	Epoch      string
-	Position   string
+	Scope       string
+	Generation  string
+	Epoch       string
+	Position    string
+	LegacyCount string `json:",omitempty"`
 }
 
 // DecodeTrackCursor validates a token's storage, session and track scope.

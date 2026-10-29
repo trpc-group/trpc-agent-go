@@ -205,13 +205,14 @@ func TestAGUIRedisCursorBacklog(t *testing.T) {
 						}
 					}
 				}}
-				// Only two ticks fit before the deadline. One page per tick cannot
+				// Allow the HTTP request time to seed the backlog before follow starts.
+				// Only two ticks fit before the follow deadline. One page per tick cannot
 				// reach the already persisted terminal event; immediate draining can.
 				server := newAGUIHTTPServerWithOptions(t, &QueueModel{}, wrapped,
 					agui.WithMessagesSnapshotFollowEnabled(true), agui.WithFlushInterval(500*time.Millisecond), agui.WithMessagesSnapshotFollowMaxDuration(1250*time.Millisecond))
 				t.Cleanup(func() { require.NoError(t, svc.DeleteSession(ctx, key)) })
 				res := postJSON(t, server.Client(), server.URL+"/history",
-					`{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`, 10*time.Second)
+					`{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`, 30*time.Second)
 				events := readSSEEvents(t, res.Body)
 				require.Len(t, events, 2+backlog+1)
 				require.IsType(t, &aguievents.RunStartedEvent{}, events[0])

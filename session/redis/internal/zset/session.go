@@ -251,7 +251,7 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.
 	return c.updateSessionStateCAS(
 		ctx,
 		key,
-		func(sessState *SessionState) error {
+		func(_ *redis.Tx, sessState *SessionState) error {
 			sessState.UpdatedAt = time.Now()
 			session.ApplyEventStateDeltaMap(sessState.State, event)
 			return nil
@@ -350,7 +350,7 @@ func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state 
 	return c.updateSessionStateCAS(
 		ctx,
 		key,
-		func(sessState *SessionState) error {
+		func(_ *redis.Tx, sessState *SessionState) error {
 			for k, v := range state {
 				if v == nil {
 					sessState.State[k] = nil
@@ -398,10 +398,10 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 	return c.updateSessionStateCAS(
 		ctx,
 		key,
-		func(sessState *SessionState) error {
+		func(tx *redis.Tx, sessState *SessionState) error {
 			// Legacy writers can drop unknown session metadata. Recover the
 			// track's high-water mark before allocating another sequence.
-			sequence, err = c.nextTrackSequence(ctx, key, trackEvent.Track, sessState.TrackSequence)
+			sequence, err = nextTrackSequence(ctx, tx, c.trackCursorKey(key, trackEvent.Track), sessState.TrackSequence)
 			if err != nil {
 				return err
 			}
@@ -456,7 +456,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 func (c *Client) updateSessionStateCAS(
 	ctx context.Context,
 	key session.Key,
-	mutate func(sessState *SessionState) error,
+	mutate func(tx *redis.Tx, sessState *SessionState) error,
 	extra func(pipe redis.Pipeliner),
 ) error {
 	sessKey := c.sessionStateKey(key)
@@ -482,7 +482,7 @@ func (c *Client) updateSessionStateCAS(
 			if sessState.State == nil {
 				sessState.State = make(session.StateMap)
 			}
-			if err := mutate(sessState); err != nil {
+			if err := mutate(tx, sessState); err != nil {
 				return err
 			}
 
