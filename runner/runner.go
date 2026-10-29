@@ -1541,12 +1541,16 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		appender.Clear(loop.invocation)
 		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
-		r.unregisterRun(loop.invocation.RunOptions.RequestID)
-		close(loop.processedEventCh)
-		loop.invocation.CleanupNotice(ctx)
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
 		}
+		if loop.agentEventCh != nil {
+			for range loop.agentEventCh {
+			}
+		}
+		close(loop.processedEventCh)
+		r.unregisterRun(loop.invocation.RunOptions.RequestID)
+		loop.invocation.CleanupNotice(ctx)
 	}()
 	for {
 		select {
