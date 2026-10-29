@@ -87,7 +87,13 @@ func (m *Model) GenerateContent(
 		return nil, err
 	}
 	reqOpts := m.requestOptions(request)
-	beforeCallback, err := json.Marshal(params)
+	paramsToEncode := params
+	if m.requestCallback == nil {
+		// History is already validated by buildParams. Keep synchronous encoding
+		// errors for the remaining fields without serializing that history again.
+		paramsToEncode.Input = responses.ResponseNewParamsInputUnion{}
+	}
+	beforeCallback, err := json.Marshal(paramsToEncode)
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: snapshot request parameters: %w", err)
 	}
