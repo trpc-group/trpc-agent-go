@@ -814,6 +814,17 @@ func (s *Service) GetTrackEvents(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if opt.TrackCursor != nil {
+		if opt.EventNum != 0 || !opt.EventTime.IsZero() || opt.EventPage != nil {
+			return nil, fmt.Errorf("%w: cursor cannot be combined with event filters", session.ErrTrackCursorInvalid)
+		}
+		events, next, err := s.readTrackEvents(ctx, key, track, *opt.TrackCursor)
+		if err != nil {
+			return nil, err
+		}
+		events.Cursor = &next
+		return events, nil
+	}
 	trackEvents, err := s.getTrackEventsByTrackLists(
 		ctx,
 		[]session.Key{key},
