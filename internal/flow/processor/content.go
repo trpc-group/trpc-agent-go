@@ -1259,10 +1259,37 @@ func (p *ContentRequestProcessor) lookUpSessionSummary(
 		text, cutoff := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
 		if text != "" {
 			diagnostics.result = summaryinject.LookupResultPrefix
+			return text, cutoff, diagnostics
 		}
-		return text, cutoff, diagnostics
+		if sum := nearestAncestorSummary(inv.Session.Summaries, filter); sum != nil {
+			diagnostics.result = summaryinject.LookupResultAncestor
+			return sum.Summary,
+				summaryHistoryCutoffFromBoundary(sum.CutoffBoundary()),
+				diagnostics
+		}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 	return "", summaryHistoryCutoff{}, diagnostics
+}
+
+// nearestAncestorSummary returns the closest ancestor's non-empty summary.
+// Prefix mode projects ancestor events into a child branch, so their summary
+// must follow. Callers must hold the session summaries read lock.
+func nearestAncestorSummary(
+	summaries map[string]*session.Summary,
+	filter string,
+) *session.Summary {
+	key := filter
+	for {
+		i := strings.LastIndex(key, event.FilterKeyDelimiter)
+		if i <= 0 {
+			return nil
+		}
+		key = key[:i]
+		if sum := summaries[key]; sum != nil && sum.Summary != "" {
+			return sum
+		}
+	}
 }
 
 // summaryLookupStrategy reports the summary scope this processor searches.
@@ -1293,6 +1320,9 @@ func (p *ContentRequestProcessor) countMatchingSummaries(
 			if session.SummaryFilterKeyMatchesPrefix(key, filter) {
 				count++
 			}
+		}
+		if count == 0 && nearestAncestorSummary(summaries, filter) != nil {
+			return 1
 		}
 		return count
 	}
