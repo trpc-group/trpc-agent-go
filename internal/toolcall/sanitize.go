@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -49,6 +50,8 @@ var (
 // This function also downgrades orphan tool calls that are not associated with a kept
 // tool result message, and orphan tool result messages that are not associated with a
 // kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
+// Native assistant records and their following tool results are retained unchanged;
+// their consumer validates native bindings and call/result completeness.
 // The context is used to attach request-scoped metadata to downgrade warnings.
 func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, tools map[string]tool.Tool) []model.Message {
 	return SanitizeMessagesWithToolsResult(ctx, messages, tools).Messages
@@ -75,7 +78,9 @@ func SanitizeMessagesWithToolsResult(
 	}
 	if !containsToolMessages(messages) {
 		out := make([]model.Message, len(messages))
-		copy(out, messages)
+		for i, msg := range messages {
+			out[i] = modelreplay.CloneMessage(msg)
+		}
 		return SanitizeResult{Messages: out}
 	}
 	builder := sanitizeResultBuilder{
@@ -83,6 +88,17 @@ func SanitizeMessagesWithToolsResult(
 	}
 	for i := 0; i < len(messages); {
 		msg := messages[i]
+		if msg.Role == model.RoleAssistant && msg.Replay != nil {
+			// Native projections cannot be normalized or split, including when
+			// results are missing. Keep the round for native history validation.
+			builder.append(indexedMessage{message: modelreplay.CloneMessage(msg), sourceIndex: i})
+			i++
+			for i < len(messages) && messages[i].Role == model.RoleTool {
+				builder.append(indexedMessage{message: messages[i], sourceIndex: i})
+				i++
+			}
+			continue
+		}
 		if msg.Role == model.RoleAssistant && len(msg.ToolCalls) > 0 {
 			next := i + 1
 			for next < len(messages) && messages[next].Role == model.RoleTool {

@@ -1,0 +1,48 @@
+{
+  "role": "assistant",
+  "content": "Looking up the record.",
+  "tool_calls": [
+    {
+      "type": "function",
+      "function": {
+        "arguments": "{\"record\":1}",
+        "name": "lookup"
+      },
+      "id": "call_1"
+    }
+  ],
+  "reasoning_content": "Need the current value.",
+  "replay": {
+    "version": 1,
+    "provider": "test.responses",
+    "model": "reasoning-model",
+    "payload": [
+      {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [],
+        "encrypted_content": "opaque-state"
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Looking up the record."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "lookup",
+        "arguments": "{\"record\":1}"
+      }
+    ],
+    "projection_sha256": "2d78d05690b312bd1014c4b1abb749dbaf1d15c185e8824f49270a7e2595d3a5"
+  }
+}

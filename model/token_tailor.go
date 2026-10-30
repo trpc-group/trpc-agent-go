@@ -118,9 +118,19 @@ func NewSimpleTokenCounter(opts ...SimpleTokenCounterOption) *SimpleTokenCounter
 	return &SimpleTokenCounter{approxRunesPerToken: o.approxRunesPerToken}
 }
 
-// CountTokens estimates tokens for a single message.
+// CountTokens estimates tokens for a single message. Native replay records are
+// estimated from their serialized payload instead of counting only their text
+// projection. This remains a heuristic: encrypted reasoning cannot be tokenized
+// locally as the provider's decrypted model input.
 func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (int, error) {
 	total := 0
+	if message.Replay != nil {
+		payload, err := message.ReplayDataFor(message.Replay.provider, message.Replay.model)
+		if err != nil {
+			return 0, err
+		}
+		return max(c.estimateRunes(utf8.RuneCount(payload)), 1), nil
+	}
 
 	// Count main content.
 	total += utf8.RuneCountInString(message.Content)
@@ -142,18 +152,21 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 		total += c.countToolCallRunes(toolCall)
 	}
 
-	runesPerToken := c.approxRunesPerToken
-	if runesPerToken <= 0 {
-		// Fall back to default to avoid division by zero.
-		runesPerToken = defaultApproxRunesPerToken
-	}
-	total = int(float64(total) / runesPerToken)
+	total = c.estimateRunes(total)
 
 	// Total should be at least 1 if message is not empty.
 	if isMessageNotEmpty(message) {
 		return max(total, 1), nil
 	}
 	return total, nil
+}
+
+func (c *SimpleTokenCounter) estimateRunes(runes int) int {
+	runesPerToken := c.approxRunesPerToken
+	if runesPerToken <= 0 {
+		runesPerToken = defaultApproxRunesPerToken
+	}
+	return int(float64(runes) / runesPerToken)
 }
 
 // isMessageNotEmpty checks if the message contains any content that should result in at least 1 token.
@@ -210,8 +223,10 @@ func (c *SimpleTokenCounter) CountTokensRange(ctx context.Context, messages []Me
 
 	total := 0
 	for i := start; i < end; i++ {
-		// Ignore error because SimpleTokenCounter's CountTokens does not return error.
-		tokens, _ := c.CountTokens(ctx, messages[i])
+		tokens, err := c.CountTokens(ctx, messages[i])
+		if err != nil {
+			return 0, err
+		}
 		total += tokens
 	}
 	return total, nil

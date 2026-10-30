@@ -1,0 +1,96 @@
+{
+  "role": "assistant",
+  "content": "Rich projection",
+  "content_parts": [
+    {
+      "type": "text",
+      "text": "Rich projection"
+    },
+    {
+      "type": "image",
+      "image": {
+        "url": "https://example.com/image.png",
+        "data": "AP8=",
+        "detail": "high",
+        "format": "png"
+      }
+    },
+    {
+      "type": "audio",
+      "audio": {
+        "url": "https://example.com/audio.wav",
+        "data": "AQI=",
+        "format": "wav"
+      }
+    },
+    {
+      "type": "video",
+      "video": {
+        "url": "https://example.com/video.mp4",
+        "data": "AwQ=",
+        "format": "mp4"
+      }
+    },
+    {
+      "type": "file",
+      "file": {
+        "filename": "sample.txt",
+        "url": "https://example.com/sample.txt",
+        "data": "c2FtcGxl",
+        "file_id": "file_1",
+        "format": "text/plain"
+      }
+    },
+    {
+      "type": "file",
+      "content_ref": {
+        "artifact_ref": "artifact://sample@1",
+        "artifact_name": "sample.txt",
+        "artifact_version": 1,
+        "mime_type": "text/plain",
+        "size_bytes": 6,
+        "sha256": "fixture-digest",
+        "original_name": "original.txt",
+        "event_id": "event_1",
+        "request_id": "request_1"
+      }
+    }
+  ],
+  "tool_id": "call_parent",
+  "tool_name": "parent",
+  "tool_calls": [
+    {
+      "type": "function",
+      "function": {
+        "arguments": "{\"record\":1}",
+        "name": "lookup",
+        "strict": true,
+        "description": "Find a record"
+      },
+      "id": "call_1",
+      "index": 2,
+      "extra_fields": {
+        "nested": {
+          "count": 3,
+          "enabled": true
+        },
+        "signature": "tool-state"
+      }
+    }
+  ],
+  "reasoning_content": "Visible summary",
+  "reasoning_signature": "opaque-signature",
+  "replay": {
+    "version": 1,
+    "provider": "test.multimodal",
+    "model": "fixture-model",
+    "payload": [
+      {
+        "type": "message",
+        "id": "msg_1",
+        "content": "synthetic fixture"
+      }
+    ],
+    "projection_sha256": "a0f2e67b0f6e48161b754c6cfee01de883904a31b6d170f03679c6921c35d961"
+  }
+}

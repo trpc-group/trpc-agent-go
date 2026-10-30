@@ -2187,6 +2187,98 @@ llm := openai.New(
 `WithShowToolCallDelta` 的默认关闭状态，以避免处理部分 JSON 片段，
 并保留默认的“仅流式输出助手文本”的简洁行为。
 
+## OpenAI Responses API
+
+使用 `model/openai/sdkv3/responses` 接入 OpenAI Responses API，支持对话、流式输出和函数调用。通过 `responses.New` 创建模型，再传给 `LLMAgent` 即可使用。
+
+该适配器从独立的 `model/openai/sdkv3` Go 模块发布，要求 Go 1.25 或更高版本，目前固定使用 OpenAI Go SDK `v3.74.0`。`sdkv3` 路径表示 SDK 的主版本，适配器模块自身按 `v1.x` 发布。此模块只提供 Responses。使用 Chat Completions 时，继续使用 `model/openai` 的 `openai.New`。
+
+### 环境变量与最小集成
+
+省略 `responses.WithAPIKey` 时，OpenAI SDK 读取 `OPENAI_API_KEY`。省略 `responses.WithBaseURL` 时，SDK 读取 `OPENAI_BASE_URL`，默认地址为 `https://api.openai.com/v1`。
+
+下面的示例创建一个非流式聊天 Agent，并打印助手回复。使用 Runner 时，需持续读取事件通道直到关闭，或取消本次运行的 context。
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func main() {
+    ctx := context.Background()
+    userID := "demo-user"
+    sessionID := "demo-session"
+
+    llm := responses.New("gpt-5", responses.WithStore(false))
+    agent := llmagent.New(
+        "responses-chat",
+        llmagent.WithModel(llm),
+        llmagent.WithDescription("A concise chat assistant."),
+        llmagent.WithInstruction("Answer the user's questions clearly and concisely."),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: false}),
+    )
+    r := runner.NewRunner("responses-chat-example", agent)
+    defer r.Close()
+
+    events, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("Hello"))
+    if err != nil {
+        log.Printf("run: %v", err)
+        return
+    }
+    for evt := range events {
+        if evt == nil || evt.Response == nil {
+            continue
+        }
+        if evt.Error != nil {
+            log.Printf("event: %s", evt.Error.Message)
+            continue
+        }
+        if len(evt.Response.Choices) == 0 {
+            continue
+        }
+        msg := evt.Response.Choices[0].Message
+        if msg.Role == model.RoleAssistant && msg.Content != "" {
+            fmt.Println(msg.Content)
+        }
+    }
+}
+```
+
+未传入会话服务时，Runner 会创建内存会话，并在 `Close` 时关闭它。示例显式传入内存会话，生命周期同样限于当前进程。本地工具的接法见 [`examples/openairesponses/tools/main.go`](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/openairesponses/tools/main.go)。
+
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses) 是独立的 Go 1.25 模块。`-model` 默认为 `gpt-5`，`-streaming` 默认为 `true`。
+
+```bash
+cd examples/openairesponses
+export OPENAI_API_KEY="your-api-key"
+# 可选。设置后由 SDK 读取 OPENAI_BASE_URL。
+# export OPENAI_BASE_URL="https://api.openai.com/v1"
+
+go run ./chat
+go run ./chat -streaming=false
+go run ./tools
+go run ./tools -streaming=false
+```
+
+输入 `/exit` 结束对话。在 `tools` 中，于同一进程里分两轮提问，例如先说 `Calculate 123 * 456.`，再说 `Add 789 to that result.`。同一会话会保留第一轮结果供第二轮使用，进程退出后即丢弃。示例 README 给出了示意交互。
+
+### 说明
+
+- 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.Replay`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
+- 下游模块需要包含 `Message.Replay` 和 `Info.ReplayProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
+- 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
+- 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
+- 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。
+
 ## Anthropic Model
 
 Anthropic Model 用于对接 Claude 模型及其兼容平台，支持流式输出、思考模式与工具调用，并提供丰富的回调机制，同时可灵活设置自定义 HTTP Header.

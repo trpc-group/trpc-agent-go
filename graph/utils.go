@@ -27,7 +27,21 @@ var (
 	modelMessagesType     = reflect.TypeOf([]model.Message(nil))
 	modelContentPartsType = reflect.TypeOf([]model.ContentPart(nil))
 	modelToolCallsType    = reflect.TypeOf([]model.ToolCall(nil))
+	modelReplayDataType   = reflect.TypeOf(model.ReplayData{})
+	modelReplayDataPtr    = reflect.TypeOf((*model.ReplayData)(nil))
 )
+
+// copyReplayData gives a copy its own native record. model.ReplayData keeps
+// its state in unexported fields, which a field-wise copy would drop, and its
+// UnmarshalJSON overwrites a record in place, which would otherwise change
+// every state sharing it. The payload bytes are never mutated and stay shared.
+func copyReplayData(record *model.ReplayData) *model.ReplayData {
+	if record == nil {
+		return nil
+	}
+	copied := *record
+	return &copied
+}
 
 // DeepCopier defines an interface for types that can perform deep copies of themselves.
 type DeepCopier interface {
@@ -414,6 +428,7 @@ func deepCopyModelMessagesWithVisited(
 		visited[key] = out
 		for i := range in {
 			out[i] = in[i]
+			out[i].Replay = copyReplayData(in[i].Replay)
 			if parts := in[i].ContentParts; parts != nil {
 				out[i].ContentParts = deepCopyModelContentPartsWithVisited(parts, visited)
 			}
@@ -426,6 +441,7 @@ func deepCopyModelMessagesWithVisited(
 	out := make([]model.Message, len(in))
 	for i := range in {
 		out[i] = in[i]
+		out[i].Replay = copyReplayData(in[i].Replay)
 		if parts := in[i].ContentParts; parts != nil {
 			out[i].ContentParts = deepCopyModelContentPartsWithVisited(parts, visited)
 		}
@@ -739,6 +755,9 @@ func copyPointer(rv reflect.Value, visited visitedMap) any {
 	if rv.IsNil() {
 		return nil
 	}
+	if rv.Type() == modelReplayDataPtr {
+		return copyReplayData(rv.Interface().(*model.ReplayData))
+	}
 	key := pointerVisitKey(rv.Pointer(), rv.Type())
 	if cached, ok := visited[key]; ok {
 		return cached
@@ -809,6 +828,10 @@ func copyStruct(rv reflect.Value, visited visitedMap) any {
 	}
 	if isTimeType(rv.Type()) {
 		return copyTime(rv)
+	}
+	if rv.Type() == modelReplayDataType {
+		// Boxing copies the whole record, including its unexported state.
+		return rv.Interface()
 	}
 	newStruct := reflect.New(rv.Type()).Elem()
 	for i := 0; i < rv.NumField(); i++ {
@@ -1062,6 +1085,9 @@ func jsonSafeCopyPointer(
 ) any {
 	if rv.IsNil() {
 		return nil
+	}
+	if rv.Type() == modelReplayDataPtr {
+		return copyReplayData(rv.Interface().(*model.ReplayData))
 	}
 	key := pointerVisitKey(rv.Pointer(), rv.Type())
 	if cached, ok := visited[key]; ok {
