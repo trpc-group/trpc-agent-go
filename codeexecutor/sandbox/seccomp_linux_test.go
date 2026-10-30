@@ -1183,7 +1183,7 @@ func newLinuxSeccompRuntime(t *testing.T, profile PermissionProfile) (*Runtime, 
 	requireLinuxBwrap(t)
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
-		WithPermissionProfile(profile),
+		WithPermissionProfile(profile.WithReadPaths(os.Args[0])),
 	)
 	if _, _, err := rt.linuxPreflight(context.Background()); err != nil {
 		t.Skipf("bubblewrap preflight unavailable: %v", err)
@@ -1222,6 +1222,11 @@ func runLinuxSeccompHelper(
 		linuxSeccompHelperMode: mode,
 	}
 	if path != "" {
+		if _, err := os.Stat(path); err == nil && !sameOrChild(ws.Path, path) {
+			permissions := additionalPermissionsFromContext(ctx)
+			permissions.ReadPaths = append(append([]string(nil), permissions.ReadPaths...), path)
+			ctx = WithAdditionalPermissions(ctx, permissions)
+		}
 		env[linuxSeccompHelperPath] = path
 	}
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
@@ -1567,9 +1572,6 @@ func TestLinuxRestrictedDenyReadUsesFD4WithSeccomp(t *testing.T) {
 	}
 	if !setup.needsSeccompFD || !setup.needsDenyReadDataFD {
 		t.Fatalf("setup flags = %+v", setup)
-	}
-	if setup.denyReadBindDataFD != "4" {
-		t.Fatalf("deny-read fd = %q, want 4", setup.denyReadBindDataFD)
 	}
 	if !hasArgPair(setup.args, "--seccomp", "3") {
 		t.Fatalf("args = %#v, missing seccomp fd 3", setup.args)

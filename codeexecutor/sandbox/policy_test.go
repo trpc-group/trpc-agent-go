@@ -21,6 +21,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
+func TestInvalidReadModeCannotResolveWorkspaceOrHostAccess(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "invalid-read-query", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithReadMode("unknown")
+	decision, err := rt.decidePath(profile, ws, "work")
+	if !isKind(err, ErrPolicyViolation) || decision.matched || accessCanRead(decision.access) {
+		t.Fatalf("invalid mode produced workspace access: %#v, %v", decision, err)
+	}
+	if err := rt.checkHostRead(profile, ws, filepath.Join(ws.Path, "work")); !isKind(err, ErrPolicyViolation) {
+		t.Fatalf("invalid mode produced host access: %v", err)
+	}
+}
+
 func TestPermissionProfileEnforcement(t *testing.T) {
 	if got := WorkspaceWriteProfile().enforcement(); got != enforcementManaged {
 		t.Fatalf("workspace_write enforcement = %s", got)
@@ -33,6 +49,22 @@ func TestPermissionProfileEnforcement(t *testing.T) {
 	}
 	if got := ExternalSandboxProfile(NetworkPolicy{}).enforcement(); got != enforcementExternal {
 		t.Fatalf("external_sandbox enforcement = %s", got)
+	}
+	granted := WorkspaceWriteProfile().WithReadMode(ReadModeGranted)
+	if got := granted.enforcement(); got != enforcementManaged {
+		t.Fatalf("granted enforcement = %s", got)
+	}
+	if granted.exposesHostRoot() {
+		t.Fatal("WithReadMode(ReadModeGranted) should not expose host root")
+	}
+	if !containsSpecialRule(granted, accessRead, specialRoot) {
+		t.Fatal("WithReadMode(ReadModeGranted) should keep the workspace read grant")
+	}
+	if WorkspaceWriteProfile().exposesHostRoot() || ReadOnlyProfile().exposesHostRoot() {
+		t.Fatalf("default profiles should use granted mode")
+	}
+	if !containsSpecialRule(granted, accessWrite, specialWork) {
+		t.Fatal("WithReadMode(ReadModeGranted) should keep the work write grant")
 	}
 }
 
@@ -665,6 +697,41 @@ func TestWorkspacePathUsesAppUserSessionShape(t *testing.T) {
 	}
 }
 
+func TestCreateWorkspaceAllowsNestedSessionPaths(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	parent, err := rt.CreateWorkspace(
+		context.Background(),
+		"app",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := rt.CreateWorkspace(
+		context.Background(),
+		"app",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Path != parent.Path {
+		t.Fatalf("reopened workspace path = %s, want %s", reopened.Path, parent.Path)
+	}
+	child, err := rt.CreateWorkspace(
+		context.Background(),
+		"app/user/session",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := parent.Path + string(os.PathSeparator)
+	if child.Path != parent.Path && !strings.HasPrefix(child.Path, prefix) {
+		t.Fatalf("nested workspace path = %s, want under %s", child.Path, parent.Path)
+	}
+}
+
 func TestManifestMaterializesInitialFilesAndEnv(t *testing.T) {
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
@@ -938,4 +1005,43 @@ func containsSpecialRule(profile PermissionProfile, access fileSystemAccess, spe
 		}
 	}
 	return false
+}
+
+func TestNestedSessionScopesAcrossRuntimes(t *testing.T) {
+	for _, firstID := range []string{"app", "app/user/session"} {
+		t.Run(firstID, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			first := NewRuntime(WithWorkspaceRoot(root))
+			if _, err := first.CreateWorkspace(ctx, firstID, codeexecutor.WorkspacePolicy{}); err != nil {
+				t.Fatal(err)
+			}
+			rt := NewRuntime(WithWorkspaceRoot(root))
+			parent, err := rt.CreateWorkspace(ctx, "app", codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child, err := rt.CreateWorkspace(ctx, "app/user/session", codeexecutor.WorkspacePolicy{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := rt.PutFiles(ctx, child, []codeexecutor.PutFile{{Path: "work/child.txt", Content: []byte("child data")}}); err != nil {
+				t.Fatal(err)
+			}
+			files, err := rt.Collect(ctx, parent, []string{"user/session/work/child.txt"})
+			if err != nil || len(files) != 1 || files[0].Content != "child data" {
+				t.Fatalf("parent read = %#v, %v", files, err)
+			}
+			if err := rt.PutFiles(ctx, parent, []codeexecutor.PutFile{{Path: "user/session/work/child.txt", Content: []byte("parent update")}}); err != nil {
+				t.Fatal(err)
+			}
+			files, err = rt.Collect(ctx, child, []string{"work/child.txt"})
+			if err != nil || len(files) != 1 || files[0].Content != "parent update" {
+				t.Fatalf("child read = %#v, %v", files, err)
+			}
+			if err := rt.PutFiles(ctx, child, []codeexecutor.PutFile{{Path: filepath.Join(parent.Path, "work", "parent.txt"), Content: []byte("escape")}}); !isKind(err, ErrPathDenied) {
+				t.Fatalf("child write outside its scope = %v", err)
+			}
+		})
+	}
 }
