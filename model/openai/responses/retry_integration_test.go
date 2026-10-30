@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3/option"
-	api "github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -55,7 +54,7 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 				defer cancel()
 				requests := make(chan retryCapturedRequest, 5)
-				var httpCalls, toolCalls, requestCallbacks atomic.Int32
+				var httpCalls, toolCalls atomic.Int32
 				transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					defer req.Body.Close()
 					call := httpCalls.Add(1)
@@ -98,8 +97,7 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 				})
 				// Leave MaxRetries unset to exercise the SDK's production default.
 				m := New("test-model", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-					WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})),
-					WithRequestCallback(func(context.Context, *api.ResponseNewParams) { requestCallbacks.Add(1) }))
+					WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
 				a := llmagent.New("native", llmagent.WithModel(m),
 					llmagent.WithGenerationConfig(model.GenerationConfig{Stream: streaming}),
 					llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}))
@@ -119,7 +117,6 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 					require.Nil(t, evt.Error)
 				}
 				require.EqualValues(t, 4, httpCalls.Load())
-				require.EqualValues(t, 2, requestCallbacks.Load(), "HTTP retries must not rerun the logical request callback")
 				require.EqualValues(t, 1, toolCalls.Load())
 				var captured []retryCapturedRequest
 				for range 4 {
@@ -167,7 +164,6 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 					require.Nil(t, evt.Error)
 				}
 				require.EqualValues(t, 5, httpCalls.Load())
-				require.EqualValues(t, 3, requestCallbacks.Load())
 				require.EqualValues(t, 1, toolCalls.Load(), "completed tools must not run again after reopening SQLite")
 				last := takeRetryRequest(t, requests)
 				var body map[string]json.RawMessage
@@ -246,7 +242,7 @@ func TestSDKDefaultRetryExhaustionIsOneTerminalError(t *testing.T) {
 		t.Run(fmt.Sprintf("stream=%t", streaming), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			var httpCalls, requestCallbacks atomic.Int32
+			var httpCalls atomic.Int32
 			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				defer req.Body.Close()
 				if httpCalls.Add(1) > 3 {
@@ -255,8 +251,7 @@ func TestSDKDefaultRetryExhaustionIsOneTerminalError(t *testing.T) {
 				return retryResponse(req, http.StatusTooManyRequests, `{"error":{"message":"fixture rate limit","type":"rate_limit_error"}}`, "1"), nil
 			})
 			m := New("test-model", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-				WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})),
-				WithRequestCallback(func(context.Context, *api.ResponseNewParams) { requestCallbacks.Add(1) }))
+				WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
 			ch, err := m.GenerateContent(ctx, &model.Request{
 				Messages: []model.Message{model.NewUserMessage("start")}, GenerationConfig: model.GenerationConfig{Stream: streaming},
 			})
@@ -269,7 +264,6 @@ func TestSDKDefaultRetryExhaustionIsOneTerminalError(t *testing.T) {
 				require.Nil(t, choice.Delta.Replay)
 			}
 			require.EqualValues(t, 3, httpCalls.Load())
-			require.EqualValues(t, 1, requestCallbacks.Load())
 		})
 	}
 }

@@ -74,9 +74,8 @@ These three cases have different contracts:
   provider-owned replay payload. They survive `Message` JSON persistence and
   are sent unchanged with that native item on the next request. Treat them as
   opaque provider state; this adapter does not interpret them.
-- Keepalives and unknown SSE event extensions remain observable through the SDK
-  stream-event callback, including their raw event JSON. They are ignored by
-  model projection and cannot commit content, tool calls, or replay state. Only
+- Keepalives and unknown SSE event extensions are ignored by model projection
+  and cannot commit content, tool calls, or replay state. Only
   a known `response.completed` event with a completed status and fully
   validated supported output commits a response. EOF after unknown events is an
   error.
@@ -114,8 +113,11 @@ execution, define its binding explicitly and version the binding when needed;
 serializing every `Message` field does not automatically change v1.
 
 Persisted replay metadata with an unsupported version or invalid format must
-not be silently dropped. Redis readers return these decoding errors while
-keeping their existing skip policy for malformed legacy history.
+not be silently dropped. Redis readers return decoding errors when they can
+identify a replay-bearing record. If the entire event JSON is malformed, that
+identification can fail and the record may be skipped under the existing Redis
+history policy. A successful history read therefore does not guarantee that no
+malformed records were skipped.
 
 History processing treats each native record as one output unit: empty
 records, item order, reasoning, call order, and call IDs are preserved, native
@@ -278,11 +280,13 @@ m := responses.New(modelName, responses.WithExtraFields(map[string]any{
 // Request.ExtraFields["include"] can add further names for one call.
 ```
 
-The request callback sees that merged include list and cannot change it.
-Response and stream callbacks are read-only observers. Callbacks must not
-retain mutable arguments. Low-level `WithOpenAIOptions` can bypass validation,
-including by replacing `include`, so callers that use it must preserve the
-managed-state contract themselves.
+This adapter does not expose callbacks for native SDK requests, responses, or
+stream events. Use the framework's model and tool callbacks for their supported
+operations; Chat Completions SDK callbacks do not apply to this adapter. The
+native-history mutation constraints above still apply to framework callbacks.
+Low-level `WithOpenAIOptions` can bypass validation, including by replacing
+`include`, so callers that use it must preserve the managed-state contract
+themselves.
 
 The tests use local HTTP fixtures and a real SQLite close/reopen cycle. They do
 not demonstrate access to any live model, account, or compatible gateway.

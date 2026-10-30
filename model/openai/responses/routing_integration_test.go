@@ -19,14 +19,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/openai/openai-go/v3/option"
-	openairesponses "github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -407,11 +405,10 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T)
 	defer cancel()
 	loserRequests := make(chan nativeRoutingRequest, 8)
 	winnerRequests := make(chan nativeRoutingRequest, 8)
-	loserParsed := make(chan struct{})
+	loserFlushed := make(chan struct{})
 	loserCancelled := make(chan struct{})
 	loserToolRequestRead := make(chan struct{})
 	loserReopenRequestRead := make(chan struct{})
-	var loserParsedOnce sync.Once
 	var loserCalls, winnerCalls, toolCalls atomic.Int32
 	loserServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call, ok := recordNativeRoutingRequest(w, r, loserRequests, &loserCalls, 3)
@@ -425,6 +422,7 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T)
 				`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_loser","call_id":"call_loser","name":"calculator","arguments":"","status":"in_progress"}}`,
 				`{"type":"response.output_item.done","output_index":0,"item":`+loserItem+`}`,
 			)
+			close(loserFlushed)
 			<-r.Context().Done()
 			close(loserCancelled)
 			return
@@ -445,7 +443,7 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T)
 		}
 		if call == 1 {
 			select {
-			case <-loserParsed:
+			case <-loserFlushed:
 			case <-r.Context().Done():
 				return
 			}
@@ -470,14 +468,7 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T)
 	}))
 	defer winnerServer.Close()
 
-	loser := New("gpt-5", WithAPIKey("test"), WithBaseURL(loserServer.URL),
-		WithOpenAIOptions(option.WithMaxRetries(0)),
-		WithStreamEventCallback(func(_ context.Context, _ *openairesponses.ResponseNewParams, streamEvent *openairesponses.ResponseStreamEventUnion) {
-			if streamEvent != nil && streamEvent.Type == eventResponseOutputItemDone && streamEvent.Item.Type == "function_call" {
-				loserParsedOnce.Do(func() { close(loserParsed) })
-			}
-		}),
-	)
+	loser := New("gpt-5", WithAPIKey("test"), WithBaseURL(loserServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
 	winner := New("gpt-5", WithAPIKey("test"), WithBaseURL(winnerServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
 	routed, err := hedge.New(hedge.WithCandidates(loser, winner), hedge.WithDelays(0))
 	require.NoError(t, err)

@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
@@ -242,17 +241,12 @@ func TestNonStreamingIncompleteDoesNotBecomeSuccessful(t *testing.T) {
 	require.Empty(t, got[0].Choices)
 }
 
-func TestExtraFieldsAndCallbackCannotOverrideManagedState(t *testing.T) {
+func TestExtraFieldsCannotOverrideManagedState(t *testing.T) {
 	for _, key := range []string{"model", "input", "stream", "store", "tools.0", "previous_response_id", "conversation.id", "background"} {
 		m := New("gpt-5", WithExtraFields(map[string]any{key: "bad"}))
 		_, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 		require.ErrorContains(t, err, "cannot override managed request state")
 	}
-	m := New("gpt-5", WithRequestCallback(func(_ context.Context, params *responses.ResponseNewParams) {
-		params.PreviousResponseID = openai.String("resp_previous")
-	}))
-	_, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
-	require.ErrorContains(t, err, `request callback cannot change managed field "previous_response_id"`)
 }
 
 func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
@@ -613,21 +607,4 @@ func TestReplayModelBindingUsesConfiguredName(t *testing.T) {
 	require.NoError(t, err)
 	_, err = projected.Choices[0].Message.ReplayDataFor(responseProvider, "resolved-name")
 	require.Error(t, err)
-}
-
-func TestOpenAIRequestCallbackCanChangeSamplingOnly(t *testing.T) {
-	var body map[string]json.RawMessage
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body = mustReadJSONBody(t, r)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"r","status":"completed","output":[]}`)
-	}))
-	defer srv.Close()
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithRequestCallback(func(_ context.Context, params *responses.ResponseNewParams) {
-		params.Temperature = openai.Float(0.2)
-	}))
-	ch, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
-	require.NoError(t, err)
-	_ = collect(t, ch)
-	require.Equal(t, "0.2", string(body["temperature"]))
 }

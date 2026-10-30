@@ -10,36 +10,11 @@
 package responses
 
 import (
-	"context"
-
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const defaultChannelBufferSize = 256
-
-// RequestCallbackFunc is invoked with the Responses request params
-// before the HTTP call. Changes to managed history, model, storage, tool,
-// include, and continuation fields are rejected. Include is already the merged
-// list that will be sent. Callbacks must not retain mutable params.
-type RequestCallbackFunc func(ctx context.Context, params *responses.ResponseNewParams)
-
-// ResponseCallbackFunc observes the non-stream Responses object before mapping.
-// The callback must treat its arguments as read-only and must not retain them.
-type ResponseCallbackFunc func(
-	ctx context.Context,
-	params *responses.ResponseNewParams,
-	resp *responses.Response,
-)
-
-// StreamEventCallbackFunc observes each parsed stream event before mapping.
-// The callback must treat its arguments as read-only and must not retain them.
-type StreamEventCallbackFunc func(
-	ctx context.Context,
-	params *responses.ResponseNewParams,
-	event *responses.ResponseStreamEventUnion,
-)
 
 // Option configures a Responses model.
 type Option func(*options)
@@ -52,9 +27,6 @@ type options struct {
 	httpClientOptions []model.HTTPClientOption
 	openaiOptions     []option.RequestOption
 	extraFields       map[string]any
-	requestCallback   RequestCallbackFunc
-	responseCallback  ResponseCallbackFunc
-	streamCallback    StreamEventCallbackFunc
 }
 
 func defaultOptions() options {
@@ -137,26 +109,5 @@ func WithExtraFields(fields map[string]any) Option {
 		for k, v := range fields {
 			o.extraFields[k] = v
 		}
-	}
-}
-
-// WithRequestCallback sets a callback invoked before the HTTP call.
-func WithRequestCallback(cb RequestCallbackFunc) Option {
-	return func(o *options) {
-		o.requestCallback = cb
-	}
-}
-
-// WithResponseCallback sets a callback invoked for non-stream responses.
-func WithResponseCallback(cb ResponseCallbackFunc) Option {
-	return func(o *options) {
-		o.responseCallback = cb
-	}
-}
-
-// WithStreamEventCallback sets a callback invoked for each stream event.
-func WithStreamEventCallback(cb StreamEventCallbackFunc) Option {
-	return func(o *options) {
-		o.streamCallback = cb
 	}
 }

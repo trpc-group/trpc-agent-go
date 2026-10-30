@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -48,7 +47,6 @@ func TestExtraIncludeUnionIsSentAndLeavesCallerDataUnchanged(t *testing.T) {
 	}
 
 	var includes []json.RawMessage
-	var observed [][]string
 	var sawCacheKey, sawMetadata bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]json.RawMessage
@@ -78,13 +76,6 @@ func TestExtraIncludeUnionIsSentAndLeavesCallerDataUnchanged(t *testing.T) {
 		WithBaseURL(srv.URL),
 		WithExtraFields(modelFields),
 		WithOpenAIOptions(option.WithMaxRetries(0)),
-		WithRequestCallback(func(_ context.Context, params *responses.ResponseNewParams) {
-			names := make([]string, len(params.Include))
-			for i, name := range params.Include {
-				names[i] = string(name)
-			}
-			observed = append(observed, names)
-		}),
 	)
 	request := &model.Request{
 		Messages:    []model.Message{model.NewUserMessage("hi")},
@@ -109,10 +100,8 @@ func TestExtraIncludeUnionIsSentAndLeavesCallerDataUnchanged(t *testing.T) {
 	}
 
 	require.Len(t, includes, 3)
-	require.Len(t, observed, 3)
 	for i := range includes {
 		require.JSONEq(t, want, string(includes[i]))
-		requireJSONField(t, want, observed[i])
 	}
 	require.True(t, sawCacheKey, "model extra fields other than include must still reach the wire")
 	require.True(t, sawMetadata, "request extra fields other than include must still reach the wire")
@@ -222,44 +211,6 @@ func TestExtraIncludeRejectsInvalidValuesAndAliasPathsBeforeHTTP(t *testing.T) {
 				}
 			})
 		}
-	}
-	require.Zero(t, calls.Load())
-}
-
-func TestRequestCallbackCannotChangeMergedInclude(t *testing.T) {
-	srv, calls := rejectingServer(t)
-	for _, tc := range []struct {
-		name string
-		edit func(*responses.ResponseNewParams)
-	}{
-		{name: "clear", edit: func(params *responses.ResponseNewParams) { params.Include = nil }},
-		{name: "drop required", edit: func(params *responses.ResponseNewParams) {
-			params.Include = append([]responses.ResponseIncludable(nil), params.Include[1:]...)
-		}},
-		{name: "append", edit: func(params *responses.ResponseNewParams) {
-			params.Include = append(params.Include, "future.provider.extension")
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var seen []string
-			m := New("gpt-5",
-				WithAPIKey("test"),
-				WithBaseURL(srv.URL),
-				WithOpenAIOptions(option.WithMaxRetries(0)),
-				WithExtraFields(map[string]any{"include": []string{"message.output_text.logprobs"}}),
-				WithRequestCallback(func(_ context.Context, params *responses.ResponseNewParams) {
-					seen = nil
-					for _, name := range params.Include {
-						seen = append(seen, string(name))
-					}
-					tc.edit(params)
-				}),
-			)
-			ch, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
-			require.Nil(t, ch)
-			require.ErrorContains(t, err, `request callback cannot change managed field "include"`)
-			require.Equal(t, []string{"reasoning.encrypted_content", "message.output_text.logprobs"}, seen)
-		})
 	}
 	require.Zero(t, calls.Load())
 }

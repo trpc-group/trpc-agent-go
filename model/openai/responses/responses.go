@@ -10,7 +10,6 @@
 package responses
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,20 +20,16 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
 
 // Model implements model.Model using the official OpenAI Responses API.
-// It supports concurrent requests; configured callbacks must be concurrency-safe.
+// It supports concurrent requests.
 type Model struct {
 	client            openai.Client
 	name              string
 	store             bool
 	channelBufferSize int
 	extraFields       map[string]any
-	requestCallback   RequestCallbackFunc
-	responseCallback  ResponseCallbackFunc
-	streamCallback    StreamEventCallbackFunc
 }
 
 // New creates a Responses API adapter with client-managed history and
@@ -61,9 +56,6 @@ func New(name string, opts ...Option) *Model {
 		store:             o.store,
 		channelBufferSize: o.channelBufferSize,
 		extraFields:       o.extraFields,
-		requestCallback:   o.requestCallback,
-		responseCallback:  o.responseCallback,
-		streamCallback:    o.streamCallback,
 	}
 }
 
@@ -88,20 +80,11 @@ func (m *Model) GenerateContent(
 	}
 	reqOpts := m.requestOptions(request)
 	paramsToEncode := params
-	if m.requestCallback == nil {
-		// History is already validated by buildParams. Keep synchronous encoding
-		// errors for the remaining fields without serializing that history again.
-		paramsToEncode.Input = responses.ResponseNewParamsInputUnion{}
-	}
-	beforeCallback, err := json.Marshal(paramsToEncode)
-	if err != nil {
+	// History is already validated by buildParams. Keep synchronous encoding
+	// errors for the remaining fields without serializing that history again.
+	paramsToEncode.Input = responses.ResponseNewParamsInputUnion{}
+	if _, err := json.Marshal(paramsToEncode); err != nil {
 		return nil, fmt.Errorf("openai/responses: snapshot request parameters: %w", err)
-	}
-	if m.requestCallback != nil {
-		m.runRequestCallback(ctx, &params)
-		if err := validateCallbackParams(beforeCallback, params); err != nil {
-			return nil, err
-		}
 	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -144,7 +127,6 @@ func (m *Model) handleNonStreaming(
 		emit(apiErrorResponse(errors.New("openai/responses: empty response body")))
 		return
 	}
-	m.runResponseCallback(ctx, &params, resp)
 	if errResp := responseAPIError(resp); errResp != nil {
 		emit(errResp)
 		return
@@ -189,62 +171,6 @@ func (m *Model) requestOptions(request *model.Request) []option.RequestOption {
 // particular, a raw include value would discard the merged include list.
 func skipJSONExtraField(key string) bool {
 	return key == "tool_choice" || key == extraFieldInclude
-}
-
-func (m *Model) runRequestCallback(ctx context.Context, params *responses.ResponseNewParams) {
-	if m.requestCallback == nil {
-		return
-	}
-	defer imodel.RecoverCallbackPanic(ctx, "responses request callback")
-	m.requestCallback(ctx, params)
-}
-
-func validateCallbackParams(before []byte, after responses.ResponseNewParams) error {
-	var oldParams, newParams map[string]json.RawMessage
-	if err := json.Unmarshal(before, &oldParams); err != nil {
-		return fmt.Errorf("openai/responses: decode request snapshot: %w", err)
-	}
-	encoded, err := json.Marshal(after)
-	if err != nil {
-		return fmt.Errorf("openai/responses: encode callback request: %w", err)
-	}
-	if err := json.Unmarshal(encoded, &newParams); err != nil {
-		return fmt.Errorf("openai/responses: decode callback request: %w", err)
-	}
-	protected := []string{
-		"model", "input", "store", "include", "tools",
-		"background", "previous_response_id", "conversation",
-	}
-	for _, key := range protected {
-		if !bytes.Equal(bytes.TrimSpace(oldParams[key]), bytes.TrimSpace(newParams[key])) {
-			return fmt.Errorf("openai/responses: request callback cannot change managed field %q", key)
-		}
-	}
-	return nil
-}
-
-func (m *Model) runResponseCallback(
-	ctx context.Context,
-	params *responses.ResponseNewParams,
-	resp *responses.Response,
-) {
-	if m.responseCallback == nil {
-		return
-	}
-	defer imodel.RecoverCallbackPanic(ctx, "responses response callback")
-	m.responseCallback(ctx, params, resp)
-}
-
-func (m *Model) runStreamCallback(
-	ctx context.Context,
-	params *responses.ResponseNewParams,
-	event *responses.ResponseStreamEventUnion,
-) {
-	if m.streamCallback == nil || event == nil {
-		return
-	}
-	defer imodel.RecoverCallbackPanic(ctx, "responses stream callback")
-	m.streamCallback(ctx, params, event)
 }
 
 func apiErrorResponse(err error) *model.Response {

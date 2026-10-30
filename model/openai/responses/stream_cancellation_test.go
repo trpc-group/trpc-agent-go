@@ -10,6 +10,7 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,7 +23,6 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3/option"
-	api "github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -30,7 +30,16 @@ import (
 type cancellationTrackedBody struct {
 	io.ReadCloser
 	closed chan struct{}
+	onRead func([]byte)
 	once   sync.Once
+}
+
+func (b *cancellationTrackedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && b.onRead != nil {
+		b.onRead(p[:n])
+	}
+	return n, err
 }
 
 func (b *cancellationTrackedBody) Close() error {
@@ -47,10 +56,13 @@ func TestStreamBackpressureCancellationReleasesBodyBeforeDrain(t *testing.T) {
 	} {
 		t.Run(eventType, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			secondPreview := make(chan struct{})
+			firstPreviewFlushed := make(chan struct{})
+			allowRemainingPreviews := make(chan struct{})
+			remainingPreviewsFlushed := make(chan struct{})
+			secondPreviewRead := make(chan struct{})
 			bodyClosed := make(chan struct{})
 			serverCancelled := make(chan struct{})
-			var requests, previews atomic.Int32
+			var requests atomic.Int32
 			var streamRequested atomic.Bool
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if requests.Add(1) != 1 {
@@ -70,9 +82,19 @@ func TestStreamBackpressureCancellationReleasesBodyBeforeDrain(t *testing.T) {
 					`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_pending","call_id":"call_pending","name":"calculator","arguments":""}}`,
 					`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_pending","delta":"{\"a\":"}`,
 					fmt.Sprintf(`{"type":%q,"output_index":1,"content_index":0,"delta":"first"}`, eventType),
+				)
+				close(firstPreviewFlushed)
+				select {
+				case <-allowRemainingPreviews:
+				case <-r.Context().Done():
+					close(serverCancelled)
+					return
+				}
+				writeSSE(w,
 					fmt.Sprintf(`{"type":%q,"output_index":1,"content_index":0,"delta":"second"}`, eventType),
 					fmt.Sprintf(`{"type":%q,"output_index":1,"content_index":0,"delta":"third"}`, eventType),
 				)
+				close(remainingPreviewsFlushed)
 				<-r.Context().Done()
 				close(serverCancelled)
 			}))
@@ -83,17 +105,23 @@ func TestStreamBackpressureCancellationReleasesBodyBeforeDrain(t *testing.T) {
 			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				response, err := transport.RoundTrip(r)
 				if err == nil && response.Body != nil {
-					response.Body = &cancellationTrackedBody{ReadCloser: response.Body, closed: bodyClosed}
+					var readBytes []byte
+					var readOnce sync.Once
+					response.Body = &cancellationTrackedBody{
+						ReadCloser: response.Body,
+						closed:     bodyClosed,
+						onRead: func(data []byte) {
+							readBytes = append(readBytes, data...)
+							if bytes.Contains(readBytes, []byte(`"delta":"second"`)) {
+								readOnce.Do(func() { close(secondPreviewRead) })
+							}
+						},
+					}
 				}
 				return response, err
 			})}
 			m := New("test-model", WithAPIKey("test"), WithBaseURL(srv.URL), WithChannelBufferSize(1),
-				WithOpenAIOptions(option.WithMaxRetries(0), option.WithHTTPClient(client)),
-				WithStreamEventCallback(func(_ context.Context, _ *api.ResponseNewParams, event *api.ResponseStreamEventUnion) {
-					if event.Type == eventType && previews.Add(1) == 2 {
-						close(secondPreview)
-					}
-				}))
+				WithOpenAIOptions(option.WithMaxRetries(0), option.WithHTTPClient(client)))
 			ch, err := m.GenerateContent(ctx, &model.Request{
 				Messages:         []model.Message{model.NewUserMessage("start")},
 				GenerationConfig: model.GenerationConfig{Stream: true},
@@ -115,15 +143,19 @@ func TestStreamBackpressureCancellationReleasesBodyBeforeDrain(t *testing.T) {
 					}
 				}
 			})
-			awaitCancellationSignal(t, secondPreview, "second preview was not parsed")
-			require.Equal(t, 1, len(ch), "the unread first preview must occupy the entire buffer")
+			awaitCancellationSignal(t, firstPreviewFlushed, "server did not flush the first preview")
+			require.Eventually(t, func() bool { return len(ch) == 1 }, 2*time.Second, time.Millisecond,
+				"the adapter's unread first preview must fill its output buffer")
+			close(allowRemainingPreviews)
+			awaitCancellationSignal(t, remainingPreviewsFlushed, "server did not flush later previews")
+			awaitCancellationSignal(t, secondPreviewRead, "adapter did not read the second preview")
+			require.Equal(t, 1, len(ch), "the adapter output buffer must remain full before cancellation")
 			cancel()
 
 			// The body must close before the consumer helps drain the channel.
 			// The channel must then close with only its already-buffered preview.
 			awaitCancellationSignal(t, bodyClosed, "HTTP body stayed open while the output buffer was full")
 			awaitCancellationSignal(t, serverCancelled, "server did not observe request cancellation")
-			require.EqualValues(t, 2, previews.Load(), "the blocked second preview must stop further event processing")
 			require.True(t, streamRequested.Load())
 			require.EqualValues(t, 1, requests.Load())
 

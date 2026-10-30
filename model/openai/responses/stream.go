@@ -83,7 +83,6 @@ func (m *Model) handleStreaming(
 			emit(apiErrorResponse(errors.New("openai/responses: stream event has no type")))
 			return
 		}
-		m.runStreamCallback(ctx, &params, &event)
 		terminal, keepGoing := handleStreamEvent(m.name, acc, &event, emit)
 		if !keepGoing || terminal {
 			return

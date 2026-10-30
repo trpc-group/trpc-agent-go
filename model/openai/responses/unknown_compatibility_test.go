@@ -17,7 +17,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	api "github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -77,12 +76,10 @@ func TestUnknownNativeFieldsSurviveMessageJSONAndNextInput(t *testing.T) {
 	require.Equal(t, nativeItem, string(inputItems[1]), "the next request must send the complete native item unchanged")
 }
 
-func TestKeepaliveAndUnknownStreamExtensionsAreObservableButNotProjected(t *testing.T) {
+func TestKeepaliveAndUnknownStreamExtensionsAreNotProjected(t *testing.T) {
 	const keepalive = `{"type":"keepalive","cursor":{"sequence":7}}`
 	const extension = `{"type":"response.vendor.trace","cursor":{"opaque":"v1"},"item":{"type":"function_call","id":"fc_fake","call_id":"call_fake","name":"calculator","arguments":"{}"}}`
 	const message = `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`
-	var observedTypes []string
-	var observedRaw []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeSSE(w,
 			keepalive,
@@ -93,14 +90,7 @@ func TestKeepaliveAndUnknownStreamExtensionsAreObservableButNotProjected(t *test
 		)
 	}))
 	defer srv.Close()
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithStreamEventCallback(func(
-		_ context.Context,
-		_ *api.ResponseNewParams,
-		event *api.ResponseStreamEventUnion,
-	) {
-		observedTypes = append(observedTypes, event.Type)
-		observedRaw = append(observedRaw, event.RawJSON())
-	}))
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
 	ch, err := m.GenerateContent(context.Background(), &model.Request{
 		Messages:         []model.Message{model.NewUserMessage("hi")},
 		GenerationConfig: model.GenerationConfig{Stream: true},
@@ -108,15 +98,13 @@ func TestKeepaliveAndUnknownStreamExtensionsAreObservableButNotProjected(t *test
 	require.NoError(t, err)
 	got := collect(t, ch)
 	require.Len(t, got, 2, "keepalive and extension events do not create model responses")
-	require.Equal(t, []string{"keepalive", "response.vendor.trace", "response.output_text.delta", "response.output_item.done", "response.completed"}, observedTypes)
-	require.Equal(t, keepalive, observedRaw[0])
-	require.Equal(t, extension, observedRaw[1], "the SDK callback must retain the unknown event payload")
 	for _, response := range got {
 		require.NotNil(t, response)
 		require.NotEmpty(t, response.Choices)
 		require.Empty(t, response.Choices[0].Message.ToolCalls, "unknown extension fields must never become executable calls")
 	}
 	require.True(t, got[0].IsPartial)
+	require.Equal(t, "preview", got[0].Choices[0].Delta.Content)
 	require.Nil(t, got[0].Choices[0].Message.Replay)
 	require.Nil(t, got[1].Error)
 	require.True(t, got[1].Done)
@@ -175,25 +163,17 @@ func TestUnknownOutputAndContentTypesFailForStreamingAndNonStreaming(t *testing.
 
 func TestUnknownTerminalExtensionDoesNotCommitResponse(t *testing.T) {
 	const unknownTerminal = `{"type":"response.vendor.completed","response":{"id":"resp_future","status":"completed","output":[{"type":"function_call","id":"fc_fake","call_id":"call_fake","name":"calculator","arguments":"{}"}]}}`
-	var observedType string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeSSE(w, unknownTerminal)
 	}))
 	defer srv.Close()
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithStreamEventCallback(func(
-		_ context.Context,
-		_ *api.ResponseNewParams,
-		event *api.ResponseStreamEventUnion,
-	) {
-		observedType = event.Type
-	}))
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
 	ch, err := m.GenerateContent(context.Background(), &model.Request{
 		Messages:         []model.Message{model.NewUserMessage("hi")},
 		GenerationConfig: model.GenerationConfig{Stream: true},
 	})
 	require.NoError(t, err)
 	respErr := requireTerminalError(t, collect(t, ch))
-	require.Equal(t, "response.vendor.completed", observedType)
 	require.Contains(t, respErr.Message, "stream ended before a terminal response event")
 }
 

@@ -18,12 +18,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -34,33 +32,25 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestInvalidSchemaEncodingReturnsSynchronousError(t *testing.T) {
-	for _, callback := range []bool{false, true} {
-		t.Run(fmt.Sprintf("request_callback=%t", callback), func(t *testing.T) {
-			var calls atomic.Int32
-			opts := []Option{WithAPIKey("test"), WithOpenAIOptions(
-				option.WithMaxRetries(0),
-				option.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-					calls.Add(1)
-					return nil, fmt.Errorf("unexpected HTTP request")
-				})}),
-			)}
-			if callback {
-				opts = append(opts, WithRequestCallback(func(context.Context, *responses.ResponseNewParams) {}))
-			}
-			m := New("test-model", opts...)
-			request := &model.Request{Messages: []model.Message{model.NewUserMessage("hello")}}
-			request.StructuredOutput = &model.StructuredOutput{
-				Type: model.StructuredOutputJSONSchema,
-				JSONSchema: &model.JSONSchemaConfig{Schema: map[string]any{
-					"type": "object", "invalid": func() {},
-				}},
-			}
-			ch, err := m.GenerateContent(context.Background(), request)
-			require.Error(t, err)
-			require.Nil(t, ch)
-			require.Zero(t, calls.Load())
-		})
+	var calls atomic.Int32
+	m := New("test-model", WithAPIKey("test"), WithOpenAIOptions(
+		option.WithMaxRetries(0),
+		option.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, fmt.Errorf("unexpected HTTP request")
+		})}),
+	))
+	request := &model.Request{Messages: []model.Message{model.NewUserMessage("hello")}}
+	request.StructuredOutput = &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{Schema: map[string]any{
+			"type": "object", "invalid": func() {},
+		}},
 	}
+	ch, err := m.GenerateContent(context.Background(), request)
+	require.Error(t, err)
+	require.Nil(t, ch)
+	require.Zero(t, calls.Load())
 }
 
 type capturedRequest struct {
@@ -550,28 +540,19 @@ func TestNonStreamErrorsAreTerminalResponses(t *testing.T) {
 	}
 }
 
-func TestNonStreamCallbackObservesAndCancellationEndsWithoutResponse(t *testing.T) {
+func TestNonStreamResponseAndCancellationEndsWithoutResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"resp_cb","status":"completed","output":[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`)
 	}))
 	defer srv.Close()
-	var seen atomic.Value
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithResponseCallback(func(
-		_ context.Context,
-		params *responses.ResponseNewParams,
-		resp *responses.Response,
-	) {
-		seen.Store(string(params.Model) + "/" + resp.ID)
-		panic("observer bug")
-	}))
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
 	ch, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.NoError(t, err)
 	got := collect(t, ch)
 	require.Len(t, got, 1)
-	require.Nil(t, got[0].Error, "a panicking observer must not fail the response")
+	require.Nil(t, got[0].Error)
 	require.Equal(t, "ok", got[0].Choices[0].Message.Content)
-	require.Equal(t, "gpt-5/resp_cb", seen.Load())
 
 	release := make(chan struct{})
 	blocked := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -650,7 +631,7 @@ func TestStreamProtocolViolationsAreTerminalErrors(t *testing.T) {
 	}
 }
 
-func TestStreamPartialsAndEventCallback(t *testing.T) {
+func TestStreamPartialsAndFinalReplay(t *testing.T) {
 	refusal := `{"type":"message","id":"msg_r","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeSSE(w,
@@ -663,18 +644,7 @@ func TestStreamPartialsAndEventCallback(t *testing.T) {
 		)
 	}))
 	defer srv.Close()
-	var mu sync.Mutex
-	var types []string
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithStreamEventCallback(func(
-		_ context.Context,
-		_ *responses.ResponseNewParams,
-		event *responses.ResponseStreamEventUnion,
-	) {
-		mu.Lock()
-		types = append(types, event.Type)
-		mu.Unlock()
-		panic("observer bug")
-	}))
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
 	ch, err := m.GenerateContent(context.Background(), &model.Request{
 		Messages:         []model.Message{model.NewUserMessage("hi")},
 		GenerationConfig: model.GenerationConfig{Stream: true},
@@ -696,14 +666,4 @@ func TestStreamPartialsAndEventCallback(t *testing.T) {
 	require.False(t, final.IsPartial)
 	require.Equal(t, "no", final.Choices[0].Message.Content)
 	require.NotNil(t, final.Choices[0].Message.Replay)
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{
-		"response.created",
-		"response.reasoning_summary_text.delta",
-		"response.output_text.delta",
-		"response.refusal.delta",
-		"response.output_item.done",
-		"response.completed",
-	}, types, "the callback observes every event even when it panics")
 }
