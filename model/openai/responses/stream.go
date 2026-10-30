@@ -212,7 +212,10 @@ func handleTerminalStreamEvent(
 		if message == "" {
 			message = "responses stream did not complete"
 		}
-		return true, emit(apiErrorResponse(errors.New(message)))
+		result := apiErrorResponse(errors.New(message))
+		result.Error.Code = strPtr(event.Code)
+		result.Error.Param = strPtr(event.Param)
+		return true, emit(result)
 	default:
 		return false, true
 	}

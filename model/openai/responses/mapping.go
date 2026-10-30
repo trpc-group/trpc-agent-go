@@ -91,7 +91,7 @@ func validateRequest(request *model.Request) error {
 		return fmt.Errorf("openai/responses: frequency_penalty is not supported by the Responses API")
 	}
 	if request.Logprobs != nil || request.TopLogprobs != nil {
-		return fmt.Errorf("openai/responses: logprobs is not supported by the Responses API")
+		return fmt.Errorf("openai/responses: logprobs is not supported by this adapter")
 	}
 	if request.ReasoningEffort != nil && strings.TrimSpace(*request.ReasoningEffort) != "" {
 		if _, ok := officialReasoningEfforts[*request.ReasoningEffort]; !ok {

@@ -320,6 +320,7 @@ func responseStatusError(resp *responses.Response) *model.Response {
 		result.Created = createdUnix(resp)
 		result.Model = string(resp.Model)
 		result.Usage = mapUsage(resp)
+		result.Error.Code = strPtr(string(resp.Error.Code))
 	}
 	return result
 }

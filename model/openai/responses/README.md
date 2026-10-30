@@ -231,6 +231,9 @@ This adapter requires a root module version containing `Message.Replay` and
 `Info.ReplayProtocol`. Repository-relative `replace` directives support local
 development only; downstream consumers must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited.
+Publish the compatible root module first, update this module's required root
+version, and verify an external consumer without a root-module `replace`
+before publishing the adapter module.
 
 ## Configuration and lifecycle
 
@@ -245,6 +248,10 @@ setup is in the
 [English model guide](../../../docs/mkdocs/en/model.md#openai-responses-api)
 and the
 [Chinese model guide](../../../docs/mkdocs/zh/model.md#openai-responses-api).
+
+Terminal API failures preserve the reported error code and, for stream error
+events, the parameter name in `Response.Error.Code` and `Response.Error.Param`.
+Missing values remain nil; an error without a message uses a fallback message.
 
 `WithExtraFields` and `Request.ExtraFields` accept ordinary dot-separated JSON
 paths for additional parameters such as `reasoning.summary` and `tool_choice`.
