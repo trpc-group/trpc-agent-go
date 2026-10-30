@@ -372,12 +372,12 @@ jobs:
           cache-dependency-path: |
             go.mod
             go.sum
-            model/openai/v3/responses/go.mod
-            model/openai/v3/responses/go.sum
+            model/openai/sdkv3/go.mod
+            model/openai/sdkv3/go.sum
             examples/openairesponses/go.mod
             examples/openairesponses/go.sum
       - name: Test Responses adapter module
-        working-directory: model/openai/v3/responses
+        working-directory: model/openai/sdkv3
         run: go test ./...
       - name: Check example module metadata and build
         working-directory: examples/openairesponses

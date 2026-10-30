@@ -1,10 +1,10 @@
-module trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses
+module trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3
 
 go 1.25.0
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../../..
+replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
-replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../../../../session/sqlite
+replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../../../session/sqlite
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32

@@ -4,12 +4,12 @@ go 1.25.0
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
-	trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses => ../../model/openai/v3/responses
+	trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3 => ../../model/openai/sdkv3
 )
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v1.11.1
-	trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses v1.11.1
+	trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3 v1.11.1
 )
 
 require (

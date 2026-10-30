@@ -159,7 +159,7 @@ function in `tools/main.go`.
   or approval flows.
 - History, callbacks, model switching, compatibility, recovery, versioning,
   and release limits are defined in the
-  [adapter README](../../model/openai/v3/responses/README.md).
+  [adapter README](../../model/openai/sdkv3/responses/README.md).
   The user guide is the OpenAI Responses API section of
   [docs/mkdocs/en/model.md](../../docs/mkdocs/en/model.md#openai-responses-api)
   and
