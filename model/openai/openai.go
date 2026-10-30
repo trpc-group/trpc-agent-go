@@ -2840,6 +2840,19 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		})
 		return
 	}
+	// A successful HTTP response containing JSON null decodes to (nil, nil).
+	// Reject it before invoking the success callback or dereferencing it.
+	if chatCompletion == nil {
+		emit(&model.Response{
+			Error: &model.ResponseError{
+				Message: "openai: received nil chat completion",
+				Type:    model.ErrorTypeAPIError,
+			},
+			Timestamp: time.Now(),
+			Done:      true,
+		})
+		return
+	}
 	// Some OpenAI-compatible providers return HTTP 200 with an error body
 	// instead of a proper 4xx/5xx status code. The SDK does not treat these
 	// as errors because it only inspects the HTTP status. However the error

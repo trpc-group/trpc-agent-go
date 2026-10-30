@@ -11055,6 +11055,74 @@ func TestExtractEmbeddedErrorResponse(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContent_NullCompletion(t *testing.T) {
+	for _, api := range []string{"iterator", "channel"} {
+		t.Run(api, func(t *testing.T) {
+			for _, tc := range []struct {
+				name string
+				body string
+			}{
+				{name: "null", body: "null"},
+				{name: "null_with_whitespace", body: " \n\tnull\r\n "},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, tc.body)
+					}))
+					defer server.Close()
+
+					callbackCalled := false
+					m := New("test-model",
+						WithBaseURL(server.URL),
+						WithAPIKey("test-key"),
+						WithChatResponseCallback(func(
+							_ context.Context,
+							_ *openai.ChatCompletionNewParams,
+							_ *openai.ChatCompletion,
+						) {
+							callbackCalled = true
+						}),
+					)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					req := &model.Request{
+						Messages:         []model.Message{model.NewUserMessage("hello")},
+						GenerationConfig: model.GenerationConfig{Stream: false},
+					}
+
+					var responses []*model.Response
+					if api == "iterator" {
+						seq, err := m.GenerateContentIter(ctx, req)
+						require.NoError(t, err)
+						seq(func(resp *model.Response) bool {
+							responses = append(responses, resp)
+							return true
+						})
+					} else {
+						ch, err := m.GenerateContent(ctx, req)
+						require.NoError(t, err)
+						for resp := range ch {
+							responses = append(responses, resp)
+						}
+					}
+
+					require.Len(t, responses, 1)
+					resp := responses[0]
+					require.NotNil(t, resp)
+					require.NotNil(t, resp.Error)
+					assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
+					assert.Contains(t, resp.Error.Message, "nil chat completion")
+					assert.True(t, resp.Done)
+					assert.False(t, resp.Timestamp.IsZero())
+					assert.Empty(t, resp.Choices)
+					assert.False(t, callbackCalled, "invalid completions must not invoke the success callback")
+				})
+			}
+		})
+	}
+}
+
 func TestModel_GenerateContent_EmbeddedErrorHTTP200(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
