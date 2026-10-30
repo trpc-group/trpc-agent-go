@@ -1107,13 +1107,16 @@ func TestCreateSession(t *testing.T) {
 			SessionID: "session-456",
 		}
 
+		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT expires_at FROM session_states").
 			WithArgs(key.AppName, key.UserID, key.SessionID).
 			WillReturnError(fmt.Errorf("database error"))
+		mock.ExpectRollback()
 
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "check existing session failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("InsertError", func(t *testing.T) {
@@ -1128,16 +1131,19 @@ func TestCreateSession(t *testing.T) {
 			SessionID: "session-456",
 		}
 
+		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT expires_at FROM session_states").
 			WithArgs(key.AppName, key.UserID, key.SessionID).
 			WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 
 		mock.ExpectExec("INSERT INTO session_states").
 			WillReturnError(fmt.Errorf("database error"))
+		mock.ExpectRollback()
 
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "create session failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ListAppStatesError", func(t *testing.T) {
@@ -1152,12 +1158,14 @@ func TestCreateSession(t *testing.T) {
 			SessionID: "session-456",
 		}
 
+		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT expires_at FROM session_states").
 			WithArgs(key.AppName, key.UserID, key.SessionID).
 			WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 
 		mock.ExpectExec("INSERT INTO session_states").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
 
 		mock.ExpectQuery("SELECT `key`, value FROM app_states").
 			WithArgs(key.AppName, sqlmock.AnyArg()).
@@ -1166,6 +1174,7 @@ func TestCreateSession(t *testing.T) {
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "list app states failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("ListUserStatesError", func(t *testing.T) {
@@ -1180,12 +1189,14 @@ func TestCreateSession(t *testing.T) {
 			SessionID: "session-456",
 		}
 
+		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT expires_at FROM session_states").
 			WithArgs(key.AppName, key.UserID, key.SessionID).
 			WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
 
 		mock.ExpectExec("INSERT INTO session_states").
 			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
 
 		mock.ExpectQuery("SELECT `key`, value FROM app_states").
 			WithArgs(key.AppName, sqlmock.AnyArg()).
@@ -1198,6 +1209,7 @@ func TestCreateSession(t *testing.T) {
 		_, err = s.CreateSession(context.Background(), key, session.StateMap{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "list user states failed")
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
@@ -1251,8 +1263,10 @@ func TestCleanupExpired(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 			WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 				AddRow("app-1", "user-1", "session-1"))
+		expectNoUnexpiredSessionStates(mock, "app-1", "user-1", "session-1", sqlmock.AnyArg())
 
 		// Mock: Soft delete session states
+		expectNoDuplicateSessionStateTombstones(mock)
 		mock.ExpectExec("UPDATE session_states SET deleted_at").
 			WillReturnError(fmt.Errorf("database error"))
 
@@ -1516,9 +1530,11 @@ func TestCreateSession_ExistingWithoutExpiry(t *testing.T) {
 	}
 
 	// Mock: Check existing session - returns a row with NULL expires_at (no expiration)
+	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT expires_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(nil))
+	mock.ExpectRollback()
 
 	_, err = s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
@@ -1645,9 +1661,11 @@ func TestCreateSession_QueryError(t *testing.T) {
 		SessionID: "session-456",
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
 
 	_, err = s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
@@ -1669,6 +1687,7 @@ func TestCreateSession_ExecError(t *testing.T) {
 		SessionID: "session-456",
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}))
@@ -1679,6 +1698,7 @@ func TestCreateSession_ExecError(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 		).
 		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
 
 	_, err = s.CreateSession(ctx, key, session.StateMap{})
 	assert.Error(t, err)
@@ -1767,7 +1787,9 @@ func TestCleanupExpiredSessions_DeleteError(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id FROM session_states WHERE")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app", "user", "sess"))
+	expectNoUnexpiredSessionStates(mock, "app", "user", "sess", sqlmock.AnyArg())
 
+	expectNoDuplicateSessionStateTombstones(mock)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WillReturnError(assert.AnError)
 	mock.ExpectRollback()
@@ -1861,11 +1883,13 @@ func TestCreateSession_ListAppStatesError(t *testing.T) {
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"})) // New
 
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WillReturnError(assert.AnError)
@@ -1886,11 +1910,13 @@ func TestCreateSession_ListUserStatesError(t *testing.T) {
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 
+	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT expires_at FROM session_states")).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"})) // New
 
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_states")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
