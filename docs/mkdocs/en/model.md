@@ -404,6 +404,13 @@ func main() {
 }
 ```
 
+For non-streaming OpenAI-compatible calls, an HTTP 200 response whose entire
+JSON body is `null` is reported through `Response.Error` with
+`Type: model.ErrorTypeAPIError` and `Done: true`. This applies to both
+`GenerateContent` and `GenerateContentIter`; the chat response callback is not
+invoked for this invalid completion. A valid completion containing
+`message.content: null`, such as a tool-call response, is unaffected.
+
 ### Structured Output
 
 When calling `model.GenerateContent` directly, use `model.NewRequest` and
