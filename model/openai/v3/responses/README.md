@@ -1,14 +1,31 @@
 # OpenAI Responses adapter
 
 Use `responses.New` when an application needs the OpenAI Responses API through
-`model.Model`. This adapter belongs to the separate `model/openai/v3` module
-for the OpenAI Go SDK v3 generation. The existing `model/openai` package and
-`openai.New` remain available for Chat Completions. See the
-[module versioning policy](../README.md#sdk-and-module-versions) for SDK and
-adapter version boundaries.
+`model.Model`. This adapter is published from the standalone
+`trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses` Go module for the
+OpenAI Go SDK v3 generation. The `/v3` path identifies the SDK generation; the
+adapter module has its own release version. The existing `model/openai`
+package and `openai.New` remain available for Chat Completions. See
+[module versioning and release](#module-versioning-and-release) for details.
 
 This adapter is opt-in: the root framework keeps its Go 1.21 requirement and
 existing Chat Completions defaults.
+
+## Module versioning and release
+
+The SDK is currently pinned to `v3.74.0`. Adapter releases follow the framework's
+`v1.x` release line, independent of the SDK version. Compatible fixes and additions
+stay on `v1.x`; a breaking public API or contract change requires a new module
+major version under Go module versioning rules. A module release such as
+`v1.11.1` does not imply SDK `v1.11.1`.
+
+Use the tag format `model/openai/v3/responses/v1.x.x`. For example, an adapter
+release at `v1.12.0` uses `model/openai/v3/responses/v1.12.0`.
+
+Before publishing this module, release a root framework version containing
+the required replay types. Then update this module's root framework
+dependency and verify it from an external consumer without repository
+`replace` directives.
 
 The module requires Go 1.25. Downstream modules that import it must use that
 Go version or newer. When `WithAPIKey` and `WithBaseURL` are omitted, the

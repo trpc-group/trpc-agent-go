@@ -67,6 +67,11 @@ func TestStreamEmptyCompletionAfterOutputIsRejected(t *testing.T) {
 			wantNoPreviews: true,
 		},
 		{
+			name:           "legacy function call name only",
+			events:         []string{`{"type":"response.function_call_arguments.done","name":"calculator"}`, emptyCompletedEvent},
+			wantNoPreviews: true,
+		},
+		{
 			name:           "native reasoning item",
 			events:         []string{`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}`, emptyCompletedEvent},
 			wantNoPreviews: true,

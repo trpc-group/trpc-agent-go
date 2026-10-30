@@ -2,8 +2,8 @@
 
 ## Purpose
 
-This independent module shows how to use the OpenAI Responses adapter from the
-OpenAI SDK v3 generation with `LLMAgent` and `Runner`.
+This independent module shows how to use the OpenAI Responses adapter with
+`LLMAgent` and `Runner`. The adapter currently pins OpenAI SDK `v3.74.0`.
 
 - `chat` is a multi-turn conversation without tools.
 - `tools` registers a local calculator and keeps one in-memory session across
@@ -157,10 +157,9 @@ function in `tools/main.go`.
 - This module does not demonstrate server-managed `previous_response_id` or
   `conversation` continuation, background responses, hosted tools, tool search,
   or approval flows.
-- History, callbacks, model switching, compatibility, and recovery limits are
-  defined in
-  [the adapter contract](../../model/openai/v3/responses/README.md) and its
-  [module versioning notes](../../model/openai/v3/README.md).
+- History, callbacks, model switching, compatibility, recovery, versioning,
+  and release limits are defined in the
+  [adapter README](../../model/openai/v3/responses/README.md).
   The user guide is the OpenAI Responses API section of
   [docs/mkdocs/en/model.md](../../docs/mkdocs/en/model.md#openai-responses-api)
   and

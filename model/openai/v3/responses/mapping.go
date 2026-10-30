@@ -323,7 +323,9 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 			if err != nil {
 				return nil, fmt.Errorf("openai/responses: tool result %q: %w", callID, err)
 			}
-			items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(callID, text))
+			item := responses.ResponseInputItemParamOfFunctionCallOutput(text)
+			item.OfFunctionCallOutput.CallID = openai.String(callID)
+			items = append(items, item)
 			completed[callID] = struct{}{}
 		case model.RoleAssistant:
 			converted, err := convertAssistantMessage(msg, called, completed)

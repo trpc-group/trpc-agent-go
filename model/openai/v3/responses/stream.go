@@ -163,7 +163,13 @@ func handleStreamEvent(
 		// Arguments stay private until response.completed supplies the complete
 		// item. A call name, argument payload, or item ID still shows that a
 		// function call was produced.
-		if event.Name != "" || event.Arguments != "" || event.ItemID != "" {
+		var legacy struct {
+			Name string `json:"name"`
+		}
+		// New SDK versions no longer declare name on this event. Preserve
+		// detection of output from compatible services that still send it.
+		_ = json.Unmarshal([]byte(event.RawJSON()), &legacy)
+		if legacy.Name != "" || event.Arguments != "" || event.ItemID != "" {
 			acc.outputObserved = true
 		}
 		return false, true
