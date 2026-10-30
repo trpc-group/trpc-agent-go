@@ -1,4 +1,4 @@
-module trpc.group/trpc-go/trpc-agent-go/model/openai/responses
+module trpc.group/trpc-go/trpc-agent-go/model/openai/v3
 
 go 1.25.0
 

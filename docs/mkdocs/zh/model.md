@@ -2179,9 +2179,9 @@ llm := openai.New(
 
 ## OpenAI Responses API
 
-使用 `model/openai/responses` 接入 OpenAI Responses API，支持对话、流式输出和函数调用。通过 `responses.New` 创建模型，再传给 `LLMAgent` 即可使用。
+使用 `model/openai/v3/responses` 接入 OpenAI Responses API，支持对话、流式输出和函数调用。通过 `responses.New` 创建模型，再传给 `LLMAgent` 即可使用。
 
-该适配器是独立的 Go 模块，要求 Go 1.25 或更高版本。使用 Chat Completions API 时，继续使用 `model/openai` 的 `openai.New`。
+该适配器位于独立的 `model/openai/v3` Go 模块，要求 Go 1.25 或更高版本。`/v3` 路径表示使用 OpenAI Go SDK v3，模块自身独立发布版本。目前此模块只提供 Responses。使用 Chat Completions 时，继续使用 `model/openai` 的 `openai.New`。
 
 ### 环境变量与最小集成
 
@@ -2199,7 +2199,7 @@ import (
 
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai/responses"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -2267,7 +2267,7 @@ go run ./tools -streaming=false
 - 下游模块需要包含 `Message.Replay` 和 `Info.ReplayProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
-- 历史、回调、摘要、兼容性和恢复的完整约定见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/responses/README.md)。
+- 历史、回调、摘要、兼容性和恢复的完整约定见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/v3/responses/README.md)。模块版本和发布要求见 [OpenAI v3 模块 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/v3/README.md)。
 
 ## Anthropic Model
 

@@ -2219,9 +2219,12 @@ to preserve the default clean text-streaming behavior.
 
 ## OpenAI Responses API
 
-Use `model/openai/responses` to access the OpenAI Responses API for conversations, streaming output, and function calling. Create a model with `responses.New` and pass it to `LLMAgent`.
+Use `model/openai/v3/responses` to access the OpenAI Responses API for conversations, streaming output, and function calling. Create a model with `responses.New` and pass it to `LLMAgent`.
 
-The adapter is a separate Go module that requires Go 1.25 or newer. For the Chat Completions API, continue using `openai.New` from `model/openai`.
+The adapter is in the separate `model/openai/v3` Go module and requires Go
+1.25 or newer. The `/v3` path identifies the OpenAI Go SDK v3 generation; the
+module has its own release versions. This module currently provides Responses
+only. For Chat Completions, continue using `openai.New` from `model/openai`.
 
 ### Environment and minimal integration
 
@@ -2239,7 +2242,7 @@ import (
 
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai/responses"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -2307,7 +2310,7 @@ Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Ca
 - Downstream modules need a root release that contains `Message.Replay` and `Info.ReplayProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
-- History, callbacks, summaries, compatibility, and recovery are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/responses/README.md).
+- History, callbacks, summaries, compatibility, and recovery are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/v3/responses/README.md). Module versioning and release requirements are in the [OpenAI v3 module README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/v3/README.md).
 
 ## Anthropic Model
 

@@ -1,9 +1,14 @@
 # OpenAI Responses adapter
 
 Use `responses.New` when an application needs the OpenAI Responses API through
-`model.Model`. Keep `openai.New` for Chat Completions. This adapter is
-opt-in: the root framework keeps its Go 1.21 requirement and existing Chat
-Completions defaults.
+`model.Model`. This adapter belongs to the separate `model/openai/v3` module
+for the OpenAI Go SDK v3 generation. The existing `model/openai` package and
+`openai.New` remain available for Chat Completions. See the
+[module versioning policy](../README.md#sdk-and-module-versions) for SDK and
+adapter version boundaries.
+
+This adapter is opt-in: the root framework keeps its Go 1.21 requirement and
+existing Chat Completions defaults.
 
 The module requires Go 1.25. Downstream modules that import it must use that
 Go version or newer. When `WithAPIKey` and `WithBaseURL` are omitted, the
@@ -16,7 +21,7 @@ Ordinary `LLMAgent` and `Runner` use does not require reading or editing
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai/responses"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/v3/responses"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -36,9 +41,9 @@ options, extra fields, and lifecycle rules are under
 
 Runnable programs and the user-level walkthrough:
 
-- [examples/openairesponses](../../../examples/openairesponses)
-- [Model guide (English)](../../../docs/mkdocs/en/model.md#openai-responses-api)
-- [模型指南（中文）](../../../docs/mkdocs/zh/model.md#openai-responses-api)
+- [examples/openairesponses](../../../../examples/openairesponses)
+- [Model guide (English)](../../../../docs/mkdocs/en/model.md#openai-responses-api)
+- [模型指南（中文）](../../../../docs/mkdocs/zh/model.md#openai-responses-api)
 
 The sections below are the detailed support, history, compatibility, and
 recovery contract.
@@ -232,10 +237,11 @@ replay state, so resuming that history with the old binary cannot be promised.
 This adapter requires a root module version containing `Message.Replay` and
 `Info.ReplayProtocol`. Repository-relative `replace` directives support local
 development only; downstream consumers must resolve a compatible root version
-because dependency modules' `replace` directives are not inherited.
-Publish the compatible root module first, update this module's required root
-version, and verify an external consumer without a root-module `replace`
-before publishing the adapter module.
+because dependency modules' `replace` directives are not inherited. Publish
+the compatible root module first, update this module's required root version,
+and verify an external consumer without a root-module `replace` before
+publishing the adapter module. See the [v3 module release notes](../README.md)
+for the module and SDK version relationship and tag format.
 
 ## Configuration and lifecycle
 
@@ -247,9 +253,9 @@ history. The caller owns its session service and must keep draining the
 response channel or cancel the request context. The runnable examples pass an
 explicit in-memory session and close it when the process exits. User-level
 setup is in the
-[English model guide](../../../docs/mkdocs/en/model.md#openai-responses-api)
+[English model guide](../../../../docs/mkdocs/en/model.md#openai-responses-api)
 and the
-[Chinese model guide](../../../docs/mkdocs/zh/model.md#openai-responses-api).
+[Chinese model guide](../../../../docs/mkdocs/zh/model.md#openai-responses-api).
 
 Terminal API failures preserve the reported error code and, for stream error
 events, the parameter name in `Response.Error.Code` and `Response.Error.Param`.

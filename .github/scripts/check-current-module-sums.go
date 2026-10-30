@@ -49,7 +49,7 @@ type unsupportedEntry struct {
 }
 
 func main() {
-	version := flag.String("version", "v0.0.0", "Synthetic version used for module zip prefix.")
+	version := flag.String("version", "v0.0.0", "Base synthetic version used for module zip prefixes.")
 	revision := flag.String("revision", "HEAD", "Git revision used for VCS archive mode.")
 	flag.Parse()
 
@@ -95,9 +95,12 @@ func main() {
 		}
 		subdir = filepath.ToSlash(strings.TrimPrefix(subdir, "./"))
 
-		fmt.Printf("::group::%s\n", fmt.Sprintf("%s@%s (%s)", entry.ModulePath, *version, humanModuleDir(subdir)))
+		m := module.Version{
+			Path:    entry.ModulePath,
+			Version: syntheticModuleVersion(entry.ModulePath, *version),
+		}
+		fmt.Printf("::group::%s\n", fmt.Sprintf("%s@%s (%s)", m.Path, m.Version, humanModuleDir(subdir)))
 
-		m := module.Version{Path: entry.ModulePath, Version: *version}
 		if err := module.Check(m.Path, m.Version); err != nil {
 			fmt.Fprintf(os.Stderr, "::error file=%s::Invalid synthetic module version for %s: %v\n", rel(repoRoot, entry.GoModPath), entry.ModulePath, err)
 			unsupported = append(unsupported, unsupportedEntry{
@@ -254,6 +257,14 @@ func readModulePath(goModPath string) (string, error) {
 		return "", fmt.Errorf("missing module directive")
 	}
 	return f.Module.Mod.Path, nil
+}
+
+func syntheticModuleVersion(modulePath, baseVersion string) string {
+	_, pathMajor, ok := module.SplitPathVersion(modulePath)
+	if !ok || pathMajor == "" || module.CheckPathMajor(baseVersion, pathMajor) == nil {
+		return baseVersion
+	}
+	return module.PathMajorPrefix(pathMajor) + ".0.0"
 }
 
 func isDoNotUseGoMod(goModPath string) bool {

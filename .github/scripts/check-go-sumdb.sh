@@ -46,10 +46,8 @@ skipped_modules=()
 for mod_file in "${go_mod_files[@]}"; do
   mod_dir="$(dirname "${mod_file}")"
   if [ "${mod_dir}" = "." ]; then
-    tag_prefix=""
     readable="root"
   else
-    tag_prefix="${mod_dir}/"
     readable="${mod_dir}"
   fi
 
@@ -60,15 +58,31 @@ for mod_file in "${go_mod_files[@]}"; do
     continue
   fi
 
+  tag_dir="${mod_dir}"
+  version_tag_pattern="v*"
+  if [[ "${module_path}" =~ /v([2-9]|[1-9][0-9]+)$ ]]; then
+    # Go excludes a /vN major-version suffix from the subdirectory used as a tag prefix.
+    module_major="v${BASH_REMATCH[1]}"
+    version_tag_pattern="${module_major}.*"
+    if [ "${mod_dir##*/}" = "${module_major}" ]; then
+      tag_dir="$(dirname "${mod_dir}")"
+    fi
+  fi
+  if [ "${tag_dir}" = "." ]; then
+    tag_prefix=""
+  else
+    tag_prefix="${tag_dir}/"
+  fi
+
   if head -n 5 "${mod_file}" | grep -q "DO NOT USE!"; then
     echo "::warning::Skipping ${readable}: marked as DO NOT USE."
     skipped_modules+=("${readable}")
     continue
   fi
 
-  tag="$(git tag -l "${tag_prefix}v*" --sort=-version:refname | head -n 1)"
+  tag="$(git tag -l "${tag_prefix}${version_tag_pattern}" --sort=-version:refname | head -n 1)"
   if [ -z "${tag}" ]; then
-    echo "::warning::Skipping ${readable}: no version tag matching '${tag_prefix}v*'."
+    echo "::warning::Skipping ${readable}: no version tag matching '${tag_prefix}${version_tag_pattern}'."
     skipped_modules+=("${readable}")
     continue
   fi
