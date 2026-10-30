@@ -481,6 +481,13 @@ func TestLocalProgramBareNamePathForGOOS(t *testing.T) {
 	toolPath := filepath.Join(bin, "tool")
 	require.NoError(t, os.WriteFile(toolPath, []byte("@echo off"), 0o644))
 
+	// The Windows branch canonicalises through EvalSymlinks, so the
+	// expectation has to be canonicalised too: on macOS a temporary
+	// directory resolves from /var to /private/var, and the resolved
+	// path would otherwise never match the path handed in.
+	want, err := filepath.EvalSymlinks(toolPath)
+	require.NoError(t, err)
+
 	// A relative search directory is resolved against the working
 	// directory, and no write permission bit is required on Windows.
 	got, ok := localProgramBareNamePathForGOOS(
@@ -490,7 +497,7 @@ func TestLocalProgramBareNamePathForGOOS(t *testing.T) {
 		"windows",
 	)
 	require.True(t, ok)
-	require.Equal(t, toolPath, got)
+	require.Equal(t, want, got)
 
 	// An absolute search directory is used as-is.
 	got, ok = localProgramBareNamePathForGOOS(
@@ -500,7 +507,7 @@ func TestLocalProgramBareNamePathForGOOS(t *testing.T) {
 		"windows",
 	)
 	require.True(t, ok)
-	require.Equal(t, toolPath, got)
+	require.Equal(t, want, got)
 
 	// Other platforms never take the bare-name fallback, and a missing
 	// file is not a candidate.
