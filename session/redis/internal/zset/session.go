@@ -997,9 +997,13 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 	var toDelete []any
 	var deletedEvents []event.Event
 	var offset int64
-	stop := false
 
-	for !stop {
+	// Selecting the target rounds and collecting their events stay separate: one
+	// pass walks the whole event stream so that events of a target round are
+	// still collected when a foreign round is interleaved with them. Stopping
+	// the scan at the first unknown RequestID silently leaked those events.
+	// See issue #2613.
+	for {
 		batch, err := c.client.ZRevRange(ctx, eventKey, offset, offset+trimScanBatchSize-1).Result()
 		if err != nil && err != redis.Nil {
 			return nil, fmt.Errorf("trim events: load events: %w", err)
@@ -1019,8 +1023,7 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 
 			if _, ok := targetReqIDs[evt.RequestID]; !ok {
 				if len(targetReqIDs) >= count {
-					stop = true
-					break
+					continue
 				}
 				targetReqIDs[evt.RequestID] = struct{}{}
 			}
@@ -1029,9 +1032,6 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 			deletedEvents = append(deletedEvents, evt)
 		}
 
-		if stop {
-			break
-		}
 		offset += trimScanBatchSize
 	}
 
