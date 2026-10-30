@@ -230,6 +230,9 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		// LLM cycle. This covers scenarios where the previous run stopped
 		// after an assistant tool_call response but before tools executed.
 		pendingResume := pendingToolCallResponse(invocation)
+		// Native records are resumed by selectModelAndResumeTools after the
+		// first model selection and replay validation, before the model request.
+		// Records without replay retain the existing resume timing here.
 		if !modelreplay.ResponseHasReplay(pendingResume) {
 			f.resumePendingToolCalls(ctx, invocation, pendingResume, eventChan)
 			pendingResume = nil
