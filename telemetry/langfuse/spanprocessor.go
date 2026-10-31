@@ -11,6 +11,7 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -37,6 +38,13 @@ var _ sdktrace.SpanProcessor = (*baggageBatchSpanProcessor)(nil)
 func (p *baggageBatchSpanProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
 	for _, member := range baggage.FromContext(ctx).Members() {
 		if defaultLangfuseTraceAttributeFilter(member) {
+			if member.Key() == traceTags {
+				var tags []string
+				if json.Unmarshal([]byte(member.Value()), &tags) == nil {
+					span.SetAttributes(attribute.StringSlice(traceTags, tags))
+					continue
+				}
+			}
 			span.SetAttributes(attribute.String(member.Key(), member.Value()))
 		}
 	}
@@ -56,13 +64,18 @@ func (p *baggageBatchSpanProcessor) OnStart(ctx context.Context, span sdktrace.R
 // - version: langfuse.version
 // - release: langfuse.release
 // - tags: langfuse.trace.tags
+// - experiment: Langfuse experiment and item association fields
 func defaultLangfuseTraceAttributeFilter(member baggage.Member) bool {
 	k := member.Key()
 	switch k {
 	case traceUserID, "user.id",
 		traceSessionID, "session.id",
 		version, release,
-		traceTags:
+		traceTags, traceName, environment,
+		"langfuse.experiment.id", "langfuse.experiment.name",
+		"langfuse.experiment.description", "langfuse.experiment.metadata",
+		"langfuse.experiment.dataset.id", "langfuse.experiment.item.id",
+		"langfuse.experiment.item.metadata", "langfuse.experiment.item.root_observation_id":
 		return true
 	default:
 		// Only propagate top-level metadata keys.

@@ -193,15 +193,33 @@ normal result semantics. A later Langfuse write failure can leave earlier writes
 in place; completed writes are not rolled back. Runners, callbacks, and managers
 must support the concurrency enabled on the evaluator.
 
-### Langfuse API Version
+### Langfuse API version
 
-By default the handler writes through the legacy public API: `POST /api/public/traces` and `POST /api/public/dataset-run-items`. Langfuse v4 removes the trace write and deprecates dataset run items, and Langfuse Cloud is v4-only from 2026-11-16. For Langfuse Cloud after that date and for self-hosted v4, select the v4 write path:
+The default uses Langfuse v3's trace and dataset-run-item APIs. For v4, enable
+both the handler's experiment path and the exporter's v4 ingestion format:
 
 ```go
+// Add to the evaluation handler options:
 langfuseeval.WithAPIVersion(langfuseeval.APIVersionV4),
+
+// Add to telemetry/langfuse.Start options:
+langfuse.WithIngestionVersion("4"),
 ```
 
-In this mode the handler makes neither call. Instead it sets the trace fields (name, user, session, tags, input, metadata) and the experiment association (`langfuse.experiment.id`, `.name`, `.description`, `.dataset.id`, `.item.id`) as attributes on each case's root agent span, so spans must reach Langfuse through the OpenTelemetry exporter (see `telemetry/langfuse`). The experiment id is derived from the webhook's `projectId`, the dataset id and the run name, the same way Langfuse's SDKs derive it, and replaces the dataset run id: run-level scores (`pass_rate` and the `*_mean` metrics) are still posted to `POST /api/public/scores` with `datasetRunId` set to it. The trace output is the root span's own output. Keep the default for self-hosted Langfuse v3.
+Start recording telemetry before evaluating cases. A custom OTLP exporter must
+send `x-langfuse-ingestion-version: 4` to `/api/public/otel/v1/traces`.
+
+The handler creates an `experiment-item-task` root observation for each inference
+run. Agent and tool spans inherit its trace and experiment association. Custom
+runners must preserve the supplied parent context. The root contains the case
+input and final response; case scores target that observation. Run scores still
+use the public Scores API with a deterministic experiment ID derived from the
+webhook's `projectId`, dataset ID, and run name. The handler makes no legacy trace
+or dataset-run-item writes in this mode.
+
+Spans may be exported during evaluation, including when a later case or batch
+fails. Cancelling the batch does not retract them. Keep the default for v3.
+See the [Langfuse OTLP experiment contract](https://langfuse.com/integrations/native/opentelemetry/experiments).
 
 ### Data Format
 

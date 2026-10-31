@@ -121,3 +121,20 @@ func TestBaggageBatchSpanProcessor_NilNext_Noops(t *testing.T) {
 	require.NoError(t, p.Shutdown(ctx))
 	require.NoError(t, p.ForceFlush(ctx))
 }
+
+func TestNewSpanProcessor_PropagatesExperimentAssociation(t *testing.T) {
+	member, err := baggage.NewMemberRaw("langfuse.experiment.item.root_observation_id", "1234567890abcdef")
+	require.NoError(t, err)
+	bag, err := baggage.New(member)
+	require.NoError(t, err)
+	ctx := baggage.ContextWithBaggage(context.Background(), bag)
+	exporter := &recordingExporter{}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(newSpanProcessor(exporter)))
+	defer provider.Shutdown(context.Background())
+	_, span := provider.Tracer("test").Start(ctx, "child")
+	span.End()
+	require.NoError(t, provider.ForceFlush(context.Background()))
+	spans := exporter.snapshot()
+	require.Len(t, spans, 1)
+	assert.Contains(t, spans[0].Attributes(), attribute.String("langfuse.experiment.item.root_observation_id", "1234567890abcdef"))
+}

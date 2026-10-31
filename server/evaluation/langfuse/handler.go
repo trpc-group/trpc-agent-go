@@ -427,6 +427,13 @@ func (h *Handler) publishCase(
 		return nil, "", 0, fmt.Errorf("resolve case artifacts for case %s: %w", spec.EvalCase.EvalID, err)
 	}
 	traceID := trace.idForSession(inferenceDetail.SessionID)
+	var observationID string
+	if h.apiVersion == APIVersionV4 {
+		observationID = trace.observationIDForSession(inferenceDetail.SessionID)
+		if observationID == "" {
+			return nil, "", 0, fmt.Errorf("experiment item span was not captured for case %s", spec.EvalCase.EvalID)
+		}
+	}
 	if traceID == "" {
 		return nil, "", 0, fmt.Errorf("trace id was not captured for case %s", spec.EvalCase.EvalID)
 	}
@@ -483,12 +490,13 @@ func (h *Handler) publishCase(
 	for _, metricResult := range runCaseResult.OverallEvalMetricResults {
 		comment := resolveMetricReason(metricResult)
 		if err := h.client.createScore(ctx, scoreCreateRequest{
-			Name:        metricResult.MetricName,
-			TraceID:     traceID,
-			Value:       metricResult.Score,
-			DataType:    "NUMERIC",
-			Environment: h.environment,
-			Comment:     comment,
+			Name:          metricResult.MetricName,
+			TraceID:       traceID,
+			ObservationID: observationID,
+			Value:         metricResult.Score,
+			DataType:      "NUMERIC",
+			Environment:   h.environment,
+			Comment:       comment,
 			Metadata: map[string]any{
 				"datasetItemId": spec.DatasetItemID,
 				"evalCaseId":    spec.EvalCase.EvalID,

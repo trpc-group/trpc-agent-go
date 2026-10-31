@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -10,6 +10,7 @@ package langfuse
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,11 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // APIVersion selects the Langfuse write API generation the handler targets.
@@ -38,16 +44,18 @@ const (
 // Experiment and trace span attributes Langfuse v4 reads from the case's root span.
 // Names follow Langfuse's own SDK (langfuse/_client/attributes.py).
 const (
-	attrTraceInput          = "langfuse.trace.input"
-	attrTraceTags           = "langfuse.trace.tags"
-	attrTraceMetadataPrefix = "langfuse.trace.metadata."
-	attrSessionID           = "langfuse.session.id"
-	attrExperimentID        = "langfuse.experiment.id"
-	attrExperimentName      = "langfuse.experiment.name"
-	attrExperimentDesc      = "langfuse.experiment.description"
-	attrExperimentMetadata  = "langfuse.experiment.metadata"
-	attrExperimentDataset   = "langfuse.experiment.dataset.id"
-	attrExperimentItemID    = "langfuse.experiment.item.id"
+	attrTraceInput             = "langfuse.trace.input"
+	attrTraceTags              = "langfuse.trace.tags"
+	attrTraceMetadataPrefix    = "langfuse.trace.metadata."
+	attrSessionID              = "langfuse.session.id"
+	attrExperimentID           = "langfuse.experiment.id"
+	attrExperimentName         = "langfuse.experiment.name"
+	attrExperimentDesc         = "langfuse.experiment.description"
+	attrExperimentMetadata     = "langfuse.experiment.metadata"
+	attrExperimentDataset      = "langfuse.experiment.dataset.id"
+	attrExperimentItemID       = "langfuse.experiment.item.id"
+	attrExperimentRootID       = "langfuse.experiment.item.root_observation_id"
+	attrExperimentItemMetadata = "langfuse.experiment.item.metadata"
 )
 
 func (v APIVersion) valid() bool {
@@ -70,9 +78,33 @@ func experimentID(projectID, datasetID, runName string) (string, error) {
 		return "", fmt.Errorf("encode experiment id payload: %w", err)
 	}
 	payload := strings.TrimSuffix(buffer.String(), "\n")
-	payload = strings.NewReplacer("\\u2028", "\u2028", "\\u2029", "\u2029").Replace(payload)
+	payload = unescapeLineSeparators(payload)
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])[:16], nil
+}
+
+// unescapeLineSeparators only decodes real JSON escapes, preserving a run name
+// that contains the literal text "\\u2028" or "\\u2029".
+func unescapeLineSeparators(payload string) string {
+	var result strings.Builder
+	for i := 0; i < len(payload); i++ {
+		if payload[i] == '\\' && i+1 < len(payload) {
+			if strings.HasPrefix(payload[i:], `\u2028`) {
+				result.WriteRune('\u2028')
+				i += 5
+				continue
+			}
+			if strings.HasPrefix(payload[i:], `\u2029`) {
+				result.WriteRune('\u2029')
+				i += 5
+				continue
+			}
+			result.WriteByte(payload[i])
+			i++
+		}
+		result.WriteByte(payload[i])
+	}
+	return result.String()
 }
 
 // newExperimentID resolves the experiment id for one remote experiment request.
@@ -86,7 +118,7 @@ func newExperimentID(request *remoteExperimentRequest, runName string) (string, 
 // v4CaseAttributes returns the span attributes that replace, for one case, the
 // POST /api/public/traces and POST /api/public/dataset-run-items writes: the
 // trace fields the trace upsert used to carry and the experiment association the
-// run item used to create. They are set on the case's root agent span, so they
+// run item used to create. They are set on the experiment item span, so they
 // must be known before the case runs; the trace output is the root observation's
 // own output in v4 and is no longer written separately.
 func (h *Handler) v4CaseAttributes(spec *CaseSpec, opts executionOptions, sessionID string) ([]attribute.KeyValue, error) {
@@ -130,4 +162,94 @@ func (h *Handler) v4CaseAttributes(spec *CaseSpec, opts executionOptions, sessio
 		attrs = append(attrs, attribute.String(attrTraceMetadataPrefix+key, value))
 	}
 	return attrs, nil
+}
+
+type experimentSpanKey struct{}
+
+// startExperimentItem follows Langfuse's experiment task-span convention. The
+// item span supplies a root observation ID before agent/tool spans start.
+func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs []attribute.KeyValue) (context.Context, oteltrace.Span, error) {
+	ctx, span := atrace.Tracer.Start(ctx, "experiment-item-task", oteltrace.WithNewRoot(), oteltrace.WithAttributes(attrs...))
+	if !span.IsRecording() {
+		span.End()
+		return nil, nil, errors.New("langfuse v4 experiments require a recording OpenTelemetry exporter")
+	}
+	attrs = append(attrs,
+		attribute.String("langfuse.trace.name", spec.TraceName),
+		attribute.String("langfuse.user.id", spec.UserID),
+		attribute.String("langfuse.environment", h.environment),
+		attribute.String("langfuse.observation.input", attributeValue(attrs, attrTraceInput)),
+		attribute.String(attrExperimentRootID, span.SpanContext().SpanID().String()))
+	metadata, err := stringifyValue("experiment item metadata", spec.TraceMetadata["datasetItemMetadata"])
+	if err != nil {
+		span.End()
+		return nil, nil, err
+	}
+	if metadata != "" {
+		attrs = append(attrs, attribute.String(attrExperimentItemMetadata, metadata))
+	}
+	span.SetAttributes(attrs...)
+	bag := baggage.FromContext(ctx)
+	for _, attr := range attrs {
+		key := string(attr.Key)
+		if !strings.HasPrefix(key, "langfuse.experiment.") &&
+			!strings.HasPrefix(key, attrTraceMetadataPrefix) &&
+			key != "langfuse.trace.name" && key != "langfuse.user.id" &&
+			key != attrSessionID && key != attrTraceTags && key != "langfuse.environment" {
+			continue
+		}
+		value := attr.Value.AsString()
+		if attr.Value.Type() == attribute.STRINGSLICE {
+			encoded, err := json.Marshal(attr.Value.AsStringSlice())
+			if err != nil {
+				span.End()
+				return nil, nil, fmt.Errorf("encode experiment tags: %w", err)
+			}
+			value = string(encoded)
+		}
+		member, err := baggage.NewMemberRaw(key, value)
+		if err != nil {
+			span.End()
+			return nil, nil, fmt.Errorf("encode experiment baggage: %w", err)
+		}
+		bag, err = bag.SetMember(member)
+		if err != nil {
+			span.End()
+			return nil, nil, fmt.Errorf("set experiment baggage: %w", err)
+		}
+	}
+	ctx = baggage.ContextWithBaggage(ctx, bag)
+	return context.WithValue(ctx, experimentSpanKey{}, span), span, nil
+}
+
+func attributeValue(attrs []attribute.KeyValue, key string) string {
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return attr.Value.AsString()
+		}
+	}
+	return ""
+}
+
+func finishExperimentItem(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+	span, ok := ctx.Value(experimentSpanKey{}).(oteltrace.Span)
+	if !ok {
+		return nil, nil
+	}
+	defer span.End()
+	if args.Result != nil {
+		inferences := args.Result.Inferences
+		if len(inferences) > 0 && inferences[len(inferences)-1] != nil && inferences[len(inferences)-1].FinalResponse != nil {
+			output := inferences[len(inferences)-1].FinalResponse.Content
+			span.SetAttributes(attribute.String("langfuse.observation.output", output), attribute.String("langfuse.trace.output", output))
+		}
+		if args.Result.ErrorMessage != "" {
+			span.SetStatus(codes.Error, args.Result.ErrorMessage)
+		}
+	}
+	if args.Error != nil {
+		span.RecordError(args.Error)
+		span.SetStatus(codes.Error, args.Error.Error())
+	}
+	return nil, nil
 }

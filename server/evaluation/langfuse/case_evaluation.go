@@ -28,6 +28,21 @@ type caseTrace struct {
 	fallback string
 	mu       sync.Mutex
 	sessions map[string]oteltrace.SpanContext
+	spans    []oteltrace.Span
+}
+
+func (t *caseTrace) addSpan(span oteltrace.Span) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.spans = append(t.spans, span)
+}
+
+func (t *caseTrace) endSpans() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, span := range t.spans {
+		span.End()
+	}
 }
 
 // idForSession selects the published run, falling back to the injected parent
@@ -39,6 +54,15 @@ func (t *caseTrace) idForSession(sessionID string) string {
 		return sc.TraceID().String()
 	}
 	return t.fallback
+}
+
+func (t *caseTrace) observationIDForSession(sessionID string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if sc := t.sessions[sessionID]; sc.IsValid() {
+		return sc.SpanID().String()
+	}
+	return ""
 }
 
 // record retains the first actual turn's valid span for each inference session.
@@ -90,6 +114,11 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution
 		byID[id] = spec
 		traces[id] = &caseTrace{parent: oteltrace.SpanContextFromContext(traceCtx), fallback: traceID, sessions: make(map[string]oteltrace.SpanContext)}
 	}
+	defer func() {
+		for _, trace := range traces {
+			trace.endSpans()
+		}
+	}()
 	callbacks := service.NewCallbacks().RegisterBeforeInferenceCase("langfuse", func(ctx context.Context, args *service.BeforeInferenceCaseArgs) (*service.BeforeInferenceCaseResult, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -110,6 +139,13 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution
 			if err != nil {
 				return nil, fmt.Errorf("build trace attributes for case %s: %w", args.EvalCaseID, err)
 			}
+			var span oteltrace.Span
+			ctx, span, err = h.startExperimentItem(ctx, spec, v4Attributes)
+			if err != nil {
+				return nil, err
+			}
+			trace.addSpan(span)
+			trace.record(args.SessionID, span.SpanContext())
 		}
 		args.RunOptions = append(args.RunOptions,
 			agent.WithExecutionTraceEnabled(true),
@@ -125,8 +161,14 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution
 				trace.record(args.SessionID, sc)
 			}),
 		)
-		return &service.BeforeInferenceCaseResult{Context: oteltrace.ContextWithRemoteSpanContext(ctx, trace.parent)}, nil
+		if h.apiVersion != APIVersionV4 {
+			ctx = oteltrace.ContextWithRemoteSpanContext(ctx, trace.parent)
+		}
+		return &service.BeforeInferenceCaseResult{Context: ctx}, nil
 	})
+	if h.apiVersion == APIVersionV4 {
+		callbacks.RegisterAfterInferenceCase("langfuse", finishExperimentItem)
+	}
 	callbacks.RegisterBeforeEvaluateCase("langfuse", func(ctx context.Context, args *service.BeforeEvaluateCaseArgs) (*service.BeforeEvaluateCaseResult, error) {
 		trace, ok := traces[args.EvalCaseID]
 		if !ok {

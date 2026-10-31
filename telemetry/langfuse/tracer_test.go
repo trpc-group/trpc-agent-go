@@ -123,3 +123,10 @@ func TestStart_WithObservationLeafValueMaxBytesOption(t *testing.T) {
 		t.Fatalf("truncateObservationValue() got %d bytes, want <= %d", len([]byte(out)), 1024)
 	}
 }
+
+func TestStart_RejectsUnsupportedIngestionVersion(t *testing.T) {
+	_, err := Start(context.Background(), WithHost("localhost:3000"), WithPublicKey("pk"), WithSecretKey("sk"), WithIngestionVersion("5"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported ingestion version") {
+		t.Fatalf("Start() error = %v", err)
+	}
+}
