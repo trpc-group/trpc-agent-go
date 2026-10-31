@@ -193,6 +193,16 @@ normal result semantics. A later Langfuse write failure can leave earlier writes
 in place; completed writes are not rolled back. Runners, callbacks, and managers
 must support the concurrency enabled on the evaluator.
 
+### Langfuse API Version
+
+By default the handler writes through the legacy public API: `POST /api/public/traces` and `POST /api/public/dataset-run-items`. Langfuse v4 removes the trace write and deprecates dataset run items, and Langfuse Cloud is v4-only from 2026-11-16. For Langfuse Cloud after that date and for self-hosted v4, select the v4 write path:
+
+```go
+langfuseeval.WithAPIVersion(langfuseeval.APIVersionV4),
+```
+
+In this mode the handler makes neither call. Instead it sets the trace fields (name, user, session, tags, input, metadata) and the experiment association (`langfuse.experiment.id`, `.name`, `.description`, `.dataset.id`, `.item.id`) as attributes on each case's root agent span, so spans must reach Langfuse through the OpenTelemetry exporter (see `telemetry/langfuse`). The experiment id is derived from the webhook's `projectId`, the dataset id and the run name, the same way Langfuse's SDKs derive it, and replaces the dataset run id: run-level scores (`pass_rate` and the `*_mean` metrics) are still posted to `POST /api/public/scores` with `datasetRunId` set to it. The trace output is the root span's own output. Keep the default for self-hosted Langfuse v3.
+
 ### Data Format
 
 Langfuse allows users to define the structure of dataset items on the platform side, so `input`, `expectedOutput`, and `metadata` do not need to follow a fixed schema. On the tRPC-Agent-Go side, evaluation still needs to run against an explicit `EvalCase`. `CaseBuilder` is the layer that bridges those two models.

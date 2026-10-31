@@ -11,6 +11,7 @@ package langfuse
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -67,7 +68,7 @@ func (t *caseTrace) spanForSession(sessionID string) oteltrace.SpanContext {
 // evaluateCases submits one batch so the evaluator owns both stage schedulers.
 // Per-call additive callbacks preserve callbacks configured by the application
 // and keep case metadata out of the shared inference request.
-func (h *Handler) evaluateCases(ctx context.Context, datasetID string, specs []*CaseSpec) (
+func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution executionOptions, specs []*CaseSpec) (
 	*coreevaluation.EvaluationResult, map[string]*caseTrace, error,
 ) {
 	if err := ctx.Err(); err != nil {
@@ -98,14 +99,27 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, specs []*
 			return nil, fmt.Errorf("unknown eval case %s", args.EvalCaseID)
 		}
 		trace := traces[args.EvalCaseID]
+		var v4Attributes []attribute.KeyValue
+		if h.apiVersion == APIVersionV4 {
+			sessionID := spec.SessionID
+			if strings.TrimSpace(sessionID) == "" {
+				sessionID = args.SessionID
+			}
+			var err error
+			v4Attributes, err = h.v4CaseAttributes(spec, execution, sessionID)
+			if err != nil {
+				return nil, fmt.Errorf("build trace attributes for case %s: %w", args.EvalCaseID, err)
+			}
+		}
 		args.RunOptions = append(args.RunOptions,
 			agent.WithExecutionTraceEnabled(true),
 			func(opts *agent.RunOptions) {
 				attrs := append([]attribute.KeyValue(nil), opts.SpanAttributes...)
-				opts.SpanAttributes = append(attrs,
+				attrs = append(attrs,
 					attribute.String("langfuse.trace.name", spec.TraceName),
 					attribute.String("langfuse.user.id", spec.UserID),
 					attribute.String("langfuse.environment", h.environment))
+				opts.SpanAttributes = append(attrs, v4Attributes...)
 			},
 			agent.WithTraceStartedCallback(func(sc oteltrace.SpanContext) {
 				trace.record(args.SessionID, sc)
