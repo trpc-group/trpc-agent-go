@@ -61,7 +61,7 @@ func New(name string, opts ...Option) *Model {
 
 // Info implements model.Model.
 func (m *Model) Info() model.Info {
-	return model.Info{Name: m.name, ReplayProtocol: responseProvider}
+	return model.Info{Name: m.name, ProviderDataProtocol: responseProvider}
 }
 
 // GenerateContent implements model.Model.

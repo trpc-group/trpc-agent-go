@@ -213,7 +213,7 @@ func TestRepairResponseToolCallArgumentsInPlaceSkipsNativeReplay(t *testing.T) {
 			},
 		}},
 	}
-	require.NoError(t, native.SetReplayData("test.native", "native-model", json.RawMessage(`[]`)))
+	require.NoError(t, native.SetProviderData("test.native", "native-model", json.RawMessage(`[]`)))
 	response := &model.Response{Choices: []model.Choice{
 		{Message: native},
 		{Message: model.Message{ToolCalls: []model.ToolCall{{

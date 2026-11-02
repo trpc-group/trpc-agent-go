@@ -56,7 +56,7 @@ func TestGenerateContent_NonStreamReplayProjectionAndUsage(t *testing.T) {
 	require.Equal(t, "call_1", resp.Choices[0].Message.ToolCalls[0].ID)
 	require.Equal(t, "calculator", resp.Choices[0].Message.ToolCalls[0].Function.Name)
 	require.JSONEq(t, `{"a":1}`, string(resp.Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.NotNil(t, resp.Choices[0].Message.Replay)
+	require.NotNil(t, resp.Choices[0].Message.ProviderData)
 	require.Equal(t, 11, resp.Usage.PromptTokens)
 	require.Equal(t, 2, resp.Usage.CompletionTokens)
 	require.Equal(t, 4, resp.Usage.PromptTokensDetails.CachedTokens)
@@ -141,25 +141,25 @@ func TestReplayPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.T) {
 func TestReplayCanBeReboundAndStillValidatesItsProducerAndShape(t *testing.T) {
 	msg := model.NewAssistantMessage("display projection")
 	payload := json.RawMessage(`[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"native payload"}]}]`)
-	require.NoError(t, msg.SetReplayData(responseProvider, "gpt-5", payload))
-	got, err := msg.ReplayDataFor(responseProvider, "gpt-5")
+	require.NoError(t, msg.SetProviderData(responseProvider, "gpt-5", payload))
+	got, err := msg.ProviderDataFor(responseProvider, "gpt-5")
 	require.NoError(t, err)
 	require.JSONEq(t, string(payload), string(got))
 
-	_, err = msg.ReplayDataFor("another.protocol", "gpt-5")
+	_, err = msg.ProviderDataFor("another.protocol", "gpt-5")
 	require.ErrorContains(t, err, "belongs to protocol")
-	_, err = msg.ReplayDataFor(responseProvider, "another-model")
+	_, err = msg.ProviderDataFor(responseProvider, "another-model")
 	require.ErrorContains(t, err, "belongs to protocol")
 
 	_, err = convertMessages([]model.Message{func() model.Message {
 		bad := model.NewAssistantMessage("bad native schema")
-		require.NoError(t, bad.SetReplayData(responseProvider, "gpt-5", json.RawMessage(`[{"type":"tool_search_call"}]`)))
+		require.NoError(t, bad.SetProviderData(responseProvider, "gpt-5", json.RawMessage(`[{"type":"tool_search_call"}]`)))
 		return bad
 	}()}, "gpt-5")
 	require.ErrorContains(t, err, "unsupported native item type")
 
-	require.Error(t, msg.SetReplayData(responseProvider, "gpt-5", json.RawMessage(`[{`)))
-	got, err = msg.ReplayDataFor(responseProvider, "gpt-5")
+	require.Error(t, msg.SetProviderData(responseProvider, "gpt-5", json.RawMessage(`[{`)))
+	got, err = msg.ProviderDataFor(responseProvider, "gpt-5")
 	require.NoError(t, err, "a failed rebind must leave the existing replay record intact")
 	require.JSONEq(t, string(payload), string(got))
 }
@@ -170,7 +170,7 @@ func TestOpaqueReasoningAndRefusalAreRetained(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "no", projected.Choices[0].Message.Content)
 	require.Empty(t, projected.Choices[0].Message.ReasoningContent)
-	raw, err := projected.Choices[0].Message.ReplayDataFor(responseProvider, "gpt-5")
+	raw, err := projected.Choices[0].Message.ProviderDataFor(responseProvider, "gpt-5")
 	require.NoError(t, err)
 	require.Contains(t, string(raw), `"id":"rs_opaque"`)
 	require.Contains(t, string(raw), `"encrypted_content":"secret"`)
@@ -200,14 +200,14 @@ func TestStreamDeltasArePartialAndFinalReplayIsAuthoritative(t *testing.T) {
 		require.True(t, partial.IsPartial)
 		require.False(t, partial.Done)
 		require.Empty(t, partial.Choices[0].Message.ToolCalls)
-		require.Nil(t, partial.Choices[0].Message.Replay)
+		require.Nil(t, partial.Choices[0].Message.ProviderData)
 	}
 	require.Equal(t, []string{"he", "llo"}, []string{got[0].Choices[0].Delta.Content, got[1].Choices[0].Delta.Content})
 	final := got[2]
 	require.True(t, final.Done)
 	require.False(t, final.IsPartial)
 	require.Equal(t, "hello", final.Choices[0].Message.Content)
-	require.NotNil(t, final.Choices[0].Message.Replay)
+	require.NotNil(t, final.Choices[0].Message.ProviderData)
 }
 
 func TestStreamFailureIncompleteAndEOFNeverExposeCalls(t *testing.T) {
@@ -247,7 +247,7 @@ func TestStreamFailureIncompleteAndEOFNeverExposeCalls(t *testing.T) {
 			for _, resp := range got {
 				if len(resp.Choices) > 0 {
 					require.Empty(t, resp.Choices[0].Message.ToolCalls)
-					require.Nil(t, resp.Choices[0].Message.Replay)
+					require.Nil(t, resp.Choices[0].Message.ProviderData)
 				}
 			}
 		})
@@ -363,7 +363,7 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 	nativeMessage := func(t *testing.T, payload string) model.Message {
 		t.Helper()
 		msg := model.NewAssistantMessage("")
-		require.NoError(t, msg.SetReplayData(responseProvider, "gpt-5", json.RawMessage(payload)))
+		require.NoError(t, msg.SetProviderData(responseProvider, "gpt-5", json.RawMessage(payload)))
 		return msg
 	}
 	item := `{"type":"function_call","call_id":" call_1 ","name":"f","arguments":"{}","future":true}`
@@ -515,7 +515,7 @@ func TestStreamCompletesWithoutWaitingForServerClose(t *testing.T) {
 
 func TestInfo(t *testing.T) {
 	require.Equal(t, "gpt-5", New("gpt-5").Info().Name)
-	require.Equal(t, responseProvider, New("gpt-5").Info().ReplayProtocol)
+	require.Equal(t, responseProvider, New("gpt-5").Info().ProviderDataProtocol)
 }
 
 func TestCompletedResponseAcceptsOptionalItemFields(t *testing.T) {
@@ -525,8 +525,8 @@ func TestCompletedResponseAcceptsOptionalItemFields(t *testing.T) {
 	]}`)
 	projected, err := projectResponse(response, "gpt-5")
 	require.NoError(t, err)
-	require.NotNil(t, projected.Choices[0].Message.Replay)
-	payload, err := projected.Choices[0].Message.ReplayDataFor(responseProvider, "gpt-5")
+	require.NotNil(t, projected.Choices[0].Message.ProviderData)
+	payload, err := projected.Choices[0].Message.ProviderDataFor(responseProvider, "gpt-5")
 	require.NoError(t, err)
 	var native []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(payload, &native))
@@ -631,8 +631,8 @@ func TestReplayModelBindingUsesConfiguredName(t *testing.T) {
 	resp := decodeResponse(t, `{"id":"r","status":"completed","model":"resolved-name","output":[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`)
 	projected, err := projectResponse(resp, "configured-name")
 	require.NoError(t, err)
-	_, err = projected.Choices[0].Message.ReplayDataFor(responseProvider, "configured-name")
+	_, err = projected.Choices[0].Message.ProviderDataFor(responseProvider, "configured-name")
 	require.NoError(t, err)
-	_, err = projected.Choices[0].Message.ReplayDataFor(responseProvider, "resolved-name")
+	_, err = projected.Choices[0].Message.ProviderDataFor(responseProvider, "resolved-name")
 	require.Error(t, err)
 }

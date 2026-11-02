@@ -17,15 +17,15 @@ import (
 )
 
 // CloneMessage isolates the mutable projection of a native history record.
-// The opaque payload remains shared read-only; decoding into the copied Replay
-// replaces only its own record. Messages without Replay keep their ownership.
+// The opaque payload remains shared read-only; decoding into the copied ProviderData
+// replaces only its own record. Messages without ProviderData keep their ownership.
 func CloneMessage(message model.Message) model.Message {
-	if message.Replay == nil {
+	if message.ProviderData == nil {
 		return message
 	}
 	cloned := message
-	record := *message.Replay
-	cloned.Replay = &record
+	record := *message.ProviderData
+	cloned.ProviderData = &record
 	cloned.ToolCalls = cloneToolCalls(message.ToolCalls)
 	if message.ContentParts != nil {
 		cloned.ContentParts = make([]model.ContentPart, len(message.ContentParts))
@@ -40,7 +40,7 @@ func CloneMessage(message model.Message) model.Message {
 // history before callbacks or tools can edit them. Legacy calls retain their
 // existing ownership and mutation behavior.
 func ToolCallsForExecution(message model.Message) []model.ToolCall {
-	if message.Replay == nil {
+	if message.ProviderData == nil {
 		return message.ToolCalls
 	}
 	return cloneToolCalls(message.ToolCalls)

@@ -100,7 +100,7 @@ func toCanonicalValue(v any) (any, error) {
 
 var modelMessageType = reflect.TypeOf(model.Message{})
 
-// isAbsentMessageReplay reports whether f is a nil model.Message.Replay field.
+// isAbsentMessageReplay reports whether f is a nil model.Message.ProviderData field.
 // Cache keys of messages without native replay data must not change, so the
 // absent field is not part of their canonical value.
 func isAbsentMessageReplay(
@@ -108,7 +108,7 @@ func isAbsentMessageReplay(
 	f reflect.StructField,
 	value reflect.Value,
 ) bool {
-	return t == modelMessageType && f.Name == "Replay" && value.IsNil()
+	return t == modelMessageType && f.Name == "ProviderData" && value.IsNil()
 }
 
 func canonicalizeMap(m map[string]any) (any, error) {

@@ -117,7 +117,7 @@ func TestRunnerUnusedResponsesModelKeepsLegacySession(t *testing.T) {
 	last := chat.requests[2].Messages
 	var sawCall, sawResult bool
 	for _, msg := range last {
-		require.Nil(t, msg.Replay)
+		require.Nil(t, msg.ProviderData)
 		sawCall = sawCall || len(msg.ToolCalls) == 1 && msg.ToolCalls[0].ID == "call_chat"
 		sawResult = sawResult || msg.Role == model.RoleTool && msg.ToolID == "call_chat"
 	}

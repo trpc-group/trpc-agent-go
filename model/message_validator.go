@@ -24,7 +24,7 @@ const (
 func HasPayload(msg Message) bool {
 	return msg.Content != "" ||
 		len(msg.ContentParts) > 0 ||
-		msg.ReasoningContent != "" || msg.Replay != nil
+		msg.ReasoningContent != "" || msg.ProviderData != nil
 }
 
 func roleGroupOf(role Role) roleGroupKind {
@@ -96,7 +96,7 @@ func ensureNonEmptyContent(messages []Message) []Message {
 	result := make([]Message, 0, len(messages))
 	for _, msg := range messages {
 		// Native records must retain their bound projection without placeholders.
-		if msg.Content != "" || msg.Replay != nil {
+		if msg.Content != "" || msg.ProviderData != nil {
 			result = append(result, msg)
 			continue
 		}

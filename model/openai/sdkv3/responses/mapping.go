@@ -298,7 +298,7 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 	called := make(map[string]struct{})
 	completed := make(map[string]struct{})
 	for messageIndex, msg := range messages {
-		if msg.Replay != nil {
+		if msg.ProviderData != nil {
 			converted, err := convertReplayMessage(msg, modelName, messageIndex, called, completed)
 			if err != nil {
 				return nil, err
@@ -356,7 +356,7 @@ func convertReplayMessage(msg model.Message, modelName string, messageIndex int,
 	if msg.Role != model.RoleAssistant {
 		return nil, fmt.Errorf("openai/responses: replay data is only valid on assistant messages (message %d)", messageIndex)
 	}
-	raw, err := msg.ReplayDataFor(responseProvider, modelName)
+	raw, err := msg.ProviderDataFor(responseProvider, modelName)
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid replay data at message %d: %w", messageIndex, err)
 	}
@@ -763,7 +763,7 @@ func projectResponse(resp *responses.Response, modelName string) (*model.Respons
 		ToolCalls:        projected.toolCalls,
 	}
 	if len(resp.Output) > 0 {
-		if err := message.SetReplayData(responseProvider, modelName, payload); err != nil {
+		if err := message.SetProviderData(responseProvider, modelName, payload); err != nil {
 			return nil, fmt.Errorf("openai/responses: store native output replay: %w", err)
 		}
 	}

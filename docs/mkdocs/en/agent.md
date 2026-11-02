@@ -413,10 +413,10 @@ agent := llmagent.New(
 
 **Note:** This option only affects how historical messages are processed before sending to the model. The current response's `reasoning_content` is always captured and stored in session events.
 
-For messages with native `Replay` data, these modes only change the projected
-reasoning fields. They do not remove reasoning or encrypted state from Replay,
+For messages with native `ProviderData` data, these modes only change the projected
+reasoning fields. They do not remove reasoning or encrypted state from ProviderData,
 which a native adapter can still send on the next request. To change that input,
-edit the native payload explicitly. Removing Replay from an unfinished native
+edit the native payload explicitly. Removing ProviderData from an unfinished native
 tool round may prevent recovery.
 
 ### Tool Transcript History Mode

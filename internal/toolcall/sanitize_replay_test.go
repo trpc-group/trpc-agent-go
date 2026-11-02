@@ -36,7 +36,7 @@ func TestSanitizeMessagesWithToolsResultPreservesNativeRounds(t *testing.T) {
 			}}
 			payload, err := json.Marshal(native.ToolCalls)
 			require.NoError(t, err)
-			require.NoError(t, native.SetReplayData("test.native", "test-model", payload))
+			require.NoError(t, native.SetProviderData("test.native", "test-model", payload))
 			messages := []model.Message{
 				model.NewUserMessage("calculate"), native,
 				{Role: model.RoleTool, ToolID: "native_a", Content: "result or validation error"},
@@ -61,7 +61,7 @@ func TestSanitizeMessagesWithToolsResultPreservesNativeRounds(t *testing.T) {
 			require.Len(t, result.Messages, len(messages))
 			require.Nil(t, result.SourceIndexes, "retained messages keep their source positions")
 			require.Equal(t, messages[:nativeEnd], result.Messages[:nativeEnd])
-			actual, err := result.Messages[1].ReplayDataFor("test.native", "test-model")
+			actual, err := result.Messages[1].ProviderDataFor("test.native", "test-model")
 			require.NoError(t, err, "history sanitation must preserve native replay payloads")
 			require.JSONEq(t, string(payload), string(actual))
 			require.Equal(t, []byte(`{"a":3}`), result.Messages[nativeEnd].ToolCalls[0].Function.Arguments)

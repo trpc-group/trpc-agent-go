@@ -2310,22 +2310,22 @@ Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Ca
 
 `Message.Content` and `ReasoningContent` are editable display fields.
 `Message.ToolCalls` supplies the arguments for current local tool execution.
-`Message.Replay` supplies the native payload for the next model request. The
+`Message.ProviderData` supplies the native payload for the next model request. The
 framework does not synchronize these fields. Editing `Content` to redact text
 does not redact the native payload persisted alongside it, so the original
 text remains in session history. A
 before-tool callback can change current execution arguments without rewriting
-Replay. Removing Replay from an unfinished native tool round does not carry a
+ProviderData. Removing ProviderData from an unfinished native tool round does not carry a
 recovery guarantee.
 
-Use the existing `ReplayDataFor` and `SetReplayData` methods when intentionally
+Use the existing `ProviderDataFor` and `SetProviderData` methods when intentionally
 editing native state. Assuming `msg`, `modelName`, and the `encoding/json`
-import are in scope, this fragment updates a function call in Replay while
+import are in scope, this fragment updates a function call in ProviderData while
 preserving other native item fields. The current `ToolCalls` arguments remain
 unchanged; update them too if the current execution should match.
 
 ```go
-payload, err := msg.ReplayDataFor("openai.responses", modelName)
+payload, err := msg.ProviderDataFor("openai.responses", modelName)
 if err != nil {
     return err
 }
@@ -2350,16 +2350,16 @@ payload, err = json.Marshal(items)
 if err != nil {
     return err
 }
-if err := msg.SetReplayData("openai.responses", modelName, payload); err != nil {
+if err := msg.SetProviderData("openai.responses", modelName, payload); err != nil {
     return err
 }
 ```
 
 ### Notes
 
-- Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.Replay`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
-- Downstream modules need a root release that contains `Message.Replay` and `Info.ReplayProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
-- Replay v2 writes no projection hash and accepts v1 records while ignoring their legacy hash. V1 readers may reject v2 records. Upgrade all readers and writers that share these sessions before enabling v2 writers.
+- Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
+- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
+- ProviderData v2 writes no projection hash and accepts v1 records while ignoring their legacy hash. V1 readers may reject v2 records. Upgrade all readers and writers that share these sessions before enabling v2 writers.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).

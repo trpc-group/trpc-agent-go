@@ -26,12 +26,12 @@ func CandidateInfo(candidates []model.Model) (model.Info, error) {
 	primary := candidates[0].Info()
 	hasNative := false
 	for _, candidate := range candidates {
-		hasNative = hasNative || candidate.Info().ReplayProtocol != ""
+		hasNative = hasNative || candidate.Info().ProviderDataProtocol != ""
 	}
 	if hasNative {
 		for _, candidate := range candidates {
 			info := candidate.Info()
-			if info.Name != primary.Name || info.ReplayProtocol != primary.ReplayProtocol {
+			if info.Name != primary.Name || info.ProviderDataProtocol != primary.ProviderDataProtocol {
 				return model.Info{}, fmt.Errorf("native replay requires candidates with the same protocol and configured model name")
 			}
 		}
@@ -42,7 +42,7 @@ func CandidateInfo(candidates []model.Model) (model.Info, error) {
 // MessagesHaveReplay reports whether any message carries native replay data.
 func MessagesHaveReplay(messages []model.Message) bool {
 	for _, message := range messages {
-		if message.Replay != nil {
+		if message.ProviderData != nil {
 			return true
 		}
 	}
@@ -56,7 +56,7 @@ func ResponseHasReplay(response *model.Response) bool {
 		return false
 	}
 	for _, choice := range response.Choices {
-		if choice.Message.Replay != nil || choice.Delta.Replay != nil {
+		if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
 			return true
 		}
 	}
@@ -64,14 +64,14 @@ func ResponseHasReplay(response *model.Response) bool {
 }
 
 // ValidateMessages checks every native record in messages against the
-// producer or consumer identity in info. Messages without Replay are ignored,
+// producer or consumer identity in info. Messages without ProviderData are ignored,
 // so legacy histories never fail this check.
 func ValidateMessages(messages []model.Message, info model.Info) error {
 	for index, message := range messages {
-		if message.Replay == nil {
+		if message.ProviderData == nil {
 			continue
 		}
-		if _, err := message.ReplayDataFor(info.ReplayProtocol, info.Name); err != nil {
+		if _, err := message.ProviderDataFor(info.ProviderDataProtocol, info.Name); err != nil {
 			return fmt.Errorf("native replay message %d: %w", index, err)
 		}
 	}
@@ -87,7 +87,7 @@ func ValidateResponse(response *model.Response, producer model.Info) error {
 		return nil
 	}
 	for _, choice := range response.Choices {
-		if choice.Message.Replay == nil && choice.Delta.Replay == nil {
+		if choice.Message.ProviderData == nil && choice.Delta.ProviderData == nil {
 			continue
 		}
 		if err := ValidateMessages(

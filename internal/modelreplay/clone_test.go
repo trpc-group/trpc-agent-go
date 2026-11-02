@@ -36,11 +36,11 @@ func TestCloneMessagePreservesNativeHistoryOwnership(t *testing.T) {
 		}},
 	}
 	const payload = `[{"type":"native","state":"opaque"}]`
-	require.NoError(t, message.SetReplayData("test.native", "test-model", json.RawMessage(payload)))
+	require.NoError(t, message.SetProviderData("test.native", "test-model", json.RawMessage(payload)))
 	before, err := json.Marshal(message)
 	require.NoError(t, err)
 	cloned := CloneMessage(message)
-	raw, err := cloned.ReplayDataFor("test.native", "test-model")
+	raw, err := cloned.ProviderDataFor("test.native", "test-model")
 	require.NoError(t, err)
 	require.JSONEq(t, payload, string(raw))
 
@@ -54,12 +54,12 @@ func TestCloneMessagePreservesNativeHistoryOwnership(t *testing.T) {
 	*cloned.ToolCalls[0].Index = 7
 	cloned.ToolCalls[0].ExtraFields["nested"].(map[string]any)["count"] = json.Number("1")
 	require.NoError(t, json.Unmarshal([]byte(`{"version":1,"provider":"other.native","model":"other-model","payload":[],"projection_sha256":"`+
-		"0000000000000000000000000000000000000000000000000000000000000000"+`"}`), cloned.Replay))
+		"0000000000000000000000000000000000000000000000000000000000000000"+`"}`), cloned.ProviderData))
 
 	after, err := json.Marshal(message)
 	require.NoError(t, err)
 	require.Equal(t, string(before), string(after), "request edits must not rewrite the stored native record")
-	raw, err = message.ReplayDataFor("test.native", "test-model")
+	raw, err = message.ProviderDataFor("test.native", "test-model")
 	require.NoError(t, err)
 	require.JSONEq(t, payload, string(raw))
 }
@@ -68,11 +68,11 @@ func TestToolCallsForExecutionPreservesNativeArguments(t *testing.T) {
 	message := model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
 		ID: "call", Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 	}}}
-	require.NoError(t, message.SetReplayData("test.native", "test-model", json.RawMessage(`[]`)))
+	require.NoError(t, message.SetProviderData("test.native", "test-model", json.RawMessage(`[]`)))
 	execution := ToolCallsForExecution(message)
 	execution[0].Function.Arguments[5] = '9'
 	require.Equal(t, `{"a":9}`, string(execution[0].Function.Arguments))
 	require.Equal(t, `{"a":1}`, string(message.ToolCalls[0].Function.Arguments))
-	_, err := message.ReplayDataFor("test.native", "test-model")
+	_, err := message.ProviderDataFor("test.native", "test-model")
 	require.NoError(t, err)
 }

@@ -227,7 +227,7 @@ func assertNativeRoutingSessionContainsOnlyCall(t *testing.T, sess *session.Sess
 			msg := choice.Message
 			delta := choice.Delta
 			require.Empty(t, delta.ToolCalls, "native function calls are committed only in the winner's terminal message")
-			require.Nil(t, delta.Replay, "partial deltas must not persist native replay")
+			require.Nil(t, delta.ProviderData, "partial deltas must not persist native replay")
 			for _, call := range msg.ToolCalls {
 				toolCallCount++
 				require.Equal(t, callID, call.ID)
@@ -236,8 +236,8 @@ func assertNativeRoutingSessionContainsOnlyCall(t *testing.T, sess *session.Sess
 				toolResultCount++
 				require.Equal(t, callID, msg.ToolID)
 			}
-			if msg.Replay != nil {
-				payload, replayErr := msg.ReplayDataFor(responseProvider, "gpt-5")
+			if msg.ProviderData != nil {
+				payload, replayErr := msg.ProviderDataFor(responseProvider, "gpt-5")
 				require.NoError(t, replayErr)
 				require.NotContains(t, string(payload), "fc_loser")
 				if bytes.Contains(payload, []byte(itemID)) {
@@ -284,7 +284,7 @@ func TestNativeRoutingFailoverBeforePreviewPreservesToolReplayAcrossReopen(t *te
 	backup := New("gpt-5", WithAPIKey("test"), WithBaseURL(backupServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
 	routed, err := failover.New(failover.WithCandidates(primary, backup))
 	require.NoError(t, err)
-	require.Equal(t, responseProvider, routed.Info().ReplayProtocol)
+	require.Equal(t, responseProvider, routed.Info().ProviderDataProtocol)
 
 	path := filepath.Join(t.TempDir(), "native-failover.db")
 	svc := openNativeRoutingSQLite(t, path)
@@ -394,8 +394,8 @@ func TestNativeRoutingFailoverAfterPreviewDoesNotSwitchOrExecuteTool(t *testing.
 		for _, choice := range choices {
 			require.Empty(t, choice.Message.ToolCalls)
 			require.Empty(t, choice.Delta.ToolCalls)
-			require.Nil(t, choice.Message.Replay)
-			require.Nil(t, choice.Delta.Replay)
+			require.Nil(t, choice.Message.ProviderData)
+			require.Nil(t, choice.Delta.ProviderData)
 		}
 	}
 }
@@ -472,7 +472,7 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T)
 	winner := New("gpt-5", WithAPIKey("test"), WithBaseURL(winnerServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
 	routed, err := hedge.New(hedge.WithCandidates(loser, winner), hedge.WithDelays(0))
 	require.NoError(t, err)
-	require.Equal(t, responseProvider, routed.Info().ReplayProtocol)
+	require.Equal(t, responseProvider, routed.Info().ProviderDataProtocol)
 	path := filepath.Join(t.TempDir(), "native-hedge.db")
 	svc := openNativeRoutingSQLite(t, path)
 	var r runner.Runner

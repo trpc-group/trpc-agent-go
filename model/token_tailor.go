@@ -124,8 +124,8 @@ func NewSimpleTokenCounter(opts ...SimpleTokenCounterOption) *SimpleTokenCounter
 // locally as the provider's decrypted model input.
 func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (int, error) {
 	total := 0
-	if message.Replay != nil {
-		payload, err := message.ReplayDataFor(message.Replay.provider, message.Replay.model)
+	if message.ProviderData != nil {
+		payload, err := message.ProviderDataFor(message.ProviderData.provider, message.ProviderData.model)
 		if err != nil {
 			return 0, err
 		}

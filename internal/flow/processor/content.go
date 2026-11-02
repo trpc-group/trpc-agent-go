@@ -2342,14 +2342,14 @@ func compactResumeToolRound(
 			choice := &response.Choices[choiceIndex]
 			// Native call arguments are part of the replayed output record;
 			// only their tool results may be compacted.
-			if choice.Message.Replay == nil && compactOversizedResumeToolCallArguments(
+			if choice.Message.ProviderData == nil && compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Message,
 				cfg,
 			) {
 				changed = true
 			}
-			if choice.Delta.Replay == nil && compactOversizedResumeToolCallArguments(
+			if choice.Delta.ProviderData == nil && compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Delta,
 				cfg,
@@ -2702,7 +2702,7 @@ func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
 			continue
 		}
 		if i < startIdx && msg.Role == model.RoleAssistant &&
-			msg.Replay != nil && len(msg.ToolCalls) > 0 {
+			msg.ProviderData != nil && len(msg.ToolCalls) > 0 {
 			return i
 		}
 		return startIdx
@@ -2754,7 +2754,7 @@ func (p *ContentRequestProcessor) projectEventMessage(
 		return msg
 	}
 	projectorInput := msg
-	if msg.Replay != nil {
+	if msg.ProviderData != nil {
 		// A projector may intentionally replace or clear the record. Give it an
 		// isolated copy so in-place decoding cannot mutate the source event.
 		projectorInput = modelreplay.CloneMessage(msg)
@@ -3020,7 +3020,7 @@ func mergeProjectedAssistantToolCallMessages(
 
 func mergeableAssistantTextMessage(message model.Message) bool {
 	return message.Role == model.RoleAssistant && message.Content != "" &&
-		message.Replay == nil &&
+		message.ProviderData == nil &&
 		len(message.ContentParts) == 0 && message.ToolID == "" &&
 		message.ToolName == "" && len(message.ToolCalls) == 0 &&
 		message.ReasoningContent == "" && message.ReasoningSignature == ""
@@ -3028,7 +3028,7 @@ func mergeableAssistantTextMessage(message model.Message) bool {
 
 func mergeableAssistantToolCallMessage(message model.Message) bool {
 	return message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 &&
-		message.Replay == nil &&
+		message.ProviderData == nil &&
 		len(message.ContentParts) == 0 && message.ToolID == "" &&
 		message.ToolName == "" && message.ReasoningContent == "" &&
 		message.ReasoningSignature == ""
@@ -3330,7 +3330,7 @@ func filterToolCallChoice(
 	if len(messageToolCalls) == 0 && len(deltaToolCalls) == 0 {
 		return model.Choice{}, false
 	}
-	if choice.Message.Replay != nil || choice.Delta.Replay != nil {
+	if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
 		// A native record cannot be reduced to a subset of its calls; the
 		// caller restores the remaining results with the original record.
 		return choice, true
@@ -3394,7 +3394,7 @@ func eventHasReplay(evt event.Event) bool {
 		return false
 	}
 	for _, choice := range evt.Response.Choices {
-		if choice.Message.Replay != nil || choice.Delta.Replay != nil {
+		if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
 			return true
 		}
 	}
@@ -3851,8 +3851,8 @@ func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
 // text becomes ordinary history and its native reasoning is not replayed.
 func withoutToolCalls(msg model.Message) model.Message {
 	msg.ToolCalls = nil
-	if msg.Replay != nil {
-		msg.Replay = nil
+	if msg.ProviderData != nil {
+		msg.ProviderData = nil
 		msg.ReasoningContent = ""
 		msg.ReasoningSignature = ""
 	}

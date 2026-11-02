@@ -33,7 +33,7 @@ const (
 
 func bindTestReplay(t *testing.T, msg *model.Message) {
 	t.Helper()
-	require.NoError(t, msg.SetReplayData(
+	require.NoError(t, msg.SetProviderData(
 		testReplayProvider,
 		testReplayModel,
 		json.RawMessage(`[{"type":"reasoning","id":"r1","encrypted_content":"opaque"}]`),
@@ -56,7 +56,7 @@ func testToolCalls(ids ...string) []model.ToolCall {
 }
 
 // testCallMessage returns an assistant tool-call message. A native message
-// carries Replay; the legacy twin has the same visible projection without it.
+// carries ProviderData; the legacy twin has the same visible projection without it.
 func testCallMessage(t *testing.T, native bool, reasoning string, ids ...string) model.Message {
 	msg := model.Message{
 		Role:             model.RoleAssistant,
@@ -113,8 +113,8 @@ func testInvocation(
 
 func requireTestReplay(t *testing.T, msg model.Message) {
 	t.Helper()
-	require.NotNil(t, msg.Replay)
-	payload, err := msg.ReplayDataFor(testReplayProvider, testReplayModel)
+	require.NotNil(t, msg.ProviderData)
+	payload, err := msg.ProviderDataFor(testReplayProvider, testReplayModel)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
 }
@@ -124,7 +124,7 @@ func requireTestReplay(t *testing.T, msg model.Message) {
 func withoutReplay(messages []model.Message) []model.Message {
 	out := make([]model.Message, len(messages))
 	for i, msg := range messages {
-		msg.Replay = nil
+		msg.ProviderData = nil
 		out[i] = msg
 	}
 	return out
@@ -174,12 +174,12 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 			_ event.Event,
 			msg model.Message,
 		) model.Message {
-			msg.Replay = nil
+			msg.ProviderData = nil
 			return msg
 		}),
 	)
 	cleared := clearingProjector.projectEventMessage(nil, event.Event{}, textMessage)
-	require.Nil(t, cleared.Replay, "a projector may deliberately clear native replay")
+	require.Nil(t, cleared.ProviderData, "a projector may deliberately clear native replay")
 	requireTestReplay(t, textMessage)
 
 	const replacement = `{"version":2,"provider":"openai.responses","model":"test-model","payload":[{"type":"message","content":"replacement"}]}`
@@ -189,14 +189,14 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 			_ event.Event,
 			msg model.Message,
 		) model.Message {
-			if err := json.Unmarshal([]byte(replacement), msg.Replay); err != nil {
+			if err := json.Unmarshal([]byte(replacement), msg.ProviderData); err != nil {
 				t.Fatal(err)
 			}
 			return msg
 		}),
 	)
 	rebound := rebindingProjector.projectEventMessage(nil, event.Event{}, textMessage)
-	reboundPayload, err := rebound.ReplayDataFor(testReplayProvider, testReplayModel)
+	reboundPayload, err := rebound.ProviderDataFor(testReplayProvider, testReplayModel)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"type":"message","content":"replacement"}]`, string(reboundPayload))
 	requireTestReplay(t, textMessage)
@@ -231,12 +231,12 @@ func TestContentRequestProcessor_ForeignNativeEventBecomesNewUserContext(t *test
 	require.Len(t, converted.Response.Choices, 1)
 	quoted := converted.Response.Choices[0].Message
 	require.Equal(t, model.RoleUser, quoted.Role)
-	require.Nil(t, quoted.Replay)
+	require.Nil(t, quoted.ProviderData)
 	require.Contains(t, quoted.Content, "native answer")
 	require.NotContains(t, quoted.Content, "opaque reasoning")
 
 	legacyMessage := native
-	legacyMessage.Replay = nil
+	legacyMessage.ProviderData = nil
 	legacy := toolTranscriptTestEvent("req1", "inv1", legacyMessage, "")
 	legacy.Author = "native-agent"
 	legacyConverted := NewContentRequestProcessor().convertForeignEvent(&legacy)
@@ -275,7 +275,7 @@ func TestContentRequestProcessor_ToolTranscriptModeRebasesCompletedNativeRound(t
 	rebased := got[0].Response.Choices[0].Message
 	require.Equal(t, "checked status", rebased.Content)
 	require.Empty(t, rebased.ToolCalls)
-	require.Nil(t, rebased.Replay,
+	require.Nil(t, rebased.ProviderData,
 		"a completed previous native round is rebased to its visible text")
 	require.Empty(t, rebased.ReasoningContent)
 	require.Empty(t, rebased.ReasoningSignature)

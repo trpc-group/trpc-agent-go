@@ -11,7 +11,7 @@ This independent module shows how to use the OpenAI Responses adapter with
 
 Every request sends the full client-managed conversation. The adapter defaults
 to `store=false`, and both programs set that explicitly. In ordinary Runner
-use, application code does not read or edit `Message.Replay`.
+use, application code does not read or edit `Message.ProviderData`.
 
 ## Prerequisites
 
@@ -147,18 +147,18 @@ function in `tools/main.go`.
   from deltas. Tool calls are displayed only from a completed
   `Message.ToolCalls` list, and results only from the Runner's committed tool
   message. Partial tool calls, partial tool-result previews, reasoning text,
-  and native Replay payloads are not displayed as completed tool activity.
+  and native ProviderData payloads are not displayed as completed tool activity.
   The Runner executes those committed local calls.
 - A stream that ends without a valid completed response is an error. Partial
   function calls from that stream are not executed.
 - Assistant messages carry a native replay record. `Content` and
   `ReasoningContent` are editable display fields; `ToolCalls` controls current
-  local execution; `Replay` controls the next request. They are not
+  local execution; `ProviderData` controls the next request. They are not
   automatically synchronized. Redacting `Content` alone leaves the original
-  text in Replay and persisted history. Use the existing `ReplayDataFor` and
-  `SetReplayData` methods when changing native state; the adapter README has a
+  text in ProviderData and persisted history. Use the existing `ProviderDataFor` and
+  `SetProviderData` methods when changing native state; the adapter README has a
   direct example. Before-tool edits affect execution arguments without
-  rewriting Replay. Removing Replay from an unfinished native tool round does
+  rewriting ProviderData. Removing ProviderData from an unfinished native tool round does
   not carry a recovery guarantee. Summary replacement, compaction, and
   behavior for other agents are specified in the adapter contract.
 - This module does not demonstrate server-managed `previous_response_id` or

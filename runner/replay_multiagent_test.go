@@ -58,9 +58,9 @@ func (m *replayTestModel) GenerateContent(
 	if m.toolCall != nil && first {
 		msg.ToolCalls = []model.ToolCall{*m.toolCall}
 	}
-	if m.info.ReplayProtocol != "" {
-		if err := msg.SetReplayData(
-			m.info.ReplayProtocol,
+	if m.info.ProviderDataProtocol != "" {
+		if err := msg.SetProviderData(
+			m.info.ProviderDataProtocol,
 			m.info.Name,
 			json.RawMessage(replayTestPayload),
 		); err != nil {
@@ -89,7 +89,7 @@ func (m *replayTestModel) recorded() []*model.Request {
 
 func newNativeReplayTestModel() *replayTestModel {
 	return &replayTestModel{
-		info:   model.Info{Name: "native-model", ReplayProtocol: "test.native"},
+		info:   model.Info{Name: "native-model", ProviderDataProtocol: "test.native"},
 		answer: "native findings",
 	}
 }
@@ -140,8 +140,8 @@ func TestRunner_NativeAgentFeedsLegacyAgent(t *testing.T) {
 	require.Len(t, nativeRequests, 2)
 	var continued bool
 	for _, msg := range nativeRequests[1].Messages {
-		if msg.Replay != nil {
-			_, err := msg.ReplayDataFor("test.native", "native-model")
+		if msg.ProviderData != nil {
+			_, err := msg.ProviderDataFor("test.native", "native-model")
 			require.NoError(t, err)
 			continued = true
 		}
@@ -153,7 +153,7 @@ func TestRunner_NativeAgentFeedsLegacyAgent(t *testing.T) {
 	for _, req := range legacyRequests {
 		var quoted bool
 		for _, msg := range req.Messages {
-			require.Nil(t, msg.Replay, "a legacy agent receives no native records")
+			require.Nil(t, msg.ProviderData, "a legacy agent receives no native records")
 			if msg.Role == model.RoleUser && strings.Contains(msg.Content, "native findings") {
 				quoted = true
 			}
@@ -205,7 +205,7 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 			name: "edited with the record dropped",
 			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
 				editArguments(rsp)
-				rsp.Choices[0].Message.Replay = nil
+				rsp.Choices[0].Message.ProviderData = nil
 				return nil, nil
 			},
 			wantInput: 1000,
@@ -223,10 +223,10 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 			name: "edited and rebound",
 			callback: func(t *testing.T, rsp *model.Response) (*model.Response, error) {
 				msg := &rsp.Choices[0].Message
-				payload, err := msg.ReplayDataFor("test.native", "native-model")
+				payload, err := msg.ProviderDataFor("test.native", "native-model")
 				require.NoError(t, err)
 				editArguments(rsp)
-				require.NoError(t, msg.SetReplayData("test.native", "native-model", payload))
+				require.NoError(t, msg.SetProviderData("test.native", "native-model", payload))
 				return nil, nil
 			},
 			wantInput: 1000,
@@ -245,7 +245,7 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 			name:   "reasoning only with the record dropped",
 			noTool: true,
 			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				rsp.Choices[0].Message.Replay = nil
+				rsp.Choices[0].Message.ProviderData = nil
 				return nil, nil
 			},
 		},
@@ -253,7 +253,7 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 			name: "foreign model binding remains invalid",
 			callback: func(t *testing.T, _ *model.Response) (*model.Response, error) {
 				msg := model.NewAssistantMessage("")
-				require.NoError(t, msg.SetReplayData("test.native", "other-model", json.RawMessage(`[]`)))
+				require.NoError(t, msg.SetProviderData("test.native", "other-model", json.RawMessage(`[]`)))
 				return &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}, nil
 			},
 			wantErr: "invalid model response",
@@ -398,7 +398,7 @@ func TestRunner_NativeAgentProjectorEditsDisplayProjection(t *testing.T) {
 			continue
 		}
 		sawEditedReplay = true
-		payload, err := message.ReplayDataFor("test.native", "native-model")
+		payload, err := message.ProviderDataFor("test.native", "native-model")
 		require.NoError(t, err)
 		require.JSONEq(t, replayTestPayload, string(payload))
 	}

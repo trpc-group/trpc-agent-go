@@ -176,8 +176,8 @@ func TestStreamBackpressureCancellationReleasesBodyBeforeDrain(t *testing.T) {
 					for _, choice := range response.Choices {
 						require.Empty(t, choice.Message.ToolCalls)
 						require.Empty(t, choice.Delta.ToolCalls)
-						require.Nil(t, choice.Message.Replay)
-						require.Nil(t, choice.Delta.Replay)
+						require.Nil(t, choice.Message.ProviderData)
+						require.Nil(t, choice.Delta.ProviderData)
 					}
 				case <-timer.C:
 					t.Fatal("response channel did not close after cancellation")

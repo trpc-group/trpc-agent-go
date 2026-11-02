@@ -1227,7 +1227,7 @@ func responseMayContainTextToolCall(response *model.Response) bool {
 	}
 	for i := range response.Choices {
 		msg := &response.Choices[i].Message
-		if msg.Role != model.RoleAssistant || msg.Replay != nil {
+		if msg.Role != model.RoleAssistant || msg.ProviderData != nil {
 			continue
 		}
 		text, ok := repairableMessageText(msg)

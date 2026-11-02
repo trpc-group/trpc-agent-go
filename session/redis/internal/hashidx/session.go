@@ -339,7 +339,7 @@ func (c *Client) loadRecentEvents(
 		for _, raw := range rawEvents {
 			var evt event.Event
 			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
-				if util.EventHasReplayData([]byte(raw)) {
+				if util.EventHasProviderData([]byte(raw)) {
 					return nil, fmt.Errorf("decode event with native replay data: %w", err)
 				}
 				continue

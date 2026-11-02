@@ -5577,7 +5577,7 @@ func hasNativeReplayToolCallInState(state State) bool {
 		switch message.Role {
 		case model.RoleAssistant:
 			if len(message.ToolCalls) > 0 {
-				return message.Replay != nil
+				return message.ProviderData != nil
 			}
 		case model.RoleUser:
 			return false

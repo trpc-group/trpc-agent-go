@@ -31,13 +31,13 @@ func (m infoModel) Info() model.Info {
 	return m.info
 }
 
-var nativeInfo = model.Info{Name: "native-model", ReplayProtocol: "test.native"}
+var nativeInfo = model.Info{Name: "native-model", ProviderDataProtocol: "test.native"}
 
 func nativeMessage(t *testing.T) model.Message {
 	t.Helper()
 	msg := model.NewAssistantMessage("answer")
-	require.NoError(t, msg.SetReplayData(
-		nativeInfo.ReplayProtocol,
+	require.NoError(t, msg.SetProviderData(
+		nativeInfo.ProviderDataProtocol,
 		nativeInfo.Name,
 		json.RawMessage(`[{"type":"reasoning","id":"rs_1"}]`),
 	))
@@ -63,11 +63,11 @@ func TestCandidateInfo(t *testing.T) {
 		"legacy then native": {legacyA, infoModel{info: nativeInfo}},
 		"another model name": {
 			infoModel{info: nativeInfo},
-			infoModel{info: model.Info{Name: "other", ReplayProtocol: nativeInfo.ReplayProtocol}},
+			infoModel{info: model.Info{Name: "other", ProviderDataProtocol: nativeInfo.ProviderDataProtocol}},
 		},
 		"another protocol": {
 			infoModel{info: nativeInfo},
-			infoModel{info: model.Info{Name: nativeInfo.Name, ReplayProtocol: "other"}},
+			infoModel{info: model.Info{Name: nativeInfo.Name, ProviderDataProtocol: "other"}},
 		},
 	} {
 		_, err := CandidateInfo(candidates)
@@ -87,8 +87,8 @@ func TestValidateMessages(t *testing.T) {
 	require.ErrorContains(t, ValidateMessages(native, model.Info{Name: nativeInfo.Name}),
 		"native replay message 2")
 	require.Error(t, ValidateMessages(native, model.Info{
-		Name:           "other-model",
-		ReplayProtocol: nativeInfo.ReplayProtocol,
+		Name:                 "other-model",
+		ProviderDataProtocol: nativeInfo.ProviderDataProtocol,
 	}))
 
 	native[2].Content = "edited"
@@ -133,8 +133,8 @@ func nativeToolResponse(t *testing.T) *model.Response {
 			Function: model.FunctionDefinitionParam{Name: "add", Arguments: []byte(`{"a":1}`)},
 		}},
 	}
-	require.NoError(t, msg.SetReplayData(
-		nativeInfo.ReplayProtocol,
+	require.NoError(t, msg.SetProviderData(
+		nativeInfo.ProviderDataProtocol,
 		nativeInfo.Name,
 		json.RawMessage(`[{"type":"function_call","call_id":"call_1"}]`),
 	))
@@ -154,7 +154,7 @@ func TestValidateResponseAllowsFinalResponseEditsAndReplacements(t *testing.T) {
 
 	t.Run("record removed", func(t *testing.T) {
 		response := nativeToolResponse(t)
-		response.Choices[0].Message.Replay = nil
+		response.Choices[0].Message.ProviderData = nil
 		require.NoError(t, ValidateResponse(response, nativeInfo))
 	})
 
@@ -167,7 +167,7 @@ func TestValidateResponseAllowsFinalResponseEditsAndReplacements(t *testing.T) {
 
 	t.Run("foreign producer remains invalid", func(t *testing.T) {
 		msg := model.NewAssistantMessage("foreign")
-		require.NoError(t, msg.SetReplayData("other.native", nativeInfo.Name,
+		require.NoError(t, msg.SetProviderData("other.native", nativeInfo.Name,
 			json.RawMessage(`[]`)))
 		response := &model.Response{Choices: []model.Choice{{Message: msg}}}
 		require.ErrorContains(t, ValidateResponse(response, nativeInfo), "invalid model response")

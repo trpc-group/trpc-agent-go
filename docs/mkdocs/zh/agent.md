@@ -384,9 +384,9 @@ agent := llmagent.New(
 
 **注意：** 此选项仅影响发送给模型之前对历史消息的处理方式。当前响应的 `reasoning_content` 始终会被捕获并存储在会话事件中。
 
-对于带有原生 `Replay` 数据的消息，这些模式只修改投影出的 reasoning 字段，
-不会删除 Replay 中的 reasoning 或加密状态，原生适配器仍可能在下一轮发送它们。
-若要改变这部分输入，需显式编辑原生 payload。删除未完成原生工具轮的 Replay
+对于带有原生 `ProviderData` 数据的消息，这些模式只修改投影出的 reasoning 字段，
+不会删除 ProviderData 中的 reasoning 或加密状态，原生适配器仍可能在下一轮发送它们。
+若要改变这部分输入，需显式编辑原生 payload。删除未完成原生工具轮的 ProviderData
 可能导致无法恢复。
 
 ### 工具调用记录历史模式

@@ -218,13 +218,13 @@ func (rsp *Response) Clone() *Response {
 	for i, choice := range rsp.Choices {
 		clone.Choices[i] = choice
 		clone.Choices[i].Logprobs = cloneLogprobs(choice.Logprobs)
-		if choice.Message.Replay != nil {
-			record := *choice.Message.Replay
-			clone.Choices[i].Message.Replay = &record
+		if choice.Message.ProviderData != nil {
+			record := *choice.Message.ProviderData
+			clone.Choices[i].Message.ProviderData = &record
 		}
-		if choice.Delta.Replay != nil {
-			record := *choice.Delta.Replay
-			clone.Choices[i].Delta.Replay = &record
+		if choice.Delta.ProviderData != nil {
+			record := *choice.Delta.ProviderData
+			clone.Choices[i].Delta.ProviderData = &record
 		}
 	}
 	if rsp.Usage != nil {

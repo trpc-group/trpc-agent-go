@@ -217,13 +217,13 @@ func assertCallbackIsolationSession(t *testing.T, sess *session.Session) {
 		}
 		for _, choice := range choices {
 			msg := choice.Message
-			if msg.Replay == nil || len(msg.ToolCalls) == 0 {
+			if msg.ProviderData == nil || len(msg.ToolCalls) == 0 {
 				continue
 			}
 			found = true
 			require.Equal(t, "call_tool", msg.ToolCalls[0].ID)
 			require.Equal(t, `{"a":1}`, string(msg.ToolCalls[0].Function.Arguments))
-			replay, err := msg.ReplayDataFor(responseProvider, "gpt-5")
+			replay, err := msg.ProviderDataFor(responseProvider, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, nativeToolOutput, string(replay))
 		}
@@ -273,7 +273,7 @@ func assertCallbackIsolationMultiSession(t *testing.T, sess *session.Session) {
 		}
 		for _, choice := range choices {
 			msg := choice.Message
-			if msg.Replay == nil || len(msg.ToolCalls) == 0 {
+			if msg.ProviderData == nil || len(msg.ToolCalls) == 0 {
 				continue
 			}
 			found = true
@@ -283,7 +283,7 @@ func assertCallbackIsolationMultiSession(t *testing.T, sess *session.Session) {
 			for _, call := range msg.ToolCalls {
 				require.Equal(t, `{"a":1}`, string(call.Function.Arguments))
 			}
-			replay, err := msg.ReplayDataFor(responseProvider, "gpt-5")
+			replay, err := msg.ProviderDataFor(responseProvider, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, callbackIsolationMultiToolOutput, string(replay))
 		}
@@ -299,7 +299,7 @@ func callbackIsolationBeforeModelMutation(mode string) model.BeforeModelCallback
 		}
 		for i := range args.Request.Messages {
 			msg := &args.Request.Messages[i]
-			if msg.Replay == nil || len(msg.ToolCalls) == 0 {
+			if msg.ProviderData == nil || len(msg.ToolCalls) == 0 {
 				continue
 			}
 			switch mode {
@@ -326,7 +326,7 @@ func setCallbackReplayArguments(message *model.Message, arguments string) error 
 	if message == nil {
 		return errors.New("assistant message is nil")
 	}
-	payload, err := message.ReplayDataFor(responseProvider, "gpt-5")
+	payload, err := message.ProviderDataFor(responseProvider, "gpt-5")
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ func setCallbackReplayArguments(message *model.Message, arguments string) error 
 	if err != nil {
 		return err
 	}
-	return message.SetReplayData(responseProvider, "gpt-5", updated)
+	return message.SetProviderData(responseProvider, "gpt-5", updated)
 }
 
 func editableReplayAfterModel(mode string) model.AfterModelCallbackStructured {
@@ -439,7 +439,7 @@ func findEditableReplayMessage(t *testing.T, sess *session.Session) model.Messag
 			choices = evt.Response.Choices
 		}
 		for _, choice := range choices {
-			if choice.Message.Replay != nil && len(choice.Message.ToolCalls) > 0 {
+			if choice.Message.ProviderData != nil && len(choice.Message.ToolCalls) > 0 {
 				return choice.Message
 			}
 		}
@@ -483,7 +483,7 @@ func TestAfterModelEditsKeepReplayAndToolExecutionIndependentAcrossSQLiteReopen(
 					continue
 				}
 				for _, choice := range evt.Response.Choices {
-					if choice.Message.Replay == nil || len(choice.Message.ToolCalls) == 0 {
+					if choice.Message.ProviderData == nil || len(choice.Message.ToolCalls) == 0 {
 						continue
 					}
 					sawEditedDisplay = true
@@ -508,7 +508,7 @@ func TestAfterModelEditsKeepReplayAndToolExecutionIndependentAcrossSQLiteReopen(
 			require.Equal(t, tc.wantContent, stored.Content)
 			require.Equal(t, tc.wantReasoning, stored.ReasoningContent)
 			require.Equal(t, tc.wantToolArguments, string(stored.ToolCalls[0].Function.Arguments))
-			storedReplay, err := stored.ReplayDataFor(responseProvider, "gpt-5")
+			storedReplay, err := stored.ProviderDataFor(responseProvider, "gpt-5")
 			require.NoError(t, err)
 			var items []struct {
 				Type      string `json:"type"`
@@ -528,7 +528,7 @@ func TestAfterModelEditsKeepReplayAndToolExecutionIndependentAcrossSQLiteReopen(
 			loaded, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
 			stored = findEditableReplayMessage(t, loaded)
-			storedReplay, err = stored.ReplayDataFor(responseProvider, "gpt-5")
+			storedReplay, err = stored.ProviderDataFor(responseProvider, "gpt-5")
 			require.NoError(t, err)
 			var loadedItems []struct {
 				Type      string `json:"type"`
@@ -573,7 +573,7 @@ func TestAfterModelCanReplaceResponseChoiceSetForNativeOutput(t *testing.T) {
 	require.EqualValues(t, 1, rt.calls.Load())
 	var sawReplacement bool
 	for _, evt := range events {
-		if evt.Response == nil || len(evt.Response.Choices) != 2 || evt.Response.Choices[0].Message.Replay == nil {
+		if evt.Response == nil || len(evt.Response.Choices) != 2 || evt.Response.Choices[0].Message.ProviderData == nil {
 			continue
 		}
 		sawReplacement = true
@@ -727,7 +727,7 @@ func TestRunnerBeforeModelToolCallEditsDoNotRewriteNativeReplay(t *testing.T) {
 			require.Empty(t, callbackIsolationErrors(first))
 			require.EqualValues(t, 1, toolCalls.Load())
 			require.Equal(t, 1, <-seen)
-			require.EqualValues(t, 2, rt.calls.Load(), "the model request must use native Replay after a detached projection edit")
+			require.EqualValues(t, 2, rt.calls.Load(), "the model request must use native ProviderData after a detached projection edit")
 			sess, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
 			assertCallbackIsolationSession(t, sess)

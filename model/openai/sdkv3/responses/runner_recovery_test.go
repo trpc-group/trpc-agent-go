@@ -499,7 +499,7 @@ func TestRunnerCrossProcessRecovery(t *testing.T) {
 							callRecords++
 							if protocol == "responses" {
 								for _, choice := range evt.Choices {
-									payload, err := choice.Message.ReplayDataFor("openai.responses", recoveryModelName)
+									payload, err := choice.Message.ProviderDataFor("openai.responses", recoveryModelName)
 									if err != nil {
 										t.Fatal(err)
 									}

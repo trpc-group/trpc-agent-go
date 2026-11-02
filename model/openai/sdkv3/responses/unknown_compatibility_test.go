@@ -58,7 +58,7 @@ func TestUnknownNativeFieldsSurviveMessageJSONAndNextInput(t *testing.T) {
 	require.NoError(t, err)
 	var restored model.Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
-	payload, err := restored.ReplayDataFor(responseProvider, "gpt-5")
+	payload, err := restored.ProviderDataFor(responseProvider, "gpt-5")
 	require.NoError(t, err)
 	require.Equal(t, nativeOutput, string(payload), "Message JSON must retain opaque fields in the provider payload")
 
@@ -105,10 +105,10 @@ func TestKeepaliveAndUnknownStreamExtensionsAreNotProjected(t *testing.T) {
 	}
 	require.True(t, got[0].IsPartial)
 	require.Equal(t, "preview", got[0].Choices[0].Delta.Content)
-	require.Nil(t, got[0].Choices[0].Message.Replay)
+	require.Nil(t, got[0].Choices[0].Message.ProviderData)
 	require.Nil(t, got[1].Error)
 	require.True(t, got[1].Done)
-	require.NotNil(t, got[1].Choices[0].Message.Replay)
+	require.NotNil(t, got[1].Choices[0].Message.ProviderData)
 }
 
 func TestUnknownOutputAndContentTypesFailForStreamingAndNonStreaming(t *testing.T) {

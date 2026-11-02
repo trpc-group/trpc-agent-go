@@ -27,12 +27,12 @@ func (m replayInfoModel) GenerateContent(context.Context, *model.Request) (<-cha
 func (m replayInfoModel) Info() model.Info { return m.info }
 
 func TestNewNativeReplayCandidates(t *testing.T) {
-	native := replayInfoModel{info: model.Info{Name: "gpt-5", ReplayProtocol: "openai.responses"}}
+	native := replayInfoModel{info: model.Info{Name: "gpt-5", ProviderDataProtocol: "openai.responses"}}
 
 	routed, err := New(WithCandidates(native, native))
 	require.NoError(t, err)
 	require.Equal(t, native.info.Name, routed.Info().Name)
-	require.Equal(t, native.info.ReplayProtocol, routed.Info().ReplayProtocol)
+	require.Equal(t, native.info.ProviderDataProtocol, routed.Info().ProviderDataProtocol)
 
 	_, err = New(WithCandidates(
 		replayInfoModel{info: model.Info{Name: "chat-a"}},

@@ -489,7 +489,7 @@ func TestRepairToolCallTextSkipsNativeReplay(t *testing.T) {
 		"<arg_value>echo native</arg_value>" +
 		"</tool_call>"
 	msg := model.NewAssistantMessage(content)
-	require.NoError(t, msg.SetReplayData("test.native", "native-model", json.RawMessage(`[]`)))
+	require.NoError(t, msg.SetProviderData("test.native", "native-model", json.RawMessage(`[]`)))
 	response := &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}
 	req := &model.Request{Tools: map[string]tool.Tool{
 		"exec_command": textRepairTool{name: "exec_command"},

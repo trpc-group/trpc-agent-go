@@ -48,7 +48,7 @@ func (m *nativeToolModel) GenerateContent(context.Context, *model.Request) (<-ch
 			},
 		}}}
 	}
-	if err := msg.SetReplayData("test.native", "native-model", json.RawMessage(
+	if err := msg.SetProviderData("test.native", "native-model", json.RawMessage(
 		`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"}]`,
 	)); err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func (m *nativeToolModel) GenerateContent(context.Context, *model.Request) (<-ch
 }
 
 func (m *nativeToolModel) Info() model.Info {
-	return model.Info{Name: "native-model", ReplayProtocol: "test.native"}
+	return model.Info{Name: "native-model", ProviderDataProtocol: "test.native"}
 }
 
 func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
@@ -93,7 +93,7 @@ func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
 				if tc.edit && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0 {
 					rsp.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"a":1000}`)
 					if tc.dropReplay {
-						rsp.Choices[0].Message.Replay = nil
+						rsp.Choices[0].Message.ProviderData = nil
 					}
 				}
 				return nil, nil

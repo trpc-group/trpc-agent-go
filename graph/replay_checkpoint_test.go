@@ -47,10 +47,10 @@ func TestNativeReplaySurvivesSQLiteCheckpointResume(t *testing.T) {
 			},
 		}},
 	}
-	require.NoError(t, native.SetReplayData(provider, modelName, json.RawMessage(payload)))
+	require.NoError(t, native.SetProviderData(provider, modelName, json.RawMessage(payload)))
 	requireNative := func(t *testing.T, msg model.Message) {
 		t.Helper()
-		got, err := msg.ReplayDataFor(provider, modelName)
+		got, err := msg.ProviderDataFor(provider, modelName)
 		require.NoError(t, err)
 		require.JSONEq(t, payload, string(got))
 	}

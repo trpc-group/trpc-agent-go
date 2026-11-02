@@ -152,7 +152,7 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 							continue
 						}
 						nativeCalls++
-						raw, err := msg.ReplayDataFor(m.Info().ReplayProtocol, m.Info().Name)
+						raw, err := msg.ProviderDataFor(m.Info().ProviderDataProtocol, m.Info().Name)
 						require.NoError(t, err)
 						require.JSONEq(t, nativeToolOutput, string(raw))
 					}
@@ -261,7 +261,7 @@ func TestSDKDefaultRetryExhaustionIsOneTerminalError(t *testing.T) {
 			requireTerminalError(t, responses)
 			for _, choice := range responses[0].Choices {
 				require.Empty(t, choice.Delta.ToolCalls)
-				require.Nil(t, choice.Delta.Replay)
+				require.Nil(t, choice.Delta.ProviderData)
 			}
 			require.EqualValues(t, 3, httpCalls.Load())
 		})

@@ -118,7 +118,7 @@ func TestStreamNonEmptyCompletionRemainsAuthoritative(t *testing.T) {
 	require.False(t, final.IsPartial)
 	require.Equal(t, "final", final.Choices[0].Message.Content)
 	require.Empty(t, final.Choices[0].Message.ToolCalls)
-	require.NotNil(t, final.Choices[0].Message.Replay)
+	require.NotNil(t, final.Choices[0].Message.ProviderData)
 }
 
 func TestStreamEmptyCompletionWithoutOutputStaysValid(t *testing.T) {
@@ -142,7 +142,7 @@ func TestStreamEmptyCompletionWithoutOutputStaysValid(t *testing.T) {
 	require.Empty(t, final.Choices[0].Message.Content)
 	require.Empty(t, final.Choices[0].Message.ReasoningContent)
 	require.Empty(t, final.Choices[0].Message.ToolCalls)
-	require.Nil(t, final.Choices[0].Message.Replay)
+	require.Nil(t, final.Choices[0].Message.ProviderData)
 	require.NotNil(t, final.Choices[0].FinishReason)
 	require.Equal(t, finishReasonStop, *final.Choices[0].FinishReason)
 }

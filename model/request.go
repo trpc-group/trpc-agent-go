@@ -86,13 +86,14 @@ type Message struct {
 	// conversation, include the text and its signature unmodified.
 	// Currently used by AWS Bedrock (Claude) models.
 	ReasoningSignature string `json:"reasoning_signature,omitempty"`
-	// Replay preserves a provider-native completion as an indivisible history unit.
+	// ProviderData preserves a provider-native completion as an indivisible history unit.
 	// It determines the next native request independently of editable display
 	// fields and ToolCalls, which determine current local tool execution. These
 	// representations are not automatically synchronized. Providers must check
-	// the record's protocol and model with ReplayDataFor before replaying it.
-	// Clearing Replay from an unfinished native tool round may prevent recovery.
-	Replay *ReplayData `json:"replay,omitempty"`
+	// the record's protocol and model with ProviderDataFor before replaying it.
+	// Clearing ProviderData from an unfinished native tool round may prevent recovery.
+	// The JSON key remains "replay" for compatibility with persisted sessions.
+	ProviderData *ProviderData `json:"replay,omitempty"`
 }
 
 // AddFilePath adds a file path to the message.

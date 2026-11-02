@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEventHasReplayDataPreservesLegacyDecodePolicy(t *testing.T) {
+func TestEventHasProviderDataPreservesLegacyDecodePolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		data string
@@ -39,7 +39,7 @@ func TestEventHasReplayDataPreservesLegacyDecodePolicy(t *testing.T) {
 		{name: "empty choices", data: `{"choices":[]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, EventHasReplayData([]byte(tc.data)))
+			require.Equal(t, tc.want, EventHasProviderData([]byte(tc.data)))
 		})
 	}
 }

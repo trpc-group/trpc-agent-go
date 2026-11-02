@@ -115,7 +115,7 @@ func calculatorTool() tool.Tool {
 // preview. Matching text is not repeated. Tool calls are shown only from a
 // completed Message.ToolCalls list, and tool results only from the committed
 // tool message. Partial tool calls, partial
-// tool-result previews, reasoning text, and native Replay payloads are not
+// tool-result previews, reasoning text, and native ProviderData payloads are not
 // displayed as completed tool activity.
 func printEvents(w io.Writer, ch <-chan *event.Event, streaming bool) {
 	assistantOpen := false

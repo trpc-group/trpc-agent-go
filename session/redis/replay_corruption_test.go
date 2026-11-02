@@ -83,7 +83,7 @@ func TestRedisSessionNativeReplaySurvivesStorageAndSkipsMalformedLegacyJSON(t *t
 			require.Equal(t, "call-native", replayCorruptionMessage(t, byID["native-tool-result"]).ToolID)
 
 			legacyCall := replayCorruptionMessage(t, byID[legacyToolCallEventID])
-			require.Nil(t, legacyCall.Replay, "legacy Chat tool calls stay ordinary projections")
+			require.Nil(t, legacyCall.ProviderData, "legacy Chat tool calls stay ordinary projections")
 			require.Equal(t, "call-legacy", replayCorruptionMessage(t, byID["legacy-tool-result"]).ToolID)
 		})
 	}
@@ -100,7 +100,7 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 			mutate: func(_ *testing.T, replay map[string]json.RawMessage) {
 				replay["version"] = json.RawMessage(`99`)
 			},
-			wantErrMsg: "unsupported replay data version 99",
+			wantErrMsg: "unsupported provider data version 99",
 		},
 	}
 
@@ -149,7 +149,7 @@ func TestRedisSessionGetSessionIgnoresLegacyReplayFingerprint(t *testing.T) {
 				fixture.expectedPayload[nativeToolCallEventID],
 			)
 
-			_, err = replayCorruptionMessage(t, byID[replayOnlyEventID]).ReplayDataFor(
+			_, err = replayCorruptionMessage(t, byID[replayOnlyEventID]).ProviderDataFor(
 				replayCorruptionProvider,
 				replayCorruptionModel,
 			)
@@ -193,7 +193,7 @@ func newReplayCorruptionFixture(
 		{"type":"reasoning","id":"rs_only","summary":[],"encrypted_content":"opaque-reasoning-only"}
 	]`)
 	reasoningOnly := model.Message{Role: model.RoleAssistant}
-	require.NoError(t, reasoningOnly.SetReplayData(
+	require.NoError(t, reasoningOnly.SetProviderData(
 		replayCorruptionProvider,
 		replayCorruptionModel,
 		reasoningPayload,
@@ -216,7 +216,7 @@ func newReplayCorruptionFixture(
 			},
 		}},
 	}
-	require.NoError(t, nativeToolCall.SetReplayData(
+	require.NoError(t, nativeToolCall.SetProviderData(
 		replayCorruptionProvider,
 		replayCorruptionModel,
 		nativeToolPayload,
@@ -337,7 +337,7 @@ func (f *replayCorruptionFixture) mutatePersistedReplay(
 	encodedEvent["choices"], _ = json.Marshal(choices)
 	updated, err := json.Marshal(encodedEvent)
 	require.NoError(t, err)
-	require.True(t, json.Valid(updated), "only the nested Replay JSON changes")
+	require.True(t, json.Valid(updated), "only the nested ProviderData JSON changes")
 
 	if f.storage.name == util.StorageTypeZset {
 		eventKey := zset.GetEventKey(f.key)
@@ -396,7 +396,7 @@ func replayCorruptionMessage(t *testing.T, evt event.Event) model.Message {
 
 func assertReplayCorruptionPayload(t *testing.T, message model.Message, expected json.RawMessage) {
 	t.Helper()
-	actual, err := message.ReplayDataFor(replayCorruptionProvider, replayCorruptionModel)
+	actual, err := message.ProviderDataFor(replayCorruptionProvider, replayCorruptionModel)
 	require.NoError(t, err)
 	require.JSONEq(t, string(expected), string(actual))
 }

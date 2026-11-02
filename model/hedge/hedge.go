@@ -90,7 +90,7 @@ func New(opt ...Option) (model.Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hedge: %w", err)
 	}
-	if replayInfo.ReplayProtocol != "" && name != replayInfo.Name {
+	if replayInfo.ProviderDataProtocol != "" && name != replayInfo.Name {
 		return nil, fmt.Errorf("hedge: native replay requires the logical name to match the configured model name")
 	}
 	contextWindow := opts.contextWindow
@@ -101,7 +101,7 @@ func New(opt ...Option) (model.Model, error) {
 		candidates:     candidates,
 		name:           name,
 		contextWindow:  contextWindow,
-		replayProtocol: replayInfo.ReplayProtocol,
+		replayProtocol: replayInfo.ProviderDataProtocol,
 		launchOffsets:  launchOffsets,
 	}, nil
 }
@@ -109,9 +109,9 @@ func New(opt ...Option) (model.Model, error) {
 // Info returns the logical hedge model info.
 func (m *hedgeModel) Info() model.Info {
 	return model.Info{
-		Name:           m.name,
-		ContextWindow:  m.contextWindow,
-		ReplayProtocol: m.replayProtocol,
+		Name:                 m.name,
+		ContextWindow:        m.contextWindow,
+		ProviderDataProtocol: m.replayProtocol,
 	}
 }
 

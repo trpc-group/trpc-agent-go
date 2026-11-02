@@ -135,12 +135,12 @@ func assertToolResultNativeReplay(t *testing.T, sess *session.Session, expected 
 		}
 		for _, choice := range choices {
 			msg := choice.Message
-			if msg.Replay == nil || len(msg.ToolCalls) == 0 {
+			if msg.ProviderData == nil || len(msg.ToolCalls) == 0 {
 				continue
 			}
 			found = true
 			require.Equal(t, expected, string(msg.ToolCalls[0].Function.Arguments))
-			raw, err := msg.ReplayDataFor(responseProvider, "gpt-5")
+			raw, err := msg.ProviderDataFor(responseProvider, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, nativeToolOutput, string(raw), "opaque native response items must survive persistence")
 		}
@@ -158,7 +158,7 @@ func assertToolResultNativeMultiReplay(t *testing.T, sess *session.Session) {
 		}
 		for _, choice := range choices {
 			msg := choice.Message
-			if msg.Replay == nil || len(msg.ToolCalls) == 0 {
+			if msg.ProviderData == nil || len(msg.ToolCalls) == 0 {
 				continue
 			}
 			found = true
@@ -167,7 +167,7 @@ func assertToolResultNativeMultiReplay(t *testing.T, sess *session.Session) {
 			require.Equal(t, `{"a":1}`, string(msg.ToolCalls[0].Function.Arguments))
 			require.Equal(t, "call_b", msg.ToolCalls[1].ID)
 			require.Equal(t, `{"a":2}`, string(msg.ToolCalls[1].Function.Arguments))
-			raw, err := msg.ReplayDataFor(responseProvider, "gpt-5")
+			raw, err := msg.ProviderDataFor(responseProvider, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, toolResultNativeMultiOutput, string(raw), "opaque native response items must survive persistence")
 		}

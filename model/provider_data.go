@@ -17,50 +17,50 @@ import (
 )
 
 const (
-	replayVersionV1 = 1
-	replayVersion   = 2
+	providerDataVersionV1 = 1
+	providerDataVersion   = 2
 )
 
-// ReplayData stores a provider-native completion with the identity of its
-// producer. The provider owns the payload schema. Replay data determines the
+// ProviderData stores a provider-native completion with the identity of its
+// producer. The provider owns the payload schema. The payload determines the
 // next model request. Content, content parts, and reasoning fields are editable
 // display projections, and ToolCalls determine the current tool execution. A
-// message carrying ReplayData must remain an assistant message.
+// message carrying ProviderData must remain an assistant message.
 //
-// Use Message.SetReplayData to create a record and Message.ReplayDataFor to read
+// Use Message.SetProviderData to create a record and Message.ProviderDataFor to read
 // it. Both methods copy the opaque payload at their boundaries. The zero value
-// is invalid; a nil Message.Replay means no native replay data.
-type ReplayData struct {
+// is invalid; a nil Message.ProviderData means no native provider data.
+type ProviderData struct {
 	provider string
 	model    string
 	payload  json.RawMessage
 }
 
-type replayJSON struct {
+type providerDataJSON struct {
 	Version  int             `json:"version"`
 	Provider string          `json:"provider"`
 	Model    string          `json:"model"`
 	Payload  json.RawMessage `json:"payload"`
 }
 
-// SetReplayData binds a copy of payload to the current assistant message.
+// SetProviderData binds a copy of payload to the current assistant message.
 // Provider identifies the wire protocol, and modelName is the configured model
 // identity used for later requests, rather than a provider-resolved alias.
 // Payload must be a JSON object or array understood by that provider.
 //
 // Content, content parts, and reasoning fields remain independently editable
-// after binding. ReplayDataFor returns the native payload used for subsequent
+// after binding. ProviderDataFor returns the native payload used for subsequent
 // model requests, while the message's ToolCalls continue to determine current
 // tool execution. The message must remain an assistant message. On error, the
 // receiver and any existing replay record are unchanged.
-func (m *Message) SetReplayData(provider, modelName string, payload json.RawMessage) error {
+func (m *Message) SetProviderData(provider, modelName string, payload json.RawMessage) error {
 	if m == nil {
-		return fmt.Errorf("cannot bind replay data to a nil message")
+		return fmt.Errorf("cannot bind provider data to a nil message")
 	}
 	if m.Role != RoleAssistant {
-		return fmt.Errorf("replay data requires an assistant message")
+		return fmt.Errorf("provider data requires an assistant message")
 	}
-	data := &ReplayData{
+	data := &ProviderData{
 		provider: provider,
 		model:    modelName,
 		payload:  append(json.RawMessage(nil), payload...),
@@ -68,38 +68,38 @@ func (m *Message) SetReplayData(provider, modelName string, payload json.RawMess
 	if err := data.validate(); err != nil {
 		return err
 	}
-	m.Replay = data
+	m.ProviderData = data
 	return nil
 }
 
-// ReplayDataFor returns a copy of the native payload for the named protocol and
-// configured model. A message without Replay returns nil, nil. A producer
+// ProviderDataFor returns a copy of the native payload for the named protocol and
+// configured model. A message without ProviderData returns nil, nil. A producer
 // mismatch or corrupt record returns an error.
-func (m Message) ReplayDataFor(provider, modelName string) (json.RawMessage, error) {
-	if m.Replay == nil {
+func (m Message) ProviderDataFor(provider, modelName string) (json.RawMessage, error) {
+	if m.ProviderData == nil {
 		return nil, nil
 	}
 	if m.Role != RoleAssistant {
-		return nil, fmt.Errorf("replay data requires an assistant message")
+		return nil, fmt.Errorf("provider data requires an assistant message")
 	}
-	if err := m.Replay.validate(); err != nil {
+	if err := m.ProviderData.validate(); err != nil {
 		return nil, err
 	}
-	if m.Replay.provider != provider || m.Replay.model != modelName {
-		return nil, fmt.Errorf("replay data belongs to protocol %q and model %q, not %q and %q",
-			m.Replay.provider, m.Replay.model, provider, modelName)
+	if m.ProviderData.provider != provider || m.ProviderData.model != modelName {
+		return nil, fmt.Errorf("provider data belongs to protocol %q and model %q, not %q and %q",
+			m.ProviderData.provider, m.ProviderData.model, provider, modelName)
 	}
-	return append(json.RawMessage(nil), m.Replay.payload...), nil
+	return append(json.RawMessage(nil), m.ProviderData.payload...), nil
 }
 
 // MarshalJSON writes the current version of the native replay record. Invalid
 // or zero-valued records return an error instead of persisting unusable state.
-func (r ReplayData) MarshalJSON() ([]byte, error) {
+func (r ProviderData) MarshalJSON() ([]byte, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(replayJSON{
-		Version:  replayVersion,
+	return json.Marshal(providerDataJSON{
+		Version:  providerDataVersion,
 		Provider: r.provider,
 		Model:    r.model,
 		Payload:  r.payload,
@@ -110,15 +110,15 @@ func (r ReplayData) MarshalJSON() ([]byte, error) {
 // for persistence compatibility and writes them back as v2. Unsupported
 // versions and invalid records fail rather than degrading silently to text-only
 // history.
-func (r *ReplayData) UnmarshalJSON(data []byte) error {
-	var stored replayJSON
+func (r *ProviderData) UnmarshalJSON(data []byte) error {
+	var stored providerDataJSON
 	if err := json.Unmarshal(data, &stored); err != nil {
-		return fmt.Errorf("decode replay data: %w", err)
+		return fmt.Errorf("decode provider data: %w", err)
 	}
-	if stored.Version != replayVersionV1 && stored.Version != replayVersion {
-		return fmt.Errorf("unsupported replay data version %d", stored.Version)
+	if stored.Version != providerDataVersionV1 && stored.Version != providerDataVersion {
+		return fmt.Errorf("unsupported provider data version %d", stored.Version)
 	}
-	decoded := ReplayData{
+	decoded := ProviderData{
 		provider: stored.Provider,
 		model:    stored.Model,
 		payload:  append(json.RawMessage(nil), stored.Payload...),
@@ -130,13 +130,13 @@ func (r *ReplayData) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (r ReplayData) validate() error {
+func (r ProviderData) validate() error {
 	if strings.TrimSpace(r.provider) == "" || strings.TrimSpace(r.model) == "" {
-		return fmt.Errorf("replay data requires a protocol and model identity")
+		return fmt.Errorf("provider data requires a protocol and model identity")
 	}
 	payload := bytes.TrimSpace(r.payload)
 	if len(payload) == 0 || !json.Valid(payload) || (payload[0] != '{' && payload[0] != '[') {
-		return fmt.Errorf("replay payload must be a valid JSON object or array")
+		return fmt.Errorf("provider payload must be a valid JSON object or array")
 	}
 	return nil
 }

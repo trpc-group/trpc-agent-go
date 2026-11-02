@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	callbackReplayProtocol = "test.native"
-	callbackReplayModel    = "callback-model"
+	callbackProviderDataProtocol = "test.native"
+	callbackReplayModel          = "callback-model"
 )
 
 type callbackReplayModelStub struct {
@@ -42,7 +42,7 @@ type callbackReplayModelStub struct {
 func (m *callbackReplayModelStub) Info() model.Info {
 	info := model.Info{Name: callbackReplayModel}
 	if m.native {
-		info.ReplayProtocol = callbackReplayProtocol
+		info.ProviderDataProtocol = callbackProviderDataProtocol
 	}
 	return info
 }
@@ -65,7 +65,7 @@ func (m *callbackReplayModelStub) GenerateContent(_ context.Context, req *model.
 			},
 		}}}
 		if m.native {
-			if err := msg.SetReplayData(callbackReplayProtocol, callbackReplayModel,
+			if err := msg.SetProviderData(callbackProviderDataProtocol, callbackReplayModel,
 				json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`)); err != nil {
 				return nil, err
 			}
@@ -91,9 +91,9 @@ func cloneCallbackReplayMessages(in []model.Message) []model.Message {
 	out := make([]model.Message, len(in))
 	copy(out, in)
 	for i := range out {
-		if out[i].Replay != nil {
-			record := *out[i].Replay
-			out[i].Replay = &record
+		if out[i].ProviderData != nil {
+			record := *out[i].ProviderData
+			out[i].ProviderData = &record
 		}
 		out[i].ToolCalls = append([]model.ToolCall(nil), out[i].ToolCalls...)
 		for j := range out[i].ToolCalls {
@@ -253,7 +253,7 @@ func assertCallbackReplayBinding(t *testing.T, msg model.Message, wantArguments 
 	require.Len(t, msg.ToolCalls, 1)
 	require.Equal(t, "call_1", msg.ToolCalls[0].ID)
 	require.Equal(t, []byte(wantArguments), msg.ToolCalls[0].Function.Arguments)
-	_, err := msg.ReplayDataFor(callbackReplayProtocol, callbackReplayModel)
+	_, err := msg.ProviderDataFor(callbackProviderDataProtocol, callbackReplayModel)
 	require.NoError(t, err, "the native replay record must still match its framework projection")
 }
 
@@ -295,9 +295,9 @@ func TestGraphBeforeToolCallbacksKeepLegacyArgumentMutation(t *testing.T) {
 	require.EqualValues(t, 9, result.toolValue)
 	require.Equal(t, 2, result.modelCalls)
 	call := findCallbackReplayCall(t, result.messages)
-	require.Nil(t, call.Replay)
+	require.Nil(t, call.ProviderData)
 	nextCall := findCallbackReplayCall(t, result.requests[1])
-	require.Nil(t, nextCall.Replay)
+	require.Nil(t, nextCall.ProviderData)
 }
 
 func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
@@ -329,7 +329,7 @@ func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 		Type: "function", ID: "call_1",
 		Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 	}}}
-	require.NoError(t, nativeCall.SetReplayData(callbackReplayProtocol, callbackReplayModel,
+	require.NoError(t, nativeCall.SetProviderData(callbackProviderDataProtocol, callbackReplayModel,
 		json.RawMessage(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`)))
 	initial := gr.State{gr.StateKeyMessages: []model.Message{model.NewUserMessage("continue"), nativeCall}}
 	inv := agent.NewInvocation(agent.WithInvocationID("before-model-replay"))
@@ -354,7 +354,7 @@ func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 		}
 		sawEditedReplay = true
 		require.Equal(t, []byte(`{"a":9}`), message.ToolCalls[0].Function.Arguments)
-		payload, err := message.ReplayDataFor(callbackReplayProtocol, callbackReplayModel)
+		payload, err := message.ProviderDataFor(callbackProviderDataProtocol, callbackReplayModel)
 		require.NoError(t, err)
 		require.JSONEq(t,
 			`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`,
@@ -368,6 +368,6 @@ func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []byte(`{"a":1}`), originalMessages[1].ToolCalls[0].Function.Arguments,
 		"a BeforeModel edit must not mutate the caller-owned graph input state")
-	_, replayErr := originalMessages[1].ReplayDataFor(callbackReplayProtocol, callbackReplayModel)
+	_, replayErr := originalMessages[1].ProviderDataFor(callbackProviderDataProtocol, callbackReplayModel)
 	require.NoError(t, replayErr)
 }

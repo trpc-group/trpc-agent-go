@@ -156,7 +156,7 @@ func TestGraphNativeHistoryValidatesPairingAndUsesReplayAfterToolCallEdit(t *tes
 				Type: "function", ID: "call_native",
 				Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 			}}}
-			require.NoError(t, msg.SetReplayData(m.Info().ReplayProtocol, m.Info().Name,
+			require.NoError(t, msg.SetProviderData(m.Info().ProviderDataProtocol, m.Info().Name,
 				json.RawMessage(`[{"type":"function_call","id":"fc_native","call_id":"call_native","name":"calculator","arguments":"{\"a\":1}"}]`)))
 			history := []model.Message{model.NewUserMessage("add one"), msg}
 			if tc.edit {
@@ -200,7 +200,7 @@ func TestGraphNativeHistoryValidatesPairingAndUsesReplayAfterToolCallEdit(t *tes
 				switch item.Type {
 				case "function_call":
 					sawCall = true
-					require.Equal(t, `{"a":1}`, item.Arguments, "Graph must send authoritative native Replay")
+					require.Equal(t, `{"a":1}`, item.Arguments, "Graph must send authoritative native ProviderData")
 				case "function_call_output":
 					sawResult = true
 					require.Equal(t, "call_native", item.CallID)

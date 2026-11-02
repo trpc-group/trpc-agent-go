@@ -97,7 +97,7 @@ func TestRunnerResumeValidatesNativeRecordBeforeExecutingTools(t *testing.T) {
 			loaded, err := svc.GetSession(ctx, key)
 			require.NoError(t, err)
 			require.Len(t, loaded.Events, 2)
-			require.NotNil(t, loaded.Events[1].Choices[0].Message.Replay)
+			require.NotNil(t, loaded.Events[1].Choices[0].Message.ProviderData)
 
 			var selected model.Model = original
 			legacy := &legacyIntegrationModel{}

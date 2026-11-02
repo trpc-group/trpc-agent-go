@@ -95,10 +95,10 @@ func RepairResponseToolCallArgumentsInPlace(ctx context.Context, response *model
 		return
 	}
 	for i := range response.Choices {
-		if response.Choices[i].Message.Replay == nil {
+		if response.Choices[i].Message.ProviderData == nil {
 			RepairToolCallsArgumentsInPlace(ctx, response.Choices[i].Message.ToolCalls)
 		}
-		if response.Choices[i].Delta.Replay == nil {
+		if response.Choices[i].Delta.ProviderData == nil {
 			RepairToolCallsArgumentsInPlace(ctx, response.Choices[i].Delta.ToolCalls)
 		}
 	}

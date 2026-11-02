@@ -25,7 +25,7 @@ func TestPrintEventsStreamingDoesNotRepeatFinalText(t *testing.T) {
 		Content:          "visible",
 		ReasoningContent: "hidden-reasoning",
 	}
-	if err := msg.SetReplayData(
+	if err := msg.SetProviderData(
 		"openai.responses",
 		"gpt-5",
 		json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
@@ -94,7 +94,7 @@ func TestPrintEventsShowsCommittedToolCallAndResult(t *testing.T) {
 			},
 		}},
 	}
-	if err := call.SetReplayData(
+	if err := call.SetProviderData(
 		"openai.responses",
 		"gpt-5",
 		json.RawMessage(`{"encrypted_content":"opaque-secret"}`),

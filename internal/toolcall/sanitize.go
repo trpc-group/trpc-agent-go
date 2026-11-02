@@ -88,7 +88,7 @@ func SanitizeMessagesWithToolsResult(
 	}
 	for i := 0; i < len(messages); {
 		msg := messages[i]
-		if msg.Role == model.RoleAssistant && msg.Replay != nil {
+		if msg.Role == model.RoleAssistant && msg.ProviderData != nil {
 			// Native projections cannot be normalized or split, including when
 			// results are missing. Keep the round for native history validation.
 			builder.append(indexedMessage{message: modelreplay.CloneMessage(msg), sourceIndex: i})

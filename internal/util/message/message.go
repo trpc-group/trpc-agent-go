@@ -45,5 +45,5 @@ func IsEmptyAssistantMessage(msg model.Message) bool {
 	return msg.Content == "" &&
 		len(msg.ContentParts) == 0 &&
 		len(msg.ToolCalls) == 0 &&
-		msg.Replay == nil
+		msg.ProviderData == nil
 }

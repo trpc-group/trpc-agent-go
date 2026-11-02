@@ -30,12 +30,12 @@ const (
 	nativeTestPayload  = `[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"}]`
 )
 
-var nativeTestInfo = model.Info{Name: nativeTestModel, ReplayProtocol: nativeTestProvider}
+var nativeTestInfo = model.Info{Name: nativeTestModel, ProviderDataProtocol: nativeTestProvider}
 
 func newNativeTestMessage(t *testing.T) model.Message {
 	t.Helper()
 	msg := legacyCacheKeyMessage()
-	require.NoError(t, msg.SetReplayData(
+	require.NoError(t, msg.SetProviderData(
 		nativeTestProvider,
 		nativeTestModel,
 		json.RawMessage(nativeTestPayload),
@@ -45,7 +45,7 @@ func newNativeTestMessage(t *testing.T) model.Message {
 
 func requireNativeTestMessage(t *testing.T, msg model.Message) {
 	t.Helper()
-	payload, err := msg.ReplayDataFor(nativeTestProvider, nativeTestModel)
+	payload, err := msg.ProviderDataFor(nativeTestProvider, nativeTestModel)
 	require.NoError(t, err)
 	require.JSONEq(t, nativeTestPayload, string(payload))
 }
@@ -61,16 +61,16 @@ func TestStateCopiesPreserveNativeReplay(t *testing.T) {
 			Choices: []model.Choice{{Message: native, Delta: native}},
 		},
 		"nested":       map[string]any{"messages": []any{native}},
-		"record":       native.Replay,
-		"record_value": *native.Replay,
+		"record":       native.ProviderData,
+		"record_value": *native.ProviderData,
 	}
-	requireRecord := func(t *testing.T, record *model.ReplayData) {
+	requireRecord := func(t *testing.T, record *model.ProviderData) {
 		t.Helper()
 		bound := native
-		bound.Replay = record
+		bound.ProviderData = record
 		requireNativeTestMessage(t, bound)
 	}
-	records := func(t *testing.T, s State) []*model.ReplayData {
+	records := func(t *testing.T, s State) []*model.ProviderData {
 		t.Helper()
 		// JSON-safe copies keep element types but return slices as []any.
 		var first model.Message
@@ -84,25 +84,25 @@ func TestStateCopiesPreserveNativeReplay(t *testing.T) {
 		}
 		response := s["response"].(*model.Response)
 		nested := s["nested"].(map[string]any)["messages"].([]any)
-		return []*model.ReplayData{
-			s["record"].(*model.ReplayData),
-			first.Replay,
-			s["message"].(model.Message).Replay,
-			s["pointer"].(*model.Message).Replay,
-			response.Choices[0].Message.Replay,
-			response.Choices[0].Delta.Replay,
-			nested[0].(model.Message).Replay,
+		return []*model.ProviderData{
+			s["record"].(*model.ProviderData),
+			first.ProviderData,
+			s["message"].(model.Message).ProviderData,
+			s["pointer"].(*model.Message).ProviderData,
+			response.Choices[0].Message.ProviderData,
+			response.Choices[0].Delta.ProviderData,
+			nested[0].(model.Message).ProviderData,
 		}
 	}
 	other := legacyCacheKeyMessage()
-	require.NoError(t, other.SetReplayData(
+	require.NoError(t, other.SetProviderData(
 		nativeTestProvider, nativeTestModel, json.RawMessage(`[{"type":"reasoning","id":"rs_other"}]`),
 	))
-	otherRecord, err := json.Marshal(other.Replay)
+	otherRecord, err := json.Marshal(other.ProviderData)
 	require.NoError(t, err)
 	check := func(t *testing.T, copied State) {
 		t.Helper()
-		value := copied["record_value"].(model.ReplayData)
+		value := copied["record_value"].(model.ProviderData)
 		requireRecord(t, &value)
 		for _, record := range records(t, copied) {
 			requireRecord(t, record)
@@ -167,7 +167,7 @@ func TestDefaultCachePolicy_NativeReplayKeys(t *testing.T) {
 		"native replay data is part of the cached input")
 
 	other := legacyCacheKeyMessage()
-	require.NoError(t, other.SetReplayData(
+	require.NoError(t, other.SetProviderData(
 		nativeTestProvider,
 		nativeTestModel,
 		json.RawMessage(`[{"type":"reasoning","id":"rs_2"}]`),
@@ -239,7 +239,7 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 			name: "edited with the record dropped",
 			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
 				editArguments(rsp)
-				rsp.Choices[0].Message.Replay = nil
+				rsp.Choices[0].Message.ProviderData = nil
 				return nil, nil
 			},
 		},
@@ -257,10 +257,10 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 			name: "edited and rebound",
 			callback: func(t *testing.T, rsp *model.Response) (*model.Response, error) {
 				msg := &rsp.Choices[0].Message
-				payload, err := msg.ReplayDataFor(nativeTestProvider, nativeTestModel)
+				payload, err := msg.ProviderDataFor(nativeTestProvider, nativeTestModel)
 				require.NoError(t, err)
 				editArguments(rsp)
-				require.NoError(t, msg.SetReplayData(nativeTestProvider, nativeTestModel, payload))
+				require.NoError(t, msg.SetProviderData(nativeTestProvider, nativeTestModel, payload))
 				return nil, nil
 			},
 		},
@@ -275,7 +275,7 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 			name:   "reasoning only with the record dropped",
 			noTool: true,
 			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				rsp.Choices[0].Message.Replay = nil
+				rsp.Choices[0].Message.ProviderData = nil
 				return nil, nil
 			},
 		},
@@ -308,13 +308,13 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 			if tc.noTool {
 				msg = withoutNativeReplay([]model.Message{msg})[0]
 				msg.ToolCalls = nil
-				require.NoError(t, msg.SetReplayData(
+				require.NoError(t, msg.SetProviderData(
 					nativeTestProvider, nativeTestModel, json.RawMessage(nativeTestPayload),
 				))
 			}
 			if tc.legacy {
 				info = model.Info{Name: "legacy-model"}
-				msg.Replay = nil
+				msg.ProviderData = nil
 			}
 			callbacks := model.NewCallbacks()
 			if tc.callback != nil {
@@ -379,7 +379,7 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 	}
 	native := newNativeTestMessage(t)
 	native.ToolCalls = nil
-	require.NoError(t, native.SetReplayData(
+	require.NoError(t, native.SetProviderData(
 		nativeTestProvider, nativeTestModel, json.RawMessage(nativeTestPayload),
 	))
 	history := []model.Message{model.NewUserMessage("hi"), native, model.NewUserMessage("next")}
@@ -388,7 +388,7 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, llm.requests)
 
-	llm, err = run(model.Info{Name: "other-model", ReplayProtocol: nativeTestProvider}, history)
+	llm, err = run(model.Info{Name: "other-model", ProviderDataProtocol: nativeTestProvider}, history)
 	require.ErrorContains(t, err, "native replay message 1")
 	require.Zero(t, llm.requests, "a foreign native record must not reach the model")
 
@@ -401,7 +401,7 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 func withoutNativeReplay(messages []model.Message) []model.Message {
 	out := append([]model.Message(nil), messages...)
 	for i := range out {
-		out[i].Replay = nil
+		out[i].ProviderData = nil
 	}
 	return out
 }

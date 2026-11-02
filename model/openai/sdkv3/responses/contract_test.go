@@ -378,7 +378,7 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 	}
 	native := func(t *testing.T, modelName, payload string) model.Message {
 		msg := model.NewAssistantMessage("")
-		require.NoError(t, msg.SetReplayData(responseProvider, modelName, json.RawMessage(payload)))
+		require.NoError(t, msg.SetProviderData(responseProvider, modelName, json.RawMessage(payload)))
 		return msg
 	}
 	nativeCall := `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"}]`
@@ -465,7 +465,7 @@ func requireTerminalError(t *testing.T, got []*model.Response) *model.ResponseEr
 	require.NotEmpty(t, got)
 	for _, resp := range got {
 		for _, choice := range resp.Choices {
-			require.Nil(t, choice.Message.Replay, "a failed response must not publish native output")
+			require.Nil(t, choice.Message.ProviderData, "a failed response must not publish native output")
 			require.Empty(t, choice.Message.ToolCalls)
 		}
 	}
@@ -665,5 +665,5 @@ func TestStreamPartialsAndFinalReplay(t *testing.T) {
 	require.Nil(t, final.Error)
 	require.False(t, final.IsPartial)
 	require.Equal(t, "no", final.Choices[0].Message.Content)
-	require.NotNil(t, final.Choices[0].Message.Replay)
+	require.NotNil(t, final.Choices[0].Message.ProviderData)
 }

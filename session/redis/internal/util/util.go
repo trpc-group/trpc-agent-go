@@ -104,7 +104,7 @@ func ProcessEventCmd(
 	for _, eventBytes := range eventsBytes {
 		evt := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), evt); err != nil {
-			if EventHasReplayData([]byte(eventBytes)) {
+			if EventHasProviderData([]byte(eventBytes)) {
 				return nil, fmt.Errorf("decode event with native replay data: %w", err)
 			}
 			log.WarnfContext(
@@ -119,10 +119,10 @@ func ProcessEventCmd(
 	return events, nil
 }
 
-// EventHasReplayData identifies non-null native records without decoding their
+// EventHasProviderData identifies non-null native records without decoding their
 // payload. It lets history readers reject native decoding errors while retaining
 // their existing policy for malformed legacy events.
-func EventHasReplayData(data []byte) bool {
+func EventHasProviderData(data []byte) bool {
 	var envelope struct {
 		Choices []json.RawMessage `json:"choices"`
 	}
@@ -139,12 +139,12 @@ func EventHasReplayData(data []byte) bool {
 		}
 		for _, rawMessage := range []json.RawMessage{choice.Message, choice.Delta} {
 			var message struct {
-				Replay json.RawMessage `json:"replay"`
+				ProviderData json.RawMessage `json:"replay"`
 			}
 			if json.Unmarshal(rawMessage, &message) != nil {
 				continue
 			}
-			replay := bytes.TrimSpace(message.Replay)
+			replay := bytes.TrimSpace(message.ProviderData)
 			if len(replay) > 0 && !bytes.Equal(replay, []byte("null")) {
 				return true
 			}

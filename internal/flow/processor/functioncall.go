@@ -3634,7 +3634,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 
 func llmResponseHasNativeReplay(response *model.Response) bool {
 	return response != nil && len(response.Choices) > 0 &&
-		response.Choices[0].Message.Replay != nil
+		response.Choices[0].Message.ProviderData != nil
 }
 
 type nativeReplayToolCallArgsContextKey struct{}

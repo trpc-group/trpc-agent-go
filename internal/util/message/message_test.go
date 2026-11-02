@@ -71,7 +71,7 @@ func TestIsEmptyAssistantMessage(t *testing.T) {
 		},
 	}))
 	replayOnly := model.NewAssistantMessage("")
-	require.NoError(t, replayOnly.SetReplayData(
+	require.NoError(t, replayOnly.SetProviderData(
 		"openai.responses",
 		"test-model",
 		json.RawMessage(`[]`),

@@ -16,7 +16,7 @@ Go version or newer. When `WithAPIKey` and `WithBaseURL` are omitted, the
 OpenAI SDK reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`. Each request sends
 the full client-managed conversation and uses `store=false` by default.
 Ordinary `LLMAgent` and `Runner` use does not require reading or editing
-`Message.Replay`.
+`Message.ProviderData`.
 
 ```go
 import (
@@ -99,15 +99,15 @@ all other item fields must agree. The adapter still waits for a valid
 
 Each completed response stores its entire ordered output array, including
 opaque encrypted reasoning, annotations, item IDs, and message phase, in
-`Message.Replay`. The adapter never synthesizes reasoning IDs, native items,
+`Message.ProviderData`. The adapter never synthesizes reasoning IDs, native items,
 or tool calls from streamed deltas or a reasoning summary. It explicitly
 requests encrypted reasoning so stateless continuation can retain provider
 state. Additional include names are unioned with that required item and cannot
 replace it.
 
-`Replay` is the authoritative native payload for the next model request.
+`ProviderData` is the authoritative native payload for the next model request.
 `Content` and `ReasoningContent` are editable display fields; changing them
-does not change Replay. `ToolCalls` is the framework's instruction for local
+does not change ProviderData. `ToolCalls` is the framework's instruction for local
 tool execution. Changing its arguments affects the current execution, but does
 not rewrite the native function-call item sent on the next request. The tool
 result is still paired by call ID. If the display, native payload, and tool
@@ -115,7 +115,7 @@ arguments should agree, update the fields and payload explicitly; the
 framework does not synchronize them.
 
 For example, redacting only the displayed text leaves the original native
-payload unchanged in Replay and session storage:
+payload unchanged in ProviderData and session storage:
 
 ```go
 message.Content = "[redacted]"
@@ -127,7 +127,7 @@ opaque fields, then bind the new payload with the existing API. Assume
 `message`, `modelName`, and the `encoding/json` import are in scope:
 
 ```go
-payload, err := message.ReplayDataFor("openai.responses", modelName)
+payload, err := message.ProviderDataFor("openai.responses", modelName)
 if err != nil {
     return err
 }
@@ -152,7 +152,7 @@ payload, err = json.Marshal(items)
 if err != nil {
     return err
 }
-if err := message.SetReplayData("openai.responses", modelName, payload); err != nil {
+if err := message.SetProviderData("openai.responses", modelName, payload); err != nil {
     return err
 }
 ```
@@ -161,14 +161,18 @@ That example changes the next request's native arguments; it does not change
 the current `ToolCalls` execution arguments. Edit `ToolCalls` separately when
 the current local execution should use the same arguments. Before-tool
 callbacks receive detached execution arguments, so changing them affects the
-tool call but does not rewrite Replay. Treat Replay as sensitive conversation
+tool call but does not rewrite ProviderData. Treat ProviderData as sensitive conversation
 state: redacting `Content` alone does not redact the native payload or remove
 the original text from persisted history.
 
-Replay v2 writes no projection fingerprint. Its reader accepts v1 records and
+The Go API uses `Message.ProviderData`, `SetProviderData`, `ProviderDataFor`, and
+`Info.ProviderDataProtocol`. Persisted JSON retains the `replay` and
+`ReplayProtocol` keys so existing session data remains readable.
+
+ProviderData v2 writes no projection fingerprint. Its reader accepts v1 records and
 ignores their legacy projection hash. Protocol, configured model, replay
 version, native item schema, and call/result integrity are still validated.
-`ReplayDataFor` returns the native payload despite edits to display or tool
+`ProviderDataFor` returns the native payload despite edits to display or tool
 projections, provided the record is structurally valid and belongs to the
 requested protocol and configured model.
 
@@ -212,22 +216,22 @@ agent can therefore consume a native agent's output as ordinary context, which
 is a semantic rebase rather than a native continuation. With
 `WithPreserveForeignMessages(true)`, foreign records keep their roles and
 replay state, so only agents that consume the same protocol and model can use
-them. Custom event projectors cannot remove Replay from an unfinished native
+them. Custom event projectors cannot remove ProviderData from an unfinished native
 tool round and still rely on recovery; the framework does not promise recovery
-after Replay is removed from a pending round.
+after ProviderData is removed from a pending round.
 
-LLM flows and Graph LLM nodes validate `model.Info.ReplayProtocol` and the
+LLM flows and Graph LLM nodes validate `model.Info.ProviderDataProtocol` and the
 configured model name before handing native history to an adapter. Another
 model or a legacy adapter is rejected; wrappers must forward `Info` correctly.
 Both allow callbacks to replace or edit a valid response, including rebinding
-its Replay data with `SetReplayData`. The resulting `ToolCalls` determine
-current local execution and Replay determines subsequent wire input. Native
+its provider data with `SetProviderData`. The resulting `ToolCalls` determine
+current local execution and ProviderData determines subsequent wire input. Native
 item structure and call/result pairing remain validated. Before-model
 callbacks receive detached history copies: edits to their `ToolCalls` or
-display fields do not rewrite Replay or stored session records. Before-tool
+display fields do not rewrite ProviderData or stored session records. Before-tool
 callbacks receive separate execution arguments, so in-place edits and
-`ModifiedArguments` affect the current tool call without rewriting Replay. The
-next model request sends Replay and pairs the result with the same call ID.
+`ModifiedArguments` affect the current tool call without rewriting ProviderData. The
+next model request sends ProviderData and pairs the result with the same call ID.
 Legacy responses keep the existing callback override behavior. Graph state
 copies, checkpoints, and cache keys preserve native records. Direct callers of
 other adapters must also avoid passing native records they cannot consume. A
@@ -244,7 +248,7 @@ With `agent.WithResume(true)`, a pending native tool response is validated
 against the first selected model before any of its tools execute. Resume and
 the following model request share that selection. A `ToolCalls` edit can
 change the resumed execution arguments; the following request still sends the
-saved Replay payload. A different protocol or configured model name fails
+saved ProviderData payload. A different protocol or configured model name fails
 before tool execution. Legacy Chat recovery keeps its existing execution
 order.
 
@@ -276,7 +280,7 @@ routing, and Graph cache keys. Registering a Responses model that is never
 selected does not change a legacy session. `model.Message` and `model.Info`
 gained fields, so code that builds them with positional composite literals
 must switch to keyed fields. This is a source-compatibility exception even for
-applications that do not select Responses. An empty `Info.ReplayProtocol` is
+applications that do not select Responses. An empty `Info.ProviderDataProtocol` is
 omitted from JSON, preserving the existing encoding for legacy models.
 
 An older framework that reads and rewrites a replay-bearing session can drop
@@ -290,8 +294,8 @@ reader and writer that can access the same replay-bearing sessions before
 enabling v2 writers. An older binary may strip replay state, so resuming that
 history with the old binary cannot be promised.
 
-This adapter requires a root module version containing `Message.Replay` and
-`Info.ReplayProtocol`. Repository-relative `replace` directives support local
+This adapter requires a root module version containing `Message.ProviderData` and
+`Info.ProviderDataProtocol`. Repository-relative `replace` directives support local
 development only; downstream consumers must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited. Publish
 the compatible root module first, update this module's required root version,

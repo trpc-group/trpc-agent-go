@@ -212,7 +212,7 @@ func TestRunnerDoesNotExecuteOrPersistUncommittedStreamCalls(t *testing.T) {
 				for _, choice := range evt.Choices {
 					require.Empty(t, choice.Message.ToolCalls)
 					require.Empty(t, choice.Delta.ToolCalls)
-					require.Nil(t, choice.Message.Replay)
+					require.Nil(t, choice.Message.ProviderData)
 				}
 			}
 		})
@@ -264,8 +264,8 @@ func TestRunnerRejectsInconsistentEmptyCompletionWithoutToolSideEffects(t *testi
 		for _, choice := range evt.Response.Choices {
 			require.Empty(t, choice.Message.ToolCalls)
 			require.Empty(t, choice.Delta.ToolCalls)
-			require.Nil(t, choice.Message.Replay)
-			require.Nil(t, choice.Delta.Replay)
+			require.Nil(t, choice.Message.ProviderData)
+			require.Nil(t, choice.Delta.ProviderData)
 			require.NotEqual(t, model.RoleTool, choice.Message.Role)
 			require.NotEqual(t, model.RoleTool, choice.Delta.Role)
 		}
@@ -298,7 +298,7 @@ func TestRunnerNativeHistoryThroughRoutingWrappers(t *testing.T) {
 				routed, err = hedge.New(hedge.WithCandidates(primary, backup), hedge.WithDelay(time.Hour))
 			}
 			require.NoError(t, err)
-			require.Equal(t, responseProvider, routed.Info().ReplayProtocol)
+			require.Equal(t, responseProvider, routed.Info().ProviderDataProtocol)
 			r := runner.NewRunner("native", llmagent.New("native", llmagent.WithModel(routed)))
 			defer r.Close()
 			for _, text := range []string{"hello", "continue"} {
@@ -349,7 +349,7 @@ func TestRunnerResponseProducerIsCapturedBeforeCallbacks(t *testing.T) {
 	for _, evt := range runIntegration(t, r, ctx, "hello") {
 		require.Nil(t, evt.Error)
 		for _, choice := range evt.Choices {
-			sawNative = sawNative || choice.Message.Replay != nil
+			sawNative = sawNative || choice.Message.ProviderData != nil
 		}
 	}
 	require.True(t, sawNative)

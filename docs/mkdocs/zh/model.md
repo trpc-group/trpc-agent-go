@@ -2264,20 +2264,20 @@ go run ./tools -streaming=false
 ### 编辑展示字段与原生重放数据
 
 `Message.Content` 和 `ReasoningContent` 是可修改的展示字段。当前本地工具
-执行使用 `Message.ToolCalls` 中的参数；下一次模型请求使用 `Message.Replay`
+执行使用 `Message.ToolCalls` 中的参数；下一次模型请求使用 `Message.ProviderData`
 中的原生 payload。框架不会自动同步这些字段。只把 `Content` 改成脱敏文本，
-不会同步修改持久化的 `Replay`，原文仍会保留在会话历史中。BeforeTool 回调可以
-修改当前执行参数，但不会重写 Replay。删除未完成原生工具轮的 Replay 后，框架
+不会同步修改持久化的 `ProviderData`，原文仍会保留在会话历史中。BeforeTool 回调可以
+修改当前执行参数，但不会重写 ProviderData。删除未完成原生工具轮的 ProviderData 后，框架
 不承诺能够恢复。
 
-需要有意修改原生状态时，可以直接使用现有的 `ReplayDataFor` 和
-`SetReplayData`。下面的代码片段更新 Replay 中的函数调用，同时保留其他原生
+需要有意修改原生状态时，可以直接使用现有的 `ProviderDataFor` 和
+`SetProviderData`。下面的代码片段更新 ProviderData 中的函数调用，同时保留其他原生
 item 字段。当前 `ToolCalls` 参数保持原样；若当前工具执行也应使用新参数，需
 单独修改它。示例假设 `msg`、`modelName` 已在作用域内，并已导入
 `encoding/json`。
 
 ```go
-payload, err := msg.ReplayDataFor("openai.responses", modelName)
+payload, err := msg.ProviderDataFor("openai.responses", modelName)
 if err != nil {
     return err
 }
@@ -2302,16 +2302,16 @@ payload, err = json.Marshal(items)
 if err != nil {
     return err
 }
-if err := msg.SetReplayData("openai.responses", modelName, payload); err != nil {
+if err := msg.SetProviderData("openai.responses", modelName, payload); err != nil {
     return err
 }
 ```
 
 ### 说明
 
-- 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.Replay`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
-- 下游模块需要包含 `Message.Replay` 和 `Info.ReplayProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
-- Replay v2 不写入投影指纹，并可读取 v1 记录且忽略旧指纹。v1 reader 可能拒绝 v2 记录。启用 v2 writer 前，需升级共享这些会话的所有 reader 和 writer。
+- 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
+- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
+- ProviderData v2 不写入投影指纹，并可读取 v1 记录且忽略旧指纹。v1 reader 可能拒绝 v2 记录。启用 v2 writer 前，需升级共享这些会话的所有 reader 和 writer。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。

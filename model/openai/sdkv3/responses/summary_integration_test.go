@@ -118,7 +118,7 @@ func TestSummaryCutoffInsideNativeMultiCallRoundRestoresTheRound(t *testing.T) {
 			continue
 		}
 		msg := evt.Response.Choices[0].Message
-		if len(msg.ToolCalls) == 2 && msg.Replay != nil {
+		if len(msg.ToolCalls) == 2 && msg.ProviderData != nil {
 			round = evt
 		}
 		if msg.Role == model.RoleTool {
