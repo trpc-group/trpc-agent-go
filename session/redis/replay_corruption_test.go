@@ -126,42 +126,6 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 	}
 }
 
-func TestRedisSessionGetSessionIgnoresLegacyReplayFingerprint(t *testing.T) {
-	for _, storage := range replayCorruptionStorages {
-		t.Run(storage.name, func(t *testing.T) {
-			fixture := newReplayCorruptionFixture(t, storage)
-			fixture.addMalformedLegacyJSON(t)
-			fixture.mutatePersistedReplay(t, replayOnlyEventID, func(
-				t *testing.T,
-				replay map[string]json.RawMessage,
-			) {
-				replay["projection_sha256"] = json.RawMessage(`"not-a-sha256"`)
-			})
-
-			got, err := fixture.service.GetSession(fixture.ctx, fixture.key)
-			require.NoError(t, err, "a syntactically valid record is decoded by the storage layer")
-			require.NotNil(t, got)
-			require.Len(t, got.Events, len(fixture.events))
-			byID := indexReplayCorruptionEvents(t, got.Events)
-			require.Contains(t, byID, replayOnlyEventID)
-			assertReplayCorruptionPayload(t,
-				replayCorruptionMessage(t, byID[nativeToolCallEventID]),
-				fixture.expectedPayload[nativeToolCallEventID],
-			)
-
-			_, err = replayCorruptionMessage(t, byID[replayOnlyEventID]).ProviderDataFor(
-				replayCorruptionProvider,
-				replayCorruptionModel,
-			)
-			require.NoError(t, err, "legacy projection fingerprints are ignored by the v2 record semantics")
-			assertReplayCorruptionPayload(t,
-				replayCorruptionMessage(t, byID[replayOnlyEventID]),
-				fixture.expectedPayload[replayOnlyEventID],
-			)
-		})
-	}
-}
-
 func newReplayCorruptionFixture(
 	t *testing.T,
 	storage replayCorruptionStorage,

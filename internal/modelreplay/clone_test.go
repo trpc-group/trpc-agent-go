@@ -53,8 +53,9 @@ func TestCloneMessagePreservesNativeHistoryOwnership(t *testing.T) {
 	cloned.ToolCalls[0].Function.Arguments[5] = '9'
 	*cloned.ToolCalls[0].Index = 7
 	cloned.ToolCalls[0].ExtraFields["nested"].(map[string]any)["count"] = json.Number("1")
-	require.NoError(t, json.Unmarshal([]byte(`{"version":1,"provider":"other.native","model":"other-model","payload":[],"projection_sha256":"`+
-		"0000000000000000000000000000000000000000000000000000000000000000"+`"}`), cloned.ProviderData))
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"version":2,"provider":"other.native","model":"other-model","payload":[]}`,
+	), cloned.ProviderData))
 
 	after, err := json.Marshal(message)
 	require.NoError(t, err)

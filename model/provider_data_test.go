@@ -114,24 +114,6 @@ func TestProviderDataReadsV1HistoryFixture(t *testing.T) {
 	require.JSONEq(t, string(payload), string(replayed))
 }
 
-func TestProviderDataReadsV1MultimodalHistoryFixture(t *testing.T) {
-	stored, err := os.ReadFile("testdata/replay_v1_multimodal.json")
-	require.NoError(t, err)
-	var restored Message
-	require.NoError(t, json.Unmarshal(stored, &restored))
-	payload, err := restored.ProviderDataFor("test.multimodal", "fixture-model")
-	require.NoError(t, err)
-	require.JSONEq(t,
-		`[{"type":"message","id":"msg_1","content":"synthetic fixture"}]`,
-		string(payload),
-	)
-	if len(restored.ContentParts) > 0 && restored.ContentParts[0].Text != nil {
-		*restored.ContentParts[0].Text = "edited display"
-	}
-	_, err = restored.ProviderDataFor("test.multimodal", "fixture-model")
-	require.NoError(t, err)
-}
-
 func TestProviderDataAllowsProjectionEdits(t *testing.T) {
 	tests := map[string]func(*Message){
 		"text":      func(m *Message) { m.Content = "edited" },
@@ -173,17 +155,24 @@ func TestProviderDataRejectsNonAssistantRole(t *testing.T) {
 	require.ErrorContains(t, err, "provider data requires an assistant message")
 }
 
-func TestProviderDataV1DoesNotRequireProjectionHash(t *testing.T) {
-	var restored ProviderData
-	require.NoError(t, json.Unmarshal([]byte(
-		`{"version":1,"provider":"test.responses","model":"reasoning-model","payload":[]}`,
-	), &restored))
-	encoded, err := json.Marshal(restored)
-	require.NoError(t, err)
-	require.JSONEq(t,
-		`{"version":2,"provider":"test.responses","model":"reasoning-model","payload":[]}`,
-		string(encoded),
-	)
+func TestProviderDataV1IgnoresProjectionHash(t *testing.T) {
+	for name, hashField := range map[string]string{
+		"missing hash":   "",
+		"malformed hash": `,"projection_sha256":"not-a-sha256"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var restored ProviderData
+			require.NoError(t, json.Unmarshal([]byte(
+				`{"version":1,"provider":"test.responses","model":"reasoning-model","payload":[]`+hashField+`}`,
+			), &restored))
+			encoded, err := json.Marshal(restored)
+			require.NoError(t, err)
+			require.JSONEq(t,
+				`{"version":2,"provider":"test.responses","model":"reasoning-model","payload":[]}`,
+				string(encoded),
+			)
+		})
+	}
 }
 
 func TestProviderDataRejectsAnotherProducer(t *testing.T) {

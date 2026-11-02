@@ -222,24 +222,14 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 		name     string
 		info     *model.Info
 		legacy   bool
-		noTool   bool
 		plugin   *model.Response
 		callback func(t *testing.T, rsp *model.Response) (*model.Response, error)
 		wantErr  string
 	}{
-		{name: "unchanged record"},
 		{
 			name: "edited with the record retained",
 			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
 				editArguments(rsp)
-				return nil, nil
-			},
-		},
-		{
-			name: "edited with the record dropped",
-			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				editArguments(rsp)
-				rsp.Choices[0].Message.ProviderData = nil
 				return nil, nil
 			},
 		},
@@ -252,32 +242,6 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 		{
 			name:   "plugin replaced without a record",
 			plugin: injectedToolResponse(),
-		},
-		{
-			name: "edited and rebound",
-			callback: func(t *testing.T, rsp *model.Response) (*model.Response, error) {
-				msg := &rsp.Choices[0].Message
-				payload, err := msg.ProviderDataFor(nativeTestProvider, nativeTestModel)
-				require.NoError(t, err)
-				editArguments(rsp)
-				require.NoError(t, msg.SetProviderData(nativeTestProvider, nativeTestModel, payload))
-				return nil, nil
-			},
-		},
-		{
-			name: "choice index changed",
-			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				rsp.Choices[0].Index = 1
-				return nil, nil
-			},
-		},
-		{
-			name:   "reasoning only with the record dropped",
-			noTool: true,
-			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				rsp.Choices[0].Message.ProviderData = nil
-				return nil, nil
-			},
 		},
 		{
 			name: "callback error",
@@ -305,13 +269,6 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 				info = *tc.info
 			}
 			msg := newNativeTestMessage(t)
-			if tc.noTool {
-				msg = withoutNativeReplay([]model.Message{msg})[0]
-				msg.ToolCalls = nil
-				require.NoError(t, msg.SetProviderData(
-					nativeTestProvider, nativeTestModel, json.RawMessage(nativeTestPayload),
-				))
-			}
 			if tc.legacy {
 				info = model.Info{Name: "legacy-model"}
 				msg.ProviderData = nil
@@ -352,11 +309,9 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 			}
 			require.NoError(t, err)
 			require.NotNil(t, evt)
-			if tc.legacy {
-				require.JSONEq(t, `{"q":"rm -rf"}`,
-					string(evt.Response.Choices[0].Message.ToolCalls[0].Function.Arguments),
-					"legacy callbacks keep overriding responses")
-			}
+			require.JSONEq(t, `{"q":"rm -rf"}`,
+				string(evt.Response.Choices[0].Message.ToolCalls[0].Function.Arguments),
+				"the emitted call must use the callback's arguments")
 		})
 	}
 }

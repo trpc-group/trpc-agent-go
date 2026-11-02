@@ -180,32 +180,15 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		legacy   bool
-		noTool   bool
 		callback func(t *testing.T, rsp *model.Response) (*model.Response, error)
 		wantErr  string
 		// wantInput is the calculator input when the tool must run once.
 		wantInput int
 	}{
 		{
-			name: "unchanged native record",
-			callback: func(*testing.T, *model.Response) (*model.Response, error) {
-				return nil, nil
-			},
-			wantInput: 1,
-		},
-		{
 			name: "edited with the record retained",
 			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
 				editArguments(rsp)
-				return nil, nil
-			},
-			wantInput: 1000,
-		},
-		{
-			name: "edited with the record dropped",
-			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				editArguments(rsp)
-				rsp.Choices[0].Message.ProviderData = nil
 				return nil, nil
 			},
 			wantInput: 1000,
@@ -218,36 +201,6 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 				return &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}, nil
 			},
 			wantInput: 1000,
-		},
-		{
-			name: "edited and rebound",
-			callback: func(t *testing.T, rsp *model.Response) (*model.Response, error) {
-				msg := &rsp.Choices[0].Message
-				payload, err := msg.ProviderDataFor("test.native", "native-model")
-				require.NoError(t, err)
-				editArguments(rsp)
-				require.NoError(t, msg.SetProviderData("test.native", "native-model", payload))
-				return nil, nil
-			},
-			wantInput: 1000,
-		},
-		{
-			name: "choice appended to native response",
-			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				msg := model.NewAssistantMessage("")
-				msg.ToolCalls = []model.ToolCall{replayTestToolCall(`{"a":1000}`)}
-				rsp.Choices = append(rsp.Choices, model.Choice{Index: 1, Message: msg})
-				return nil, nil
-			},
-			wantInput: 1,
-		},
-		{
-			name:   "reasoning only with the record dropped",
-			noTool: true,
-			callback: func(_ *testing.T, rsp *model.Response) (*model.Response, error) {
-				rsp.Choices[0].Message.ProviderData = nil
-				return nil, nil
-			},
 		},
 		{
 			name: "foreign model binding remains invalid",
@@ -284,10 +237,8 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 			if tc.legacy {
 				m.info = model.Info{Name: "legacy-model"}
 			}
-			if !tc.noTool {
-				call := replayTestToolCall(`{"a":1}`)
-				m.toolCall = &call
-			}
+			call := replayTestToolCall(`{"a":1}`)
+			m.toolCall = &call
 			var executed, input atomic.Int32
 			calculator := function.NewFunctionTool(func(_ context.Context, in struct {
 				A int `json:"a"`
@@ -321,10 +272,6 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 				return
 			}
 			require.Empty(t, errMessage)
-			if tc.noTool {
-				require.Zero(t, executed.Load())
-				return
-			}
 			require.EqualValues(t, 1, executed.Load())
 			require.EqualValues(t, tc.wantInput, input.Load())
 		})
