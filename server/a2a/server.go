@@ -141,6 +141,7 @@ func buildProcessor(
 			adkCompatibility:          options.adkCompatibility,
 			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
 			streamingEventType:        options.streamingEventType,
+			streamingMessageDeltaOnly: options.streamingMessageDeltaOnly,
 			eventPartMappers:          options.eventPartMappers,
 		}
 	} else if len(options.eventPartMappers) > 0 {

@@ -130,6 +130,7 @@ type defaultEventToA2AMessage struct {
 	adkCompatibility          bool
 	graphEventObjectAllowlist []string
 	streamingEventType        StreamingEventType
+	streamingMessageDeltaOnly bool
 	eventPartMappers          []EventToA2APartMapper
 }
 
@@ -568,7 +569,9 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	choice := event.Response.Choices[0]
 	parts := c.buildTextParts(choice.Delta)
 	usesSnapshot := false
-	if !event.Response.IsPartial {
+	deltaOnly := c.streamingEventType == StreamingEventTypeMessage &&
+		c.streamingMessageDeltaOnly
+	if !event.Response.IsPartial && !deltaOnly {
 		if messageParts := c.buildTextParts(choice.Message); len(messageParts) > 0 {
 			parts = messageParts
 			usesSnapshot = true

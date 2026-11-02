@@ -391,6 +391,7 @@ type options struct {
 	graphEventObjectAllowlist []string
 	responseRewriter          ResponseRewriter
 	streamingEventType        StreamingEventType
+	streamingMessageDeltaOnly bool
 	agentCard                 *a2a.AgentCard
 	processorBuilder          ProcessorBuilder
 	processorHook             ProcessMessageHook
@@ -660,6 +661,24 @@ func WithADKCompatibility(enabled bool) Option {
 func WithStreamingEventType(eventType StreamingEventType) Option {
 	return func(opts *options) {
 		opts.streamingEventType = eventType
+	}
+}
+
+// WithStreamingMessageDeltaOnly controls whether streaming Message text and
+// reasoning are taken only from choice.Delta, without using choice.Message
+// for non-partial events. The default is false, which also emits complete
+// message text and reasoning when available.
+//
+// This compatibility option requires StreamingEventTypeMessage and the default
+// event converter. When enabled, responses with text only in choice.Message
+// produce no text parts, even if no deltas preceded them. Metadata emission
+// follows the existing rules: if no parts remain and the only metadata is
+// llm_response_id, the entire event is omitted. Event part mappers, tool calls,
+// code execution, and task status updates are unaffected.
+// It has no effect on unary responses, artifact streaming, or custom converters.
+func WithStreamingMessageDeltaOnly(enabled bool) Option {
+	return func(opts *options) {
+		opts.streamingMessageDeltaOnly = enabled
 	}
 }
 
