@@ -2016,6 +2016,9 @@ func WithMessageBranchFilterMode(mode string) Option {
 // where ordinary previous-turn reasoning_content may be omitted, but tool-call
 // reasoning_content must be replayed in later turns.
 //
+// This option changes message reasoning fields, not a native Replay payload.
+// A native adapter may therefore still send reasoning retained in Replay.
+//
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from
 //     ordinary previous requests, keep for the current request and previous

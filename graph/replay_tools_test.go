@@ -63,13 +63,16 @@ func (m *nativeToolModel) Info() model.Info {
 	return model.Info{Name: "native-model", ReplayProtocol: "test.native"}
 }
 
-func TestGraphToolsNodeDoesNotRunCallbackEditedNativeCalls(t *testing.T) {
+func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		edit bool
+		name       string
+		edit       bool
+		dropReplay bool
+		wantInput  int32
 	}{
-		{name: "unchanged"},
-		{name: "edited with the record dropped", edit: true},
+		{name: "unchanged", wantInput: 1},
+		{name: "edited with the record retained", edit: true, wantInput: 1000},
+		{name: "edited with the record dropped", edit: true, dropReplay: true, wantInput: 1000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var executed, input atomic.Int32
@@ -89,7 +92,9 @@ func TestGraphToolsNodeDoesNotRunCallbackEditedNativeCalls(t *testing.T) {
 			) (*model.Response, error) {
 				if tc.edit && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0 {
 					rsp.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"a":1000}`)
-					rsp.Choices[0].Message.Replay = nil
+					if tc.dropReplay {
+						rsp.Choices[0].Message.Replay = nil
+					}
 				}
 				return nil, nil
 			})
@@ -116,14 +121,9 @@ func TestGraphToolsNodeDoesNotRunCallbackEditedNativeCalls(t *testing.T) {
 				}
 			}
 
-			if tc.edit {
-				require.Contains(t, errMessage, "was removed")
-				require.Zero(t, executed.Load(), "an edited native tool call must not be executed")
-				return
-			}
 			require.Empty(t, errMessage)
 			require.EqualValues(t, 1, executed.Load())
-			require.EqualValues(t, 1, input.Load())
+			require.Equal(t, tc.wantInput, input.Load())
 			require.Equal(t, 2, llm.calls)
 		})
 	}

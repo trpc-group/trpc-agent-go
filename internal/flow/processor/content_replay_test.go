@@ -140,7 +140,7 @@ func toolCallIDOccurrences(messages []model.Message) map[string]int {
 	return counts
 }
 
-func TestContentRequestProcessor_NativeRecordProjectionIsReadOnly(t *testing.T) {
+func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) {
 	textMessage := testTextMessage(t, true, "checking")
 	textMessage.ReasoningContent = "opaque reasoning"
 	textMessage.ReasoningSignature = "signature"
@@ -150,8 +150,8 @@ func TestContentRequestProcessor_NativeRecordProjectionIsReadOnly(t *testing.T) 
 		WithReasoningContentMode(ReasoningContentModeDiscardAll),
 	)
 	got := processor.processReasoningContent(textMessage, "old", "new", false)
-	require.Equal(t, textMessage.ReasoningContent, got.ReasoningContent)
-	require.Equal(t, textMessage.ReasoningSignature, got.ReasoningSignature)
+	require.Empty(t, got.ReasoningContent)
+	require.Empty(t, got.ReasoningSignature)
 	requireTestReplay(t, got)
 
 	projector := NewContentRequestProcessor(
@@ -165,9 +165,41 @@ func TestContentRequestProcessor_NativeRecordProjectionIsReadOnly(t *testing.T) 
 		}),
 	)
 	projected := projector.projectEventMessage(nil, event.Event{}, textMessage)
-	_, err := projected.ReplayDataFor(testReplayProvider, testReplayModel)
-	require.ErrorContains(t, err, "projection changed",
-		"a projector rewrite of a native record must be rejected, not replayed")
+	require.Equal(t, "rewritten", projected.Content)
+	requireTestReplay(t, projected)
+
+	clearingProjector := NewContentRequestProcessor(
+		WithEventMessageProjector(func(
+			_ *agent.Invocation,
+			_ event.Event,
+			msg model.Message,
+		) model.Message {
+			msg.Replay = nil
+			return msg
+		}),
+	)
+	cleared := clearingProjector.projectEventMessage(nil, event.Event{}, textMessage)
+	require.Nil(t, cleared.Replay, "a projector may deliberately clear native replay")
+	requireTestReplay(t, textMessage)
+
+	const replacement = `{"version":2,"provider":"openai.responses","model":"test-model","payload":[{"type":"message","content":"replacement"}]}`
+	rebindingProjector := NewContentRequestProcessor(
+		WithEventMessageProjector(func(
+			_ *agent.Invocation,
+			_ event.Event,
+			msg model.Message,
+		) model.Message {
+			if err := json.Unmarshal([]byte(replacement), msg.Replay); err != nil {
+				t.Fatal(err)
+			}
+			return msg
+		}),
+	)
+	rebound := rebindingProjector.projectEventMessage(nil, event.Event{}, textMessage)
+	reboundPayload, err := rebound.ReplayDataFor(testReplayProvider, testReplayModel)
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"type":"message","content":"replacement"}]`, string(reboundPayload))
+	requireTestReplay(t, textMessage)
 
 	replayOnly := testTextMessage(t, true, "")
 	inv := agent.NewInvocation(agent.WithInvocationID("inv1"))

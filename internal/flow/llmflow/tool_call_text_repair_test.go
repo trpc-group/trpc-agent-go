@@ -483,6 +483,23 @@ func TestRepairToolCallTextDisabledPaths(t *testing.T) {
 	require.False(t, processor.repairToolCallText(resp))
 }
 
+func TestRepairToolCallTextSkipsNativeReplay(t *testing.T) {
+	content := "<tool_call>exec_command" +
+		"<arg_key>command</arg_key>" +
+		"<arg_value>echo native</arg_value>" +
+		"</tool_call>"
+	msg := model.NewAssistantMessage(content)
+	require.NoError(t, msg.SetReplayData("test.native", "native-model", json.RawMessage(`[]`)))
+	response := &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}
+	req := &model.Request{Tools: map[string]tool.Tool{
+		"exec_command": textRepairTool{name: "exec_command"},
+	}}
+
+	require.False(t, repairResponseToolCallTextInPlace(context.Background(), req, response))
+	require.Equal(t, content, response.Choices[0].Message.Content)
+	require.Empty(t, response.Choices[0].Message.ToolCalls)
+}
+
 func TestRepairToolCallTextAndStatsCountsRepairedToolResponse(t *testing.T) {
 	t.Parallel()
 

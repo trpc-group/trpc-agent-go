@@ -2718,12 +2718,8 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	currentRequestID string,
 	requestHasToolCalls bool,
 ) model.Message {
-	// A native replay is an immutable output unit. Reasoning policy applies to
-	// the legacy Chat projection only; changing either projection field would
-	// make a valid native record fail its integrity check.
-	if msg.Replay != nil {
-		return msg
-	}
+	// Reasoning content is a display projection. Changing it does not rewrite a
+	// native replay payload.
 	// Only process assistant messages with reasoning content.
 	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
 		return msg
@@ -2757,14 +2753,13 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	if p == nil || p.EventMessageProjector == nil {
 		return msg
 	}
-	projected := p.EventMessageProjector(inv, evt, msg)
+	projectorInput := msg
 	if msg.Replay != nil {
-		// Keep the original record attached even if a custom projector rewrites
-		// its Message projection. Request validation then reports the mismatch
-		// instead of silently falling back to stale native output.
-		projected.Replay = msg.Replay
+		// A projector may intentionally replace or clear the record. Give it an
+		// isolated copy so in-place decoding cannot mutate the source event.
+		projectorInput = modelreplay.CloneMessage(msg)
 	}
-	return projected
+	return p.EventMessageProjector(inv, evt, projectorInput)
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.

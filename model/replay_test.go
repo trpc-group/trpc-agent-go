@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,8 +82,7 @@ func TestReplayDataSurvivesMessageJSON(t *testing.T) {
 }
 
 func TestReplayDataReadsV1HistoryFixture(t *testing.T) {
-	// Keep this fixture and its fingerprint fixed. Generating both with the
-	// current encoder would miss changes that invalidate persisted v1 history.
+	// Keep this old record fixed to verify v1 remains readable.
 	stored, err := os.ReadFile("testdata/replay_v1.json")
 	require.NoError(t, err)
 	var restored Message
@@ -95,10 +93,20 @@ func TestReplayDataReadsV1HistoryFixture(t *testing.T) {
 	projection := restored
 	projection.Replay = nil
 	require.Equal(t, replayTestMessage(), projection)
+	restored.Content = "edited display text"
+	restored.ToolCalls[0].Function.Arguments = json.RawMessage(`{"record":2}`)
+	payload, err = restored.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.NoError(t, err, "the legacy fingerprint does not constrain edits")
+	require.JSONEq(t, string(replayTestPayload()), string(payload))
 
 	encoded, err := json.Marshal(restored)
 	require.NoError(t, err)
-	require.JSONEq(t, string(stored), string(encoded))
+	var storedMessage map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &storedMessage))
+	var storedReplay map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(storedMessage["replay"], &storedReplay))
+	require.JSONEq(t, `2`, string(storedReplay["version"]))
+	require.NotContains(t, storedReplay, "projection_sha256")
 	var roundTrip Message
 	require.NoError(t, json.Unmarshal(encoded, &roundTrip))
 	replayed, err := roundTrip.ReplayDataFor(replayTestProtocol, replayTestModel)
@@ -106,11 +114,28 @@ func TestReplayDataReadsV1HistoryFixture(t *testing.T) {
 	require.JSONEq(t, string(payload), string(replayed))
 }
 
-func TestReplayDataRejectsProjectionEdits(t *testing.T) {
+func TestReplayDataReadsV1MultimodalHistoryFixture(t *testing.T) {
+	stored, err := os.ReadFile("testdata/replay_v1_multimodal.json")
+	require.NoError(t, err)
+	var restored Message
+	require.NoError(t, json.Unmarshal(stored, &restored))
+	payload, err := restored.ReplayDataFor("test.multimodal", "fixture-model")
+	require.NoError(t, err)
+	require.JSONEq(t,
+		`[{"type":"message","id":"msg_1","content":"synthetic fixture"}]`,
+		string(payload),
+	)
+	if len(restored.ContentParts) > 0 && restored.ContentParts[0].Text != nil {
+		*restored.ContentParts[0].Text = "edited display"
+	}
+	_, err = restored.ReplayDataFor("test.multimodal", "fixture-model")
+	require.NoError(t, err)
+}
+
+func TestReplayDataAllowsProjectionEdits(t *testing.T) {
 	tests := map[string]func(*Message){
 		"text":      func(m *Message) { m.Content = "edited" },
 		"reasoning": func(m *Message) { m.ReasoningContent = "edited" },
-		"role":      func(m *Message) { m.Role = RoleUser },
 		"call name": func(m *Message) { m.ToolCalls[0].Function.Name = "different" },
 		"arguments with same call id": func(m *Message) {
 			m.ToolCalls[0].Function.Arguments = json.RawMessage(`{"record":2}`)
@@ -126,17 +151,39 @@ func TestReplayDataRejectsProjectionEdits(t *testing.T) {
 			msg := replayTestMessage()
 			require.NoError(t, msg.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
 			edit(&msg)
-			_, err := msg.ReplayDataFor(replayTestProtocol, replayTestModel)
-			require.ErrorContains(t, err, "projection changed")
-			// Persistence must not bless edits by recalculating the binding.
+			payload, err := msg.ReplayDataFor(replayTestProtocol, replayTestModel)
+			require.NoError(t, err)
+			require.JSONEq(t, string(replayTestPayload()), string(payload))
 			encoded, err := json.Marshal(msg)
 			require.NoError(t, err)
 			var restored Message
 			require.NoError(t, json.Unmarshal(encoded, &restored))
-			_, err = restored.ReplayDataFor(replayTestProtocol, replayTestModel)
-			require.ErrorContains(t, err, "projection changed")
+			payload, err = restored.ReplayDataFor(replayTestProtocol, replayTestModel)
+			require.NoError(t, err)
+			require.JSONEq(t, string(replayTestPayload()), string(payload))
 		})
 	}
+}
+
+func TestReplayDataRejectsNonAssistantRole(t *testing.T) {
+	msg := replayTestMessage()
+	require.NoError(t, msg.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
+	msg.Role = RoleUser
+	_, err := msg.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.ErrorContains(t, err, "replay data requires an assistant message")
+}
+
+func TestReplayDataV1DoesNotRequireProjectionHash(t *testing.T) {
+	var restored ReplayData
+	require.NoError(t, json.Unmarshal([]byte(
+		`{"version":1,"provider":"test.responses","model":"reasoning-model","payload":[]}`,
+	), &restored))
+	encoded, err := json.Marshal(restored)
+	require.NoError(t, err)
+	require.JSONEq(t,
+		`{"version":2,"provider":"test.responses","model":"reasoning-model","payload":[]}`,
+		string(encoded),
+	)
 }
 
 func TestReplayDataRejectsAnotherProducer(t *testing.T) {
@@ -209,7 +256,7 @@ func TestReplayDataRejectsUnsupportedPersistentFormat(t *testing.T) {
 	require.NoError(t, json.Unmarshal(encoded, &stored))
 	var record map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(stored["replay"], &record))
-	record["version"] = json.RawMessage(`2`)
+	record["version"] = json.RawMessage(`3`)
 	stored["replay"], err = json.Marshal(record)
 	require.NoError(t, err)
 	encoded, err = json.Marshal(stored)
@@ -238,25 +285,17 @@ func TestReplayDataRejectsCorruptRecords(t *testing.T) {
 
 	unencodable := replayTestMessage()
 	unencodable.ToolCalls[0].ExtraFields = map[string]any{"bad": func() {}}
-	require.ErrorContains(t,
+	require.NoError(t,
 		unencodable.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()),
-		"encode replay message projection")
-	require.Nil(t, unencodable.Replay)
-
-	msg := replayTestMessage()
-	require.NoError(t, msg.SetReplayData(replayTestProtocol, replayTestModel, replayTestPayload()))
-	msg.ToolCalls[0].ExtraFields = map[string]any{"bad": func() {}}
-	_, err = msg.ReplayDataFor(replayTestProtocol, replayTestModel)
-	require.ErrorContains(t, err, "encode replay message projection")
+		"editable projections do not participate in replay record encoding")
+	_, err = unencodable.ReplayDataFor(replayTestProtocol, replayTestModel)
+	require.NoError(t, err)
 
 	for name, record := range map[string]string{
-		"not an object":    `"record"`,
-		"missing identity": `{"version":1,"provider":"","model":"m","payload":[],"projection_sha256":"00"}`,
-		"scalar payload": `{"version":1,"provider":"p","model":"m","payload":"text",` +
-			`"projection_sha256":"` + strings.Repeat("0", 64) + `"}`,
-		"short fingerprint": `{"version":1,"provider":"p","model":"m","payload":[],"projection_sha256":"00"}`,
-		"non-hex fingerprint": `{"version":1,"provider":"p","model":"m","payload":[],` +
-			`"projection_sha256":"` + strings.Repeat("z", 64) + `"}`,
+		"not an object":        `"record"`,
+		"missing identity":     `{"version":1,"provider":"","model":"m","payload":[]}`,
+		"scalar payload":       `{"version":1,"provider":"p","model":"m","payload":"text"}`,
+		"invalid json payload": `{"version":2,"provider":"p","model":"m","payload":{broken}}`,
 	} {
 		var restored ReplayData
 		require.Error(t, json.Unmarshal([]byte(record), &restored), name)
@@ -274,7 +313,7 @@ func TestSimpleTokenCounterAccountsForNativeReplay(t *testing.T) {
 	require.Greater(t, tokens, 1, "opaque-only history must not appear to consume zero context")
 	msg.Content = "changed"
 	_, err = counter.CountTokensRange(context.Background(), []Message{msg}, 0, 1)
-	require.ErrorContains(t, err, "projection changed")
+	require.NoError(t, err, "display edits do not invalidate native replay")
 }
 
 func TestTokenTailoringPreservesNativeRecordsWithoutText(t *testing.T) {

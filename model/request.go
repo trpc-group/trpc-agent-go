@@ -87,10 +87,11 @@ type Message struct {
 	// Currently used by AWS Bedrock (Claude) models.
 	ReasoningSignature string `json:"reasoning_signature,omitempty"`
 	// Replay preserves a provider-native completion as an indivisible history unit.
-	// The remaining fields are its display and tool-execution projection. A
-	// provider must validate that projection with ReplayDataFor before replaying
-	// it. Clear Replay explicitly when intentionally creating a new context from
-	// edited content; doing so cannot resume an in-progress native tool turn.
+	// It determines the next native request independently of editable display
+	// fields and ToolCalls, which determine current local tool execution. These
+	// representations are not automatically synchronized. Providers must check
+	// the record's protocol and model with ReplayDataFor before replaying it.
+	// Clearing Replay from an unfinished native tool round may prevent recovery.
 	Replay *ReplayData `json:"replay,omitempty"`
 }
 

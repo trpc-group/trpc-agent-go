@@ -138,6 +138,10 @@ func TestRunnerNativeToolLoopSurvivesSQLiteReopen(t *testing.T) {
 }
 
 func assertToolReplayInput(t *testing.T, raw json.RawMessage) {
+	assertToolReplayInputWithOutput(t, raw, "2")
+}
+
+func assertToolReplayInputWithOutput(t *testing.T, raw json.RawMessage, expectedOutput string) {
 	t.Helper()
 	var input []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(raw, &input))
@@ -151,7 +155,7 @@ func assertToolReplayInput(t *testing.T, raw json.RawMessage) {
 		}
 		if string(item["type"]) == `"function_call_output"` {
 			require.Equal(t, `"call_tool"`, string(item["call_id"]))
-			require.Equal(t, `"2"`, string(item["output"]))
+			require.JSONEq(t, `"`+expectedOutput+`"`, string(item["output"]))
 			outputIndex = i
 		}
 	}
@@ -266,39 +270,6 @@ func TestRunnerRejectsInconsistentEmptyCompletionWithoutToolSideEffects(t *testi
 			require.NotEqual(t, model.RoleTool, choice.Delta.Role)
 		}
 	}
-}
-
-func TestRunnerRejectsCallbackEditsBeforeToolExecution(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var toolCalls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"resp_tool","status":"completed","output":`+nativeToolOutput+`}`)
-	}))
-	defer srv.Close()
-	callbacks := model.NewCallbacks().RegisterAfterModel(func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
-		if args.Response != nil && len(args.Response.Choices) > 0 {
-			msg := &args.Response.Choices[0].Message
-			if len(msg.ToolCalls) > 0 {
-				msg.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":999}`)
-			}
-		}
-		return nil, nil
-	})
-	a := llmagent.New("native", llmagent.WithModel(New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))),
-		llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}), llmagent.WithModelCallbacks(callbacks))
-	r := runner.NewRunner("native", a)
-	defer r.Close()
-	var sawError bool
-	for _, evt := range runIntegration(t, r, ctx, "calculate") {
-		if evt.Error != nil {
-			require.Contains(t, evt.Error.Message, "projection changed")
-			sawError = true
-		}
-	}
-	require.True(t, sawError)
-	require.Zero(t, toolCalls.Load())
 }
 
 func TestRunnerNativeHistoryThroughRoutingWrappers(t *testing.T) {

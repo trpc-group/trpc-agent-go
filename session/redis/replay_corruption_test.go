@@ -12,7 +12,6 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -103,13 +102,6 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 			},
 			wantErrMsg: "unsupported replay data version 99",
 		},
-		{
-			name: "invalid fingerprint encoding",
-			mutate: func(_ *testing.T, replay map[string]json.RawMessage) {
-				replay["projection_sha256"] = json.RawMessage(`"not-a-sha256"`)
-			},
-			wantErrMsg: "invalid replay message fingerprint",
-		},
 	}
 
 	for _, storage := range replayCorruptionStorages {
@@ -134,7 +126,7 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 	}
 }
 
-func TestRedisSessionGetSessionDefersValidFingerprintMismatchToReplayValidation(t *testing.T) {
+func TestRedisSessionGetSessionIgnoresLegacyReplayFingerprint(t *testing.T) {
 	for _, storage := range replayCorruptionStorages {
 		t.Run(storage.name, func(t *testing.T) {
 			fixture := newReplayCorruptionFixture(t, storage)
@@ -143,13 +135,7 @@ func TestRedisSessionGetSessionDefersValidFingerprintMismatchToReplayValidation(
 				t *testing.T,
 				replay map[string]json.RawMessage,
 			) {
-				var current string
-				require.NoError(t, json.Unmarshal(replay["projection_sha256"], &current))
-				replacement := strings.Repeat("0", 64)
-				if replacement == current {
-					replacement = strings.Repeat("1", 64)
-				}
-				replay["projection_sha256"], _ = json.Marshal(replacement)
+				replay["projection_sha256"] = json.RawMessage(`"not-a-sha256"`)
 			})
 
 			got, err := fixture.service.GetSession(fixture.ctx, fixture.key)
@@ -167,7 +153,11 @@ func TestRedisSessionGetSessionDefersValidFingerprintMismatchToReplayValidation(
 				replayCorruptionProvider,
 				replayCorruptionModel,
 			)
-			require.ErrorContains(t, err, "message projection changed after native replay data was bound")
+			require.NoError(t, err, "legacy projection fingerprints are ignored by the v2 record semantics")
+			assertReplayCorruptionPayload(t,
+				replayCorruptionMessage(t, byID[replayOnlyEventID]),
+				fixture.expectedPayload[replayOnlyEventID],
+			)
 		})
 	}
 }

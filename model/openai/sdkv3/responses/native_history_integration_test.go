@@ -141,17 +141,17 @@ func TestNativeToolHistoryRetainsArguments(t *testing.T) {
 	}
 }
 
-func TestGraphNativeHistoryRejectsMissingResultsAndEdits(t *testing.T) {
+func TestGraphNativeHistoryValidatesPairingAndUsesReplayAfterToolCallEdit(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		edit bool
-		want string
+		name      string
+		edit      bool
+		wantError bool
 	}{
-		{name: "missing result", want: "has no tool result"},
-		{name: "edited arguments", edit: true, want: "projection changed"},
+		{name: "missing result", wantError: true},
+		{name: "edited tool arguments keep native input", edit: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _, modelCalls := nativeHistoryModel(t, `{"a":1}`)
+			m, requests, modelCalls := nativeHistoryModel(t, `{"a":1}`)
 			msg := model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
 				Type: "function", ID: "call_native",
 				Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
@@ -180,9 +180,35 @@ func TestGraphNativeHistoryRejectsMissingResultsAndEdits(t *testing.T) {
 				}
 			}
 			require.NoError(t, ctx.Err())
-			require.NotEmpty(t, errors)
-			require.Contains(t, errors[0], tc.want)
-			require.Zero(t, modelCalls.Load(), "invalid history must fail before HTTP")
+			if tc.wantError {
+				require.NotEmpty(t, errors)
+				require.Contains(t, errors[0], "has no tool result")
+				require.Zero(t, modelCalls.Load(), "incomplete native history must fail before HTTP")
+				return
+			}
+			require.Empty(t, errors)
+			require.EqualValues(t, 1, modelCalls.Load())
+			var input []struct {
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Arguments string `json:"arguments"`
+				Output    string `json:"output"`
+			}
+			require.NoError(t, json.Unmarshal((<-requests)["input"], &input))
+			var sawCall, sawResult bool
+			for _, item := range input {
+				switch item.Type {
+				case "function_call":
+					sawCall = true
+					require.Equal(t, `{"a":1}`, item.Arguments, "Graph must send authoritative native Replay")
+				case "function_call_output":
+					sawResult = true
+					require.Equal(t, "call_native", item.CallID)
+					require.Equal(t, "2", item.Output)
+				}
+			}
+			require.True(t, sawCall)
+			require.True(t, sawResult)
 		})
 	}
 }

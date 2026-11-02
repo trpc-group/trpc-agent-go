@@ -1008,7 +1008,6 @@ func (p *streamingResponseProcessor) process(
 	)
 	p.updateMetricsState()
 	trackModelResponseTelemetry(response, p.tracker)
-	replayGuard := modelreplay.GuardResponse(response)
 	callbackTimingAttachment := responseusage.AttachTimingForCallback(
 		response,
 		p.timingInfo,
@@ -1039,7 +1038,7 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
-	if err := replayGuard.Validate(response, p.producerInfo); err != nil {
+	if err := modelreplay.ValidateResponse(response, p.producerInfo); err != nil {
 		*p.err = err
 		responseErr = err
 		return false
@@ -1228,7 +1227,7 @@ func responseMayContainTextToolCall(response *model.Response) bool {
 	}
 	for i := range response.Choices {
 		msg := &response.Choices[i].Message
-		if msg.Role != model.RoleAssistant {
+		if msg.Role != model.RoleAssistant || msg.Replay != nil {
 			continue
 		}
 		text, ok := repairableMessageText(msg)

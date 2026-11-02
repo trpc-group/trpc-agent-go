@@ -105,18 +105,72 @@ requests encrypted reasoning so stateless continuation can retain provider
 state. Additional include names are unioned with that required item and cannot
 replace it.
 
-The other `Message` fields are read-only projections for UI and local tool
-execution. The framework records a fingerprint when binding native output;
-editing text, roles, tool names, or arguments invalidates that binding, even
-after JSON persistence. This detects inconsistent edits; it is not an
-authentication signature. Applications should treat replay data as sensitive
-conversation state despite its opaque encoding.
+`Replay` is the authoritative native payload for the next model request.
+`Content` and `ReasoningContent` are editable display fields; changing them
+does not change Replay. `ToolCalls` is the framework's instruction for local
+tool execution. Changing its arguments affects the current execution, but does
+not rewrite the native function-call item sent on the next request. The tool
+result is still paired by call ID. If the display, native payload, and tool
+arguments should agree, update the fields and payload explicitly; the
+framework does not synchronize them.
 
-Replay v1 uses a fixed encoding for its message projection, including nested
-content parts and tool-call data. This release keeps the persisted replay
-format and fingerprint unchanged. If a future field can affect replay or tool
-execution, define its binding explicitly and version the binding when needed;
-serializing every `Message` field does not automatically change v1.
+For example, redacting only the displayed text leaves the original native
+payload unchanged in Replay and session storage:
+
+```go
+message.Content = "[redacted]"
+message.ReasoningContent = ""
+```
+
+To change native state, read it, edit the supported JSON item while retaining
+opaque fields, then bind the new payload with the existing API. Assume
+`message`, `modelName`, and the `encoding/json` import are in scope:
+
+```go
+payload, err := message.ReplayDataFor("openai.responses", modelName)
+if err != nil {
+    return err
+}
+var items []map[string]json.RawMessage
+if err := json.Unmarshal(payload, &items); err != nil {
+    return err
+}
+for _, item := range items {
+    var itemType string
+    if err := json.Unmarshal(item["type"], &itemType); err != nil {
+        return err
+    }
+    if itemType == "function_call" {
+        arguments, err := json.Marshal(`{"a":2}`)
+        if err != nil {
+            return err
+        }
+        item["arguments"] = arguments
+    }
+}
+payload, err = json.Marshal(items)
+if err != nil {
+    return err
+}
+if err := message.SetReplayData("openai.responses", modelName, payload); err != nil {
+    return err
+}
+```
+
+That example changes the next request's native arguments; it does not change
+the current `ToolCalls` execution arguments. Edit `ToolCalls` separately when
+the current local execution should use the same arguments. Before-tool
+callbacks receive detached execution arguments, so changing them affects the
+tool call but does not rewrite Replay. Treat Replay as sensitive conversation
+state: redacting `Content` alone does not redact the native payload or remove
+the original text from persisted history.
+
+Replay v2 writes no projection fingerprint. Its reader accepts v1 records and
+ignores their legacy projection hash. Protocol, configured model, replay
+version, native item schema, and call/result integrity are still validated.
+`ReplayDataFor` returns the native payload despite edits to display or tool
+projections, provided the record is structurally valid and belongs to the
+requested protocol and configured model.
 
 Persisted replay metadata with an unsupported version or invalid format must
 not be silently dropped. Redis readers return decoding errors when they can
@@ -158,26 +212,23 @@ agent can therefore consume a native agent's output as ordinary context, which
 is a semantic rebase rather than a native continuation. With
 `WithPreserveForeignMessages(true)`, foreign records keep their roles and
 replay state, so only agents that consume the same protocol and model can use
-them. Custom event projectors cannot remove replay state; rewriting a native
-record fails validation instead of silently choosing between two
-representations. Do not clear replay on pending tool turns.
+them. Custom event projectors cannot remove Replay from an unfinished native
+tool round and still rely on recovery; the framework does not promise recovery
+after Replay is removed from a pending round.
 
 LLM flows and Graph LLM nodes validate `model.Info.ReplayProtocol` and the
 configured model name before handing native history to an adapter. Another
 model or a legacy adapter is rejected; wrappers must forward `Info` correctly.
-Both also validate a native response after model callbacks and argument
-repair, before it is emitted, stored, or used to execute tools. After-model
-callbacks and plugins may observe a native response, but editing, rebinding,
-moving, dropping, or replacing its native records fails the call before any
-tool runs. Adding or removing choices is also rejected. Return an error from
-the callback to block such a response. Before-model callbacks receive detached
-native history projections: edits to those projections leave the stored native
-records and Graph input unchanged, and retaining Replay on an edited projection
-rejects the request. Before-tool callbacks receive separate execution
-arguments, so in-place edits and `ModifiedArguments` can affect the tool without
-rewriting the original native call or its replay binding. The next model request
-retains the original call and pairs its result with the same call ID. Legacy
-responses keep the existing callback override behavior. Graph state
+Both allow callbacks to replace or edit a valid response, including rebinding
+its Replay data with `SetReplayData`. The resulting `ToolCalls` determine
+current local execution and Replay determines subsequent wire input. Native
+item structure and call/result pairing remain validated. Before-model
+callbacks receive detached history copies: edits to their `ToolCalls` or
+display fields do not rewrite Replay or stored session records. Before-tool
+callbacks receive separate execution arguments, so in-place edits and
+`ModifiedArguments` affect the current tool call without rewriting Replay. The
+next model request sends Replay and pairs the result with the same call ID.
+Legacy responses keep the existing callback override behavior. Graph state
 copies, checkpoints, and cache keys preserve native records. Direct callers of
 other adapters must also avoid passing native records they cannot consume. A
 switch to another endpoint using the same model name is the application's
@@ -191,9 +242,11 @@ representation.
 
 With `agent.WithResume(true)`, a pending native tool response is validated
 against the first selected model before any of its tools execute. Resume and
-the following model request share that selection. Edited projections or a
-different protocol/configured model name fail before tool execution. Legacy
-Chat recovery keeps its existing execution order.
+the following model request share that selection. A `ToolCalls` edit can
+change the resumed execution arguments; the following request still sends the
+saved Replay payload. A different protocol or configured model name fails
+before tool execution. Legacy Chat recovery keeps its existing execution
+order.
 
 The existing resume mechanism only handles a final persisted assistant event
 containing tool calls. It does not scan earlier events for missing results.
@@ -231,9 +284,11 @@ the unknown replay field. Do not route native sessions through older writers;
 readers that reject unknown JSON fields also need to be upgraded first.
 Retaining unknown fields inside a native payload does not make a new native
 item type compatible with old readers, even when the replay format version is
-unchanged. Upgrade every reader and writer that handles replay-bearing history
-before enabling a feature that emits a new item type. An older binary may strip
-replay state, so resuming that history with the old binary cannot be promised.
+unchanged. The v2 reader accepts v1 records, but v1 readers expect the legacy
+projection hash and may reject v2 records written without it. Upgrade every
+reader and writer that can access the same replay-bearing sessions before
+enabling v2 writers. An older binary may strip replay state, so resuming that
+history with the old binary cannot be promised.
 
 This adapter requires a root module version containing `Message.Replay` and
 `Info.ReplayProtocol`. Repository-relative `replace` directives support local

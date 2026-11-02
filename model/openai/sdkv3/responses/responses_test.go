@@ -115,7 +115,7 @@ func TestReplayItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	require.JSONEq(t, `{"type":"function_call_output","call_id":"call_1","output":"2"}`, string(got[6]))
 }
 
-func TestReplayRejectsProjectionEditsAndUnsupportedItems(t *testing.T) {
+func TestReplayPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.T) {
 	resp := decodeResponse(t, `{"id":"r","status":"completed","output":[`+
 		`{"type":"function_call","id":"fc_1","status":"completed","call_id":"call_1","name":"f","arguments":"{}"},`+
 		`{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}]}`)
@@ -123,17 +123,45 @@ func TestReplayRejectsProjectionEditsAndUnsupportedItems(t *testing.T) {
 	require.NoError(t, err)
 	message := projected.Choices[0].Message
 	message.ToolCalls[0].Function.Arguments = []byte(`{"edited":true}`)
-	_, err = convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")}, "gpt-5")
-	require.ErrorContains(t, err, "projection changed")
-
-	message = projected.Choices[0].Message
 	message.Content = "edited"
-	_, err = convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")}, "gpt-5")
-	require.ErrorContains(t, err, "projection changed")
+	items, err := convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")}, "gpt-5")
+	require.NoError(t, err)
+	encoded, err := json.Marshal(items)
+	require.NoError(t, err)
+	require.JSONEq(t, `[`+
+		`{"type":"function_call","id":"fc_1","status":"completed","call_id":"call_1","name":"f","arguments":"{}"},`+
+		`{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]},`+
+		`{"type":"function_call_output","call_id":"call_1","output":"ok"}]`, string(encoded))
 
 	unsupported := decodeResponse(t, `{"id":"r","status":"completed","output":[{"type":"tool_search_call","id":"ts_1","status":"completed"}]}`)
 	_, err = projectResponse(unsupported, "gpt-5")
 	require.ErrorContains(t, err, "unsupported native item type")
+}
+
+func TestReplayCanBeReboundAndStillValidatesItsProducerAndShape(t *testing.T) {
+	msg := model.NewAssistantMessage("display projection")
+	payload := json.RawMessage(`[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"native payload"}]}]`)
+	require.NoError(t, msg.SetReplayData(responseProvider, "gpt-5", payload))
+	got, err := msg.ReplayDataFor(responseProvider, "gpt-5")
+	require.NoError(t, err)
+	require.JSONEq(t, string(payload), string(got))
+
+	_, err = msg.ReplayDataFor("another.protocol", "gpt-5")
+	require.ErrorContains(t, err, "belongs to protocol")
+	_, err = msg.ReplayDataFor(responseProvider, "another-model")
+	require.ErrorContains(t, err, "belongs to protocol")
+
+	_, err = convertMessages([]model.Message{func() model.Message {
+		bad := model.NewAssistantMessage("bad native schema")
+		require.NoError(t, bad.SetReplayData(responseProvider, "gpt-5", json.RawMessage(`[{"type":"tool_search_call"}]`)))
+		return bad
+	}()}, "gpt-5")
+	require.ErrorContains(t, err, "unsupported native item type")
+
+	require.Error(t, msg.SetReplayData(responseProvider, "gpt-5", json.RawMessage(`[{`)))
+	got, err = msg.ReplayDataFor(responseProvider, "gpt-5")
+	require.NoError(t, err, "a failed rebind must leave the existing replay record intact")
+	require.JSONEq(t, string(payload), string(got))
 }
 
 func TestOpaqueReasoningAndRefusalAreRetained(t *testing.T) {

@@ -63,6 +63,7 @@ func TestNativeReplaySurvivesSQLiteReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, string(payload), string(replayed))
 	message.Content = "edited after loading"
-	_, err = message.ReplayDataFor("openai.responses", "test-model")
-	require.ErrorContains(t, err, "projection changed")
+	replayed, err = message.ReplayDataFor("openai.responses", "test-model")
+	require.NoError(t, err)
+	require.JSONEq(t, string(payload), string(replayed))
 }

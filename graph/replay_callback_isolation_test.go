@@ -300,7 +300,7 @@ func TestGraphBeforeToolCallbacksKeepLegacyArgumentMutation(t *testing.T) {
 	require.Nil(t, nextCall.Replay)
 }
 
-func TestGraphBeforeModelCallbackCannotMutateCallerNativeHistory(t *testing.T) {
+func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	modelStub := &callbackReplayModelStub{native: true}
@@ -335,17 +335,34 @@ func TestGraphBeforeModelCallbackCannotMutateCallerNativeHistory(t *testing.T) {
 	inv := agent.NewInvocation(agent.WithInvocationID("before-model-replay"))
 	events, err := executor.Execute(ctx, initial, inv)
 	require.NoError(t, err)
-	var guardError string
+	var errorMessage string
 	for evt := range events {
-		if evt != nil && evt.Error != nil && guardError == "" {
-			guardError = evt.Error.Message
+		if evt != nil && evt.Error != nil && errorMessage == "" {
+			errorMessage = evt.Error.Message
 		}
 	}
 	require.NoError(t, ctx.Err())
 	require.EqualValues(t, 1, callbackCalls.Load())
-	require.Contains(t, guardError, "projection", "the edited native request must be rejected before model execution")
-	calls, _ := modelStub.requestSnapshot()
-	require.Zero(t, calls, "a request rejected by the replay guard must not reach the model")
+	require.Empty(t, errorMessage)
+	calls, requests := modelStub.requestSnapshot()
+	require.Equal(t, 1, calls, "the edited projection is accepted by the model")
+	require.Len(t, requests, 1)
+	var sawEditedReplay bool
+	for _, message := range requests[0] {
+		if message.Role != model.RoleAssistant || len(message.ToolCalls) == 0 {
+			continue
+		}
+		sawEditedReplay = true
+		require.Equal(t, []byte(`{"a":9}`), message.ToolCalls[0].Function.Arguments)
+		payload, err := message.ReplayDataFor(callbackReplayProtocol, callbackReplayModel)
+		require.NoError(t, err)
+		require.JSONEq(t,
+			`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`,
+			string(payload),
+			"the native payload remains authoritative for a later model request",
+		)
+	}
+	require.True(t, sawEditedReplay, "the native history message must reach the model")
 
 	originalMessages, ok := initial[gr.StateKeyMessages].([]model.Message)
 	require.True(t, ok)

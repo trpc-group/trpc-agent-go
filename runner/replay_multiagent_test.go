@@ -173,7 +173,7 @@ func replayTestToolCall(arguments string) model.ToolCall {
 	}
 }
 
-func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
+func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 	editArguments := func(rsp *model.Response) {
 		rsp.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"a":1000}`)
 	}
@@ -199,7 +199,7 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				editArguments(rsp)
 				return nil, nil
 			},
-			wantErr: "projection changed",
+			wantInput: 1000,
 		},
 		{
 			name: "edited with the record dropped",
@@ -208,7 +208,7 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				rsp.Choices[0].Message.Replay = nil
 				return nil, nil
 			},
-			wantErr: "was removed",
+			wantInput: 1000,
 		},
 		{
 			name: "replaced without a record",
@@ -217,7 +217,7 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				msg.ToolCalls = []model.ToolCall{replayTestToolCall(`{"a":1000}`)}
 				return &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}, nil
 			},
-			wantErr: "was removed",
+			wantInput: 1000,
 		},
 		{
 			name: "edited and rebound",
@@ -229,7 +229,7 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				require.NoError(t, msg.SetReplayData("test.native", "native-model", payload))
 				return nil, nil
 			},
-			wantErr: "was removed",
+			wantInput: 1000,
 		},
 		{
 			name: "choice appended to native response",
@@ -239,7 +239,7 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				rsp.Choices = append(rsp.Choices, model.Choice{Index: 1, Message: msg})
 				return nil, nil
 			},
-			wantErr: "native response choices were added or removed",
+			wantInput: 1,
 		},
 		{
 			name:   "reasoning only with the record dropped",
@@ -248,7 +248,15 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				rsp.Choices[0].Message.Replay = nil
 				return nil, nil
 			},
-			wantErr: "was removed",
+		},
+		{
+			name: "foreign model binding remains invalid",
+			callback: func(t *testing.T, _ *model.Response) (*model.Response, error) {
+				msg := model.NewAssistantMessage("")
+				require.NoError(t, msg.SetReplayData("test.native", "other-model", json.RawMessage(`[]`)))
+				return &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}, nil
+			},
+			wantErr: "invalid model response",
 		},
 		{
 			name: "callback error",
@@ -313,6 +321,10 @@ func TestRunner_AfterModelCallbacksCannotBypassNativeRecords(t *testing.T) {
 				return
 			}
 			require.Empty(t, errMessage)
+			if tc.noTool {
+				require.Zero(t, executed.Load())
+				return
+			}
 			require.EqualValues(t, 1, executed.Load())
 			require.EqualValues(t, tc.wantInput, input.Load())
 		})
@@ -324,7 +336,12 @@ type replacingPlugin struct{}
 func (replacingPlugin) Name() string { return "replacing" }
 
 func (replacingPlugin) Register(r *plugin.Registry) {
+	replaced := false
 	r.AfterModel(func(context.Context, *model.AfterModelArgs) (*model.AfterModelResult, error) {
+		if replaced {
+			return nil, nil
+		}
+		replaced = true
 		msg := model.NewAssistantMessage("")
 		msg.ToolCalls = []model.ToolCall{replayTestToolCall(`{"a":1000}`)}
 		return &model.AfterModelResult{CustomResponse: &model.Response{
@@ -334,7 +351,7 @@ func (replacingPlugin) Register(r *plugin.Registry) {
 	})
 }
 
-func TestRunner_PluginCannotReplaceNativeRecord(t *testing.T) {
+func TestRunner_PluginMayReplaceNativeResponse(t *testing.T) {
 	m := newNativeReplayTestModel()
 	call := replayTestToolCall(`{"a":1}`)
 	m.toolCall = &call
@@ -354,11 +371,11 @@ func TestRunner_PluginCannotReplaceNativeRecord(t *testing.T) {
 	)
 
 	errMessage := replayTestError(runReplayTest(t, r, "session", "add one"))
-	require.Contains(t, errMessage, "was removed")
-	require.Zero(t, executed.Load())
+	require.Empty(t, errMessage)
+	require.EqualValues(t, 1, executed.Load())
 }
 
-func TestRunner_NativeAgentRejectsRewrittenOwnRecord(t *testing.T) {
+func TestRunner_NativeAgentProjectorEditsDisplayProjection(t *testing.T) {
 	native := newNativeReplayTestModel()
 	rewrite := func(_ *agent.Invocation, _ event.Event, msg model.Message) model.Message {
 		if msg.Role == model.RoleAssistant {
@@ -372,8 +389,18 @@ func TestRunner_NativeAgentRejectsRewrittenOwnRecord(t *testing.T) {
 	), runner.WithSessionService(inmemory.NewSessionService()))
 
 	require.Empty(t, replayTestError(runReplayTest(t, r, "session", "investigate")))
-	errMessage := replayTestError(runReplayTest(t, r, "session", "continue"))
-	require.Contains(t, errMessage, "projection changed",
-		"a stale projection in the same conversation must not be sent")
-	require.Len(t, native.recorded(), 1, "the rejected request never reaches the model")
+	require.Empty(t, replayTestError(runReplayTest(t, r, "session", "continue")))
+	recorded := native.recorded()
+	require.Len(t, recorded, 2)
+	var sawEditedReplay bool
+	for _, message := range recorded[1].Messages {
+		if message.Role != model.RoleAssistant || message.Content != "rewritten findings" {
+			continue
+		}
+		sawEditedReplay = true
+		payload, err := message.ReplayDataFor("test.native", "native-model")
+		require.NoError(t, err)
+		require.JSONEq(t, replayTestPayload, string(payload))
+	}
+	require.True(t, sawEditedReplay, "the projector's display edit reaches the next request")
 }

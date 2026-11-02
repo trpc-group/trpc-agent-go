@@ -1569,6 +1569,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		defer span.End()
 	}
 	startTime := time.Now()
+	ctx = withNativeReplayToolCallArgs(ctx, llmResponseHasNativeReplay(llmResponse))
 	execution, err := p.executeToolCall(
 		ctx,
 		invocation,
@@ -1933,6 +1934,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		defer span.End()
 	}
 	startTime := time.Now()
+	ctx = withNativeReplayToolCallArgs(ctx, llmResponseHasNativeReplay(llmResponse))
 	// Execute the tool (streamable or callable) with callbacks.
 	execution, err := p.executeToolCall(
 		ctx,
@@ -3503,7 +3505,8 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
-	if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+	if !hasNativeReplayToolCallArgs(ctx) &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
@@ -3627,6 +3630,34 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+func llmResponseHasNativeReplay(response *model.Response) bool {
+	return response != nil && len(response.Choices) > 0 &&
+		response.Choices[0].Message.Replay != nil
+}
+
+type nativeReplayToolCallArgsContextKey struct{}
+
+func withNativeReplayToolCallArgs(ctx context.Context, native bool) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	if native {
+		return context.WithValue(ctx, nativeReplayToolCallArgsContextKey{}, true)
+	}
+	if hasNativeReplayToolCallArgs(ctx) {
+		return context.WithValue(ctx, nativeReplayToolCallArgsContextKey{}, false)
+	}
+	return ctx
+}
+
+func hasNativeReplayToolCallArgs(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	native, _ := ctx.Value(nativeReplayToolCallArgsContextKey{}).(bool)
+	return native
 }
 
 func (p *FunctionCallResponseProcessor) checkToolPermission(

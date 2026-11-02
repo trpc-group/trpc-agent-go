@@ -152,7 +152,7 @@ func TestRunnerResumeValidatesNativeRecordBeforeExecutingTools(t *testing.T) {
 				return
 			}
 			require.NoError(t, ctx.Err())
-			if scenario == "valid" || scenario == "selected_native_model" {
+			if scenario == "valid" || scenario == "edited_arguments" || scenario == "selected_native_model" {
 				require.Empty(t, errors)
 				require.EqualValues(t, 1, toolCalls.Load())
 				require.EqualValues(t, 2, httpCalls.Load())
@@ -163,14 +163,14 @@ func TestRunnerResumeValidatesNativeRecordBeforeExecutingTools(t *testing.T) {
 				default:
 					t.Fatal("resumed tool callback did not receive its model")
 				}
-				assertToolReplayInput(t, <-inputs)
+				if scenario == "edited_arguments" {
+					assertToolReplayInputWithOutput(t, <-inputs, "1000")
+				} else {
+					assertToolReplayInput(t, <-inputs)
+				}
 			} else {
 				require.NotEmpty(t, errors)
-				if scenario == "edited_arguments" {
-					require.Contains(t, strings.Join(errors, "\n"), "message projection changed")
-				} else {
-					require.Contains(t, strings.Join(errors, "\n"), "belongs to protocol")
-				}
+				require.Contains(t, strings.Join(errors, "\n"), "belongs to protocol")
 				require.Zero(t, toolCalls.Load(), "an invalid persisted native record must fail before any tool side effect")
 				require.Zero(t, beforeModelCalls.Load())
 				require.EqualValues(t, 1, httpCalls.Load(), "a rejected resume must not call another model")

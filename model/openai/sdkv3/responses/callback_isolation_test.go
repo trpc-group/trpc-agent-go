@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -323,6 +322,266 @@ func callbackIsolationBeforeModelMutation(mode string) model.BeforeModelCallback
 	}
 }
 
+func setCallbackReplayArguments(message *model.Message, arguments string) error {
+	if message == nil {
+		return errors.New("assistant message is nil")
+	}
+	payload, err := message.ReplayDataFor(responseProvider, "gpt-5")
+	if err != nil {
+		return err
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &items); err != nil {
+		return err
+	}
+	encodedArguments, err := json.Marshal(arguments)
+	if err != nil {
+		return err
+	}
+	var found bool
+	for _, item := range items {
+		var itemType string
+		if err := json.Unmarshal(item["type"], &itemType); err != nil {
+			return err
+		}
+		if itemType != "function_call" {
+			continue
+		}
+		item["arguments"] = encodedArguments
+		found = true
+	}
+	if !found {
+		return errors.New("native payload has no function call")
+	}
+	updated, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	return message.SetReplayData(responseProvider, "gpt-5", updated)
+}
+
+func editableReplayAfterModel(mode string) model.AfterModelCallbackStructured {
+	return func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+		if args == nil || args.Response == nil || len(args.Response.Choices) == 0 ||
+			len(args.Response.Choices[0].Message.ToolCalls) == 0 {
+			return nil, nil
+		}
+		response := args.Response
+		if mode == "replace_response_and_rebind" {
+			copy := *args.Response
+			copy.Choices = append([]model.Choice(nil), args.Response.Choices...)
+			response = &copy
+			message := response.Choices[0].Message
+			message.ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
+			message.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":9}`)
+			if err := setCallbackReplayArguments(&message, `{"a":9}`); err != nil {
+				return nil, err
+			}
+			response.Choices[0].Message = message
+			return &model.AfterModelResult{CustomResponse: response}, nil
+		}
+
+		message := &response.Choices[0].Message
+		switch mode {
+		case "display_only":
+			message.Content = "edited display text"
+			message.ReasoningContent = "edited display reasoning"
+		case "tool_calls_only":
+			message.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":9}`)
+		case "replay_only":
+			if err := setCallbackReplayArguments(message, `{"a":9}`); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("unknown after-model edit mode %q", mode)
+		}
+		return nil, nil
+	}
+}
+
+func assertEditableReplayContinuation(t *testing.T, raw json.RawMessage, replayArguments, toolOutput string) {
+	t.Helper()
+	var input []struct {
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		CallID    string          `json:"call_id"`
+		Name      string          `json:"name"`
+		Arguments string          `json:"arguments"`
+		Output    json.RawMessage `json:"output"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &input))
+	var callCount, resultCount int
+	for _, item := range input {
+		switch item.Type {
+		case "function_call":
+			callCount++
+			require.Equal(t, "fc_tool", item.ID)
+			require.Equal(t, "call_tool", item.CallID)
+			require.Equal(t, "calculator", item.Name)
+			require.JSONEq(t, replayArguments, item.Arguments)
+		case "function_call_output":
+			resultCount++
+			require.Equal(t, "call_tool", item.CallID)
+			var output string
+			require.NoError(t, json.Unmarshal(item.Output, &output))
+			require.Equal(t, toolOutput, output)
+		}
+	}
+	require.Equal(t, 1, callCount)
+	require.Equal(t, 1, resultCount)
+}
+
+func findEditableReplayMessage(t *testing.T, sess *session.Session) model.Message {
+	t.Helper()
+	for _, evt := range sess.Events {
+		choices := evt.Choices
+		if evt.Response != nil {
+			choices = evt.Response.Choices
+		}
+		for _, choice := range choices {
+			if choice.Message.Replay != nil && len(choice.Message.ToolCalls) > 0 {
+				return choice.Message
+			}
+		}
+	}
+	t.Fatal("session has no replay-bearing tool call")
+	return model.Message{}
+}
+
+func TestAfterModelEditsKeepReplayAndToolExecutionIndependentAcrossSQLiteReopen(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		callbackMode      string
+		wantToolArguments string
+		wantReplayArgs    string
+		wantToolOutput    string
+		wantContent       string
+		wantReasoning     string
+	}{
+		{name: "display fields only", callbackMode: "display_only", wantToolArguments: `{"a":1}`, wantReplayArgs: `{"a":1}`, wantToolOutput: "1", wantContent: "edited display text", wantReasoning: "edited display reasoning"},
+		{name: "tool calls only", callbackMode: "tool_calls_only", wantToolArguments: `{"a":9}`, wantReplayArgs: `{"a":1}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "replay only", callbackMode: "replay_only", wantToolArguments: `{"a":1}`, wantReplayArgs: `{"a":9}`, wantToolOutput: "1", wantContent: "calculating"},
+		{name: "replacement response rebinds both", callbackMode: "replace_response_and_rebind", wantToolArguments: `{"a":9}`, wantReplayArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newCallbackIsolationTransport()
+			m := callbackIsolationModel(rt)
+			var toolCalls atomic.Int32
+			seen := make(chan int, 2)
+			calculator := callbackIsolationCalculator(&toolCalls, seen, false)
+			callbacks := model.NewCallbacks().RegisterAfterModel(editableReplayAfterModel(tc.callbackMode))
+			a := llmagent.New("native", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{calculator}),
+				llmagent.WithModelCallbacks(callbacks))
+			path := filepath.Join(t.TempDir(), "editable-replay.db")
+			svc := openCallbackIsolationSQLite(t, path)
+			r := runner.NewRunner("native", a, runner.WithSessionService(svc))
+			first := runCallbackIsolation(t, r, "calculate")
+			require.Empty(t, callbackIsolationErrors(first))
+			var sawEditedDisplay bool
+			for _, evt := range first {
+				if evt.Response == nil {
+					continue
+				}
+				for _, choice := range evt.Response.Choices {
+					if choice.Message.Replay == nil || len(choice.Message.ToolCalls) == 0 {
+						continue
+					}
+					sawEditedDisplay = true
+					require.Equal(t, tc.wantContent, choice.Message.Content)
+					require.Equal(t, tc.wantReasoning, choice.Message.ReasoningContent)
+				}
+			}
+			require.True(t, sawEditedDisplay, "callback message should be emitted to consumers")
+			require.EqualValues(t, 1, toolCalls.Load())
+			wantExecuted := 1
+			if tc.wantToolArguments == `{"a":9}` {
+				wantExecuted = 9
+			}
+			require.Equal(t, wantExecuted, <-seen)
+			require.EqualValues(t, 2, rt.calls.Load())
+			<-rt.requests // initial request
+			assertEditableReplayContinuation(t, <-rt.requests, tc.wantReplayArgs, tc.wantToolOutput)
+
+			sess, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
+			require.NoError(t, err)
+			stored := findEditableReplayMessage(t, sess)
+			require.Equal(t, tc.wantContent, stored.Content)
+			require.Equal(t, tc.wantReasoning, stored.ReasoningContent)
+			require.Equal(t, tc.wantToolArguments, string(stored.ToolCalls[0].Function.Arguments))
+			storedReplay, err := stored.ReplayDataFor(responseProvider, "gpt-5")
+			require.NoError(t, err)
+			var items []struct {
+				Type      string `json:"type"`
+				Arguments string `json:"arguments"`
+			}
+			require.NoError(t, json.Unmarshal(storedReplay, &items))
+			var replayArgs string
+			for _, item := range items {
+				if item.Type == "function_call" {
+					replayArgs = item.Arguments
+				}
+			}
+			require.JSONEq(t, tc.wantReplayArgs, replayArgs)
+			require.NoError(t, r.Close())
+			require.NoError(t, svc.Close())
+			svc = openCallbackIsolationSQLite(t, path)
+			loaded, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
+			require.NoError(t, err)
+			stored = findEditableReplayMessage(t, loaded)
+			storedReplay, err = stored.ReplayDataFor(responseProvider, "gpt-5")
+			require.NoError(t, err)
+			var loadedItems []struct {
+				Type      string `json:"type"`
+				Arguments string `json:"arguments"`
+			}
+			require.NoError(t, json.Unmarshal(storedReplay, &loadedItems))
+			replayArgs = ""
+			for _, item := range loadedItems {
+				if item.Type == "function_call" {
+					replayArgs = item.Arguments
+				}
+			}
+			require.JSONEq(t, tc.wantReplayArgs, replayArgs)
+
+			r = runner.NewRunner("native", a, runner.WithSessionService(svc))
+			continued := runCallbackIsolation(t, r, "continue")
+			require.Empty(t, callbackIsolationErrors(continued))
+			require.EqualValues(t, 1, toolCalls.Load(), "reopening the session must not rerun completed tools")
+			require.EqualValues(t, 3, rt.calls.Load())
+			assertEditableReplayContinuation(t, <-rt.requests, tc.wantReplayArgs, tc.wantToolOutput)
+			require.NoError(t, r.Close())
+		})
+	}
+}
+
+func TestAfterModelCanReplaceResponseChoiceSetForNativeOutput(t *testing.T) {
+	rt := newCallbackIsolationTransport()
+	rt.firstOutput = `[{"type":"message","id":"msg_final","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"original"}]}]`
+	m := callbackIsolationModel(rt)
+	callbacks := model.NewCallbacks().RegisterAfterModel(func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+		copy := *args.Response
+		copy.Choices = append([]model.Choice(nil), args.Response.Choices...)
+		copy.Choices = append(copy.Choices, model.Choice{Index: 1, Message: model.NewAssistantMessage("callback choice")})
+		return &model.AfterModelResult{CustomResponse: &copy}, nil
+	})
+	a := llmagent.New("native", llmagent.WithModel(m), llmagent.WithModelCallbacks(callbacks))
+	r := runner.NewRunner("native", a)
+	defer r.Close()
+
+	events := runCallbackIsolation(t, r, "hello")
+	require.Empty(t, callbackIsolationErrors(events))
+	require.EqualValues(t, 1, rt.calls.Load())
+	var sawReplacement bool
+	for _, evt := range events {
+		if evt.Response == nil || len(evt.Response.Choices) != 2 || evt.Response.Choices[0].Message.Replay == nil {
+			continue
+		}
+		sawReplacement = true
+		require.Equal(t, "callback choice", evt.Response.Choices[1].Message.Content)
+	}
+	require.True(t, sawReplacement, "Runner must emit the complete callback replacement response")
+}
+
 func TestRunnerBeforeToolInPlaceMutationPreservesNativeReplayAcrossSQLiteReopen(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -432,7 +691,7 @@ func TestRunnerBeforeToolInPlaceMutationPerCallEventsPreservesMultiCallReplay(t 
 	assertCallbackIsolationMultiContinuation(t, <-rt.requests)
 }
 
-func TestRunnerBeforeModelEditsDoNotPolluteNativeSession(t *testing.T) {
+func TestRunnerBeforeModelToolCallEditsDoNotRewriteNativeReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		mode   string
@@ -465,19 +724,20 @@ func TestRunnerBeforeModelEditsDoNotPolluteNativeSession(t *testing.T) {
 			defer r.Close()
 
 			first := runCallbackIsolation(t, r, "calculate")
-			require.Contains(t, strings.Join(callbackIsolationErrors(first), "\n"), "projection changed")
+			require.Empty(t, callbackIsolationErrors(first))
 			require.EqualValues(t, 1, toolCalls.Load())
 			require.Equal(t, 1, <-seen)
-			require.EqualValues(t, 1, rt.calls.Load(), "the edited native history must be rejected before HTTP")
+			require.EqualValues(t, 2, rt.calls.Load(), "the model request must use native Replay after a detached projection edit")
 			sess, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
 			assertCallbackIsolationSession(t, sess)
-			<-rt.requests
+			<-rt.requests // initial request
+			assertCallbackIsolationContinuation(t, <-rt.requests, "1")
 
 			continued := runCallbackIsolation(t, r, "continue")
 			require.Empty(t, callbackIsolationErrors(continued))
-			require.EqualValues(t, 1, toolCalls.Load(), "a rejected callback edit must not change the stored completed tool call")
-			require.EqualValues(t, 2, rt.calls.Load())
+			require.EqualValues(t, 1, toolCalls.Load(), "a detached callback edit must not change the stored completed tool call")
+			require.EqualValues(t, 3, rt.calls.Load())
 			assertCallbackIsolationContinuation(t, <-rt.requests, "1")
 			sess, err = svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)

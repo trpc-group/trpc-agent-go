@@ -92,7 +92,7 @@ func TestValidateMessages(t *testing.T) {
 	}))
 
 	native[2].Content = "edited"
-	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "projection changed")
+	require.NoError(t, ValidateMessages(native, nativeInfo))
 }
 
 func TestValidateResponse(t *testing.T) {
@@ -113,13 +113,14 @@ func TestValidateResponse(t *testing.T) {
 		"invalid model response")
 
 	response.Choices[1].Message.ToolCalls = []model.ToolCall{{ID: "call_injected"}}
-	require.ErrorContains(t, ValidateResponse(response, nativeInfo), "projection changed")
+	require.NoError(t, ValidateResponse(response, nativeInfo),
+		"ToolCalls is the current execution projection")
 
 	delta := &model.Response{Choices: []model.Choice{{Delta: nativeMessage(t)}}}
 	require.True(t, ResponseHasReplay(delta))
 	require.NoError(t, ValidateResponse(delta, nativeInfo))
 	delta.Choices[0].Delta.Content = "edited"
-	require.Error(t, ValidateResponse(delta, nativeInfo))
+	require.NoError(t, ValidateResponse(delta, nativeInfo))
 }
 
 func nativeToolResponse(t *testing.T) *model.Response {
@@ -140,150 +141,35 @@ func nativeToolResponse(t *testing.T) *model.Response {
 	return &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: msg}}}
 }
 
-func TestResponseGuard(t *testing.T) {
-	legacy := &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("a")}}}
-	guard := GuardResponse(legacy)
-	require.False(t, guard.Active(legacy))
-	replacement := &model.Response{Choices: []model.Choice{{Message: model.Message{
-		Role:      model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{ID: "call_override"}},
-	}}}}
-	require.False(t, guard.Active(replacement))
-	require.NoError(t, guard.Validate(replacement, model.Info{Name: "legacy"}),
-		"legacy callbacks keep replacing responses")
-	require.False(t, GuardResponse(nil).Active(nil))
-	require.NoError(t, GuardResponse(nil).Validate(nil, nativeInfo))
-
-	editArguments := func(response *model.Response) {
+func TestValidateResponseAllowsFinalResponseEditsAndReplacements(t *testing.T) {
+	t.Run("edited tool calls and choices", func(t *testing.T) {
+		response := nativeToolResponse(t)
 		response.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"a":2}`)
-	}
-	for _, tc := range []struct {
-		name    string
-		change  func(t *testing.T, response *model.Response) *model.Response
-		wantErr string
-	}{
-		{
-			name: "unchanged",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				return response
-			},
-		},
-		{
-			name: "wrapped in a new response",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				return &model.Response{Choices: append([]model.Choice(nil), response.Choices...)}
-			},
-		},
-		{
-			name: "edited with the record retained",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				editArguments(response)
-				return response
-			},
-			wantErr: "projection changed",
-		},
-		{
-			name: "edited with the record dropped",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				editArguments(response)
-				response.Choices[0].Message.Replay = nil
-				return response
-			},
-			wantErr: "native message record of choice 0 was removed",
-		},
-		{
-			name: "replaced without a record",
-			change: func(_ *testing.T, _ *model.Response) *model.Response {
-				return &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("x")}}}
-			},
-			wantErr: "was removed",
-		},
-		{
-			name: "replaced without choices",
-			change: func(_ *testing.T, _ *model.Response) *model.Response {
-				return &model.Response{}
-			},
-			wantErr: "was removed",
-		},
-		{
-			name: "edited and rebound",
-			change: func(t *testing.T, response *model.Response) *model.Response {
-				msg := &response.Choices[0].Message
-				payload, err := msg.ReplayDataFor(nativeInfo.ReplayProtocol, nativeInfo.Name)
-				require.NoError(t, err)
-				editArguments(response)
-				require.NoError(t, msg.SetReplayData(nativeInfo.ReplayProtocol, nativeInfo.Name, payload))
-				return response
-			},
-			wantErr: "was removed",
-		},
-		{
-			name: "record replaced by in-place decode",
-			change: func(t *testing.T, response *model.Response) *model.Response {
-				other := nativeMessage(t)
-				raw, err := json.Marshal(other.Replay)
-				require.NoError(t, err)
-				require.NoError(t, json.Unmarshal(raw, response.Choices[0].Message.Replay))
-				return response
-			},
-			wantErr: "was removed",
-		},
-		{
-			name: "choice moved",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				response.Choices = append([]model.Choice{{Message: model.NewAssistantMessage("x")}},
-					response.Choices...)
-				return response
-			},
-			wantErr: "was removed",
-		},
-		{
-			name: "choice appended",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				response.Choices = append(response.Choices, model.Choice{
-					Index: 1, Message: model.NewAssistantMessage("unbound output"),
-				})
-				return response
-			},
-			wantErr: "native response choices were added or removed",
-		},
-		{
-			name: "choice index changed",
-			change: func(_ *testing.T, response *model.Response) *model.Response {
-				response.Choices[0].Index = 1
-				return response
-			},
-			wantErr: "was removed",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response := nativeToolResponse(t)
-			guard := GuardResponse(response)
-			require.True(t, guard.Active(response))
-			final := tc.change(t, response)
-			require.True(t, guard.Active(final), "a captured record keeps validation active")
-			err := guard.Validate(final, nativeInfo)
-			if tc.wantErr == "" {
-				require.NoError(t, err)
-				return
-			}
-			require.ErrorContains(t, err, tc.wantErr)
+		response.Choices[0].Index = 1
+		response.Choices = append(response.Choices, model.Choice{
+			Index: 2, Message: model.NewAssistantMessage("additional choice"),
 		})
-	}
-
-	t.Run("delta record dropped", func(t *testing.T) {
-		response := &model.Response{Choices: []model.Choice{{Delta: nativeMessage(t)}}}
-		guard := GuardResponse(response)
-		response.Choices[0].Delta.Replay = nil
-		require.ErrorContains(t, guard.Validate(response, nativeInfo), "native delta record of choice 0")
+		require.NoError(t, ValidateResponse(response, nativeInfo))
 	})
 
-	t.Run("record added by a callback", func(t *testing.T) {
-		response := &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("a")}}}
-		guard := GuardResponse(response)
-		response.Choices[0].Message = nativeMessage(t)
-		require.True(t, guard.Active(response))
-		require.ErrorContains(t, guard.Validate(response, model.Info{Name: "legacy"}),
-			"invalid model response")
+	t.Run("record removed", func(t *testing.T) {
+		response := nativeToolResponse(t)
+		response.Choices[0].Message.Replay = nil
+		require.NoError(t, ValidateResponse(response, nativeInfo))
+	})
+
+	t.Run("response replaced without a record", func(t *testing.T) {
+		response := &model.Response{Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("replacement"),
+		}}}
+		require.NoError(t, ValidateResponse(response, nativeInfo))
+	})
+
+	t.Run("foreign producer remains invalid", func(t *testing.T) {
+		msg := model.NewAssistantMessage("foreign")
+		require.NoError(t, msg.SetReplayData("other.native", nativeInfo.Name,
+			json.RawMessage(`[]`)))
+		response := &model.Response{Choices: []model.Choice{{Message: msg}}}
+		require.ErrorContains(t, ValidateResponse(response, nativeInfo), "invalid model response")
 	})
 }

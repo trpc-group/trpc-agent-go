@@ -214,7 +214,7 @@ func injectedToolResponse() *model.Response {
 	return &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}
 }
 
-func TestProcessModelResponse_ValidatesNativeRecordBeforeDispatch(t *testing.T) {
+func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testing.T) {
 	editArguments := func(rsp *model.Response) {
 		rsp.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"q":"rm -rf"}`)
 	}
@@ -234,7 +234,6 @@ func TestProcessModelResponse_ValidatesNativeRecordBeforeDispatch(t *testing.T) 
 				editArguments(rsp)
 				return nil, nil
 			},
-			wantErr: "projection changed",
 		},
 		{
 			name: "edited with the record dropped",
@@ -243,19 +242,16 @@ func TestProcessModelResponse_ValidatesNativeRecordBeforeDispatch(t *testing.T) 
 				rsp.Choices[0].Message.Replay = nil
 				return nil, nil
 			},
-			wantErr: "native message record of choice 0 was removed",
 		},
 		{
 			name: "replaced without a record",
 			callback: func(*testing.T, *model.Response) (*model.Response, error) {
 				return injectedToolResponse(), nil
 			},
-			wantErr: "was removed",
 		},
 		{
-			name:    "plugin replaced without a record",
-			plugin:  injectedToolResponse(),
-			wantErr: "was removed",
+			name:   "plugin replaced without a record",
+			plugin: injectedToolResponse(),
 		},
 		{
 			name: "edited and rebound",
@@ -267,7 +263,6 @@ func TestProcessModelResponse_ValidatesNativeRecordBeforeDispatch(t *testing.T) 
 				require.NoError(t, msg.SetReplayData(nativeTestProvider, nativeTestModel, payload))
 				return nil, nil
 			},
-			wantErr: "was removed",
 		},
 		{
 			name: "choice index changed",
@@ -275,7 +270,6 @@ func TestProcessModelResponse_ValidatesNativeRecordBeforeDispatch(t *testing.T) 
 				rsp.Choices[0].Index = 1
 				return nil, nil
 			},
-			wantErr: "was removed",
 		},
 		{
 			name:   "reasoning only with the record dropped",
@@ -284,7 +278,6 @@ func TestProcessModelResponse_ValidatesNativeRecordBeforeDispatch(t *testing.T) 
 				rsp.Choices[0].Message.Replay = nil
 				return nil, nil
 			},
-			wantErr: "was removed",
 		},
 		{
 			name: "callback error",

@@ -151,9 +151,16 @@ function in `tools/main.go`.
   The Runner executes those committed local calls.
 - A stream that ends without a valid completed response is an error. Partial
   function calls from that stream are not executed.
-- Assistant messages carry a native replay record. Do not edit that projection
-  in place. Summary replacement, compaction, and behavior for other agents are
-  specified in the adapter contract.
+- Assistant messages carry a native replay record. `Content` and
+  `ReasoningContent` are editable display fields; `ToolCalls` controls current
+  local execution; `Replay` controls the next request. They are not
+  automatically synchronized. Redacting `Content` alone leaves the original
+  text in Replay and persisted history. Use the existing `ReplayDataFor` and
+  `SetReplayData` methods when changing native state; the adapter README has a
+  direct example. Before-tool edits affect execution arguments without
+  rewriting Replay. Removing Replay from an unfinished native tool round does
+  not carry a recovery guarantee. Summary replacement, compaction, and
+  behavior for other agents are specified in the adapter contract.
 - This module does not demonstrate server-managed `previous_response_id` or
   `conversation` continuation, background responses, hosted tools, tool search,
   or approval flows.
