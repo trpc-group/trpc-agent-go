@@ -58,6 +58,9 @@ func TestExecutorExecutionTraceDisabledSkipsSnapshots(t *testing.T) {
 		require.NoError(t, err)
 		invocation := agent.NewInvocation(
 			agent.WithInvocationID("inv-trace-snapshot"),
+			// Without a trace node id the executor derives no step id and never
+			// records the step, so the snapshot it builds is discarded.
+			agent.WithInvocationTraceNodeID("graph"),
 			agent.WithInvocationRunOptions(agent.NewRunOptions(
 				agent.WithExecutionTraceEnabled(traceEnabled),
 			)),
@@ -70,6 +73,14 @@ func TestExecutorExecutionTraceDisabledSkipsSnapshots(t *testing.T) {
 		trace := agent.BuildExecutionTrace(invocation, atrace.TraceStatusCompleted)
 		if traceEnabled {
 			require.NotNil(t, trace, "enabled tracing should build a trace")
+			var recordedOutput bool
+			for _, step := range trace.Steps {
+				if step.Output != nil {
+					recordedOutput = true
+					break
+				}
+			}
+			require.True(t, recordedOutput, "enabled tracing should record a node output snapshot")
 		} else {
 			require.Nil(t, trace, "disabled tracing should not build a trace")
 		}
@@ -96,7 +107,9 @@ func TestExecutorCacheHitAfterCallbackErrorSkipsSnapshot(t *testing.T) {
 	sg := NewStateGraph(NewStateSchema()).
 		WithCache(NewInMemoryCache()).
 		WithCachePolicy(DefaultCachePolicy())
+	var nodeRuns int32
 	sg.AddNode("work", func(ctx context.Context, state State) (any, error) {
+		atomic.AddInt32(&nodeRuns, 1)
 		return State{"result": traceMarshalProbe{}}, nil
 	}).SetEntryPoint("work").SetFinishPoint("work")
 	var callbacks int32
@@ -117,7 +130,8 @@ func TestExecutorCacheHitAfterCallbackErrorSkipsSnapshot(t *testing.T) {
 	exec, err := NewExecutor(compiled)
 	require.NoError(t, err)
 
-	run := func(id string) {
+	run := func(id string) int32 {
+		before := atomic.LoadInt32(&traceMarshalCount)
 		invocation := agent.NewInvocation(
 			agent.WithInvocationID(id),
 			agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithExecutionTraceEnabled(false))),
@@ -126,13 +140,20 @@ func TestExecutorCacheHitAfterCallbackErrorSkipsSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		for range events {
 		}
+		return atomic.LoadInt32(&traceMarshalCount) - before
 	}
 
 	// The first run executes the node and fills the cache; the second hits the
 	// cache and fails in the after-node callback.
-	run("inv-cache-after-callback-miss")
-	run("inv-cache-after-callback-hit")
+	missRunEncodings := run("inv-cache-after-callback-miss")
+	hitRunEncodings := run("inv-cache-after-callback-hit")
 	require.EqualValues(t, 2, atomic.LoadInt32(&callbacks))
+	require.EqualValues(t, 1, atomic.LoadInt32(&nodeRuns),
+		"the second run must return the cached result without executing the node")
+	require.Greater(t, missRunEncodings, int32(0),
+		"the cache-miss run should encode the completion state")
+	require.Zero(t, hitRunEncodings,
+		"a cache hit that fails in the after-node callback must not encode a trace snapshot")
 }
 
 var _ json.Marshaler = traceMarshalProbe{}
