@@ -4397,6 +4397,14 @@ func runTool(
 	return finalCtx, result, modifiedArgs, err
 }
 
+func repairToolCallArguments(ctx context.Context, toolCall *model.ToolCall, skipArgumentRepair []bool) {
+	skipJSONRepair := len(skipArgumentRepair) > 0 && skipArgumentRepair[0]
+	if invocation, ok := agent.InvocationFromContext(ctx); ok && !skipJSONRepair &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+		jsonrepair.RepairToolCallArgumentsInPlace(ctx, toolCall)
+	}
+}
+
 func runToolWithEventContexts(
 	ctx context.Context,
 	toolCall model.ToolCall,
@@ -4408,11 +4416,7 @@ func runToolWithEventContexts(
 	skipArgumentRepair ...bool,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
-	skipJSONRepair := len(skipArgumentRepair) > 0 && skipArgumentRepair[0]
-	if invocation, ok := agent.InvocationFromContext(ctx); ok && !skipJSONRepair &&
-		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
-		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
-	}
+	repairToolCallArguments(ctx, &toolCall, skipArgumentRepair)
 	decl := t.Declaration()
 	startInvocation := invocationFromContextOrFallback(ctx, nil)
 
