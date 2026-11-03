@@ -35,9 +35,8 @@ func main() {
 	streaming := flag.Bool("streaming", true, "Enable streaming responses")
 	flag.Parse()
 
-	// WithStore(false) is the adapter default: each request sends the full
-	// client-managed history. The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
-	chatModel := responses.New(*modelName, responses.WithStore(false))
+	// The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
+	chatModel := responses.New(*modelName)
 	chatAgent := llmagent.New(
 		"responses-chat",
 		llmagent.WithModel(chatModel),

@@ -2253,7 +2253,7 @@ func main() {
     userID := "demo-user"
     sessionID := "demo-session"
 
-    llm := responses.New("gpt-5", responses.WithStore(false))
+    llm := responses.New("gpt-5")
     agent := llmagent.New(
         "responses-chat",
         llmagent.WithModel(llm),

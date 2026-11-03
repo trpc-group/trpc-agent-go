@@ -26,7 +26,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-llm := responses.New("gpt-5", responses.WithStore(false))
+llm := responses.New("gpt-5")
 agent := llmagent.New(
     "responses-assistant",
     llmagent.WithModel(llm),

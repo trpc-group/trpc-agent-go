@@ -37,11 +37,10 @@ func main() {
 	streaming := flag.Bool("streaming", true, "Enable streaming responses")
 	flag.Parse()
 
-	// WithStore(false) is the adapter default: each request sends the full
-	// client-managed history. The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
+	// The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
 	toolAgent := llmagent.New(
 		"responses-tool-agent",
-		llmagent.WithModel(responses.New(*modelName, responses.WithStore(false))),
+		llmagent.WithModel(responses.New(*modelName)),
 		llmagent.WithDescription("An assistant that can use a local calculator."),
 		llmagent.WithInstruction("Use the calculator for arithmetic. Each call performs one operation; use another call when the answer needs multiple operations."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming}),

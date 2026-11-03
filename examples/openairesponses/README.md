@@ -119,7 +119,7 @@ You: /exit
 ## Core API
 
 ```go
-llm := responses.New(modelName, responses.WithStore(false))
+llm := responses.New(modelName)
 agent := llmagent.New(
     "responses-tool-agent",
     llmagent.WithModel(llm),
