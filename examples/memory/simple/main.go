@@ -20,6 +20,7 @@
 //	go run main.go -memory=mysqlvec
 //	go run main.go -memory=postgres
 //	go run main.go -memory=pgvector
+//	go run main.go -memory=gorm
 //	go run main.go -memory=chromadb
 //
 // Environment variables by memory type (example usage):
@@ -102,7 +103,7 @@ var (
 		"inmemory",
 		"Name of the memory service to use, "+
 			"inmemory / sqlite / sqlitevec / redis / "+
-			"mysql / mysqlvec / postgres / pgvector / chromadb",
+			"mysql / mysqlvec / postgres / pgvector / gorm / chromadb",
 	)
 	streaming = flag.Bool(
 		"streaming",
