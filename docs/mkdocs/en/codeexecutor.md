@@ -126,6 +126,31 @@ Typical recommendations:
 - isolated or production-like execution: `container`
 - notebook workflows: `jupyter`
 
+### E2B sandbox hostname compatibility
+
+By default, when the API response omits `domain` or returns `null` or an empty
+string, hostnames retain the legacy format
+`<port>-<sandboxID>-<clientID>.<configured-domain>` if `clientID` is non-empty.
+For deployments that route by sandbox ID alone, such as AGS endpoints that
+omit `domain`, add `e2b.WithClientIDHostSuffix(false)` to `e2b.New` or
+`e2b.NewWithContext`:
+
+```go
+executor, err := e2b.New(
+    e2b.WithDomain("your-sandbox-domain"),
+    e2b.WithClientIDHostSuffix(false),
+)
+```
+
+With `false`, the fallback is `<port>-<sandboxID>.<configured-domain>`.
+A non-empty response domain still takes precedence and never uses the client
+ID suffix. The option applies to creation and reconnection, Code Interpreter,
+native process requests, and `executor.Sandbox().GetHost(port)`. It does not
+change the sandbox ID, management API URL, or client ID metadata. Existing
+users retain the original behavior when the option is omitted or set to `true`.
+`true` retains the conditional legacy rule; it does not force a suffix when
+the response domain is non-empty.
+
 ### E2B workspace programs
 
 `e2b.CodeExecutor.RunProgram` and `Engine().Runner().RunProgram` use native
