@@ -164,30 +164,7 @@ func (f *SkillFilter) decide(ctx context.Context, inv *agent.Invocation) (*skill
 
 	userMessage, userHistory := decisionConversation(inv)
 
-	candidates := make([]skillCandidate, 0, len(summaries))
-	seen := make(map[string]struct{}, len(summaries))
-	names := make([]string, 0, len(summaries))
-	for _, s := range summaries {
-		name := strings.TrimSpace(s.Name)
-		if name == "" {
-			continue
-		}
-		if _, dup := seen[name]; dup {
-			continue
-		}
-		seen[name] = struct{}{}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if _, keep := f.keepSet[name]; keep {
-			continue
-		}
-		candidates = append(candidates, skillCandidate{
-			name:        name,
-			description: clipRunes(skillDescription(summaries, name), descriptionClipLen),
-		})
-	}
+	names, candidates := f.skillCandidates(summaries)
 
 	if len(candidates) == 0 {
 		return &skillRunResult{outcome: OutcomeUntouched}, &Report{
@@ -261,6 +238,67 @@ func (f *SkillFilter) decide(ctx context.Context, inv *agent.Invocation) (*skill
 		}
 	}
 
+	kept, scores := f.selectSkills(resp, asked, unasked)
+
+	dropped := make([]string, 0)
+	for _, name := range names {
+		if _, ok := kept[name]; !ok {
+			dropped = append(dropped, name)
+		}
+	}
+	outcome := OutcomeNarrowed
+	reason := ""
+	if len(dropped) == 0 {
+		outcome = OutcomeUntouched
+		reason = "all candidates retained"
+	}
+	report := &Report{
+		Outcome:             outcome,
+		Reason:              reason,
+		TurnKey:             inv.InvocationID,
+		Asked:               skillNames(asked),
+		Unasked:             unasked,
+		Dropped:             dropped,
+		Scores:              scores,
+		CatalogTokensBefore: before,
+		CatalogTokensAfter:  before - skillTokensFor(summaries, dropped),
+	}
+	report.SavedTokens = report.CatalogTokensBefore - report.CatalogTokensAfter
+	return &skillRunResult{outcome: outcome, kept: kept, scores: scores}, report
+}
+
+// skillCandidates collects unique skill names and excludes always-kept skills
+// from scoring while preserving the sorted catalog used for reporting.
+func (f *SkillFilter) skillCandidates(summaries []skill.Summary) ([]string, []skillCandidate) {
+	candidates := make([]skillCandidate, 0, len(summaries))
+	seen := make(map[string]struct{}, len(summaries))
+	names := make([]string, 0, len(summaries))
+	for _, s := range summaries {
+		name := strings.TrimSpace(s.Name)
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, keep := f.keepSet[name]; keep {
+			continue
+		}
+		candidates = append(candidates, skillCandidate{
+			name:        name,
+			description: clipRunes(skillDescription(summaries, name), descriptionClipLen),
+		})
+	}
+	return names, candidates
+}
+
+// selectSkills applies the threshold and fallback margin to the decision.
+func (f *SkillFilter) selectSkills(resp *systemoneclient.Response, asked []skillCandidate, unasked []string) (map[string]struct{}, map[string]float64) {
 	kept := make(map[string]struct{}, len(asked)+len(unasked)+len(f.keepSet))
 	for name := range f.keepSet {
 		kept[name] = struct{}{}
@@ -292,31 +330,7 @@ func (f *SkillFilter) decide(ctx context.Context, inv *agent.Invocation) (*skill
 		}
 	}
 
-	dropped := make([]string, 0)
-	for _, name := range names {
-		if _, ok := kept[name]; !ok {
-			dropped = append(dropped, name)
-		}
-	}
-	outcome := OutcomeNarrowed
-	reason := ""
-	if len(dropped) == 0 {
-		outcome = OutcomeUntouched
-		reason = "all candidates retained"
-	}
-	report := &Report{
-		Outcome:             outcome,
-		Reason:              reason,
-		TurnKey:             inv.InvocationID,
-		Asked:               skillNames(asked),
-		Unasked:             unasked,
-		Dropped:             dropped,
-		Scores:              scores,
-		CatalogTokensBefore: before,
-		CatalogTokensAfter:  before - skillTokensFor(summaries, dropped),
-	}
-	report.SavedTokens = report.CatalogTokensBefore - report.CatalogTokensAfter
-	return &skillRunResult{outcome: outcome, kept: kept, scores: scores}, report
+	return kept, scores
 }
 
 // emit delivers the report: one log line always, plus the WithObserver
