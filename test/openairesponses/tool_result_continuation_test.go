@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bytes"
@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -86,9 +87,9 @@ func (rt *toolResultNativeTransport) RoundTrip(req *http.Request) (*http.Respons
 	}, nil
 }
 
-func toolResultNativeModel(rt *toolResultNativeTransport) *Model {
-	return New("gpt-5", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-		WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: rt}), option.WithMaxRetries(0)))
+func toolResultNativeModel(rt *toolResultNativeTransport) *responses.Model {
+	return responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL("http://fixture.invalid/v1"),
+		responses.WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: rt}), option.WithMaxRetries(0)))
 }
 
 func openToolResultNativeSQLite(t *testing.T, path string) *sqlite.Service {
@@ -140,7 +141,7 @@ func assertToolResultNativeProviderData(t *testing.T, sess *session.Session, exp
 			}
 			found = true
 			require.Equal(t, expected, string(msg.ToolCalls[0].Function.Arguments))
-			raw, err := msg.ProviderDataFor(responseProvider, "gpt-5")
+			raw, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, nativeToolOutput, string(raw), "opaque native response items must survive persistence")
 		}
@@ -167,7 +168,7 @@ func assertToolResultNativeMultiProviderData(t *testing.T, sess *session.Session
 			require.Equal(t, `{"a":1}`, string(msg.ToolCalls[0].Function.Arguments))
 			require.Equal(t, "call_b", msg.ToolCalls[1].ID)
 			require.Equal(t, `{"a":2}`, string(msg.ToolCalls[1].Function.Arguments))
-			raw, err := msg.ProviderDataFor(responseProvider, "gpt-5")
+			raw, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, toolResultNativeMultiOutput, string(raw), "opaque native response items must survive persistence")
 		}

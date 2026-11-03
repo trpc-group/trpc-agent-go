@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"context"
@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
@@ -88,7 +89,7 @@ func TestRunnerUnusedResponsesModelKeepsLegacySession(t *testing.T) {
 		llmagent.WithModel(chat),
 		llmagent.WithModels(map[string]model.Model{
 			"chat":      chat,
-			"responses": New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL)),
+			"responses": responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL)),
 		}),
 		llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}),
 	)

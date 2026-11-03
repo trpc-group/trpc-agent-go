@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"context"
@@ -27,8 +27,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
@@ -82,7 +82,7 @@ func TestSummaryCutoffInsideNativeMultiCallRoundRestoresTheRound(t *testing.T) {
 	}
 
 	var toolCalls atomic.Int32
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	m := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))
 	a := llmagent.New("native", llmagent.WithModel(m),
 		llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}))
 	path := filepath.Join(t.TempDir(), "summary.db")
@@ -145,14 +145,14 @@ func TestSummaryCutoffInsideNativeMultiCallRoundRestoresTheRound(t *testing.T) {
 		agent.WithInvocationMessage(model.NewUserMessage("third question")),
 		agent.WithInvocationEventFilterKey(round.FilterKey),
 	)
-	inv.AgentName = "native"
-	req := &model.Request{}
-	processor.NewContentRequestProcessor(processor.WithAddSessionSummary(true)).
-		ProcessRequest(ctx, inv, req, make(chan *event.Event, 16))
-	ch, err := m.GenerateContent(ctx, req)
+	publicAgent := llmagent.New("native",
+		llmagent.WithModel(m),
+		llmagent.WithAddSessionSummary(true),
+	)
+	ch, err := publicAgent.Run(ctx, inv)
 	require.NoError(t, err)
-	for resp := range ch {
-		require.Nil(t, resp.Error)
+	for evt := range ch {
+		require.Nil(t, evt.Error)
 	}
 	sent := recorded()
 	require.Len(t, sent, 4)

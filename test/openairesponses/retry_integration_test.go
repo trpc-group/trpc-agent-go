@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bytes"
@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
@@ -96,8 +97,8 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 					return result, nil
 				})
 				// Leave MaxRetries unset to exercise the SDK's production default.
-				m := New("test-model", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-					WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
+				m := responses.New("test-model", responses.WithAPIKey("test"), responses.WithBaseURL("http://fixture.invalid/v1"),
+					responses.WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
 				a := llmagent.New("native", llmagent.WithModel(m),
 					llmagent.WithGenerationConfig(model.GenerationConfig{Stream: streaming}),
 					llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}))
@@ -214,8 +215,8 @@ func TestSDKDefaultRetryCancellationInterruptsBackoff(t *testing.T) {
 				response.Body = &retryClosedBody{ReadCloser: response.Body, closed: bodyClosed}
 				return response, nil
 			})
-			m := New("test-model", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-				WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
+			m := responses.New("test-model", responses.WithAPIKey("test"), responses.WithBaseURL("http://fixture.invalid/v1"),
+				responses.WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
 			ch, err := m.GenerateContent(ctx, &model.Request{
 				Messages: []model.Message{model.NewUserMessage("start")}, GenerationConfig: model.GenerationConfig{Stream: streaming},
 			})
@@ -250,16 +251,16 @@ func TestSDKDefaultRetryExhaustionIsOneTerminalError(t *testing.T) {
 				}
 				return retryResponse(req, http.StatusTooManyRequests, `{"error":{"message":"fixture rate limit","type":"rate_limit_error"}}`, "1"), nil
 			})
-			m := New("test-model", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-				WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
+			m := responses.New("test-model", responses.WithAPIKey("test"), responses.WithBaseURL("http://fixture.invalid/v1"),
+				responses.WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport})))
 			ch, err := m.GenerateContent(ctx, &model.Request{
 				Messages: []model.Message{model.NewUserMessage("start")}, GenerationConfig: model.GenerationConfig{Stream: streaming},
 			})
 			require.NoError(t, err)
-			responses := collect(t, ch)
-			require.Len(t, responses, 1)
-			requireTerminalError(t, responses)
-			for _, choice := range responses[0].Choices {
+			collectedResponses := collect(t, ch)
+			require.Len(t, collectedResponses, 1)
+			requireTerminalError(t, collectedResponses)
+			for _, choice := range collectedResponses[0].Choices {
 				require.Empty(t, choice.Delta.ToolCalls)
 				require.Nil(t, choice.Delta.ProviderData)
 			}

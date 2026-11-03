@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bytes"
@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/failover"
 	"trpc.group/trpc-go/trpc-agent-go/model/hedge"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -237,7 +238,7 @@ func assertNativeRoutingSessionContainsOnlyCall(t *testing.T, sess *session.Sess
 				require.Equal(t, callID, msg.ToolID)
 			}
 			if msg.ProviderData != nil {
-				payload, replayErr := msg.ProviderDataFor(responseProvider, "gpt-5")
+				payload, replayErr := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 				require.NoError(t, replayErr)
 				require.NotContains(t, string(payload), "fc_loser")
 				if bytes.Contains(payload, []byte(itemID)) {
@@ -280,11 +281,11 @@ func TestNativeRoutingFailoverBeforePreviewPreservesToolProviderDataAcrossReopen
 	}))
 	defer backupServer.Close()
 
-	primary := New("gpt-5", WithAPIKey("test"), WithBaseURL(primaryServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
-	backup := New("gpt-5", WithAPIKey("test"), WithBaseURL(backupServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
+	primary := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(primaryServer.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
+	backup := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(backupServer.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
 	routed, err := failover.New(failover.WithCandidates(primary, backup))
 	require.NoError(t, err)
-	require.Equal(t, responseProvider, routed.Info().ProviderDataProtocol)
+	require.Equal(t, responsesProviderProtocol, routed.Info().ProviderDataProtocol)
 
 	path := filepath.Join(t.TempDir(), "native-failover.db")
 	svc := openNativeRoutingSQLite(t, path)
@@ -362,8 +363,8 @@ func TestNativeRoutingFailoverAfterPreviewDoesNotSwitchOrExecuteTool(t *testing.
 		writeNativeRoutingToolRound(w, "resp_unexpected_backup", "fc_backup", "call_backup", `{"a":1}`)
 	}))
 	defer backupServer.Close()
-	primary := New("gpt-5", WithAPIKey("test"), WithBaseURL(primaryServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
-	backup := New("gpt-5", WithAPIKey("test"), WithBaseURL(backupServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
+	primary := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(primaryServer.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
+	backup := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(backupServer.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
 	routed, err := failover.New(failover.WithCandidates(primary, backup))
 	require.NoError(t, err)
 	svc := inmemory.NewSessionService()
@@ -468,11 +469,11 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerProviderData(t *test
 	}))
 	defer winnerServer.Close()
 
-	loser := New("gpt-5", WithAPIKey("test"), WithBaseURL(loserServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
-	winner := New("gpt-5", WithAPIKey("test"), WithBaseURL(winnerServer.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
+	loser := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(loserServer.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
+	winner := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(winnerServer.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
 	routed, err := hedge.New(hedge.WithCandidates(loser, winner), hedge.WithDelays(0))
 	require.NoError(t, err)
-	require.Equal(t, responseProvider, routed.Info().ProviderDataProtocol)
+	require.Equal(t, responsesProviderProtocol, routed.Info().ProviderDataProtocol)
 	path := filepath.Join(t.TempDir(), "native-hedge.db")
 	svc := openNativeRoutingSQLite(t, path)
 	var r runner.Runner

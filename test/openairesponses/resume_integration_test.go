@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"context"
@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
@@ -58,12 +59,12 @@ func TestRunnerResumeValidatesNativeRecordBeforeExecutingTools(t *testing.T) {
 				_, _ = io.WriteString(w, `{"id":"answer","status":"completed","output":`+messageOutput("answer", "2")+`}`)
 			}))
 			defer srv.Close()
-			original := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
+			original := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL), responses.WithOpenAIOptions(option.WithMaxRetries(0)))
 			ch, err := original.GenerateContent(ctx, &model.Request{Messages: []model.Message{model.NewUserMessage("calculate")}})
 			require.NoError(t, err)
-			responses := collect(t, ch)
-			require.Len(t, responses, 1)
-			pending := responses[0]
+			collectedResponses := collect(t, ch)
+			require.Len(t, collectedResponses, 1)
+			pending := collectedResponses[0]
 			if scenario == "edited_arguments" {
 				pending.Choices[0].Message.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":999}`)
 			}
@@ -101,7 +102,7 @@ func TestRunnerResumeValidatesNativeRecordBeforeExecutingTools(t *testing.T) {
 
 			var selected model.Model = original
 			legacy := &legacyIntegrationModel{}
-			other := New("other-model", WithAPIKey("test"), WithBaseURL(srv.URL))
+			other := responses.New("other-model", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))
 			switch scenario {
 			case "other_model":
 				selected = other

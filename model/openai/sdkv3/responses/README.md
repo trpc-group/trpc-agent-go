@@ -361,5 +361,17 @@ Low-level `WithOpenAIOptions` can bypass validation, including by replacing
 `include`, so callers that use it must preserve the managed-state contract
 themselves.
 
-The tests use local HTTP fixtures and a real SQLite close/reopen cycle. They do
-not demonstrate access to any live model, account, or compatible gateway.
+## Testing
+
+Adapter unit tests stay in this module. Runner, Graph, and Session integration
+tests live in `test/openairesponses`, within the repository's separate E2E module.
+From the repository root, run:
+
+```sh
+(cd model/openai/sdkv3 && go test ./...)
+(cd test && CGO_ENABLED=1 go test ./openairesponses)
+```
+
+Both modules require Go 1.25 or newer. The integration tests also require a C
+compiler for SQLite. They use local HTTP fixtures and real SQLite close/reopen
+cycles, without API credentials or live model calls.

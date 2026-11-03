@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bytes"
@@ -27,12 +27,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func nativeHistoryModel(t *testing.T, arguments string) (*Model, <-chan map[string]json.RawMessage, *atomic.Int32) {
+func nativeHistoryModel(t *testing.T, arguments string) (*responses.Model, <-chan map[string]json.RawMessage, *atomic.Int32) {
 	t.Helper()
 	requests := make(chan map[string]json.RawMessage, 2)
 	var calls atomic.Int32
@@ -76,8 +77,8 @@ func nativeHistoryModel(t *testing.T, arguments string) (*Model, <-chan map[stri
 			Body: io.NopCloser(bytes.NewReader(encoded)), Request: req,
 		}, nil
 	})
-	m := New("test-model", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-		WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport}), option.WithMaxRetries(0)))
+	m := responses.New("test-model", responses.WithAPIKey("test"), responses.WithBaseURL("http://fixture.invalid/v1"),
+		responses.WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: transport}), option.WithMaxRetries(0)))
 	return m, requests, &calls
 }
 

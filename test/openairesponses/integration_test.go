@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"context"
@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/failover"
 	"trpc.group/trpc-go/trpc-agent-go/model/hedge"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -86,7 +87,7 @@ func TestRunnerNativeToolLoopSurvivesSQLiteReopen(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"id":"resp_%d","status":"completed","output":[{"type":"message","id":"msg_answer_%d","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"2"}]}]}`, call, call)
 	}))
 	defer srv.Close()
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	m := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))
 	a := llmagent.New("native", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}))
 	path := filepath.Join(t.TempDir(), "runner.db")
 	openService := func() *sqlite.Service {
@@ -194,7 +195,7 @@ func TestRunnerDoesNotExecuteOrPersistUncommittedStreamCalls(t *testing.T) {
 			svc := inmemory.NewSessionService()
 			defer svc.Close()
 			a := llmagent.New("native",
-				llmagent.WithModel(New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))),
+				llmagent.WithModel(responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))),
 				llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
 				llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}),
 			)
@@ -237,7 +238,7 @@ func TestRunnerRejectsInconsistentEmptyCompletionWithoutToolSideEffects(t *testi
 	svc := inmemory.NewSessionService()
 	defer svc.Close()
 	a := llmagent.New("native",
-		llmagent.WithModel(New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))),
+		llmagent.WithModel(responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
 		llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}),
 	)
@@ -288,8 +289,8 @@ func TestRunnerNativeHistoryThroughRoutingWrappers(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"id":"resp_%d","status":"completed","output":[{"type":"message","id":"msg_%d","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}]}`, call, call)
 			}))
 			defer srv.Close()
-			primary := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
-			backup := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+			primary := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))
+			backup := responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))
 			var routed model.Model
 			var err error
 			if kind == "failover" {
@@ -298,7 +299,7 @@ func TestRunnerNativeHistoryThroughRoutingWrappers(t *testing.T) {
 				routed, err = hedge.New(hedge.WithCandidates(primary, backup), hedge.WithDelay(time.Hour))
 			}
 			require.NoError(t, err)
-			require.Equal(t, responseProvider, routed.Info().ProviderDataProtocol)
+			require.Equal(t, responsesProviderProtocol, routed.Info().ProviderDataProtocol)
 			r := runner.NewRunner("native", llmagent.New("native", llmagent.WithModel(routed)))
 			defer r.Close()
 			for _, text := range []string{"hello", "continue"} {
@@ -312,9 +313,9 @@ func TestRunnerNativeHistoryThroughRoutingWrappers(t *testing.T) {
 }
 
 func TestNativeRoutingRejectsMixedProducerIdentities(t *testing.T) {
-	primary := New("gpt-5")
+	primary := responses.New("gpt-5")
 	for _, candidates := range [][]model.Model{
-		{primary, New("another-model")},
+		{primary, responses.New("another-model")},
 		{primary, &legacyIntegrationModel{}},
 		{&legacyIntegrationModel{}, primary},
 	} {
@@ -341,7 +342,7 @@ func TestRunnerResponseProducerIsCapturedBeforeCallbacks(t *testing.T) {
 		invocation.Model = &legacyIntegrationModel{}
 		return nil, nil
 	})
-	a := llmagent.New("native", llmagent.WithModel(New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))),
+	a := llmagent.New("native", llmagent.WithModel(responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))),
 		llmagent.WithModelCallbacks(callbacks))
 	r := runner.NewRunner("native", a)
 	defer r.Close()

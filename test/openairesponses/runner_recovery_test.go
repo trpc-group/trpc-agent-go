@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bufio"
@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	legacychat "trpc.group/trpc-go/trpc-agent-go/model/openai"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
@@ -173,10 +174,10 @@ func TestRecoveryChildRunner(t *testing.T) {
 	idempotent := os.Getenv(recoveryChildIdemEnv) != "false"
 	var selectedModel model.Model
 	if protocol == "responses" {
-		selectedModel = New(recoveryModelName,
-			WithAPIKey("offline-test"),
-			WithBaseURL(baseURL),
-			WithOpenAIOptions(option.WithMaxRetries(0)),
+		selectedModel = responses.New(recoveryModelName,
+			responses.WithAPIKey("offline-test"),
+			responses.WithBaseURL(baseURL),
+			responses.WithOpenAIOptions(option.WithMaxRetries(0)),
 		)
 	} else {
 		selectedModel = legacychat.New(recoveryModelName,

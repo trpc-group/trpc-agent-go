@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bytes"
@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	graphsqlite "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -98,10 +99,10 @@ func TestGraphNativeInterruptCheckpointResume(t *testing.T) {
 				}, nil
 			})
 
-			m := New("gpt-5",
-				WithAPIKey("test"),
-				WithBaseURL("http://fixture.invalid/v1"),
-				WithOpenAIOptions(
+			m := responses.New("gpt-5",
+				responses.WithAPIKey("test"),
+				responses.WithBaseURL("http://fixture.invalid/v1"),
+				responses.WithOpenAIOptions(
 					option.WithHTTPClient(&http.Client{Transport: transport}),
 					option.WithMaxRetries(0),
 				),

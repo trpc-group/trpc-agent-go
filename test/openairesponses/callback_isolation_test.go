@@ -7,7 +7,7 @@
 //
 //
 
-package responses
+package openairesponses_test
 
 import (
 	"bytes"
@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -97,9 +98,9 @@ func (rt *callbackIsolationTransport) RoundTrip(req *http.Request) (*http.Respon
 	}, nil
 }
 
-func callbackIsolationModel(rt *callbackIsolationTransport) *Model {
-	return New("gpt-5", WithAPIKey("test"), WithBaseURL("http://fixture.invalid/v1"),
-		WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: rt}), option.WithMaxRetries(0)))
+func callbackIsolationModel(rt *callbackIsolationTransport) *responses.Model {
+	return responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL("http://fixture.invalid/v1"),
+		responses.WithOpenAIOptions(option.WithHTTPClient(&http.Client{Transport: rt}), option.WithMaxRetries(0)))
 }
 
 func openCallbackIsolationSQLite(t *testing.T, path string) *sqlite.Service {
@@ -223,7 +224,7 @@ func assertCallbackIsolationSession(t *testing.T, sess *session.Session) {
 			found = true
 			require.Equal(t, "call_tool", msg.ToolCalls[0].ID)
 			require.Equal(t, `{"a":1}`, string(msg.ToolCalls[0].Function.Arguments))
-			replay, err := msg.ProviderDataFor(responseProvider, "gpt-5")
+			replay, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, nativeToolOutput, string(replay))
 		}
@@ -283,7 +284,7 @@ func assertCallbackIsolationMultiSession(t *testing.T, sess *session.Session) {
 			for _, call := range msg.ToolCalls {
 				require.Equal(t, `{"a":1}`, string(call.Function.Arguments))
 			}
-			replay, err := msg.ProviderDataFor(responseProvider, "gpt-5")
+			replay, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 			require.NoError(t, err)
 			require.JSONEq(t, callbackIsolationMultiToolOutput, string(replay))
 		}
@@ -326,7 +327,7 @@ func setCallbackProviderDataArguments(message *model.Message, arguments string) 
 	if message == nil {
 		return errors.New("assistant message is nil")
 	}
-	payload, err := message.ProviderDataFor(responseProvider, "gpt-5")
+	payload, err := message.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 	if err != nil {
 		return err
 	}
@@ -357,7 +358,7 @@ func setCallbackProviderDataArguments(message *model.Message, arguments string) 
 	if err != nil {
 		return err
 	}
-	return message.SetProviderData(responseProvider, "gpt-5", updated)
+	return message.SetProviderData(responsesProviderProtocol, "gpt-5", updated)
 }
 
 func editableProviderDataAfterModel(mode string) model.AfterModelCallbackStructured {
@@ -508,7 +509,7 @@ func TestAfterModelEditsKeepProviderDataAndToolExecutionIndependentAcrossSQLiteR
 			require.Equal(t, tc.wantContent, stored.Content)
 			require.Equal(t, tc.wantReasoning, stored.ReasoningContent)
 			require.Equal(t, tc.wantToolArguments, string(stored.ToolCalls[0].Function.Arguments))
-			storedProviderData, err := stored.ProviderDataFor(responseProvider, "gpt-5")
+			storedProviderData, err := stored.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 			require.NoError(t, err)
 			var items []struct {
 				Type      string `json:"type"`
@@ -528,7 +529,7 @@ func TestAfterModelEditsKeepProviderDataAndToolExecutionIndependentAcrossSQLiteR
 			loaded, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
 			stored = findEditableProviderDataMessage(t, loaded)
-			storedProviderData, err = stored.ProviderDataFor(responseProvider, "gpt-5")
+			storedProviderData, err = stored.ProviderDataFor(responsesProviderProtocol, "gpt-5")
 			require.NoError(t, err)
 			var loadedItems []struct {
 				Type      string `json:"type"`

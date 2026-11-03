@@ -299,7 +299,7 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 	completed := make(map[string]struct{})
 	for messageIndex, msg := range messages {
 		if msg.ProviderData != nil {
-			converted, err := convertReplayMessage(msg, modelName, messageIndex, called, completed)
+			converted, err := convertProviderDataMessage(msg, modelName, messageIndex, called, completed)
 			if err != nil {
 				return nil, err
 			}
@@ -351,18 +351,18 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 	return items, nil
 }
 
-func convertReplayMessage(msg model.Message, modelName string, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func convertProviderDataMessage(msg model.Message, modelName string, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	if msg.Role != model.RoleAssistant {
-		return nil, fmt.Errorf("openai/responses: replay data is only valid on assistant messages (message %d)", messageIndex)
+		return nil, fmt.Errorf("openai/responses: provider data is only valid on assistant messages (message %d)", messageIndex)
 	}
 	raw, err := msg.ProviderDataFor(responseProvider, modelName)
 	if err != nil {
-		return nil, fmt.Errorf("openai/responses: invalid replay data at message %d: %w", messageIndex, err)
+		return nil, fmt.Errorf("openai/responses: invalid provider data at message %d: %w", messageIndex, err)
 	}
 	native, err := parseNativeItems(raw, true)
 	if err != nil {
-		return nil, fmt.Errorf("openai/responses: invalid replay items at message %d: %w", messageIndex, err)
+		return nil, fmt.Errorf("openai/responses: invalid provider data items at message %d: %w", messageIndex, err)
 	}
 	for _, item := range native {
 		if err := trackCall(item, called, completed); err != nil {
@@ -372,7 +372,7 @@ func convertReplayMessage(msg model.Message, modelName string, messageIndex int,
 	for _, rawItem := range rawItems(raw) {
 		var item responses.ResponseInputItemUnion
 		if err := json.Unmarshal(rawItem, &item); err != nil {
-			return nil, fmt.Errorf("openai/responses: decode replay item: %w", err)
+			return nil, fmt.Errorf("openai/responses: decode provider data item: %w", err)
 		}
 		items = append(items, item.ToParam())
 	}
@@ -382,7 +382,7 @@ func convertReplayMessage(msg model.Message, modelName string, messageIndex int,
 func convertAssistantMessage(msg model.Message, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	if msg.ReasoningContent != "" || msg.ReasoningSignature != "" {
-		return nil, fmt.Errorf("assistant reasoning requires native replay data")
+		return nil, fmt.Errorf("assistant reasoning requires provider data")
 	}
 	if len(msg.ContentParts) > 0 || msg.Content != "" {
 		item, hasContent, err := messageInputItem(msg, responses.EasyInputMessageRoleAssistant)
@@ -449,14 +449,14 @@ func trackCall(item nativeItem, called, completed map[string]struct{}) error {
 
 func parseNativeItems(payload json.RawMessage, requireCompleted bool) ([]nativeItem, error) {
 	if len(bytes.TrimSpace(payload)) == 0 {
-		return nil, fmt.Errorf("replay payload is empty")
+		return nil, fmt.Errorf("provider data payload is empty")
 	}
 	var raw []json.RawMessage
 	if err := json.Unmarshal(payload, &raw); err != nil {
-		return nil, fmt.Errorf("replay payload must be an item array: %w", err)
+		return nil, fmt.Errorf("provider data payload must be an item array: %w", err)
 	}
 	if raw == nil {
-		return nil, fmt.Errorf("replay payload must be an item array")
+		return nil, fmt.Errorf("provider data payload must be an item array")
 	}
 	items := make([]nativeItem, 0, len(raw))
 	for i, encoded := range raw {
@@ -764,7 +764,7 @@ func projectResponse(resp *responses.Response, modelName string) (*model.Respons
 	}
 	if len(resp.Output) > 0 {
 		if err := message.SetProviderData(responseProvider, modelName, payload); err != nil {
-			return nil, fmt.Errorf("openai/responses: store native output replay: %w", err)
+			return nil, fmt.Errorf("openai/responses: store native output provider data: %w", err)
 		}
 	}
 	finish := finishReasonStop
