@@ -125,14 +125,14 @@ server, _ := a2aserver.New(
 `chat.completion`，并通过 `metadata.llm_response_id` 关联响应。
 
 如果需要兼容将每个 TextPart 都追加显示的客户端，可以在 Message 流式模式下
-开启 `WithStreamingMessageDeltaOnly(true)`：
+开启 `WithStreamingMessageTextDeltaOnly(true)`：
 
 ```go
 server, _ := a2aserver.New(
 	a2aserver.WithHost("localhost:8080"),
 	a2aserver.WithAgent(agent, true),
 	a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
-	a2aserver.WithStreamingMessageDeltaOnly(true),
+	a2aserver.WithStreamingMessageTextDeltaOnly(true),
 )
 ```
 
@@ -986,7 +986,7 @@ subAgent, _ := a2aagent.New(
 | `WithResponseRewriter(rewriter)` | 改写或丢弃出站 A2A unary/streaming 结果 |
 | `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
 | `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
-| `WithStreamingMessageDeltaOnly(enabled)` | Message 流式模式只输出 Delta 文本和思考内容（默认 false） |
+| `WithStreamingMessageTextDeltaOnly(enabled)` | Message 流式模式只输出 Delta 文本和思考内容（默认 false） |
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
 | `WithADKCompatibility(enabled)` | ADK 兼容模式（默认：开启） |
 | `WithErrorHandler(handler)` | 自定义错误处理 |

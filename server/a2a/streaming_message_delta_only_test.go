@@ -24,7 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestStreamingMessageDeltaOnlyHTTP(t *testing.T) {
+func TestStreamingMessageTextDeltaOnlyHTTP(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		options     []Option
@@ -32,8 +32,8 @@ func TestStreamingMessageDeltaOnlyHTTP(t *testing.T) {
 		wantThought string
 	}{
 		{name: "default", wantText: "hellohello world world", wantThought: "thinkthink again again"},
-		{name: "enabled", options: []Option{WithStreamingMessageDeltaOnly(true)}, wantText: "hello world", wantThought: "think again"},
-		{name: "disabled", options: []Option{WithStreamingMessageDeltaOnly(true), WithStreamingMessageDeltaOnly(false)}, wantText: "hellohello world world", wantThought: "thinkthink again again"},
+		{name: "enabled", options: []Option{WithStreamingMessageTextDeltaOnly(true)}, wantText: "hello world", wantThought: "think again"},
+		{name: "disabled", options: []Option{WithStreamingMessageTextDeltaOnly(true), WithStreamingMessageTextDeltaOnly(false)}, wantText: "hellohello world world", wantThought: "thinkthink again again"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backend := &mockRunner{runFunc: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *event.Event, error) {
@@ -118,7 +118,7 @@ func TestStreamingMessageDeltaOnlyHTTP(t *testing.T) {
 	}
 }
 
-func TestStreamingMessageDeltaOnlyConversionBoundaries(t *testing.T) {
+func TestStreamingMessageTextDeltaOnlyConversionBoundaries(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name      string
@@ -137,7 +137,7 @@ func TestStreamingMessageDeltaOnlyConversionBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
-				streamingEventType: tc.eventType, streamingMessageDeltaOnly: tc.enabled,
+				streamingEventType: tc.eventType, streamingMessageTextDeltaOnly: tc.enabled,
 			}
 			evt := &event.Event{Response: &model.Response{
 				ID: "response", Object: model.ObjectTypeChatCompletion, IsPartial: tc.partial,
@@ -169,9 +169,9 @@ func TestStreamingMessageDeltaOnlyConversionBoundaries(t *testing.T) {
 	}
 }
 
-func TestStreamingMessageDeltaOnlyOmitsIDOnlyEvent(t *testing.T) {
+func TestStreamingMessageTextDeltaOnlyOmitsIDOnlyEvent(t *testing.T) {
 	converter := &defaultEventToA2AMessage{
-		streamingEventType: StreamingEventTypeMessage, streamingMessageDeltaOnly: true,
+		streamingEventType: StreamingEventTypeMessage, streamingMessageTextDeltaOnly: true,
 	}
 	evt := &event.Event{Response: &model.Response{
 		ID:      "response",
@@ -182,9 +182,9 @@ func TestStreamingMessageDeltaOnlyOmitsIDOnlyEvent(t *testing.T) {
 	require.Nil(t, result)
 }
 
-func TestStreamingMessageDeltaOnlyNonPartialReasoning(t *testing.T) {
+func TestStreamingMessageTextDeltaOnlyNonPartialReasoning(t *testing.T) {
 	converter := &defaultEventToA2AMessage{
-		streamingEventType: StreamingEventTypeMessage, streamingMessageDeltaOnly: true,
+		streamingEventType: StreamingEventTypeMessage, streamingMessageTextDeltaOnly: true,
 	}
 	evt := &event.Event{Response: &model.Response{
 		ID: "response", Object: model.ObjectTypeChatCompletion, IsPartial: false,
@@ -204,7 +204,7 @@ func TestStreamingMessageDeltaOnlyNonPartialReasoning(t *testing.T) {
 	require.Equal(t, true, part.Metadata["thought"])
 }
 
-func TestStreamingMessageDeltaOnlyCustomConverter(t *testing.T) {
+func TestStreamingMessageTextDeltaOnlyCustomConverter(t *testing.T) {
 	backend := &mockRunner{runFunc: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *event.Event, error) {
 		ch := make(chan *event.Event, 1)
 		ch <- &event.Event{Response: &model.Response{
@@ -232,7 +232,7 @@ func TestStreamingMessageDeltaOnlyCustomConverter(t *testing.T) {
 	srv, err := New(
 		WithRunner(backend), WithAgentCard(card),
 		WithStreamingEventType(StreamingEventTypeMessage),
-		WithStreamingMessageDeltaOnly(true), WithEventToA2AConverter(custom),
+		WithStreamingMessageTextDeltaOnly(true), WithEventToA2AConverter(custom),
 	)
 	require.NoError(t, err)
 	httpServer := httptest.NewServer(srv.Handler())

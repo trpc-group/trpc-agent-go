@@ -130,14 +130,14 @@ non-partial events. Clients can distinguish `chat.completion.chunk` from
 `metadata.llm_response_id`.
 
 For compatibility with clients that append every text part, enable
-`WithStreamingMessageDeltaOnly(true)` together with Message streaming:
+`WithStreamingMessageTextDeltaOnly(true)` together with Message streaming:
 
 ```go
 server, _ := a2aserver.New(
 	a2aserver.WithHost("localhost:8080"),
 	a2aserver.WithAgent(agent, true),
 	a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
-	a2aserver.WithStreamingMessageDeltaOnly(true),
+	a2aserver.WithStreamingMessageTextDeltaOnly(true),
 )
 ```
 
@@ -1029,7 +1029,7 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithResponseRewriter(rewriter)` | Rewrite or drop outbound A2A unary/streaming results |
 | `WithRunOptions(opts...)` | Append RunOptions to every invocation |
 | `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
-| `WithStreamingMessageDeltaOnly(enabled)` | Use only Delta text and reasoning in Message streaming (default: false) |
+| `WithStreamingMessageTextDeltaOnly(enabled)` | Use only Delta text and reasoning in Message streaming (default: false) |
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
 | `WithADKCompatibility(enabled)` | ADK compatibility mode (default: enabled) |
 | `WithErrorHandler(handler)` | Custom error handler |
