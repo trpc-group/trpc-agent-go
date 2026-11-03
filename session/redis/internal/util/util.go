@@ -105,7 +105,7 @@ func ProcessEventCmd(
 		evt := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), evt); err != nil {
 			if EventHasProviderData([]byte(eventBytes)) {
-				return nil, fmt.Errorf("decode event with native replay data: %w", err)
+				return nil, fmt.Errorf("decode event with provider data: %w", err)
 			}
 			log.WarnfContext(
 				ctx,
@@ -139,13 +139,13 @@ func EventHasProviderData(data []byte) bool {
 		}
 		for _, rawMessage := range []json.RawMessage{choice.Message, choice.Delta} {
 			var message struct {
-				ProviderData json.RawMessage `json:"replay"`
+				ProviderData json.RawMessage `json:"provider_data"`
 			}
 			if json.Unmarshal(rawMessage, &message) != nil {
 				continue
 			}
-			replay := bytes.TrimSpace(message.ProviderData)
-			if len(replay) > 0 && !bytes.Equal(replay, []byte("null")) {
+			record := bytes.TrimSpace(message.ProviderData)
+			if len(record) > 0 && !bytes.Equal(record, []byte("null")) {
 				return true
 			}
 		}

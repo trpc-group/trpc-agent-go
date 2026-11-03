@@ -7,9 +7,9 @@
 //
 //
 
-// Package modelreplay checks native replay compatibility for routing models
-// and for the messages exchanged with them.
-package modelreplay
+// Package providerdata checks provider data compatibility and isolates mutable
+// message fields at callback and tool-execution boundaries.
+package providerdata
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ import (
 // native producer identity. Heterogeneous legacy candidates remain supported.
 func CandidateInfo(candidates []model.Model) (model.Info, error) {
 	if len(candidates) == 0 {
-		return model.Info{}, fmt.Errorf("native replay requires at least one candidate")
+		return model.Info{}, fmt.Errorf("provider data requires at least one candidate")
 	}
 	primary := candidates[0].Info()
 	hasNative := false
@@ -32,15 +32,15 @@ func CandidateInfo(candidates []model.Model) (model.Info, error) {
 		for _, candidate := range candidates {
 			info := candidate.Info()
 			if info.Name != primary.Name || info.ProviderDataProtocol != primary.ProviderDataProtocol {
-				return model.Info{}, fmt.Errorf("native replay requires candidates with the same protocol and configured model name")
+				return model.Info{}, fmt.Errorf("provider data requires candidates with the same protocol and configured model name")
 			}
 		}
 	}
 	return primary, nil
 }
 
-// MessagesHaveReplay reports whether any message carries native replay data.
-func MessagesHaveReplay(messages []model.Message) bool {
+// MessagesHaveData reports whether any message carries provider data.
+func MessagesHaveData(messages []model.Message) bool {
 	for _, message := range messages {
 		if message.ProviderData != nil {
 			return true
@@ -49,9 +49,9 @@ func MessagesHaveReplay(messages []model.Message) bool {
 	return false
 }
 
-// ResponseHasReplay reports whether any choice of response carries native
-// replay data.
-func ResponseHasReplay(response *model.Response) bool {
+// ResponseHasData reports whether any choice of response carries native
+// provider data.
+func ResponseHasData(response *model.Response) bool {
 	if response == nil {
 		return false
 	}
@@ -72,7 +72,7 @@ func ValidateMessages(messages []model.Message, info model.Info) error {
 			continue
 		}
 		if _, err := message.ProviderDataFor(info.ProviderDataProtocol, info.Name); err != nil {
-			return fmt.Errorf("native replay message %d: %w", index, err)
+			return fmt.Errorf("provider data message %d: %w", index, err)
 		}
 	}
 	return nil

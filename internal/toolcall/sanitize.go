@@ -19,7 +19,7 @@ import (
 	"regexp"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -79,7 +79,7 @@ func SanitizeMessagesWithToolsResult(
 	if !containsToolMessages(messages) {
 		out := make([]model.Message, len(messages))
 		for i, msg := range messages {
-			out[i] = modelreplay.CloneMessage(msg)
+			out[i] = providerdata.CloneMessage(msg)
 		}
 		return SanitizeResult{Messages: out}
 	}
@@ -91,7 +91,7 @@ func SanitizeMessagesWithToolsResult(
 		if msg.Role == model.RoleAssistant && msg.ProviderData != nil {
 			// Native projections cannot be normalized or split, including when
 			// results are missing. Keep the round for native history validation.
-			builder.append(indexedMessage{message: modelreplay.CloneMessage(msg), sourceIndex: i})
+			builder.append(indexedMessage{message: providerdata.CloneMessage(msg), sourceIndex: i})
 			i++
 			for i < len(messages) && messages[i].Role == model.RoleTool {
 				builder.append(indexedMessage{message: messages[i], sourceIndex: i})

@@ -20,7 +20,7 @@ const (
 )
 
 // HasPayload reports whether the message has non-empty Content, ContentParts,
-// ReasoningContent, or provider-native replay data.
+// ReasoningContent, or provider-provider data.
 func HasPayload(msg Message) bool {
 	return msg.Content != "" ||
 		len(msg.ContentParts) > 0 ||

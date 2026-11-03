@@ -7,7 +7,7 @@
 //
 //
 
-package modelreplay
+package providerdata
 
 import (
 	"encoding/json"
@@ -54,7 +54,7 @@ func TestCloneMessagePreservesNativeHistoryOwnership(t *testing.T) {
 	*cloned.ToolCalls[0].Index = 7
 	cloned.ToolCalls[0].ExtraFields["nested"].(map[string]any)["count"] = json.Number("1")
 	require.NoError(t, json.Unmarshal([]byte(
-		`{"version":2,"provider":"other.native","model":"other-model","payload":[]}`,
+		`{"version":1,"provider":"other.native","model":"other-model","payload":[]}`,
 	), cloned.ProviderData))
 
 	after, err := json.Marshal(message)

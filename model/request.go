@@ -92,8 +92,7 @@ type Message struct {
 	// representations are not automatically synchronized. Providers must check
 	// the record's protocol and model with ProviderDataFor before replaying it.
 	// Clearing ProviderData from an unfinished native tool round may prevent recovery.
-	// The JSON key remains "replay" for compatibility with persisted sessions.
-	ProviderData *ProviderData `json:"replay,omitempty"`
+	ProviderData *ProviderData `json:"provider_data,omitempty"`
 }
 
 // AddFilePath adds a file path to the message.

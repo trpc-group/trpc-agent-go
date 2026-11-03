@@ -23,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestStreamReplayUsesDoneReasoningCiphertext(t *testing.T) {
+func TestStreamProviderDataUsesDoneReasoningCiphertext(t *testing.T) {
 	const doneReasoning = `{"type":"reasoning","id":"rs_done","summary":[],"encrypted_content":"opaque-item-done","future_extension":{"keep":true}}`
 	const terminalReasoning = `{"type":"reasoning","id":"rs_done","summary":[],"encrypted_content":"opaque-terminal-snapshot","future_extension":{"keep":true}}`
 	const message = `{"type":"message","id":"msg_done","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ready"}]}`

@@ -190,7 +190,7 @@ func TestGraphNativeInterruptCheckpointResume(t *testing.T) {
 			assertNoGraphNativeEventErrors(t, resumedEvents)
 			require.EqualValues(t, 2, httpCalls.Load(), "resume should make exactly one next Responses request")
 			require.EqualValues(t, 1, toolCalls.Load(), "a completed tool must not be re-executed during resume")
-			assertToolReplayInput(t, receiveGraphNativeRequest(t, ctx, requests)["input"])
+			assertToolProviderDataInput(t, receiveGraphNativeRequest(t, ctx, requests)["input"])
 		})
 	}
 }

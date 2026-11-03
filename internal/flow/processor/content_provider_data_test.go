@@ -27,15 +27,15 @@ import (
 )
 
 const (
-	testReplayProvider = "openai.responses"
-	testReplayModel    = "test-model"
+	testProviderDataProvider = "openai.responses"
+	testProviderDataModel    = "test-model"
 )
 
-func bindTestReplay(t *testing.T, msg *model.Message) {
+func bindTestProviderData(t *testing.T, msg *model.Message) {
 	t.Helper()
 	require.NoError(t, msg.SetProviderData(
-		testReplayProvider,
-		testReplayModel,
+		testProviderDataProvider,
+		testProviderDataModel,
 		json.RawMessage(`[{"type":"reasoning","id":"r1","encrypted_content":"opaque"}]`),
 	))
 }
@@ -64,7 +64,7 @@ func testCallMessage(t *testing.T, native bool, reasoning string, ids ...string)
 		ToolCalls:        testToolCalls(ids...),
 	}
 	if native {
-		bindTestReplay(t, &msg)
+		bindTestProviderData(t, &msg)
 	}
 	return msg
 }
@@ -72,7 +72,7 @@ func testCallMessage(t *testing.T, native bool, reasoning string, ids ...string)
 func testTextMessage(t *testing.T, native bool, content string) model.Message {
 	msg := model.NewAssistantMessage(content)
 	if native {
-		bindTestReplay(t, &msg)
+		bindTestProviderData(t, &msg)
 	}
 	return msg
 }
@@ -111,17 +111,17 @@ func testInvocation(
 	return inv
 }
 
-func requireTestReplay(t *testing.T, msg model.Message) {
+func requireTestProviderData(t *testing.T, msg model.Message) {
 	t.Helper()
 	require.NotNil(t, msg.ProviderData)
-	payload, err := msg.ProviderDataFor(testReplayProvider, testReplayModel)
+	payload, err := msg.ProviderDataFor(testProviderDataProvider, testProviderDataModel)
 	require.NoError(t, err)
 	require.NotEmpty(t, payload)
 }
 
-// withoutReplay clears native records so a native projection can be compared
+// withoutProviderData clears native records so a native projection can be compared
 // with the projection of the same legacy history.
-func withoutReplay(messages []model.Message) []model.Message {
+func withoutProviderData(messages []model.Message) []model.Message {
 	out := make([]model.Message, len(messages))
 	for i, msg := range messages {
 		msg.ProviderData = nil
@@ -144,7 +144,7 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 	textMessage := testTextMessage(t, true, "checking")
 	textMessage.ReasoningContent = "opaque reasoning"
 	textMessage.ReasoningSignature = "signature"
-	bindTestReplay(t, &textMessage)
+	bindTestProviderData(t, &textMessage)
 
 	processor := NewContentRequestProcessor(
 		WithReasoningContentMode(ReasoningContentModeDiscardAll),
@@ -152,7 +152,7 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 	got := processor.processReasoningContent(textMessage, "old", "new", false)
 	require.Empty(t, got.ReasoningContent)
 	require.Empty(t, got.ReasoningSignature)
-	requireTestReplay(t, got)
+	requireTestProviderData(t, got)
 
 	projector := NewContentRequestProcessor(
 		WithEventMessageProjector(func(
@@ -166,7 +166,7 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 	)
 	projected := projector.projectEventMessage(nil, event.Event{}, textMessage)
 	require.Equal(t, "rewritten", projected.Content)
-	requireTestReplay(t, projected)
+	requireTestProviderData(t, projected)
 
 	clearingProjector := NewContentRequestProcessor(
 		WithEventMessageProjector(func(
@@ -180,9 +180,9 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 	)
 	cleared := clearingProjector.projectEventMessage(nil, event.Event{}, textMessage)
 	require.Nil(t, cleared.ProviderData, "a projector may deliberately clear native replay")
-	requireTestReplay(t, textMessage)
+	requireTestProviderData(t, textMessage)
 
-	const replacement = `{"version":2,"provider":"openai.responses","model":"test-model","payload":[{"type":"message","content":"replacement"}]}`
+	const replacement = `{"version":1,"provider":"openai.responses","model":"test-model","payload":[{"type":"message","content":"replacement"}]}`
 	rebindingProjector := NewContentRequestProcessor(
 		WithEventMessageProjector(func(
 			_ *agent.Invocation,
@@ -196,10 +196,10 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 		}),
 	)
 	rebound := rebindingProjector.projectEventMessage(nil, event.Event{}, textMessage)
-	reboundPayload, err := rebound.ProviderDataFor(testReplayProvider, testReplayModel)
+	reboundPayload, err := rebound.ProviderDataFor(testProviderDataProvider, testProviderDataModel)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"type":"message","content":"replacement"}]`, string(reboundPayload))
-	requireTestReplay(t, textMessage)
+	requireTestProviderData(t, textMessage)
 
 	replayOnly := testTextMessage(t, true, "")
 	inv := agent.NewInvocation(agent.WithInvocationID("inv1"))
@@ -211,7 +211,7 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 		nil,
 	)
 	require.Len(t, projectedMessages, 1)
-	requireTestReplay(t, projectedMessages[0])
+	requireTestProviderData(t, projectedMessages[0])
 
 	_, ok := mergeProjectedAssistantToolCallMessages(
 		[]model.Message{textMessage},
@@ -223,7 +223,7 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 func TestContentRequestProcessor_ForeignNativeEventBecomesNewUserContext(t *testing.T) {
 	native := testTextMessage(t, true, "native answer")
 	native.ReasoningContent = "opaque reasoning"
-	bindTestReplay(t, &native)
+	bindTestProviderData(t, &native)
 	foreign := toolTranscriptTestEvent("req1", "inv1", native, "")
 	foreign.Author = "native-agent"
 
@@ -248,7 +248,7 @@ func TestContentRequestProcessor_ToolTranscriptModeRebasesCompletedNativeRound(t
 	callMessage := testCallMessage(t, true, "opaque reasoning", "call_1")
 	callMessage.Content = "checked status"
 	callMessage.ReasoningSignature = "signature"
-	bindTestReplay(t, &callMessage)
+	bindTestProviderData(t, &callMessage)
 	silentCall := testCallMessage(t, true, "silent reasoning", "call_2")
 	pendingCall := testCallMessage(t, true, "pending reasoning", "call_3")
 	events := []event.Event{
@@ -284,7 +284,7 @@ func TestContentRequestProcessor_ToolTranscriptModeRebasesCompletedNativeRound(t
 	require.Len(t, current.ToolCalls, 1)
 	require.Equal(t, "call_3", current.ToolCalls[0].ID)
 	require.Equal(t, "pending reasoning", current.ReasoningContent)
-	requireTestReplay(t, current)
+	requireTestProviderData(t, current)
 	require.Equal(t, "call_3", got[2].Response.Choices[0].Message.ToolID)
 }
 
@@ -323,7 +323,7 @@ func TestContentRequestProcessor_SummaryCutoffSummarizesCompletedNativePrefix(t 
 	}
 
 	native := project(true)
-	require.Equal(t, project(false), withoutReplay(native),
+	require.Equal(t, project(false), withoutProviderData(native),
 		"a cutoff outside native rounds must keep the legacy projection")
 
 	counts := toolCallIDOccurrences(native)
@@ -339,7 +339,7 @@ func TestContentRequestProcessor_SummaryCutoffSummarizesCompletedNativePrefix(t 
 	require.Equal(t, "pending reasoning", pending.ReasoningContent)
 	require.Equal(t, []string{"call_3", "call_4"},
 		[]string{pending.ToolCalls[0].ID, pending.ToolCalls[1].ID})
-	requireTestReplay(t, *pending)
+	requireTestProviderData(t, *pending)
 	last := native[len(native)-2:]
 	require.Equal(t, "call_3", last[0].ToolID)
 	require.Equal(t, "call_4", last[1].ToolID)
@@ -399,7 +399,7 @@ func requireNativeRoundIntact(t *testing.T, messages []model.Message) {
 	require.Equal(t, "call_1", record.ToolCalls[0].ID)
 	require.Equal(t, "call_2", record.ToolCalls[1].ID)
 	require.Equal(t, "pending reasoning", record.ReasoningContent)
-	requireTestReplay(t, record)
+	requireTestProviderData(t, record)
 	require.Equal(t, "call_1", messages[2].ToolID)
 	require.Equal(t, "first result", messages[2].Content)
 	require.Equal(t, "call_2", messages[3].ToolID)
@@ -476,7 +476,7 @@ func TestContentRequestProcessor_MaxHistoryRunsBoundsCompletedNativeRounds(t *te
 			record := got[pendingIndex]
 			require.Len(t, record.ToolCalls, 2)
 			require.Equal(t, "pending reasoning", record.ReasoningContent)
-			requireTestReplay(t, record)
+			requireTestProviderData(t, record)
 			require.Equal(t, "call_21a", got[pendingIndex+1].ToolID)
 			require.Equal(t, "call_21b", got[pendingIndex+2].ToolID)
 			for _, msg := range got[:pendingIndex] {
@@ -509,7 +509,7 @@ func TestContentRequestProcessor_IncompletePerCallNativeRoundStaysIntact(t *test
 	record := native[0].Response.Choices[0].Message
 	require.Len(t, record.ToolCalls, 2,
 		"a native record keeps every call so the adapter can reject the gap")
-	requireTestReplay(t, record)
+	requireTestProviderData(t, record)
 	require.Equal(t, "call_1", native[1].Response.Choices[0].Message.ToolID)
 }
 
@@ -544,14 +544,14 @@ func TestContentRequestProcessor_NativeHistoryKeepsLegacyCompaction(t *testing.T
 
 	legacy := project(false)
 	native := project(true)
-	require.Equal(t, legacy, withoutReplay(native))
+	require.Equal(t, legacy, withoutProviderData(native))
 	var compacted int
 	for _, msg := range native {
 		if msg.Role == model.RoleTool && msg.Content != large {
 			compacted++
 		}
 		if msg.Role == model.RoleAssistant {
-			requireTestReplay(t, msg)
+			requireTestProviderData(t, msg)
 		}
 	}
 	require.Positive(t, compacted, "native histories must still compact tool results")
@@ -561,7 +561,7 @@ func TestCompactResumeToolRoundKeepsNativeArguments(t *testing.T) {
 	arguments := []byte(`{"q":"` + strings.Repeat("argument ", 200) + `"}`)
 	native := testCallMessage(t, true, "reasoning", "call_1")
 	native.ToolCalls[0].Function.Arguments = arguments
-	bindTestReplay(t, &native)
+	bindTestProviderData(t, &native)
 	legacy := testCallMessage(t, false, "reasoning", "call_1")
 	legacy.ToolCalls[0].Function.Arguments = arguments
 	large := strings.Repeat("large tool output ", 200)
@@ -585,7 +585,7 @@ func TestCompactResumeToolRoundKeepsNativeArguments(t *testing.T) {
 	nativeTail := compactResumeToolRound(context.Background(), tail(native), cfg)
 	record := nativeTail[0].Response.Choices[0].Message
 	require.Equal(t, arguments, []byte(record.ToolCalls[0].Function.Arguments))
-	requireTestReplay(t, record)
+	requireTestProviderData(t, record)
 	require.NotEqual(t, large, nativeTail[1].Response.Choices[0].Message.Content,
 		"native resume tails still compact tool results")
 }

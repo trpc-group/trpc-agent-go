@@ -151,10 +151,11 @@ function in `tools/main.go`.
   The Runner executes those committed local calls.
 - A stream that ends without a valid completed response is an error. Partial
   function calls from that stream are not executed.
-- Assistant messages carry a native replay record. `Content` and
-  `ReasoningContent` are editable display fields; `ToolCalls` controls current
-  local execution; `ProviderData` controls the next request. They are not
-  automatically synchronized. Redacting `Content` alone leaves the original
+- Assistant messages carry native `ProviderData` for the next request. Its
+  opaque payload is stored under `provider_data` in `Message` JSON. `Content`
+  and `ReasoningContent` are editable display fields; `ToolCalls` controls
+  current local execution. These fields are not automatically synchronized.
+  Redacting `Content` alone leaves the original
   text in ProviderData and persisted history. Use the existing `ProviderDataFor` and
   `SetProviderData` methods when changing native state; the adapter README has a
   direct example. Before-tool edits affect execution arguments without

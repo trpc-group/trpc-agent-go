@@ -164,9 +164,9 @@ func TestRunnerResumeValidatesNativeRecordBeforeExecutingTools(t *testing.T) {
 					t.Fatal("resumed tool callback did not receive its model")
 				}
 				if scenario == "edited_arguments" {
-					assertToolReplayInputWithOutput(t, <-inputs, "1000")
+					assertToolProviderDataInputWithOutput(t, <-inputs, "1000")
 				} else {
-					assertToolReplayInput(t, <-inputs)
+					assertToolProviderDataInput(t, <-inputs)
 				}
 			} else {
 				require.NotEmpty(t, errors)

@@ -18,27 +18,27 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type replayInfoModel struct{ info model.Info }
+type providerDataInfoModel struct{ info model.Info }
 
-func (m replayInfoModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
+func (m providerDataInfoModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
 	return nil, errors.New("unused")
 }
 
-func (m replayInfoModel) Info() model.Info { return m.info }
+func (m providerDataInfoModel) Info() model.Info { return m.info }
 
-func TestNewNativeReplayCandidates(t *testing.T) {
-	native := replayInfoModel{info: model.Info{Name: "gpt-5", ProviderDataProtocol: "openai.responses"}}
+func TestNewNativeProviderDataCandidates(t *testing.T) {
+	native := providerDataInfoModel{info: model.Info{Name: "gpt-5", ProviderDataProtocol: "openai.responses"}}
 
 	routed, err := New(WithCandidates(native, native))
 	require.NoError(t, err)
 	require.Equal(t, native.info.ProviderDataProtocol, routed.Info().ProviderDataProtocol)
 
 	_, err = New(WithCandidates(
-		replayInfoModel{info: model.Info{Name: "chat-a"}},
-		replayInfoModel{info: model.Info{Name: "chat-b"}},
+		providerDataInfoModel{info: model.Info{Name: "chat-a"}},
+		providerDataInfoModel{info: model.Info{Name: "chat-b"}},
 	))
 	require.NoError(t, err, "heterogeneous legacy candidates remain supported")
 
-	_, err = New(WithCandidates(native, replayInfoModel{info: model.Info{Name: "gpt-5"}}))
-	require.ErrorContains(t, err, "failover: native replay requires")
+	_, err = New(WithCandidates(native, providerDataInfoModel{info: model.Info{Name: "gpt-5"}}))
+	require.ErrorContains(t, err, "failover: provider data requires")
 }

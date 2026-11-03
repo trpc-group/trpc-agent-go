@@ -106,7 +106,7 @@ func TestRunnerNativeToolLoopSurvivesSQLiteReopen(t *testing.T) {
 	require.EqualValues(t, 2, httpCalls.Load(), "a completed model tool response must continue the agent loop")
 	<-requests
 	second := <-requests
-	assertToolReplayInput(t, second["input"])
+	assertToolProviderDataInput(t, second["input"])
 	require.NoError(t, r.Close())
 	require.NoError(t, svc.Close())
 
@@ -117,7 +117,7 @@ func TestRunnerNativeToolLoopSurvivesSQLiteReopen(t *testing.T) {
 	for _, evt := range runIntegration(t, r, ctx, "explain the previous answer") {
 		require.Nil(t, evt.Error)
 	}
-	assertToolReplayInput(t, (<-requests)["input"])
+	assertToolProviderDataInput(t, (<-requests)["input"])
 	require.EqualValues(t, 1, toolCalls.Load(), "reloading a completed history must not execute its tools again")
 
 	// A legacy adapter with the same configured name still cannot consume the
@@ -137,11 +137,11 @@ func TestRunnerNativeToolLoopSurvivesSQLiteReopen(t *testing.T) {
 	require.Zero(t, legacy.calls.Load())
 }
 
-func assertToolReplayInput(t *testing.T, raw json.RawMessage) {
-	assertToolReplayInputWithOutput(t, raw, "2")
+func assertToolProviderDataInput(t *testing.T, raw json.RawMessage) {
+	assertToolProviderDataInputWithOutput(t, raw, "2")
 }
 
-func assertToolReplayInputWithOutput(t *testing.T, raw json.RawMessage, expectedOutput string) {
+func assertToolProviderDataInputWithOutput(t *testing.T, raw json.RawMessage, expectedOutput string) {
 	t.Helper()
 	var input []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(raw, &input))

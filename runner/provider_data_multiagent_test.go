@@ -87,14 +87,14 @@ func (m *replayTestModel) recorded() []*model.Request {
 	return append([]*model.Request(nil), m.requests...)
 }
 
-func newNativeReplayTestModel() *replayTestModel {
+func newNativeProviderDataTestModel() *replayTestModel {
 	return &replayTestModel{
 		info:   model.Info{Name: "native-model", ProviderDataProtocol: "test.native"},
 		answer: "native findings",
 	}
 }
 
-func runReplayTest(
+func runProviderDataTest(
 	t *testing.T,
 	r runner.Runner,
 	sessionID string,
@@ -122,7 +122,7 @@ func replayTestError(events []*event.Event) string {
 }
 
 func TestRunner_NativeAgentFeedsLegacyAgent(t *testing.T) {
-	native := newNativeReplayTestModel()
+	native := newNativeProviderDataTestModel()
 	legacy := &replayTestModel{info: model.Info{Name: "legacy-model"}, answer: "legacy summary"}
 	chain := chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{
 		llmagent.New("native-agent", llmagent.WithModel(native)),
@@ -132,7 +132,7 @@ func TestRunner_NativeAgentFeedsLegacyAgent(t *testing.T) {
 		runner.WithSessionService(inmemory.NewSessionService()))
 
 	for turn, text := range []string{"investigate", "continue"} {
-		events := runReplayTest(t, r, "session", text)
+		events := runProviderDataTest(t, r, "session", text)
 		require.Empty(t, replayTestError(events), "turn %d", turn)
 	}
 
@@ -233,7 +233,7 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newNativeReplayTestModel()
+			m := newNativeProviderDataTestModel()
 			if tc.legacy {
 				m.info = model.Info{Name: "legacy-model"}
 			}
@@ -264,7 +264,7 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 				llmagent.WithModelCallbacks(callbacks),
 			), runner.WithSessionService(inmemory.NewSessionService()))
 
-			errMessage := replayTestError(runReplayTest(t, r, "session", "add one"))
+			errMessage := replayTestError(runProviderDataTest(t, r, "session", "add one"))
 			if tc.wantErr != "" {
 				require.Contains(t, errMessage, tc.wantErr)
 				require.Zero(t, executed.Load(), "a rejected response must not run tools")
@@ -299,7 +299,7 @@ func (replacingPlugin) Register(r *plugin.Registry) {
 }
 
 func TestRunner_PluginMayReplaceNativeResponse(t *testing.T) {
-	m := newNativeReplayTestModel()
+	m := newNativeProviderDataTestModel()
 	call := replayTestToolCall(`{"a":1}`)
 	m.toolCall = &call
 	var executed atomic.Int32
@@ -317,13 +317,13 @@ func TestRunner_PluginMayReplaceNativeResponse(t *testing.T) {
 		runner.WithPlugins(replacingPlugin{}),
 	)
 
-	errMessage := replayTestError(runReplayTest(t, r, "session", "add one"))
+	errMessage := replayTestError(runProviderDataTest(t, r, "session", "add one"))
 	require.Empty(t, errMessage)
 	require.EqualValues(t, 1, executed.Load())
 }
 
 func TestRunner_NativeAgentProjectorEditsDisplayProjection(t *testing.T) {
-	native := newNativeReplayTestModel()
+	native := newNativeProviderDataTestModel()
 	rewrite := func(_ *agent.Invocation, _ event.Event, msg model.Message) model.Message {
 		if msg.Role == model.RoleAssistant {
 			msg.Content = "rewritten findings"
@@ -335,19 +335,19 @@ func TestRunner_NativeAgentProjectorEditsDisplayProjection(t *testing.T) {
 		llmagent.WithEventMessageProjector(rewrite),
 	), runner.WithSessionService(inmemory.NewSessionService()))
 
-	require.Empty(t, replayTestError(runReplayTest(t, r, "session", "investigate")))
-	require.Empty(t, replayTestError(runReplayTest(t, r, "session", "continue")))
+	require.Empty(t, replayTestError(runProviderDataTest(t, r, "session", "investigate")))
+	require.Empty(t, replayTestError(runProviderDataTest(t, r, "session", "continue")))
 	recorded := native.recorded()
 	require.Len(t, recorded, 2)
-	var sawEditedReplay bool
+	var sawEditedProviderData bool
 	for _, message := range recorded[1].Messages {
 		if message.Role != model.RoleAssistant || message.Content != "rewritten findings" {
 			continue
 		}
-		sawEditedReplay = true
+		sawEditedProviderData = true
 		payload, err := message.ProviderDataFor("test.native", "native-model")
 		require.NoError(t, err)
 		require.JSONEq(t, replayTestPayload, string(payload))
 	}
-	require.True(t, sawEditedReplay, "the projector's display edit reaches the next request")
+	require.True(t, sawEditedProviderData, "the projector's display edit reaches the next request")
 }

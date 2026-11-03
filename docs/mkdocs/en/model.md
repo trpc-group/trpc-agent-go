@@ -2319,9 +2319,9 @@ ProviderData. Removing ProviderData from an unfinished native tool round does no
 recovery guarantee.
 
 Use the existing `ProviderDataFor` and `SetProviderData` methods when intentionally
-editing native state. Assuming `msg`, `modelName`, and the `encoding/json`
-import are in scope, this fragment updates a function call in ProviderData while
-preserving other native item fields. The current `ToolCalls` arguments remain
+editing native state. Assuming `msg`, `modelName`, `callID`, and the
+`encoding/json` import are in scope, this fragment updates only the function call
+whose `call_id` matches `callID`, preserving other calls and native item fields. The current `ToolCalls` arguments remain
 unchanged; update them too if the current execution should match.
 
 ```go
@@ -2342,9 +2342,18 @@ for _, item := range items {
     if err := json.Unmarshal(item["type"], &itemType); err != nil {
         return err
     }
-    if itemType == "function_call" {
-        item["arguments"] = arguments
+    if itemType != "function_call" {
+        continue
     }
+    var itemCallID string
+    if err := json.Unmarshal(item["call_id"], &itemCallID); err != nil {
+        return err
+    }
+    if itemCallID != callID {
+        continue
+    }
+    item["arguments"] = arguments
+    break
 }
 payload, err = json.Marshal(items)
 if err != nil {
@@ -2359,7 +2368,7 @@ if err := msg.SetProviderData("openai.responses", modelName, payload); err != ni
 
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
 - Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
-- ProviderData v2 writes no projection hash and accepts v1 records while ignoring their legacy hash. V1 readers may reject v2 records. Upgrade all readers and writers that share these sessions before enabling v2 writers.
+- Message JSON stores `Message.ProviderData` under `provider_data`; the payload bytes are opaque to the framework. The current format version is 1; other versions are rejected. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and malformed or unsupported ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).

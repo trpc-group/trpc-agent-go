@@ -2271,9 +2271,9 @@ go run ./tools -streaming=false
 不承诺能够恢复。
 
 需要有意修改原生状态时，可以直接使用现有的 `ProviderDataFor` 和
-`SetProviderData`。下面的代码片段更新 ProviderData 中的函数调用，同时保留其他原生
-item 字段。当前 `ToolCalls` 参数保持原样；若当前工具执行也应使用新参数，需
-单独修改它。示例假设 `msg`、`modelName` 已在作用域内，并已导入
+`SetProviderData`。下面的代码片段只更新 ProviderData 中 `call_id` 与 `callID` 匹配的
+函数调用，保留其他调用和原生 item 字段。当前 `ToolCalls` 参数保持原样；若当前工具
+执行也应使用新参数，需单独修改它。示例假设 `msg`、`modelName`、`callID` 已在作用域内，并已导入
 `encoding/json`。
 
 ```go
@@ -2294,9 +2294,18 @@ for _, item := range items {
     if err := json.Unmarshal(item["type"], &itemType); err != nil {
         return err
     }
-    if itemType == "function_call" {
-        item["arguments"] = arguments
+    if itemType != "function_call" {
+        continue
     }
+    var itemCallID string
+    if err := json.Unmarshal(item["call_id"], &itemCallID); err != nil {
+        return err
+    }
+    if itemCallID != callID {
+        continue
+    }
+    item["arguments"] = arguments
+    break
 }
 payload, err = json.Marshal(items)
 if err != nil {
@@ -2311,7 +2320,7 @@ if err := msg.SetProviderData("openai.responses", modelName, payload); err != ni
 
 - 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
 - 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
-- ProviderData v2 不写入投影指纹，并可读取 v1 记录且忽略旧指纹。v1 reader 可能拒绝 v2 记录。启用 v2 writer 前，需升级共享这些会话的所有 reader 和 writer。
+- 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，payload 字节对框架保持不透明。当前格式版本为 1，其他版本会被拒绝。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效或版本不支持的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。

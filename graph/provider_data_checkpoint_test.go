@@ -27,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestNativeReplaySurvivesSQLiteCheckpointResume(t *testing.T) {
+func TestNativeProviderDataSurvivesSQLiteCheckpointResume(t *testing.T) {
 	const (
 		provider  = "test.native"
 		modelName = "native-model"

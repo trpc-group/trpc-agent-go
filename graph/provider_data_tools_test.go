@@ -65,14 +65,14 @@ func (m *nativeToolModel) Info() model.Info {
 
 func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		edit       bool
-		dropReplay bool
-		wantInput  int32
+		name             string
+		edit             bool
+		dropProviderData bool
+		wantInput        int32
 	}{
 		{name: "unchanged", wantInput: 1},
 		{name: "edited with the record retained", edit: true, wantInput: 1000},
-		{name: "edited with the record dropped", edit: true, dropReplay: true, wantInput: 1000},
+		{name: "edited with the record dropped", edit: true, dropProviderData: true, wantInput: 1000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var executed, input atomic.Int32
@@ -92,7 +92,7 @@ func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
 			) (*model.Response, error) {
 				if tc.edit && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0 {
 					rsp.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"a":1000}`)
-					if tc.dropReplay {
+					if tc.dropProviderData {
 						rsp.Choices[0].Message.ProviderData = nil
 					}
 				}

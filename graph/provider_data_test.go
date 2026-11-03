@@ -50,7 +50,7 @@ func requireNativeTestMessage(t *testing.T, msg model.Message) {
 	require.JSONEq(t, nativeTestPayload, string(payload))
 }
 
-func TestStateCopiesPreserveNativeReplay(t *testing.T) {
+func TestStateCopiesPreserveNativeProviderData(t *testing.T) {
 	native := newNativeTestMessage(t)
 	pointer := native
 	state := State{
@@ -147,7 +147,7 @@ func TestStateCopiesPreserveNativeReplay(t *testing.T) {
 	})
 }
 
-func TestDefaultCachePolicy_NativeReplayKeys(t *testing.T) {
+func TestDefaultCachePolicy_NativeProviderDataKeys(t *testing.T) {
 	policy := DefaultCachePolicy()
 	key := func(input any) string {
 		t.Helper()
@@ -164,7 +164,7 @@ func TestDefaultCachePolicy_NativeReplayKeys(t *testing.T) {
 		"equal native state must produce a stable key")
 	require.Equal(t, legacyCacheKeyGolden["message_direct"], key(legacyCacheKeyMessage()))
 	require.NotEqual(t, key(input(legacyCacheKeyMessage())), key(input(native)),
-		"native replay data is part of the cached input")
+		"provider data is part of the cached input")
 
 	other := legacyCacheKeyMessage()
 	require.NoError(t, other.SetProviderData(
@@ -175,13 +175,13 @@ func TestDefaultCachePolicy_NativeReplayKeys(t *testing.T) {
 	require.NotEqual(t, key(input(native)), key(input(other)))
 }
 
-type nativeReplayTestModel struct {
+type nativeProviderDataTestModel struct {
 	info     model.Info
 	response *model.Response
 	requests int
 }
 
-func (m *nativeReplayTestModel) GenerateContent(
+func (m *nativeProviderDataTestModel) GenerateContent(
 	context.Context,
 	*model.Request,
 ) (<-chan *model.Response, error) {
@@ -192,7 +192,7 @@ func (m *nativeReplayTestModel) GenerateContent(
 	return ch, nil
 }
 
-func (m *nativeReplayTestModel) Info() model.Info {
+func (m *nativeProviderDataTestModel) Info() model.Info {
 	return m.info
 }
 
@@ -295,7 +295,7 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 				ModelCallbacks: callbacks,
 				EventChan:      make(chan *event.Event, 1),
 				InvocationID:   "inv",
-				LLMModel:       &nativeReplayTestModel{info: info},
+				LLMModel:       &nativeProviderDataTestModel{info: info},
 				Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
 				Span:           oteltrace.SpanFromContext(context.Background()),
 			}
@@ -320,8 +320,8 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("test")
 	ctx, span := tracer.Start(context.Background(), "test")
 	defer span.End()
-	run := func(info model.Info, history []model.Message) (*nativeReplayTestModel, error) {
-		llm := &nativeReplayTestModel{
+	run := func(info model.Info, history []model.Message) (*nativeProviderDataTestModel, error) {
+		llm := &nativeProviderDataTestModel{
 			info: info,
 			response: &model.Response{
 				Done:    true,
@@ -344,16 +344,16 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 	require.Equal(t, 1, llm.requests)
 
 	llm, err = run(model.Info{Name: "other-model", ProviderDataProtocol: nativeTestProvider}, history)
-	require.ErrorContains(t, err, "native replay message 1")
+	require.ErrorContains(t, err, "provider data message 1")
 	require.Zero(t, llm.requests, "a foreign native record must not reach the model")
 
-	legacy := withoutNativeReplay(history)
+	legacy := withoutNativeProviderData(history)
 	llm, err = run(model.Info{Name: "legacy-model"}, legacy)
 	require.NoError(t, err)
 	require.Equal(t, 1, llm.requests)
 }
 
-func withoutNativeReplay(messages []model.Message) []model.Message {
+func withoutNativeProviderData(messages []model.Message) []model.Message {
 	out := append([]model.Message(nil), messages...)
 	for i := range out {
 		out[i].ProviderData = nil

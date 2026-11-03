@@ -29,7 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
-	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
@@ -1648,8 +1648,8 @@ func cloneEventForContentSnapshot(evt event.Event) event.Event {
 		cloned.Response = evt.Response.Clone()
 		for i := range cloned.Response.Choices {
 			choice := &cloned.Response.Choices[i]
-			choice.Message = modelreplay.CloneMessage(choice.Message)
-			choice.Delta = modelreplay.CloneMessage(choice.Delta)
+			choice.Message = providerdata.CloneMessage(choice.Message)
+			choice.Delta = providerdata.CloneMessage(choice.Delta)
 		}
 	}
 	if evt.LongRunningToolIDs != nil {
@@ -1743,7 +1743,7 @@ func (p *ContentRequestProcessor) nativeToolResultsToRestore(
 ) map[int]event.Event {
 	nativeCallRestored := false
 	for callEventIndex := range restoredCallEvents {
-		if eventHasReplay(events[callEventIndex]) {
+		if eventHasProviderData(events[callEventIndex]) {
 			nativeCallRestored = true
 			break
 		}
@@ -1759,7 +1759,7 @@ func (p *ContentRequestProcessor) nativeToolResultsToRestore(
 	)
 	choicesByResultEvent := make(map[int]map[int]struct{})
 	for callEventIndex := range restoredCallEvents {
-		if !eventHasReplay(events[callEventIndex]) {
+		if !eventHasProviderData(events[callEventIndex]) {
 			continue
 		}
 		for _, match := range responseMatchesByCallEvent[callEventIndex] {
@@ -2719,7 +2719,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	requestHasToolCalls bool,
 ) model.Message {
 	// Reasoning content is a display projection. Changing it does not rewrite a
-	// native replay payload.
+	// native provider data payload.
 	// Only process assistant messages with reasoning content.
 	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
 		return msg
@@ -2757,7 +2757,7 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	if msg.ProviderData != nil {
 		// A projector may intentionally replace or clear the record. Give it an
 		// isolated copy so in-place decoding cannot mutate the source event.
-		projectorInput = modelreplay.CloneMessage(msg)
+		projectorInput = providerdata.CloneMessage(msg)
 	}
 	return p.EventMessageProjector(inv, evt, projectorInput)
 }
@@ -3389,7 +3389,7 @@ func isEventEligibleForInclusion(evt event.Event) bool {
 		!graph.CompletionSnapshotOnlyFromStateDelta(evt.StateDelta)
 }
 
-func eventHasReplay(evt event.Event) bool {
+func eventHasProviderData(evt event.Event) bool {
 	if evt.Response == nil {
 		return false
 	}
@@ -3671,7 +3671,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	// Set the converted message.
 	if len(contents) > 0 || len(contentParts) > 0 {
 		// The quotation is newly authored user context. It never inherits the
-		// quoted agent's native replay state.
+		// quoted agent's ProviderData.
 		msg := model.Message{
 			Role: model.RoleUser,
 		}
@@ -3983,7 +3983,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 			// A native record cannot drop calls without losing its opaque
 			// reasoning, so its partial round stays intact and the provider
 			// adapter rejects the missing results explicitly.
-			if !eventHasReplay(evt) &&
+			if !eventHasProviderData(evt) &&
 				!allToolCallIDsMatched(callIDs, events, responseMatches) &&
 				perToolCallResultRound {
 				// Keep persisted events for audit, but do not project a

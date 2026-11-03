@@ -33,7 +33,7 @@ const orderedOutput = `[
   {"type":"message","id":"msg_2","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"refusal","refusal":"cannot help"}]}
 ]`
 
-func TestGenerateContent_NonStreamReplayProjectionAndUsage(t *testing.T) {
+func TestGenerateContent_NonStreamProviderDataProjectionAndUsage(t *testing.T) {
 	var body map[string]json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body = mustReadJSONBody(t, r)
@@ -66,7 +66,7 @@ func TestGenerateContent_NonStreamReplayProjectionAndUsage(t *testing.T) {
 	require.Equal(t, `"gpt-5"`, string(body["model"]))
 }
 
-func TestReplayItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
+func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	var calls int
 	var secondInput json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func TestReplayItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	require.JSONEq(t, `{"type":"function_call_output","call_id":"call_1","output":"2"}`, string(got[6]))
 }
 
-func TestReplayPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.T) {
+func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.T) {
 	resp := decodeResponse(t, `{"id":"r","status":"completed","output":[`+
 		`{"type":"function_call","id":"fc_1","status":"completed","call_id":"call_1","name":"f","arguments":"{}"},`+
 		`{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}]}`)
@@ -138,7 +138,7 @@ func TestReplayPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported native item type")
 }
 
-func TestReplayCanBeReboundAndStillValidatesItsProducerAndShape(t *testing.T) {
+func TestProviderDataCanBeReboundAndStillValidatesItsProducerAndShape(t *testing.T) {
 	msg := model.NewAssistantMessage("display projection")
 	payload := json.RawMessage(`[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"native payload"}]}]`)
 	require.NoError(t, msg.SetProviderData(responseProvider, "gpt-5", payload))
@@ -176,7 +176,7 @@ func TestOpaqueReasoningAndRefusalAreRetained(t *testing.T) {
 	require.Contains(t, string(raw), `"encrypted_content":"secret"`)
 }
 
-func TestStreamDeltasArePartialAndFinalReplayIsAuthoritative(t *testing.T) {
+func TestStreamDeltasArePartialAndFinalProviderDataIsAuthoritative(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeSSE(w,
 			`{"type":"response.created","response":{"id":"resp_s","status":"in_progress","created_at":1700000001}}`,
@@ -301,10 +301,10 @@ func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
 	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}}, "gpt-5")
 	require.ErrorContains(t, err, "no tool result")
 	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}}, "gpt-5")
-	require.ErrorContains(t, err, "requires native replay data")
+	require.ErrorContains(t, err, "requires provider data")
 }
 
-func TestReplayPayloadValidatesDependencyIDs(t *testing.T) {
+func TestProviderDataPayloadValidatesDependencyIDs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		msgs []model.Message
@@ -627,7 +627,7 @@ func TestLowLevelSDKOptionsAreAnExplicitEscapeHatch(t *testing.T) {
 	require.Equal(t, `"test"`, string(body["prompt_cache_key"]))
 }
 
-func TestReplayModelBindingUsesConfiguredName(t *testing.T) {
+func TestProviderDataModelBindingUsesConfiguredName(t *testing.T) {
 	resp := decodeResponse(t, `{"id":"r","status":"completed","model":"resolved-name","output":[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`)
 	projected, err := projectResponse(resp, "configured-name")
 	require.NoError(t, err)

@@ -76,7 +76,7 @@ func toCanonicalValue(v any) (any, error) {
 			if f.PkgPath != "" { // unexported
 				continue
 			}
-			if isAbsentMessageReplay(t, f, rv.Field(i)) {
+			if isAbsentMessageProviderData(t, f, rv.Field(i)) {
 				continue
 			}
 			names = append(names, f.Name)
@@ -100,10 +100,10 @@ func toCanonicalValue(v any) (any, error) {
 
 var modelMessageType = reflect.TypeOf(model.Message{})
 
-// isAbsentMessageReplay reports whether f is a nil model.Message.ProviderData field.
-// Cache keys of messages without native replay data must not change, so the
+// isAbsentMessageProviderData reports whether f is a nil model.Message.ProviderData field.
+// Cache keys of messages without provider data must not change, so the
 // absent field is not part of their canonical value.
-func isAbsentMessageReplay(
+func isAbsentMessageProviderData(
 	t reflect.Type,
 	f reflect.StructField,
 	value reflect.Value,

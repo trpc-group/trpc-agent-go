@@ -62,7 +62,7 @@ func TestSanitizeMessagesWithToolsResultPreservesNativeRounds(t *testing.T) {
 			require.Nil(t, result.SourceIndexes, "retained messages keep their source positions")
 			require.Equal(t, messages[:nativeEnd], result.Messages[:nativeEnd])
 			actual, err := result.Messages[1].ProviderDataFor("test.native", "test-model")
-			require.NoError(t, err, "history sanitation must preserve native replay payloads")
+			require.NoError(t, err, "history sanitation must preserve native provider data payloads")
 			require.JSONEq(t, string(payload), string(actual))
 			require.Equal(t, []byte(`{"a":3}`), result.Messages[nativeEnd].ToolCalls[0].Function.Arguments)
 		})

@@ -36,8 +36,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
-	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
@@ -1668,8 +1668,8 @@ func (r *llmRunner) executeModel(
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
-	if callModel != nil && modelreplay.MessagesHaveReplay(request.Messages) {
-		if err := modelreplay.ValidateMessages(
+	if callModel != nil && providerdata.MessagesHaveData(request.Messages) {
+		if err := providerdata.ValidateMessages(
 			request.Messages,
 			callModel.Info(),
 		); err != nil {
@@ -2198,7 +2198,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if config.LLMModel != nil {
 		producer = config.LLMModel.Info()
 	}
-	if err := modelreplay.ValidateResponse(config.Response, producer); err != nil {
+	if err := providerdata.ValidateResponse(config.Response, producer); err != nil {
 		return ctx, nil, err
 	}
 	llmEvent := event.NewResponseEvent(
@@ -2282,8 +2282,8 @@ func generateModelStream(
 	request *model.Request,
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
-	if request != nil && modelreplay.MessagesHaveReplay(request.Messages) {
-		if err := modelreplay.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
+	if request != nil && providerdata.MessagesHaveData(request.Messages) {
+		if err := providerdata.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			return modelResponseStream{}, err
@@ -2500,7 +2500,7 @@ func newToolsNodeRuntime(
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:          toolCalls,
-			SkipArgumentRepair: hasNativeReplayToolCallInState(state),
+			SkipArgumentRepair: hasNativeProviderDataToolCallInState(state),
 			Tools:              effectiveTools,
 			InvocationID:       invocationID,
 			EventChan:          eventChan,
@@ -5554,7 +5554,7 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 		switch m.Role {
 		case model.RoleAssistant:
 			if len(m.ToolCalls) > 0 {
-				return modelreplay.ToolCallsForExecution(m), nil
+				return providerdata.ToolCallsForExecution(m), nil
 			}
 		case model.RoleUser:
 			// Stop scanning when we encounter a user message.
@@ -5571,7 +5571,7 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 	return nil, errors.New("no assistant message with tool calls found")
 }
 
-func hasNativeReplayToolCallInState(state State) bool {
+func hasNativeProviderDataToolCallInState(state State) bool {
 	messages, ok := state[StateKeyMessages].([]model.Message)
 	if !ok {
 		return false
@@ -5609,7 +5609,7 @@ type toolCallsConfig struct {
 	RetryPolicy *tool.RetryPolicy
 	// Concurrency limits active calls across invocations of the owning node.
 	Concurrency *toolcall.Limiter
-	// SkipArgumentRepair is true when these calls came from a native replay
+	// SkipArgumentRepair is true when these calls came from a ProviderData
 	// message whose editable arguments must not be rewritten automatically.
 	SkipArgumentRepair bool
 }

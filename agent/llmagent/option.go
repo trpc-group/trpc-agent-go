@@ -1930,10 +1930,10 @@ func WithPreserveForeignMessages(preserve bool) Option {
 
 // WithEventMessageProjector rewrites one event-derived message before
 // it is appended to the model request.
-// A projector cannot remove native replay records: editing the projection of
-// such a record causes a validation error before the model is called. To
-// rebase completed native history intentionally, use a session summary or
-// newly authored messages instead of rewriting an active native tool turn here.
+// For messages carrying ProviderData, editing display fields does not change
+// the native input sent to the model. The projector may explicitly replace or
+// clear ProviderData; its payload and producer identity are checked before use.
+// Clearing it from an unfinished native tool round may prevent continuation.
 func WithEventMessageProjector(
 	projector EventMessageProjector,
 ) Option {

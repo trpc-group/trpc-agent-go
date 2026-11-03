@@ -30,7 +30,7 @@ import (
 // legacyGoldenPath holds request projections and JSON encodings produced by
 // the processor before native replay support. The file must only be
 // regenerated from that revision, with LEGACY_PROJECTION_GOLDEN_WRITE=1, so it
-// keeps guarding the behavior of histories without native replay data.
+// keeps guarding the behavior of histories without provider data.
 const legacyGoldenPath = "testdata/legacy_projection.golden.json"
 
 const legacyGoldenFilter = "golden"
@@ -95,7 +95,7 @@ func legacyGoldenAnswer(reasoning string, content string) model.Message {
 	return msg
 }
 
-// newLegacyGoldenFixture builds a history without native replay data that
+// newLegacyGoldenFixture builds a history without provider data that
 // exercises tool rounds, foreign agents, reasoning, and large tool outputs.
 func newLegacyGoldenFixture() *legacyGoldenFixture {
 	f := &legacyGoldenFixture{at: make(map[string]time.Time)}

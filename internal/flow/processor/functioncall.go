@@ -29,7 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
-	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
@@ -626,7 +626,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 			p.attachmentBudget,
 		)
 	}
-	toolCalls := modelreplay.ToolCallsForExecution(llmResponse.Choices[0].Message)
+	toolCalls := providerdata.ToolCallsForExecution(llmResponse.Choices[0].Message)
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
 	if p.enableParallelTools {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
@@ -819,7 +819,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			p.attachmentBudget,
 		)
 	}
-	toolCalls := modelreplay.ToolCallsForExecution(llmResponse.Choices[0].Message)
+	toolCalls := providerdata.ToolCallsForExecution(llmResponse.Choices[0].Message)
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
 	if p.enableParallelTools && len(toolCalls) > 1 {
@@ -1569,7 +1569,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		defer span.End()
 	}
 	startTime := time.Now()
-	ctx = withNativeReplayToolCallArgs(ctx, llmResponseHasNativeReplay(llmResponse))
+	ctx = withNativeProviderDataToolCallArgs(ctx, llmResponseHasNativeProviderData(llmResponse))
 	execution, err := p.executeToolCall(
 		ctx,
 		invocation,
@@ -1934,7 +1934,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		defer span.End()
 	}
 	startTime := time.Now()
-	ctx = withNativeReplayToolCallArgs(ctx, llmResponseHasNativeReplay(llmResponse))
+	ctx = withNativeProviderDataToolCallArgs(ctx, llmResponseHasNativeProviderData(llmResponse))
 	// Execute the tool (streamable or callable) with callbacks.
 	execution, err := p.executeToolCall(
 		ctx,
@@ -3505,7 +3505,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
-	if !hasNativeReplayToolCallArgs(ctx) &&
+	if !hasNativeProviderDataToolCallArgs(ctx) &&
 		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
@@ -3632,31 +3632,31 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
 }
 
-func llmResponseHasNativeReplay(response *model.Response) bool {
+func llmResponseHasNativeProviderData(response *model.Response) bool {
 	return response != nil && len(response.Choices) > 0 &&
 		response.Choices[0].Message.ProviderData != nil
 }
 
-type nativeReplayToolCallArgsContextKey struct{}
+type nativeProviderDataToolCallArgsContextKey struct{}
 
-func withNativeReplayToolCallArgs(ctx context.Context, native bool) context.Context {
+func withNativeProviderDataToolCallArgs(ctx context.Context, native bool) context.Context {
 	if ctx == nil {
 		return ctx
 	}
 	if native {
-		return context.WithValue(ctx, nativeReplayToolCallArgsContextKey{}, true)
+		return context.WithValue(ctx, nativeProviderDataToolCallArgsContextKey{}, true)
 	}
-	if hasNativeReplayToolCallArgs(ctx) {
-		return context.WithValue(ctx, nativeReplayToolCallArgsContextKey{}, false)
+	if hasNativeProviderDataToolCallArgs(ctx) {
+		return context.WithValue(ctx, nativeProviderDataToolCallArgsContextKey{}, false)
 	}
 	return ctx
 }
 
-func hasNativeReplayToolCallArgs(ctx context.Context) bool {
+func hasNativeProviderDataToolCallArgs(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	native, _ := ctx.Value(nativeReplayToolCallArgsContextKey{}).(bool)
+	native, _ := ctx.Value(nativeProviderDataToolCallArgsContextKey{}).(bool)
 	return native
 }
 

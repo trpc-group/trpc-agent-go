@@ -77,11 +77,11 @@ initial contract. Unsupported Chat-specific parameters fail validation.
 These three cases have different contracts:
 
 - Unknown JSON fields on supported native output items remain in the
-  provider-owned replay payload. They survive `Message` JSON persistence and
+  provider-owned native payload. They survive `Message` JSON persistence and
   are sent unchanged with that native item on the next request. Treat them as
   opaque provider state; this adapter does not interpret them.
 - Keepalives and unknown SSE event extensions are ignored by model projection
-  and cannot commit content, tool calls, or replay state. Only
+  and cannot commit content, tool calls, or ProviderData. Only
   a known `response.completed` event with a completed status and fully
   validated supported output commits a response. EOF after unknown events is an
   error.
@@ -123,8 +123,9 @@ message.ReasoningContent = ""
 ```
 
 To change native state, read it, edit the supported JSON item while retaining
-opaque fields, then bind the new payload with the existing API. Assume
-`message`, `modelName`, and the `encoding/json` import are in scope:
+opaque fields, then bind the new payload with the existing API. This example
+updates only the function call whose `call_id` matches `callID`. Assume
+`message`, `modelName`, `callID`, and the `encoding/json` import are in scope:
 
 ```go
 payload, err := message.ProviderDataFor("openai.responses", modelName)
@@ -135,18 +136,27 @@ var items []map[string]json.RawMessage
 if err := json.Unmarshal(payload, &items); err != nil {
     return err
 }
+arguments, err := json.Marshal(`{"a":2}`)
+if err != nil {
+    return err
+}
 for _, item := range items {
     var itemType string
     if err := json.Unmarshal(item["type"], &itemType); err != nil {
         return err
     }
-    if itemType == "function_call" {
-        arguments, err := json.Marshal(`{"a":2}`)
-        if err != nil {
-            return err
-        }
-        item["arguments"] = arguments
+    if itemType != "function_call" {
+        continue
     }
+    var itemCallID string
+    if err := json.Unmarshal(item["call_id"], &itemCallID); err != nil {
+        return err
+    }
+    if itemCallID != callID {
+        continue
+    }
+    item["arguments"] = arguments
+    break
 }
 payload, err = json.Marshal(items)
 if err != nil {
@@ -166,22 +176,21 @@ state: redacting `Content` alone does not redact the native payload or remove
 the original text from persisted history.
 
 The Go API uses `Message.ProviderData`, `SetProviderData`, `ProviderDataFor`, and
-`Info.ProviderDataProtocol`. Persisted JSON retains the `replay` and
-`ReplayProtocol` keys so existing session data remains readable.
+`Info.ProviderDataProtocol`. Message JSON stores ProviderData under
+`provider_data`. The `Info` JSON key `ProviderDataProtocol` is omitted when
+empty. The payload bytes are opaque to the framework. The adapter validates
+that the protocol and configured model match the record, and rejects
+mismatches.
 
-ProviderData v2 writes no projection fingerprint. Its reader accepts v1 records and
-ignores their legacy projection hash. Protocol, configured model, replay
-version, native item schema, and call/result integrity are still validated.
-`ProviderDataFor` returns the native payload despite edits to display or tool
-projections, provided the record is structurally valid and belongs to the
-requested protocol and configured model.
-
-Persisted replay metadata with an unsupported version or invalid format must
-not be silently dropped. Redis readers return decoding errors when they can
-identify a replay-bearing record. If the entire event JSON is malformed, that
-identification can fail and the record may be skipped under the existing Redis
-history policy. A successful history read therefore does not guarantee that no
-malformed records were skipped.
+The current ProviderData format version is 1; other versions are rejected.
+Invalid ProviderData metadata or an unsupported format version is not silently
+dropped. Redis readers return decoding errors when they can identify an event
+with ProviderData. If the entire event JSON is malformed, that identification
+can fail and the event may be skipped under the existing Redis history policy.
+A successful history read therefore does not guarantee that no malformed
+records were skipped. `ProviderDataFor` returns the native payload despite
+edits to display or tool projections, provided the record is structurally valid
+and belongs to the requested protocol and configured model.
 
 History processing treats each native record as one output unit: empty
 records, item order, reasoning, call order, and call IDs are preserved, native
@@ -211,11 +220,11 @@ summary cutoffs, and `MaxHistoryRuns` behave as they do for legacy history.
   explicitly rather than replaying a record without some of its calls.
 
 Foreign-agent events converted into user context are newly authored user
-messages without replay state. A legacy or differently configured downstream
+messages without ProviderData. A legacy or differently configured downstream
 agent can therefore consume a native agent's output as ordinary context, which
 is a semantic rebase rather than a native continuation. With
 `WithPreserveForeignMessages(true)`, foreign records keep their roles and
-replay state, so only agents that consume the same protocol and model can use
+ProviderData, so only agents that consume the same protocol and model can use
 them. Custom event projectors cannot remove ProviderData from an unfinished native
 tool round and still rely on recovery; the framework does not promise recovery
 after ProviderData is removed from a pending round.
@@ -275,7 +284,7 @@ compression or deduplication of the native payload is performed in this version.
 ## Compatibility
 
 The existing non-native model path keeps its defaults. Messages without
-replay data keep their request projection, JSON encoding, persistence,
+ProviderData keep their request projection, JSON encoding, persistence,
 routing, and Graph cache keys. Registering a Responses model that is never
 selected does not change a legacy session. `model.Message` and `model.Info`
 gained fields, so code that builds them with positional composite literals
@@ -283,16 +292,14 @@ must switch to keyed fields. This is a source-compatibility exception even for
 applications that do not select Responses. An empty `Info.ProviderDataProtocol` is
 omitted from JSON, preserving the existing encoding for legacy models.
 
-An older framework that reads and rewrites a replay-bearing session can drop
-the unknown replay field. Do not route native sessions through older writers;
-readers that reject unknown JSON fields also need to be upgraded first.
-Retaining unknown fields inside a native payload does not make a new native
-item type compatible with old readers, even when the replay format version is
-unchanged. The v2 reader accepts v1 records, but v1 readers expect the legacy
-projection hash and may reject v2 records written without it. Upgrade every
-reader and writer that can access the same replay-bearing sessions before
-enabling v2 writers. An older binary may strip replay state, so resuming that
-history with the old binary cannot be promised.
+An older framework that reads and rewrites a session containing ProviderData
+can discard the unknown `provider_data` field. Do not route native sessions
+through older writers; readers that reject unknown JSON fields also need to be
+upgraded. Preserving opaque bytes does not make a new native item type
+compatible with an old adapter reader. Upgrade every reader and writer that can
+access the same sessions to versions that understand `provider_data`. An older
+binary may strip ProviderData, so resuming that history through the old binary
+cannot be promised.
 
 This adapter requires a root module version containing `Message.ProviderData` and
 `Info.ProviderDataProtocol`. Repository-relative `replace` directives support local

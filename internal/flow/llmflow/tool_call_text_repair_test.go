@@ -483,7 +483,7 @@ func TestRepairToolCallTextDisabledPaths(t *testing.T) {
 	require.False(t, processor.repairToolCallText(resp))
 }
 
-func TestRepairToolCallTextSkipsNativeReplay(t *testing.T) {
+func TestRepairToolCallTextSkipsNativeProviderData(t *testing.T) {
 	content := "<tool_call>exec_command" +
 		"<arg_key>command</arg_key>" +
 		"<arg_value>echo native</arg_value>" +

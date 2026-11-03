@@ -7,7 +7,7 @@
 //
 //
 
-package modelreplay
+package providerdata
 
 import (
 	"context"
@@ -77,15 +77,15 @@ func TestCandidateInfo(t *testing.T) {
 
 func TestValidateMessages(t *testing.T) {
 	legacy := []model.Message{model.NewUserMessage("q"), model.NewAssistantMessage("a")}
-	require.False(t, MessagesHaveReplay(legacy))
+	require.False(t, MessagesHaveData(legacy))
 	require.NoError(t, ValidateMessages(legacy, model.Info{Name: "legacy"}),
 		"legacy histories never fail validation")
 
 	native := append(append([]model.Message(nil), legacy...), nativeMessage(t))
-	require.True(t, MessagesHaveReplay(native))
+	require.True(t, MessagesHaveData(native))
 	require.NoError(t, ValidateMessages(native, nativeInfo))
 	require.ErrorContains(t, ValidateMessages(native, model.Info{Name: nativeInfo.Name}),
-		"native replay message 2")
+		"provider data message 2")
 	require.Error(t, ValidateMessages(native, model.Info{
 		Name:                 "other-model",
 		ProviderDataProtocol: nativeInfo.ProviderDataProtocol,
@@ -96,18 +96,18 @@ func TestValidateMessages(t *testing.T) {
 }
 
 func TestValidateResponse(t *testing.T) {
-	require.False(t, ResponseHasReplay(nil))
+	require.False(t, ResponseHasData(nil))
 	require.NoError(t, ValidateResponse(nil, nativeInfo))
 
 	legacy := &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("a")}}}
-	require.False(t, ResponseHasReplay(legacy))
+	require.False(t, ResponseHasData(legacy))
 	require.NoError(t, ValidateResponse(legacy, model.Info{Name: "legacy"}))
 
 	response := &model.Response{Choices: []model.Choice{
 		{Message: model.NewAssistantMessage("legacy choice")},
 		{Message: nativeMessage(t)},
 	}}
-	require.True(t, ResponseHasReplay(response))
+	require.True(t, ResponseHasData(response))
 	require.NoError(t, ValidateResponse(response, nativeInfo))
 	require.ErrorContains(t, ValidateResponse(response, model.Info{Name: "legacy"}),
 		"invalid model response")
@@ -117,7 +117,7 @@ func TestValidateResponse(t *testing.T) {
 		"ToolCalls is the current execution projection")
 
 	delta := &model.Response{Choices: []model.Choice{{Delta: nativeMessage(t)}}}
-	require.True(t, ResponseHasReplay(delta))
+	require.True(t, ResponseHasData(delta))
 	require.NoError(t, ValidateResponse(delta, nativeInfo))
 	delta.Choices[0].Delta.Content = "edited"
 	require.NoError(t, ValidateResponse(delta, nativeInfo))

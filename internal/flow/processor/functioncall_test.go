@@ -10541,10 +10541,10 @@ func TestExecuteToolWithCallbacks_LegacyChildOverridesInheritedNativeRepairMarke
 	}
 
 	base := context.Background()
-	parent := withNativeReplayToolCallArgs(base, true)
-	legacyChild := withNativeReplayToolCallArgs(parent, false)
-	require.False(t, hasNativeReplayToolCallArgs(legacyChild))
-	require.Equal(t, base, withNativeReplayToolCallArgs(base, false),
+	parent := withNativeProviderDataToolCallArgs(base, true)
+	legacyChild := withNativeProviderDataToolCallArgs(parent, false)
+	require.False(t, hasNativeProviderDataToolCallArgs(legacyChild))
+	require.Equal(t, base, withNativeProviderDataToolCallArgs(base, false),
 		"legacy calls without an inherited marker keep the original context")
 
 	_, _, _, _, _, err := proc.executeToolWithCallbacks(

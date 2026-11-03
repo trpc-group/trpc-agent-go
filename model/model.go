@@ -75,11 +75,10 @@ type Info struct {
 	// ContextWindow is the model context window in tokens.
 	// A non-positive value means the window is unknown for this model instance.
 	ContextWindow int
-	// ProviderDataProtocol identifies the native replay format consumed by this
-	// model. An empty value means native replay is unsupported. LLM flows and
+	// ProviderDataProtocol identifies the protocol of provider data consumed by this
+	// model. An empty value means ProviderData is unsupported. LLM flows and
 	// Graph LLM nodes reject history from another protocol or configured model
 	// before calling the adapter. Wrappers must preserve this value when
 	// forwarding Info.
-	// The JSON key retains its original name for serialization compatibility.
-	ProviderDataProtocol string `json:"ReplayProtocol,omitempty"`
+	ProviderDataProtocol string `json:"ProviderDataProtocol,omitempty"`
 }

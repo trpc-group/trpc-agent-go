@@ -133,7 +133,7 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 					require.NoError(t, json.Unmarshal(captured[i].body, &body))
 					require.Equal(t, streaming, body.Stream)
 					if i > 0 {
-						assertToolReplayInput(t, body.Input)
+						assertToolProviderDataInput(t, body.Input)
 					}
 				}
 				require.NoError(t, r.Close())
@@ -168,7 +168,7 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 				last := takeRetryRequest(t, requests)
 				var body map[string]json.RawMessage
 				require.NoError(t, json.Unmarshal(last.body, &body))
-				assertToolReplayInput(t, body["input"])
+				assertToolProviderDataInput(t, body["input"])
 				require.Equal(t, "0", last.retryCount)
 			})
 		}

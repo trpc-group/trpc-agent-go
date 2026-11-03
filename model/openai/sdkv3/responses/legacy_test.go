@@ -130,6 +130,6 @@ func TestRunnerUnusedResponsesModelKeepsLegacySession(t *testing.T) {
 	require.NotNil(t, sess)
 	data, err := json.Marshal(sess.Events)
 	require.NoError(t, err)
-	require.False(t, strings.Contains(string(data), `"replay"`),
+	require.False(t, strings.Contains(string(data), `"provider_data"`),
 		"a legacy session must not persist native replay fields")
 }

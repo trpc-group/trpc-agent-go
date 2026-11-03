@@ -16,10 +16,7 @@ import (
 	"strings"
 )
 
-const (
-	providerDataVersionV1 = 1
-	providerDataVersion   = 2
-)
+const providerDataVersion = 1
 
 // ProviderData stores a provider-native completion with the identity of its
 // producer. The provider owns the payload schema. The payload determines the
@@ -52,7 +49,7 @@ type providerDataJSON struct {
 // after binding. ProviderDataFor returns the native payload used for subsequent
 // model requests, while the message's ToolCalls continue to determine current
 // tool execution. The message must remain an assistant message. On error, the
-// receiver and any existing replay record are unchanged.
+// receiver and any existing provider data are unchanged.
 func (m *Message) SetProviderData(provider, modelName string, payload json.RawMessage) error {
 	if m == nil {
 		return fmt.Errorf("cannot bind provider data to a nil message")
@@ -92,7 +89,7 @@ func (m Message) ProviderDataFor(provider, modelName string) (json.RawMessage, e
 	return append(json.RawMessage(nil), m.ProviderData.payload...), nil
 }
 
-// MarshalJSON writes the current version of the native replay record. Invalid
+// MarshalJSON writes the current version of the provider data record. Invalid
 // or zero-valued records return an error instead of persisting unusable state.
 func (r ProviderData) MarshalJSON() ([]byte, error) {
 	if err := r.validate(); err != nil {
@@ -106,16 +103,14 @@ func (r ProviderData) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// UnmarshalJSON restores a versioned native replay record. It reads v1 records
-// for persistence compatibility and writes them back as v2. Unsupported
-// versions and invalid records fail rather than degrading silently to text-only
-// history.
+// UnmarshalJSON restores a versioned provider data record. Unsupported versions
+// and invalid records fail rather than degrading silently to text-only history.
 func (r *ProviderData) UnmarshalJSON(data []byte) error {
 	var stored providerDataJSON
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return fmt.Errorf("decode provider data: %w", err)
 	}
-	if stored.Version != providerDataVersionV1 && stored.Version != providerDataVersion {
+	if stored.Version != providerDataVersion {
 		return fmt.Errorf("unsupported provider data version %d", stored.Version)
 	}
 	decoded := ProviderData{

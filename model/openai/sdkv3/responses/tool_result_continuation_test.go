@@ -125,7 +125,7 @@ func toolResultNativeErrors(events []*event.Event) []string {
 	return messages
 }
 
-func assertToolResultNativeReplay(t *testing.T, sess *session.Session, expected string) {
+func assertToolResultNativeProviderData(t *testing.T, sess *session.Session, expected string) {
 	t.Helper()
 	found := false
 	for _, evt := range sess.Events {
@@ -148,7 +148,7 @@ func assertToolResultNativeReplay(t *testing.T, sess *session.Session, expected 
 	require.True(t, found, "session must retain the native tool call")
 }
 
-func assertToolResultNativeMultiReplay(t *testing.T, sess *session.Session) {
+func assertToolResultNativeMultiProviderData(t *testing.T, sess *session.Session) {
 	t.Helper()
 	found := false
 	for _, evt := range sess.Events {
@@ -275,7 +275,7 @@ func TestToolResultNativeAfterToolReplacementContinuesAfterSQLiteReopen(t *testi
 	svc = openToolResultNativeSQLite(t, path)
 	sess, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 	require.NoError(t, err)
-	assertToolResultNativeReplay(t, sess, `{"a":1}`)
+	assertToolResultNativeProviderData(t, sess, `{"a":1}`)
 
 	r = runner.NewRunner("native", a, runner.WithSessionService(svc))
 	t.Cleanup(func() { _ = r.Close() })
@@ -354,7 +354,7 @@ func TestToolResultNativeAfterToolMessagesRewriteAndParallelPanicContinueAfterSQ
 	svc = openToolResultNativeSQLite(t, path)
 	sess, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 	require.NoError(t, err)
-	assertToolResultNativeMultiReplay(t, sess)
+	assertToolResultNativeMultiProviderData(t, sess)
 
 	r = runner.NewRunner("native", a, runner.WithSessionService(svc), runner.WithPlugins(p))
 	t.Cleanup(func() { _ = r.Close() })

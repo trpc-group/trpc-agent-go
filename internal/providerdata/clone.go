@@ -7,7 +7,7 @@
 //
 //
 
-package modelreplay
+package providerdata
 
 import (
 	"bytes"

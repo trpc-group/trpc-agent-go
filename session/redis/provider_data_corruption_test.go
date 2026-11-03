@@ -53,10 +53,10 @@ type replayCorruptionFixture struct {
 	expectedPayload map[string]json.RawMessage
 }
 
-func TestRedisSessionNativeReplaySurvivesStorageAndSkipsMalformedLegacyJSON(t *testing.T) {
+func TestRedisSessionNativeProviderDataSurvivesStorageAndSkipsMalformedLegacyJSON(t *testing.T) {
 	for _, storage := range replayCorruptionStorages {
 		t.Run(storage.name, func(t *testing.T) {
-			fixture := newReplayCorruptionFixture(t, storage)
+			fixture := newProviderDataCorruptionFixture(t, storage)
 			fixture.addMalformedLegacyJSON(t)
 
 			got, err := fixture.service.GetSession(fixture.ctx, fixture.key)
@@ -65,7 +65,7 @@ func TestRedisSessionNativeReplaySurvivesStorageAndSkipsMalformedLegacyJSON(t *t
 			require.Len(t, got.Events, len(fixture.events),
 				"invalid legacy JSON remains skippable without dropping valid history")
 
-			byID := indexReplayCorruptionEvents(t, got.Events)
+			byID := indexProviderDataCorruptionEvents(t, got.Events)
 			require.NotContains(t, byID, "malformed-legacy-json")
 
 			reasoningOnly := replayCorruptionMessage(t, byID[replayOnlyEventID])
@@ -74,12 +74,12 @@ func TestRedisSessionNativeReplaySurvivesStorageAndSkipsMalformedLegacyJSON(t *t
 			require.Empty(t, reasoningOnly.ToolCalls)
 			require.True(t, model.HasPayload(reasoningOnly),
 				"the native-only event is meaningful even with no visible text")
-			assertReplayCorruptionPayload(t, reasoningOnly, fixture.expectedPayload[replayOnlyEventID])
+			assertProviderDataCorruptionPayload(t, reasoningOnly, fixture.expectedPayload[replayOnlyEventID])
 
 			nativeCall := replayCorruptionMessage(t, byID[nativeToolCallEventID])
 			require.Len(t, nativeCall.ToolCalls, 1)
 			require.Equal(t, "call-native", nativeCall.ToolCalls[0].ID)
-			assertReplayCorruptionPayload(t, nativeCall, fixture.expectedPayload[nativeToolCallEventID])
+			assertProviderDataCorruptionPayload(t, nativeCall, fixture.expectedPayload[nativeToolCallEventID])
 			require.Equal(t, "call-native", replayCorruptionMessage(t, byID["native-tool-result"]).ToolID)
 
 			legacyCall := replayCorruptionMessage(t, byID[legacyToolCallEventID])
@@ -89,7 +89,7 @@ func TestRedisSessionNativeReplaySurvivesStorageAndSkipsMalformedLegacyJSON(t *t
 	}
 }
 
-func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T) {
+func TestRedisSessionGetSessionRejectsMalformedNativeProviderDataRecords(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(*testing.T, map[string]json.RawMessage)
@@ -97,8 +97,8 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 	}{
 		{
 			name: "unknown version",
-			mutate: func(_ *testing.T, replay map[string]json.RawMessage) {
-				replay["version"] = json.RawMessage(`99`)
+			mutate: func(_ *testing.T, record map[string]json.RawMessage) {
+				record["version"] = json.RawMessage(`99`)
 			},
 			wantErrMsg: "unsupported provider data version 99",
 		},
@@ -108,14 +108,14 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 		for _, tt := range tests {
 			for _, eventID := range []string{replayOnlyEventID, nativeToolCallEventID} {
 				t.Run(storage.name+"/"+eventID+"/"+tt.name, func(t *testing.T) {
-					fixture := newReplayCorruptionFixture(t, storage)
+					fixture := newProviderDataCorruptionFixture(t, storage)
 					fixture.addMalformedLegacyJSON(t)
-					fixture.mutatePersistedReplay(t, eventID, tt.mutate)
+					fixture.mutatePersistedProviderData(t, eventID, tt.mutate)
 
 					got, err := fixture.service.GetSession(fixture.ctx, fixture.key)
 					if err == nil {
 						ids := replayCorruptionEventIDs(got)
-						t.Errorf("GetSession silently skipped the malformed native replay event; loaded events: %v", ids)
+						t.Errorf("GetSession silently skipped the malformed native record event; loaded events: %v", ids)
 						return
 					}
 					require.ErrorContains(t, err, tt.wantErrMsg)
@@ -126,7 +126,7 @@ func TestRedisSessionGetSessionRejectsMalformedNativeReplayRecords(t *testing.T)
 	}
 }
 
-func newReplayCorruptionFixture(
+func newProviderDataCorruptionFixture(
 	t *testing.T,
 	storage replayCorruptionStorage,
 ) *replayCorruptionFixture {
@@ -145,7 +145,7 @@ func newReplayCorruptionFixture(
 
 	ctx := context.Background()
 	key := session.Key{
-		AppName:   "replay-corruption",
+		AppName:   "record-corruption",
 		UserID:    "user",
 		SessionID: storage.name + "-session",
 	}
@@ -253,7 +253,7 @@ func (f *replayCorruptionFixture) addMalformedLegacyJSON(t *testing.T) {
 	for _, record := range []struct{ id, raw string }{
 		{id: "malformed-legacy-json", raw: "not valid legacy event JSON"},
 		{id: "malformed-legacy-field", raw: `{"id":"malformed-legacy-field","choices":[{"message":{"role":7}}]}`},
-		{id: "malformed-legacy-null-replay", raw: `{"id":"malformed-legacy-null-replay","choices":[{"message":{"role":7,"replay":null}}]}`},
+		{id: "malformed-legacy-null-record", raw: `{"id":"malformed-legacy-null-record","choices":[{"message":{"role":7,"provider_data":null}}]}`},
 	} {
 		if f.storage.name == util.StorageTypeZset {
 			err := f.client.ZAdd(f.ctx, zset.GetEventKey(f.key), redis.Z{
@@ -273,7 +273,7 @@ func (f *replayCorruptionFixture) addMalformedLegacyJSON(t *testing.T) {
 	}
 }
 
-func (f *replayCorruptionFixture) mutatePersistedReplay(
+func (f *replayCorruptionFixture) mutatePersistedProviderData(
 	t *testing.T,
 	eventID string,
 	mutate func(*testing.T, map[string]json.RawMessage),
@@ -290,12 +290,12 @@ func (f *replayCorruptionFixture) mutatePersistedReplay(
 	require.NoError(t, json.Unmarshal(choices[0], &choice))
 	var message map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(choice["message"], &message))
-	var replay map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(message["replay"], &replay))
-	require.NotEmpty(t, replay)
+	var record map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(message["provider_data"], &record))
+	require.NotEmpty(t, record)
 
-	mutate(t, replay)
-	message["replay"], _ = json.Marshal(replay)
+	mutate(t, record)
+	message["provider_data"], _ = json.Marshal(record)
 	choice["message"], _ = json.Marshal(message)
 	choices[0], _ = json.Marshal(choice)
 	encodedEvent["choices"], _ = json.Marshal(choices)
@@ -342,7 +342,7 @@ func (f *replayCorruptionFixture) persistedEventRaw(t *testing.T, eventID string
 	return raw, 0
 }
 
-func indexReplayCorruptionEvents(t *testing.T, events []event.Event) map[string]event.Event {
+func indexProviderDataCorruptionEvents(t *testing.T, events []event.Event) map[string]event.Event {
 	t.Helper()
 	byID := make(map[string]event.Event, len(events))
 	for _, evt := range events {
@@ -358,7 +358,7 @@ func replayCorruptionMessage(t *testing.T, evt event.Event) model.Message {
 	return evt.Response.Choices[0].Message
 }
 
-func assertReplayCorruptionPayload(t *testing.T, message model.Message, expected json.RawMessage) {
+func assertProviderDataCorruptionPayload(t *testing.T, message model.Message, expected json.RawMessage) {
 	t.Helper()
 	actual, err := message.ProviderDataFor(replayCorruptionProvider, replayCorruptionModel)
 	require.NoError(t, err)

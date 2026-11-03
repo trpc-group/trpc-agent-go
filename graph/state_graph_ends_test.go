@@ -260,7 +260,7 @@ type captureTool struct {
 	err     error
 }
 
-func TestToolArgumentRepairSkipsNativeReplayCalls(t *testing.T) {
+func TestToolArgumentRepairSkipsNativeProviderDataCalls(t *testing.T) {
 	enabled := true
 	invocation := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
 		ToolCallArgumentsJSONRepairEnabled: &enabled,

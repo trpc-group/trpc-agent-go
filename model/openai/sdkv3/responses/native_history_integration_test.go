@@ -141,7 +141,7 @@ func TestNativeToolHistoryRetainsArguments(t *testing.T) {
 	}
 }
 
-func TestGraphNativeHistoryValidatesPairingAndUsesReplayAfterToolCallEdit(t *testing.T) {
+func TestGraphNativeHistoryValidatesPairingAndUsesProviderDataAfterToolCallEdit(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		edit      bool

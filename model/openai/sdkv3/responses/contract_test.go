@@ -409,13 +409,13 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 			msg := native(t, "gpt-5", nativeCall)
 			msg.Role = model.RoleUser
 			return []model.Message{msg}
-		}, want: "replay data is only valid on assistant messages"},
+		}, want: "provider data is only valid on assistant messages"},
 		{name: "replay of another model", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-4.1", nativeCall)}
-		}, want: "invalid replay data at message 0"},
+		}, want: "invalid provider data at message 0"},
 		{name: "replay object", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `{"type":"message"}`)}
-		}, want: "replay payload must be an item array"},
+		}, want: "provider data payload must be an item array"},
 		{name: "replay scalar item", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[1]`)}
 		}, want: "decode item 0"},
@@ -631,7 +631,7 @@ func TestStreamProtocolViolationsAreTerminalErrors(t *testing.T) {
 	}
 }
 
-func TestStreamPartialsAndFinalReplay(t *testing.T) {
+func TestStreamPartialsAndFinalProviderData(t *testing.T) {
 	refusal := `{"type":"message","id":"msg_r","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeSSE(w,

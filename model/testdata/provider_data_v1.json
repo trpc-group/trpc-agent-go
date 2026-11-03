@@ -12,7 +12,7 @@
     }
   ],
   "reasoning_content": "Need the current value.",
-  "replay": {
+  "provider_data": {
     "version": 1,
     "provider": "test.responses",
     "model": "reasoning-model",
@@ -42,7 +42,6 @@
         "name": "lookup",
         "arguments": "{\"record\":1}"
       }
-    ],
-    "projection_sha256": "2d78d05690b312bd1014c4b1abb749dbaf1d15c185e8824f49270a7e2595d3a5"
+    ]
   }
 }

@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestNativeReplaySurvivesSQLiteReopen(t *testing.T) {
+func TestNativeProviderDataSurvivesSQLiteReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "native-replay.db")
 	db, err := sql.Open("sqlite3", path)
@@ -29,7 +29,7 @@ func TestNativeReplaySurvivesSQLiteReopen(t *testing.T) {
 	svc, err := NewService(db)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
-	key := session.Key{AppName: "native", UserID: "user", SessionID: "replay"}
+	key := session.Key{AppName: "native", UserID: "user", SessionID: "provider_data"}
 	sess, err := svc.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
 

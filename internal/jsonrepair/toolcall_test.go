@@ -202,7 +202,7 @@ func TestRepairResponseToolCallArgumentsInPlace_RepairsAllChoices(t *testing.T) 
 	require.Equal(t, "{\"c\":4}", string(response.Choices[0].Delta.ToolCalls[0].Function.Arguments))
 }
 
-func TestRepairResponseToolCallArgumentsInPlaceSkipsNativeReplay(t *testing.T) {
+func TestRepairResponseToolCallArgumentsInPlaceSkipsNativeProviderData(t *testing.T) {
 	ctx := context.Background()
 	native := model.Message{
 		Role: model.RoleAssistant,

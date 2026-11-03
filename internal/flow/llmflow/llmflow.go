@@ -35,8 +35,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
-	"trpc.group/trpc-go/trpc-agent-go/internal/modelreplay"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
@@ -231,9 +231,9 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		// after an assistant tool_call response but before tools executed.
 		pendingResume := pendingToolCallResponse(invocation)
 		// Native records are resumed by selectModelAndResumeTools after the
-		// first model selection and replay validation, before the model request.
-		// Records without replay retain the existing resume timing here.
-		if !modelreplay.ResponseHasReplay(pendingResume) {
+		// first model selection and provider data validation, before the model request.
+		// Records without ProviderData retain the existing resume timing here.
+		if !providerdata.ResponseHasData(pendingResume) {
 			f.resumePendingToolCalls(ctx, invocation, pendingResume, eventChan)
 			pendingResume = nil
 		}
@@ -554,7 +554,7 @@ func (f *Flow) selectModelAndResumeTools(
 	if selected == nil {
 		return nil, errors.New("native tool resume requires a model")
 	}
-	if err := modelreplay.ValidateResponse(pending, selected.Info()); err != nil {
+	if err := providerdata.ValidateResponse(pending, selected.Info()); err != nil {
 		return nil, fmt.Errorf("cannot resume native tool calls: %w", err)
 	}
 	originalModel := invocation.Model
@@ -1038,7 +1038,7 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
-	if err := modelreplay.ValidateResponse(response, p.producerInfo); err != nil {
+	if err := providerdata.ValidateResponse(response, p.producerInfo); err != nil {
 		*p.err = err
 		responseErr = err
 		return false
@@ -3120,8 +3120,8 @@ func (f *Flow) generateContentSeq(
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
-	if callModel != nil && modelreplay.MessagesHaveReplay(llmRequest.Messages) {
-		if err := modelreplay.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
+	if callModel != nil && providerdata.MessagesHaveData(llmRequest.Messages) {
+		if err := providerdata.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
 			return nil, err
 		}
 	}

@@ -181,7 +181,7 @@ func assertNativeRoutingText(t *testing.T, events []*event.Event, want string) {
 	t.Fatalf("did not observe expected text %q", want)
 }
 
-func assertNativeRoutingReplayInput(t *testing.T, raw json.RawMessage, itemID, callID, arguments, toolOutput string) {
+func assertNativeRoutingProviderDataInput(t *testing.T, raw json.RawMessage, itemID, callID, arguments, toolOutput string) {
 	t.Helper()
 	var input []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(raw, &input))
@@ -252,7 +252,7 @@ func assertNativeRoutingSessionContainsOnlyCall(t *testing.T, sess *session.Sess
 	require.Equal(t, 1, toolResultCount)
 }
 
-func TestNativeRoutingFailoverBeforePreviewPreservesToolReplayAcrossReopen(t *testing.T) {
+func TestNativeRoutingFailoverBeforePreviewPreservesToolProviderDataAcrossReopen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	primaryRequests := make(chan nativeRoutingRequest, 4)
@@ -309,11 +309,11 @@ func TestNativeRoutingFailoverBeforePreviewPreservesToolReplayAcrossReopen(t *te
 	primaryInitial := takeNativeRoutingRequest(t, primaryRequests)
 	require.Equal(t, `true`, string(primaryInitial["stream"]))
 	primaryToolContinuation := takeNativeRoutingRequest(t, primaryRequests)
-	assertNativeRoutingReplayInput(t, primaryToolContinuation["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
+	assertNativeRoutingProviderDataInput(t, primaryToolContinuation["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
 	backupInitial := takeNativeRoutingRequest(t, backupRequests)
 	require.Equal(t, `true`, string(backupInitial["stream"]))
 	backupToolContinuation := takeNativeRoutingRequest(t, backupRequests)
-	assertNativeRoutingReplayInput(t, backupToolContinuation["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
+	assertNativeRoutingProviderDataInput(t, backupToolContinuation["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
 
 	require.NoError(t, r.Close())
 	r = nil
@@ -330,9 +330,9 @@ func TestNativeRoutingFailoverBeforePreviewPreservesToolReplayAcrossReopen(t *te
 	require.EqualValues(t, 3, primaryCalls.Load())
 	require.EqualValues(t, 3, backupCalls.Load())
 	primaryAfterReopen := takeNativeRoutingRequest(t, primaryRequests)
-	assertNativeRoutingReplayInput(t, primaryAfterReopen["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
+	assertNativeRoutingProviderDataInput(t, primaryAfterReopen["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
 	backupAfterReopen := takeNativeRoutingRequest(t, backupRequests)
-	assertNativeRoutingReplayInput(t, backupAfterReopen["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
+	assertNativeRoutingProviderDataInput(t, backupAfterReopen["input"], "fc_failover", "call_failover", `{"a":4}`, "5")
 }
 
 func TestNativeRoutingFailoverAfterPreviewDoesNotSwitchOrExecuteTool(t *testing.T) {
@@ -400,7 +400,7 @@ func TestNativeRoutingFailoverAfterPreviewDoesNotSwitchOrExecuteTool(t *testing.
 	}
 }
 
-func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T) {
+func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerProviderData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	loserRequests := make(chan nativeRoutingRequest, 8)
@@ -521,7 +521,7 @@ func TestNativeRoutingHedgeCancelsLoserAndPersistsOnlyWinnerReplay(t *testing.T)
 	assertNativeRoutingText(t, continuedEvents, "5")
 	require.EqualValues(t, 1, toolCalls.Load(), "reopened native history must not execute the winner tool again")
 	continued := takeNativeRoutingRequest(t, loserRequests)
-	assertNativeRoutingReplayInput(t, continued["input"], "fc_winner", "call_winner", `{"a":4}`, "5")
+	assertNativeRoutingProviderDataInput(t, continued["input"], "fc_winner", "call_winner", `{"a":4}`, "5")
 	sess, err = svc.GetSession(ctx, session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 	require.NoError(t, err)
 	assertNativeRoutingSessionContainsOnlyCall(t, sess, "fc_winner", "call_winner")
