@@ -401,6 +401,12 @@ func main() {
 }
 ```
 
+对于非流式 OpenAI 兼容调用，如果 HTTP 200 响应的整个 JSON 响应体是 `null`，
+框架会通过 `Response.Error` 报告错误，其中 `Type` 为 `model.ErrorTypeAPIError`，
+`Done` 为 `true`。这适用于 `GenerateContent` 和 `GenerateContentIter`，
+此类无效响应不会触发 chat response callback。合法响应中的 `message.content: null`
+（例如工具调用响应）不受影响。
+
 ### 结构化输出
 
 直接调用 `model.GenerateContent` 时，可以用 `model.NewRequest` 和
