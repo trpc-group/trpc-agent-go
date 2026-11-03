@@ -169,6 +169,41 @@ func TestStreamingMessageDeltaOnlyConversionBoundaries(t *testing.T) {
 	}
 }
 
+func TestStreamingMessageDeltaOnlyOmitsIDOnlyEvent(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		streamingEventType: StreamingEventTypeMessage, streamingMessageDeltaOnly: true,
+	}
+	evt := &event.Event{Response: &model.Response{
+		ID:      "response",
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("complete")}},
+	}}
+	result, err := converter.ConvertStreamingToA2AMessage(context.Background(), evt, EventToA2AStreamingOptions{})
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+func TestStreamingMessageDeltaOnlyNonPartialReasoning(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		streamingEventType: StreamingEventTypeMessage, streamingMessageDeltaOnly: true,
+	}
+	evt := &event.Event{Response: &model.Response{
+		ID: "response", Object: model.ObjectTypeChatCompletion, IsPartial: false,
+		Choices: []model.Choice{{
+			Delta:   model.Message{ReasoningContent: "delta thought"},
+			Message: model.Message{Content: "complete", ReasoningContent: "complete thought"},
+		}},
+	}}
+	result, err := converter.ConvertStreamingToA2AMessage(context.Background(), evt, EventToA2AStreamingOptions{})
+	require.NoError(t, err)
+	msg, ok := result.(*protocol.Message)
+	require.True(t, ok)
+	require.Len(t, msg.Parts, 1)
+	part, ok := msg.Parts[0].(protocol.TextPart)
+	require.True(t, ok)
+	require.Equal(t, "delta thought", part.Text)
+	require.Equal(t, true, part.Metadata["thought"])
+}
+
 func TestStreamingMessageDeltaOnlyCustomConverter(t *testing.T) {
 	backend := &mockRunner{runFunc: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *event.Event, error) {
 		ch := make(chan *event.Event, 1)
