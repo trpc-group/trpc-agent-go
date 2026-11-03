@@ -42,13 +42,15 @@ func WithDomain(domain string) Option {
 	return func(c *CodeExecutor) { c.domain = domain }
 }
 
-// WithDisableClientIDHostSuffix disables appending the client ID to sandbox
-// hostnames when the API response does not provide a domain. The configured
-// domain is still used as the fallback. This applies to Code Interpreter,
-// native processes, and Sandbox().GetHost for both new and connected sandboxes.
-// Without this option, the legacy client ID suffix is preserved.
-func WithDisableClientIDHostSuffix() Option {
-	return func(c *CodeExecutor) { c.disableClientIDHostSuffix = true }
+// WithClientIDHostSuffix controls the legacy client ID suffix in sandbox
+// hostnames. It is enabled by default. When enabled, the suffix is appended
+// only when the response domain is empty and the client ID is non-empty.
+// When disabled, fallback hostnames use only the sandbox ID and configured
+// domain. A non-empty response domain always takes precedence without a suffix.
+// This applies to Code Interpreter, native processes, and Sandbox().GetHost
+// for both new and connected sandboxes.
+func WithClientIDHostSuffix(enabled bool) Option {
+	return func(c *CodeExecutor) { c.disableClientIDHostSuffix = !enabled }
 }
 
 // WithAPIURL overrides the full base URL of the E2B management API

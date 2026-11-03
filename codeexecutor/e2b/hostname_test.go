@@ -34,14 +34,24 @@ func TestClientIDHostSuffix(t *testing.T) {
 		{"empty", `,"domain":""`, "configured.test"},
 		{"provided", `,"domain":"actual.test"`, "actual.test"},
 	} {
-		for _, disable := range []bool{false, true} {
+		for _, mode := range []struct {
+			name     string
+			disabled bool
+			options  []Option
+		}{
+			{name: "default"},
+			{name: "enabled", options: []Option{WithClientIDHostSuffix(true)}},
+			{name: "disabled", disabled: true, options: []Option{WithClientIDHostSuffix(false)}},
+			{name: "re-enabled", options: []Option{WithClientIDHostSuffix(false), WithClientIDHostSuffix(true)}},
+			{name: "last-disabled", disabled: true, options: []Option{WithClientIDHostSuffix(true), WithClientIDHostSuffix(false)}},
+		} {
 			for _, reconnect := range []bool{false, true} {
 				for _, clientID := range []string{"worker", ""} {
-					t.Run(fmt.Sprintf("%s/disable=%t/connect=%t/client=%s", domain.name, disable, reconnect, clientID), func(t *testing.T) {
+					t.Run(fmt.Sprintf("%s/%s/connect=%t/client=%s", domain.name, mode.name, reconnect, clientID), func(t *testing.T) {
 						t.Setenv("E2B_DEBUG", "false")
 						t.Setenv("E2B_ACCESS_TOKEN", "")
 						id := "sandbox"
-						if !disable && domain.name != "provided" && clientID != "" {
+						if !mode.disabled && domain.name != "provided" && clientID != "" {
 							id += "-" + clientID
 						}
 						wantHost := "49999-" + id + "." + domain.host
@@ -70,9 +80,7 @@ func TestClientIDHostSuffix(t *testing.T) {
 							return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 						})}
 						opts := []Option{WithAPIKey("key"), WithAPIURL("https://management.test"), WithDomain("configured.test"), WithHTTPClient(client)}
-						if disable {
-							opts = append(opts, WithDisableClientIDHostSuffix())
-						}
+						opts = append(opts, mode.options...)
 						if reconnect {
 							opts = append(opts, WithSandboxID("sandbox"))
 						}

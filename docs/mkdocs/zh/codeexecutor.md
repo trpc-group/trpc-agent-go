@@ -129,19 +129,20 @@ agent := llmagent.New(
 默认情况下，API 响应缺少 `domain`、返回 `null` 或空字符串时，如果 `clientID`
 非空，主机名保留旧格式 `<port>-<sandboxID>-<clientID>.<配置域名>`。
 对于仅按 sandbox ID 路由的部署（例如省略 `domain` 的 AGS 入口），在
-`e2b.New` 或 `e2b.NewWithContext` 中添加无参选项：
+`e2b.New` 或 `e2b.NewWithContext` 中将该选项设为 `false`：
 
 ```go
 executor, err := e2b.New(
     e2b.WithDomain("your-sandbox-domain"),
-    e2b.WithDisableClientIDHostSuffix(),
+    e2b.WithClientIDHostSuffix(false),
 )
 ```
 
-启用后，回退地址为 `<port>-<sandboxID>.<配置域名>`。响应中的非空 `domain`
+设为 `false` 后，回退地址为 `<port>-<sandboxID>.<配置域名>`。响应中的非空 `domain`
 仍优先于配置域名，且不会追加 client ID 后缀。该选项同时作用于创建和重连、
 Code Interpreter、原生进程请求及 `executor.Sandbox().GetHost(port)`，不改变
-sandbox ID、管理 API 地址或 client ID 元数据。不传入此选项时保持原有行为。
+sandbox ID、管理 API 地址或 client ID 元数据。不传入此选项或设为 `true` 时
+保持原有行为；`true` 仅保留旧有的条件性追加规则，不会在响应域名非空时强制追加后缀。
 
 ### E2B workspace 程序执行
 
