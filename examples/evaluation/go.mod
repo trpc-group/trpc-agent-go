@@ -18,7 +18,7 @@ replace (
 require (
 	github.com/stretchr/testify v1.11.1
 	github.com/yanyiwu/gojieba v1.4.7
-	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.6.0
 	trpc.group/trpc-go/trpc-agent-go/runner/bestofn v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/server/evaluation v1.6.0

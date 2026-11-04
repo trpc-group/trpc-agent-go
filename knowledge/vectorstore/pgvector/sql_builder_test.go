@@ -513,7 +513,21 @@ func TestMetadataQueryBuilder(t *testing.T) {
 				"0.0 as score",
 				"FROM documents",
 				"WHERE 1=1",
-				"ORDER BY created_at",
+				"ORDER BY created_at, id",
+				"LIMIT $1 OFFSET $2",
+			},
+			expectedArgs: 2,
+		},
+		{
+			name: "custom_order_fields",
+			setupFunc: func(mqb *metadataQueryBuilder) {
+				mqb.o.createdAtFieldName = "inserted_at"
+				mqb.o.idFieldName = "document_key"
+			},
+			limit:  256,
+			offset: 256,
+			expectedContains: []string{
+				"ORDER BY inserted_at, document_key",
 				"LIMIT $1 OFFSET $2",
 			},
 			expectedArgs: 2,

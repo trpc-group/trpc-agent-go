@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/tool/google v0.0.0-20251126064502-c8c2594d2519
 )
 

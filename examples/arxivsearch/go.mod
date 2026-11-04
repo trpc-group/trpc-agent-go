@@ -9,7 +9,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch v0.8.1-0.20251222024650-ea147adf3d21
 )
 

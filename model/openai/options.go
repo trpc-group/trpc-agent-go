@@ -369,18 +369,25 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
-// When enabled, the system will automatically calculate max input tokens using the model's
-// context window minus reserved tokens and protocol overhead.
+// WithEnableTokenTailoring controls automatic message trimming before sending a
+// request to the model provider. It is disabled by default.
+// Setting WithMaxInputTokens or WithContextWindow alone does not enable trimming.
+// When enabled, trimming uses Model.InputTokenBudget, which derives the budget
+// from the context window unless a positive WithMaxInputTokens limit is set.
 func WithEnableTokenTailoring(enabled bool) Option {
 	return func(opts *options) {
 		opts.EnableTokenTailoring = enabled
 	}
 }
 
-// WithMaxInputTokens sets only the input token limit for token tailoring.
-// The counter/strategy will be lazily initialized if not provided.
-// Defaults to SimpleTokenCounter and MiddleOutStrategy.
+// WithMaxInputTokens sets the messages input budget used by Model.InputTokenBudget
+// and token tailoring. A non-positive limit derives the budget from the context
+// window instead.
+// This option does not enable automatic trimming; use
+// WithEnableTokenTailoring(true) to apply trimming before provider requests.
+// The input budget remains available to other framework consumers when trimming
+// is disabled. The default counter and strategy are SimpleTokenCounter and
+// MiddleOutStrategy.
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.MaxInputTokens = limit
@@ -389,6 +396,10 @@ func WithMaxInputTokens(limit int) Option {
 
 // WithContextWindow sets the model context window size in tokens for this
 // model instance.
+// This option does not enable automatic trimming; use
+// WithEnableTokenTailoring(true) to apply trimming before provider requests.
+// The window is also exposed through Model.Info for other framework consumers,
+// such as context-threshold summaries, regardless of the trimming setting.
 func WithContextWindow(tokens int) Option {
 	return func(opts *options) {
 		if tokens > 0 {

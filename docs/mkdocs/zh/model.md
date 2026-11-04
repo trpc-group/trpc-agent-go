@@ -401,6 +401,12 @@ func main() {
 }
 ```
 
+对于非流式 OpenAI 兼容调用，如果 HTTP 200 响应的整个 JSON 响应体是 `null`，
+框架会通过 `Response.Error` 报告错误，其中 `Type` 为 `model.ErrorTypeAPIError`，
+`Done` 为 `true`。这适用于 `GenerateContent` 和 `GenerateContentIter`，
+此类无效响应不会触发 chat response callback。合法响应中的 `message.content: null`
+（例如工具调用响应）不受影响。
+
 ### 结构化输出
 
 直接调用 `model.GenerateContent` 时，可以用 `model.NewRequest` 和
@@ -1799,6 +1805,12 @@ summarizer := summary.NewSummarizer(
 #### 7. Token 裁剪（Token Tailoring）
 
 Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
+
+Token Tailoring **默认关闭**。如需在请求发送给模型服务前自动裁剪消息，必须显式设置
+`openai.WithEnableTokenTailoring(true)`。仅设置 `openai.WithMaxInputTokens(...)`
+或 `openai.WithContextWindow(...)` 只会配置预算或窗口，不会开启裁剪。即使关闭裁剪，
+其他框架流程仍可通过 `Model.InputTokenBudget` 和 `Model.Info` 读取这些配置。
+会话摘要和上下文压缩需要单独配置。
 
 **自动模式（推荐）**：
 

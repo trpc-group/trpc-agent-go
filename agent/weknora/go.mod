@@ -7,7 +7,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 require (
 	github.com/Tencent/WeKnora/client v0.0.0-20260324035655-62e6ae960f46
 	github.com/google/uuid v1.6.0
-	trpc.group/trpc-go/trpc-agent-go v1.7.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

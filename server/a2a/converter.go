@@ -127,10 +127,11 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
 	// of "type").
-	adkCompatibility          bool
-	graphEventObjectAllowlist []string
-	streamingEventType        StreamingEventType
-	eventPartMappers          []EventToA2APartMapper
+	adkCompatibility              bool
+	graphEventObjectAllowlist     []string
+	streamingEventType            StreamingEventType
+	streamingMessageTextDeltaOnly bool
+	eventPartMappers              []EventToA2APartMapper
 }
 
 const graphObjectPrefix = "graph."
@@ -568,7 +569,9 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	choice := event.Response.Choices[0]
 	parts := c.buildTextParts(choice.Delta)
 	usesSnapshot := false
-	if !event.Response.IsPartial {
+	deltaOnly := c.streamingEventType == StreamingEventTypeMessage &&
+		c.streamingMessageTextDeltaOnly
+	if !event.Response.IsPartial && !deltaOnly {
 		if messageParts := c.buildTextParts(choice.Message); len(messageParts) > 0 {
 			parts = messageParts
 			usesSnapshot = true
