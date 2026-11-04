@@ -11,6 +11,7 @@ package toolretry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -128,6 +129,69 @@ func TestExecute_DoesNotRetryTerminalErrors(t *testing.T) {
 	})
 	require.ErrorIs(t, result.Error, stopErr)
 	require.Equal(t, 1, attempts)
+}
+
+type replaySafetyError struct {
+	safe bool
+}
+
+func (e *replaySafetyError) Error() string            { return "interrupted tool call" }
+func (e *replaySafetyError) Unwrap() error            { return io.ErrUnexpectedEOF }
+func (e *replaySafetyError) ToolCallReplaySafe() bool { return e.safe }
+
+func TestExecute_RespectsToolCallReplaySafety(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		safe   bool
+		joined bool
+		custom bool
+	}{
+		{name: "unsafe wrapped"},
+		{name: "unsafe joined", joined: true},
+		{name: "unsafe custom policy", custom: true},
+		{name: "unsafe joined custom policy", joined: true, custom: true},
+		{name: "safe wrapped", safe: true},
+		{name: "safe custom policy", safe: true, custom: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callErr := fmt.Errorf("wrapped: %w", &replaySafetyError{safe: tc.safe})
+			if tc.joined {
+				callErr = errors.Join(errors.New("connection interrupted"), callErr)
+			}
+			attempts, policyCalls := 0, 0
+			policy := &tool.RetryPolicy{MaxAttempts: 2}
+			if tc.custom {
+				policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) {
+					policyCalls++
+					return true, nil
+				}
+			}
+			result := Execute(context.Background(), ExecuteInput{
+				Policy: policy,
+				Call: func(context.Context, []byte) (any, error) {
+					attempts++
+					if attempts == 1 {
+						return "partial", callErr
+					}
+					return "finished", nil
+				},
+			})
+			if tc.safe {
+				require.NoError(t, result.Error)
+				require.Equal(t, "finished", result.Result)
+				require.Equal(t, 2, attempts)
+				if tc.custom {
+					require.Equal(t, 1, policyCalls)
+				}
+				return
+			}
+			require.Same(t, callErr, result.Error, "preserve the original error chain")
+			require.ErrorIs(t, result.Error, io.ErrUnexpectedEOF)
+			require.Equal(t, "partial", result.Result)
+			require.Equal(t, 1, attempts)
+			require.Zero(t, policyCalls, "retry policies cannot override replay safety")
+		})
+	}
 }
 
 func TestExecute_RequiresCallFunction(t *testing.T) {

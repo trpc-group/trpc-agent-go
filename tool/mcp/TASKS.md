@@ -31,6 +31,12 @@ not full MCP 2026-07-28 support; see the SDK's `TASKS.md`. Tasks are disabled by
 default, preserving ordinary tool-call behavior.
 There is no automatic cross-process handle persistence or human-input handler.
 
+Framework tool-call retries in LLMAgent and Graph also honor errors reporting
+`ToolCallReplaySafe() == false`, including wrapped errors and custom retry
+policies. An interrupted task returns its original error and handle rather than
+submitting the tool again after the session reconnect budget is exhausted. This
+does not turn the task error into an Agent stop signal.
+
 The reconnect integration tests run in the normal package test suite using the
 released SDK, without build tags or local replacements. From the Agent repository:
 
