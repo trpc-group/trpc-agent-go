@@ -1,0 +1,705 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package replaytest
+
+import (
+	"encoding/json"
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func TestOperationValidateRejectsInvalidPayloads(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation Operation
+	}{
+		{name: "empty", operation: Operation{}},
+		{name: "missing event", operation: Operation{Kind: OperationAppendEvent, SessionID: "session"}},
+		{
+			name: "unrelated payload",
+			operation: Operation{
+				Kind:      OperationCreateSession,
+				SessionID: "session",
+				Memory:    &MemorySnapshot{},
+			},
+		},
+		{
+			name: "missing replay window filter key",
+			operation: Operation{
+				Kind:      OperationSetReplayWindow,
+				SessionID: "session",
+			},
+		},
+		{
+			name: "invalid search limit",
+			operation: Operation{
+				Kind:        OperationSearchMemory,
+				SearchQuery: "query",
+			},
+		},
+		{
+			name: "summary ownership mismatch",
+			operation: Operation{
+				Kind:      OperationUpdateSummary,
+				SessionID: "session-1",
+				Summary:   &SummarySnapshot{SessionID: "session-2"},
+			},
+		},
+		{
+			name: "summary generated fields used as input",
+			operation: Operation{
+				Kind:      OperationUpdateSummary,
+				SessionID: "session-1",
+				Summary: &SummarySnapshot{
+					SessionID: "session-1",
+					Version:   1,
+				},
+			},
+		},
+		{
+			name: "unexpected injected failure",
+			operation: Operation{
+				Kind:            OperationWriteMemory,
+				Memory:          &MemorySnapshot{},
+				InjectedFailure: "failure",
+				ExpectFailure:   false,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.operation.Validate(); err == nil {
+				t.Fatalf("Operation.Validate() error = nil for %#v", test.operation)
+			}
+		})
+	}
+}
+
+func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
+	validChild := appendEvent("event", "user", "content", 1)
+	tests := []struct {
+		name      string
+		operation Operation
+		want      string
+	}{
+		{
+			name:      "unsupported kind",
+			operation: Operation{Kind: "unknown"},
+			want:      "unsupported operation kind",
+		},
+		{
+			name: "expected failure without injection",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session", ExpectFailure: true,
+			},
+			want: "expected failure requires injected failure",
+		},
+		{
+			name: "invalid failure point",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session",
+				InjectedFailure: "failure", ExpectFailure: true, FailurePoint: "invalid",
+			},
+			want: "valid failure point",
+		},
+		{
+			name: "failure point without injection",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session", FailurePoint: FailureBeforeWrite,
+			},
+			want: "failure point requires injected failure",
+		},
+		{
+			name: "children on non-parallel operation",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session", Parallel: []Operation{validChild},
+			},
+			want: "cannot contain parallel operations",
+		},
+		{
+			name: "failure on parallel parent",
+			operation: Operation{
+				Kind: OperationParallel, Parallel: []Operation{validChild},
+				InjectedFailure: "failure", ExpectFailure: true, FailurePoint: FailureBeforeWrite,
+			},
+			want: "parallel failure must be injected on a child",
+		},
+		{
+			name:      "create session without id",
+			operation: Operation{Kind: OperationCreateSession},
+			want:      "create session requires session id",
+		},
+		{
+			name: "tool response with conflicting role",
+			operation: Operation{
+				Kind: OperationAppendEvent, SessionID: "session",
+				Event: &EventSnapshot{
+					Role: "assistant", ToolResponse: &ToolResponse{Content: "result"},
+				},
+			},
+			want: "tool response conflicts with event role",
+		},
+		{
+			name: "tool response with conflicting content",
+			operation: Operation{
+				Kind: OperationAppendEvent, SessionID: "session",
+				Event: &EventSnapshot{
+					Role: "tool", Content: "outer",
+					ToolResponse: &ToolResponse{Content: "nested"},
+				},
+			},
+			want: "tool response conflicts with event content",
+		},
+		{
+			name:      "update state without changes",
+			operation: Operation{Kind: OperationUpdateState, SessionID: "session"},
+			want:      "update state requires session id and state changes",
+		},
+		{
+			name: "update state with app key",
+			operation: Operation{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateUpdates: map[string]any{"app:theme": "dark"},
+			},
+			want: "reserved scope prefix",
+		},
+		{
+			name: "delete state with user key",
+			operation: Operation{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateDeletes: []string{"user:theme"},
+			},
+			want: "reserved scope prefix",
+		},
+		{
+			name: "update and delete same state key",
+			operation: Operation{
+				Kind: OperationUpdateState, SessionID: "session",
+				StateUpdates: map[string]any{"theme": nil}, StateDeletes: []string{"theme"},
+			},
+			want: "cannot be both updated and deleted",
+		},
+		{
+			name:      "write memory without memory",
+			operation: Operation{Kind: OperationWriteMemory},
+			want:      "write memory requires memory",
+		},
+		{
+			name: "write memory without app name",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					UserID: "user",
+				},
+			},
+			want: "requires app name and user id",
+		},
+		{
+			name: "write memory without user id",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app",
+				},
+			},
+			want: "requires app name and user id",
+		},
+		{
+			name: "write memory with partial scope",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user",
+					Scope: MemoryScope{AppName: "app"},
+				},
+			},
+			want: "scope must match",
+		},
+		{
+			name: "write memory with conflicting scope",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user",
+					Scope: MemoryScope{AppName: "other", UserID: "user"},
+				},
+			},
+			want: "scope must match",
+		},
+		{
+			name: "write memory with id",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					ID: "memory", AppName: "app", UserID: "user",
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "write memory with score",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user", Score: 0.5,
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "write memory with created time",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user", CreatedAt: time.Unix(1, 0),
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "write memory with updated time",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user", UpdatedAt: time.Unix(1, 0),
+				},
+			},
+			want: "read-only",
+		},
+		{
+			name: "search score above one",
+			operation: Operation{
+				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
+				SearchAppName: "app", SearchUserID: "user", SearchMinScore: 1.1,
+			},
+			want: "score threshold",
+		},
+		{
+			name: "search score NaN",
+			operation: Operation{
+				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
+				SearchAppName: "app", SearchUserID: "user", SearchMinScore: math.NaN(),
+			},
+			want: "score threshold",
+		},
+		{
+			name: "search score infinity",
+			operation: Operation{
+				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
+				SearchAppName: "app", SearchUserID: "user", SearchMinScore: math.Inf(1),
+			},
+			want: "score threshold",
+		},
+		{
+			name:      "update summary without summary",
+			operation: Operation{Kind: OperationUpdateSummary, SessionID: "session"},
+			want:      "update summary requires session id and summary",
+		},
+		{
+			name:      "append track without event",
+			operation: Operation{Kind: OperationAppendTrack, SessionID: "session", TrackName: "tool"},
+			want:      "append track requires session id, track name, and event",
+		},
+		{
+			name:      "parallel without children",
+			operation: Operation{Kind: OperationParallel},
+			want:      "parallel operation requires child operations",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.operation.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Operation.Validate() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestOperationValidateAcceptsConsistentToolResponseFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		event EventSnapshot
+	}{
+		{
+			name: "nested fields only",
+			event: EventSnapshot{
+				ToolResponse: &ToolResponse{Content: "result"},
+			},
+		},
+		{
+			name: "matching outer fields",
+			event: EventSnapshot{
+				Role: "tool", Content: "result",
+				ToolResponse: &ToolResponse{Content: "result"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			operation := Operation{
+				Kind: OperationAppendEvent, SessionID: "session", Event: &test.event,
+			}
+			if err := operation.Validate(); err != nil {
+				t.Fatalf("Operation.Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestOperationValidateAcceptsWriteMemoryOwnership(t *testing.T) {
+	for _, scope := range []MemoryScope{
+		{},
+		{AppName: "app", UserID: "user"},
+	} {
+		operation := Operation{
+			Kind: OperationWriteMemory,
+			Memory: &MemorySnapshot{
+				AppName: "app", UserID: "user", Scope: scope,
+			},
+		}
+		if err := operation.Validate(); err != nil {
+			t.Fatalf("Operation.Validate() scope=%#v error = %v", scope, err)
+		}
+	}
+}
+
+func TestParallelDependenciesRejectInvalidGraphs(t *testing.T) {
+	tests := []struct {
+		name       string
+		operations []Operation
+	}{
+		{
+			name: "duplicate name",
+			operations: []Operation{
+				namedOperation(appendEvent("1", "user", "one", 1), "same"),
+				namedOperation(appendEvent("2", "user", "two", 2), "same"),
+			},
+		},
+		{
+			name: "unknown dependency",
+			operations: []Operation{
+				namedOperation(appendEvent("1", "user", "one", 1), "one", "missing"),
+			},
+		},
+		{
+			name: "cycle",
+			operations: []Operation{
+				namedOperation(appendEvent("1", "user", "one", 1), "one", "two"),
+				namedOperation(appendEvent("2", "user", "two", 2), "two", "one"),
+			},
+		},
+		{
+			name:       "invalid child operation",
+			operations: []Operation{{Kind: OperationCreateSession}},
+		},
+		{
+			name: "unnamed dependency",
+			operations: []Operation{{
+				Kind: OperationCreateSession, SessionID: "session", After: []string{"other"},
+			}},
+		},
+		{
+			name: "self dependency",
+			operations: []Operation{{
+				Kind: OperationCreateSession, SessionID: "session", Name: "self", After: []string{"self"},
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parallelDependencies(test.operations); err == nil {
+				t.Fatal("parallelDependencies() error = nil")
+			}
+		})
+	}
+}
+
+func TestCloneOperationDeeplyIsolatesPayloads(t *testing.T) {
+	eventTime := time.Unix(123, 456).UTC()
+	original := Operation{
+		Kind:         OperationParallel,
+		Name:         "parent",
+		After:        []string{"before"},
+		StateUpdates: map[string]any{"nested": map[string]any{"items": []any{"value"}}},
+		StateDeletes: []string{"deleted"},
+		Event: &EventSnapshot{
+			ToolCalls: []ToolCallSnapshot{{
+				Arguments: map[string]any{"raw": json.RawMessage(`{"kept":true}`)},
+				Extra:     map[string]any{"bytes": []byte("bytes")},
+			}},
+			ToolResponse: &ToolResponse{Extra: map[string]any{"strings": []string{"one"}}},
+			StateDelta: map[string]StateValueSnapshot{
+				"state": JSONStateValue(map[string]any{"key": "value"}),
+			},
+			Extensions: map[string]any{
+				"labels":   map[string]string{"key": "value"},
+				"typed":    []map[string]any{{"bytes": []byte("bytes")}},
+				"byte_map": map[string][]byte{"bytes": []byte("bytes")},
+				"struct": &typedClonePayload{
+					Labels: map[string]string{"key": "value"},
+					Items:  []string{"item"},
+				},
+			},
+		},
+		Memory: &MemorySnapshot{
+			Topics: []string{"topic"},
+			Metadata: map[string]any{
+				"nested":     map[string]any{"key": "value"},
+				"event_time": &eventTime,
+			},
+		},
+		Summary:    &SummarySnapshot{Boundary: map[string]any{"ids": []any{"one"}}},
+		TrackEvent: &TrackEventSnapshot{Payload: map[string]any{"items": []any{"one"}}},
+		Parallel: []Operation{{
+			Kind: OperationAppendEvent,
+			Event: &EventSnapshot{
+				Extensions: map[string]any{"child": map[string]any{"key": "value"}},
+			},
+		}},
+	}
+	want := cloneOperation(original)
+	cloned := cloneOperation(original)
+	mutateClonedOperation(&cloned)
+	if !reflect.DeepEqual(original, want) {
+		t.Fatalf("clone mutation changed original:\ngot:  %#v\nwant: %#v", original, want)
+	}
+}
+
+func mutateClonedOperation(operation *Operation) {
+	operation.After[0] = "changed"
+	operation.StateUpdates["nested"].(map[string]any)["items"].([]any)[0] = "changed"
+	operation.StateDeletes[0] = "changed"
+	operation.Event.ToolCalls[0].Arguments.(map[string]any)["raw"].(json.RawMessage)[0] = 'X'
+	operation.Event.ToolCalls[0].Extra["bytes"].([]byte)[0] = 'X'
+	operation.Event.ToolResponse.Extra["strings"].([]string)[0] = "changed"
+	operation.Event.StateDelta["state"].Value.(map[string]any)["key"] = "changed"
+	operation.Event.Extensions["labels"].(map[string]string)["key"] = "changed"
+	operation.Event.Extensions["typed"].([]map[string]any)[0]["bytes"].([]byte)[0] = 'X'
+	operation.Event.Extensions["byte_map"].(map[string][]byte)["bytes"][0] = 'X'
+	structured := operation.Event.Extensions["struct"].(*typedClonePayload)
+	structured.Labels["key"] = "changed"
+	structured.Items[0] = "changed"
+	operation.Memory.Topics[0] = "changed"
+	operation.Memory.Metadata["nested"].(map[string]any)["key"] = "changed"
+	*operation.Memory.Metadata["event_time"].(*time.Time) = time.Time{}
+	operation.Summary.Boundary["ids"].([]any)[0] = "changed"
+	operation.TrackEvent.Payload["items"].([]any)[0] = "changed"
+	operation.Parallel[0].Event.Extensions["child"].(map[string]any)["key"] = "changed"
+}
+
+func TestCloneOperationPreservesNonNilEmptyPayloads(t *testing.T) {
+	original := Operation{
+		After:        []string{},
+		StateDeletes: []string{},
+		Event: &EventSnapshot{
+			ToolCalls:  []ToolCallSnapshot{},
+			Extensions: map[string]any{"raw": json.RawMessage{}},
+		},
+		Memory:   &MemorySnapshot{Topics: []string{}},
+		Parallel: []Operation{},
+	}
+	cloned := cloneOperation(original)
+	if cloned.After == nil || cloned.StateDeletes == nil || cloned.Event.ToolCalls == nil ||
+		cloned.Event.Extensions["raw"].(json.RawMessage) == nil || cloned.Memory.Topics == nil ||
+		cloned.Parallel == nil {
+		t.Fatalf("clone changed non-nil empty payloads: %#v", cloned)
+	}
+}
+
+func TestCloneOperationPreservesSharedAndCyclicReferences(t *testing.T) {
+	shared := map[string]any{}
+	shared["self"] = shared
+	original := Operation{
+		StateUpdates: shared,
+		Event:        &EventSnapshot{Extensions: shared},
+	}
+	cloned := cloneOperation(original)
+	clonedState := cloned.StateUpdates
+	clonedEvent := cloned.Event.Extensions
+	clonedSelf := clonedState["self"].(map[string]any)
+	if reflect.ValueOf(clonedState).Pointer() == reflect.ValueOf(shared).Pointer() {
+		t.Fatal("clone retained original map")
+	}
+	if reflect.ValueOf(clonedState).Pointer() != reflect.ValueOf(clonedEvent).Pointer() ||
+		reflect.ValueOf(clonedState).Pointer() != reflect.ValueOf(clonedSelf).Pointer() {
+		t.Fatal("clone did not preserve shared/cyclic topology")
+	}
+}
+
+type opaqueClonePayload struct {
+	values map[string]string
+}
+
+func (payload opaqueClonePayload) MarshalJSON() ([]byte, error) {
+	return json.Marshal(payload.values)
+}
+
+func TestOperationRejectsOpaqueMutablePayloads(t *testing.T) {
+	operation := Operation{
+		Kind: OperationUpdateState, SessionID: "session",
+		StateUpdates: map[string]any{
+			"opaque": opaqueClonePayload{values: map[string]string{"key": "value"}},
+		},
+	}
+	if err := operation.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "unexported mutable field") {
+		t.Fatalf("Operation.Validate() error = %v", err)
+	}
+}
+
+func cyclicStateMapOperation() Operation {
+	value := map[string]any{"key": "value"}
+	value["self"] = value
+	return Operation{
+		Kind:         OperationUpdateState,
+		SessionID:    "session-1",
+		StateUpdates: map[string]any{"cyclic": value},
+	}
+}
+
+func cyclicExtensionOperation() Operation {
+	extension := map[string]any{"role": "tool"}
+	extension["self"] = &extension
+	return Operation{
+		Kind:      OperationAppendEvent,
+		SessionID: "session-1",
+		Event: &EventSnapshot{
+			Role:       "user",
+			Content:    "hello",
+			Extensions: map[string]any{"cyclic": extension},
+		},
+	}
+}
+
+func cyclicParallelOperation() Operation {
+	return Operation{
+		Kind:     OperationParallel,
+		Parallel: []Operation{cyclicStateMapOperation()},
+	}
+}
+
+func complexStateOperation() Operation {
+	return Operation{
+		Kind:         OperationUpdateState,
+		SessionID:    "session-1",
+		StateUpdates: map[string]any{"complex": complex(1, 2)},
+	}
+}
+
+func interfaceKeyStateOperation() Operation {
+	return Operation{
+		Kind:         OperationUpdateState,
+		SessionID:    "session-1",
+		StateUpdates: map[string]any{"interfaces": map[any]any{"key": "value"}},
+	}
+}
+
+func TestOperationValidateRejectsCyclicPayloads(t *testing.T) {
+	operations := []struct {
+		name      string
+		operation Operation
+	}{
+		{"cyclic state map", cyclicStateMapOperation()},
+		{"cyclic extension pointer", cyclicExtensionOperation()},
+		{"cyclic parallel child", cyclicParallelOperation()},
+	}
+	for _, tc := range operations {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.operation.Validate(); err == nil {
+				t.Fatal("Operation.Validate() accepted a cyclic payload")
+			}
+		})
+	}
+}
+
+func TestOperationValidateRejectsNonSerializablePayloads(t *testing.T) {
+	operations := []struct {
+		name      string
+		operation Operation
+	}{
+		{"complex state value", complexStateOperation()},
+		{"interface-keyed map", interfaceKeyStateOperation()},
+	}
+	for _, tc := range operations {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.operation.Validate(); err == nil {
+				t.Fatal("Operation.Validate() accepted a non-serializable payload")
+			}
+		})
+	}
+}
+
+func TestOperationValidateAcceptsSharedJSONLikeValues(t *testing.T) {
+	shared := map[string]any{"count": int64(2)}
+	operation := Operation{
+		Kind:      OperationUpdateState,
+		SessionID: "session-1",
+		StateUpdates: map[string]any{
+			"first":  shared,
+			"second": shared,
+		},
+	}
+	if err := operation.Validate(); err != nil {
+		t.Fatalf("shared acyclic values rejected: %v", err)
+	}
+	cloned := cloneOperation(operation)
+	if cloned.StateUpdates["first"] == nil || cloned.StateUpdates["second"] == nil {
+		t.Fatal("cloneOperation() lost shared values")
+	}
+}
+
+func TestUpdateStateRejectsInternalBookkeepingKeys(t *testing.T) {
+	internalKeys := []string{
+		"tracks",
+		session.SummaryLastIncludedTimestampStateKey,
+		session.SummaryLastIncludedEventIDStateKey,
+	}
+	for _, key := range internalKeys {
+		t.Run("update "+key, func(t *testing.T) {
+			operation := Operation{
+				Kind:         OperationUpdateState,
+				SessionID:    "session-1",
+				StateUpdates: map[string]any{key: "value"},
+			}
+			if err := operation.Validate(); err == nil {
+				t.Fatalf("update state key %q passed validation", key)
+			}
+		})
+		t.Run("delete "+key, func(t *testing.T) {
+			operation := Operation{
+				Kind:         OperationUpdateState,
+				SessionID:    "session-1",
+				StateDeletes: []string{key},
+			}
+			if err := operation.Validate(); err == nil {
+				t.Fatalf("delete state key %q passed validation", key)
+			}
+		})
+	}
+}
+
+func TestUpdateStateAcceptsUserStateKeys(t *testing.T) {
+	for _, key := range []string{"profile", "temp:scratch", "summary:custom"} {
+		operation := Operation{
+			Kind:         OperationUpdateState,
+			SessionID:    "session-1",
+			StateUpdates: map[string]any{key: "value"},
+		}
+		if err := operation.Validate(); err != nil {
+			t.Fatalf("update state key %q rejected: %v", key, err)
+		}
+	}
+}
