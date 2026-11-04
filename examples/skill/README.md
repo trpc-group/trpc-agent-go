@@ -59,7 +59,7 @@ dependencies into the same Python environment that `python3` points to.
 2) Install Python packages
 
 ```bash
-python3 -m pip install openai-whisper pillow pytesseract
+python3 -m pip install "openai-whisper==20250625" pillow pytesseract
 ```
 
 3) Install system dependencies
