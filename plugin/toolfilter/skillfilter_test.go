@@ -13,6 +13,8 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -98,6 +100,64 @@ func TestVisibility_NarrowsSkills(t *testing.T) {
 		"core-skill":     true, // WithKeepSkills
 	}, visible)
 	require.Equal(t, 1, rec.requests()) // one batch decision for the run
+}
+
+func TestVisibility_NormalizesSnapshotNames(t *testing.T) {
+	server, rec := decisionServer(t, binaryResponder(map[string]float64{"skill:approved": 0.9}, 0.05), http.StatusOK)
+	repo := &fakeSkillRepo{summaries: []skill.Summary{
+		{Name: " core-skill "},
+		{Name: " approved "},
+		{Name: " dropped "},
+	}}
+	f, err := NewSkillFilter(server.URL, repo, WithHTTPClient(server.Client()), WithKeepSkills("core-skill"))
+	require.NoError(t, err)
+	ctx := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test"))))
+	filter := f.VisibilityFilter()
+	require.True(t, filter(ctx, repo.summaries[0]))
+	require.True(t, filter(ctx, repo.summaries[1]))
+	require.False(t, filter(ctx, repo.summaries[2]))
+	require.True(t, filter(ctx, skill.Summary{Name: " new-skill "}))
+	require.Equal(t, 1, rec.requests())
+}
+
+func TestVisibility_SkillsAddedAfterDecision(t *testing.T) {
+	root := t.TempDir()
+	writeSkill := func(name string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+			[]byte("---\nname: "+name+"\ndescription: test skill\n---\nInstructions\n"), 0o644))
+	}
+	writeSkill("kept")
+	writeSkill("dropped")
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	server, rec := decisionServer(t, binaryResponder(map[string]float64{"skill:kept": 0.9}, 0.05), http.StatusOK)
+	f, err := NewSkillFilter(server.URL, repo, WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	filtered := skill.NewFilteredRepository(repo, f.VisibilityFilter())
+	inv := agent.NewInvocation(agent.WithInvocationMessage(model.NewUserMessage("test")))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	_, err = skill.GetForContext(ctx, filtered, "kept")
+	require.NoError(t, err)
+	_, err = skill.GetForContext(ctx, filtered, "dropped")
+	require.Error(t, err)
+
+	writeSkill("new-skill")
+	require.NoError(t, repo.Refresh())
+	_, err = skill.GetForContext(ctx, filtered, "new-skill")
+	require.NoError(t, err)
+	_, err = skill.GetForContext(ctx, filtered, "dropped")
+	require.Error(t, err)
+	require.Equal(t, 1, rec.requests())
+
+	next := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test"))))
+	_, err = skill.GetForContext(next, filtered, "new-skill")
+	require.Error(t, err)
+	require.Equal(t, 2, rec.requests())
 }
 
 func TestVisibility_ShortlistsFromUserHistory(t *testing.T) {

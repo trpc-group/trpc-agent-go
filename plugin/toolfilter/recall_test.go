@@ -160,6 +160,29 @@ func TestRecallRank_EmbeddingFusion(t *testing.T) {
 	require.Equal(t, "gamma", fused[1].name)
 }
 
+func TestRecallRank_EmbeddingWithoutKeywordTokens(t *testing.T) {
+	candidates := []scoredCandidate{
+		{name: "alpha", description: "first"},
+		{name: "beta", description: "second"},
+		{name: "missing", description: "no vector"},
+	}
+	for _, query := range []string{"مرحبا", "привет", "x"} {
+		t.Run(query, func(t *testing.T) {
+			emb := &stubEmbedder{vectors: map[string][]float64{
+				query: {1, 0}, "alpha\nfirst": {0, 1}, "beta\nsecond": {1, 0},
+			}}
+			ranked := recallRank(context.Background(), query, candidates, newEmbedCache(emb))
+			require.Len(t, ranked, 2)
+			require.Equal(t, "beta", ranked[0].name)
+			require.Greater(t, ranked[0].score, ranked[1].score)
+			require.Positive(t, ranked[1].score)
+		})
+	}
+	require.Empty(t, recallRank(context.Background(), "x", candidates, nil))
+	require.Empty(t, recallRank(context.Background(), "x", candidates,
+		newEmbedCache(&stubEmbedder{err: errors.New("embedding failed")})))
+}
+
 func TestRecallRank_BoundsConcurrentCandidateEmbeddings(t *testing.T) {
 	e := &controlledEmbedder{calls: make(map[string]int), started: make(chan string, 64), release: make(chan struct{})}
 	cache := newEmbedCache(e)
@@ -258,6 +281,67 @@ func TestEmbedCache_FailsOpenAndCaches(t *testing.T) {
 	// Failed embeddings are not cached: the next call retries.
 	require.Nil(t, cache.vector(context.Background(), "broken"))
 	require.Equal(t, 3, stub.calls())
+}
+
+func TestEmbedCache_RejectsMissWhenFull(t *testing.T) {
+	e := &stubEmbedder{vectors: map[string][]float64{"cached": {1}, "miss": {2}}}
+	cache := newEmbedCache(e)
+	cache.users.set("cached", []float64{1})
+	for i := 0; i < maxEmbeddingConcurrency; i++ {
+		cache.permits <- struct{}{}
+	}
+	require.Equal(t, []float64{1}, cache.vector(context.Background(), "cached"))
+	done := make(chan []float64, 1)
+	go func() { done <- cache.vector(context.Background(), "miss") }()
+	select {
+	case got := <-done:
+		require.Nil(t, got)
+	case <-time.After(time.Second):
+		for i := 0; i < maxEmbeddingConcurrency; i++ {
+			<-cache.permits
+		}
+		t.Fatal("cache miss waited for an embedding permit")
+	}
+	for i := 0; i < maxEmbeddingConcurrency; i++ {
+		<-cache.permits
+	}
+	require.Equal(t, 0, e.calls())
+	require.Equal(t, []float64{2}, cache.vector(context.Background(), "miss"))
+}
+
+func TestEmbedCache_SharesInFlightWhenFull(t *testing.T) {
+	e := &controlledEmbedder{calls: make(map[string]int), started: make(chan string, 1), release: make(chan struct{})}
+	cache := newEmbedCache(e)
+	for i := 1; i < maxEmbeddingConcurrency; i++ {
+		cache.permits <- struct{}{}
+	}
+	done := make(chan []float64, 2)
+	go func() { done <- cache.vector(context.Background(), "shared") }()
+	select {
+	case <-e.started:
+	case <-time.After(time.Second):
+		close(e.release)
+		t.Fatal("embedding did not start")
+	}
+	go func() { done <- cache.vector(context.Background(), "shared") }()
+	select {
+	case <-done:
+		close(e.release)
+		t.Fatal("shared embedding returned before it completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(e.release)
+	for i := 0; i < 2; i++ {
+		select {
+		case v := <-done:
+			require.NotEmpty(t, v)
+		case <-time.After(time.Second):
+			t.Fatal("shared embedding did not complete")
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	require.Equal(t, 1, e.calls["shared"])
 }
 
 func TestEmbedCache_BoundsUserAndCandidateVectors(t *testing.T) {

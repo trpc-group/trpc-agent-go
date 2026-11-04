@@ -109,13 +109,11 @@ func WithDefaultModel(model string) Option {
 	}
 }
 
-// WithTimeout sets the per-request timeout. It must be positive; the
-// default is 30 seconds.
+// WithTimeout sets the per-request timeout. It must be positive or the
+// constructor returns an error; the default is 30 seconds.
 func WithTimeout(timeout time.Duration) Option {
 	return func(o *options) {
-		if timeout > 0 {
-			o.timeout = timeout
-		}
+		o.timeout = timeout
 	}
 }
 
@@ -161,8 +159,9 @@ func WithMinToolCount(count int) Option {
 
 // WithShortlistLimit bounds tool and skill recall. Catalogs at or below the
 // limit are sent directly to the decision model. Larger catalogs use lexical
-// recall, optionally fused with embeddings; if recall finds no candidates,
-// the catalog remains visible. The limit must be at least 1; the default is 16.
+// recall, optionally combined with embeddings; if recall finds no candidates,
+// the catalog remains visible. Embeddings can also rank queries without lexical
+// tokens. The limit must be at least 1; the default is 16.
 func WithShortlistLimit(limit int) Option {
 	return func(o *options) {
 		if limit >= 1 {
@@ -207,8 +206,10 @@ func WithKeepSkills(names ...string) Option {
 // keyword path by reciprocal rank fusion. When the embedder fails, the
 // keyword path alone decides (fail-open). Concurrent requests for the same
 // text share one embedding operation per filter, with a 30-second timeout;
-// each caller may stop waiting when its context is canceled. Successful
-// embeddings are cached per filter in separate least-recently-used caches for
+// each caller may stop waiting when its context is canceled. When all 8
+// embedding slots are occupied, new distinct texts skip embedding; keyword
+// recall remains available. Successful embeddings are cached per filter in
+// separate least-recently-used caches for
 // 128 user texts and 1024 candidate descriptions. Evicted entries are
 // recomputed when needed. Each filter performs at most 8 embedding calls
 // concurrently, including calls for user texts.
@@ -257,6 +258,9 @@ func WithFallbackModel(m model.Model) Option {
 // newSystemOneClient builds the shared decision client from resolved
 // options. Internal types never leak into exported signatures.
 func newSystemOneClient(baseURL string, o options) (*systemoneclient.Client, error) {
+	if o.timeout <= 0 {
+		return nil, fmt.Errorf("toolfilter: timeout must be positive, got %v", o.timeout)
+	}
 	client, err := systemoneclient.NewClient(baseURL,
 		systemoneclient.WithAPIKey(o.apiKey),
 		systemoneclient.WithDefaultModel(o.model),

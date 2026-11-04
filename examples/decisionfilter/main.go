@@ -31,6 +31,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -179,7 +180,7 @@ func chat(ctx context.Context, r runner.Runner) error {
 	for {
 		fmt.Print("👤 User: ")
 		if !scanner.Scan() {
-			return nil
+			return scanner.Err()
 		}
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
@@ -258,11 +259,16 @@ func calculatorTool() tool.CallableTool {
 			var result float64
 			var left, right string
 			var op byte
-			for _, candidate := range []byte{'+', '-', '*', '/'} {
-				if i := strings.IndexByte(expr, candidate); i > 0 {
-					left, op, right = expr[:i], candidate, expr[i+1:]
-					break
+			for i := 1; i < len(expr); i++ {
+				candidate := expr[i]
+				if candidate != '+' && candidate != '-' && candidate != '*' && candidate != '/' {
+					continue
 				}
+				if (candidate == '+' || candidate == '-') && (expr[i-1] == 'e' || expr[i-1] == 'E') {
+					continue
+				}
+				left, op, right = expr[:i], candidate, expr[i+1:]
+				break
 			}
 			if op == 0 {
 				return struct {
@@ -301,9 +307,7 @@ func calculatorTool() tool.CallableTool {
 }
 
 func parseFloat(s string) (float64, error) {
-	var v float64
-	_, err := fmt.Sscanf(s, "%g", &v)
-	return v, err
+	return strconv.ParseFloat(s, 64)
 }
 
 func textTool() tool.CallableTool {

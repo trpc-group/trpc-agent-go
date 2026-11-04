@@ -12,7 +12,8 @@ protocol-compatible endpoint):
 - **Skill visibility** — `toolfilter.NewSkillFilter` returns a
   `skill.VisibilityFilter` for `llmagent.WithSkillFilter` that narrows the
   skill overview to the skills relevant for the current run, decided in one
-  batch request on the first visibility query.
+  batch request on the first visibility query. Skills added after that
+  decision stay visible for the run and are considered on the next run.
 - **Model routing** — `toolfilter.NewModelRouter` returns an
   `agent.ModelSelector` that picks a cheap or a strong model per run with one
   Choice question.
@@ -64,15 +65,19 @@ go run main.go \
   replay it by invocation ID. Tools added after that decision stay visible.
 - `📋 Tools sent to model: [...]` — printed by the OpenAI request callback;
   compare it with the dropped list to see the narrowing take effect.
-- `Ask about cooking` — a skill-irrelevant question; the skill overview in
-  the system message shrinks to the relevant skills (visible through the
-  `skill_load` tool's enum-free listing or the report line).
+- `Ask about cooking` — a question in the scope of the registered `cooking`
+  skill. The skill overview in the system message can keep `cooking` and
+  drop unrelated skills (visible through the `skill_load` tool's
+  enum-free listing or the report line).
 - Simple arithmetic questions route to the cheap model; long-context review
   questions route to the strong model.
 
 ## Tuning
 
-The shared options apply to all three integrations, for example:
+Options can be passed to all three constructors, but each integration uses
+only the options relevant to it. `NewModelRouter` ignores the filtering
+threshold, slack, minimum tool count, shortlist limit, question budget, and
+tool and skill keep-list options. Filtering options include:
 
 ```go
 toolfilter.WithThreshold(0.6)      // keep when P(relevant) >= 0.6
@@ -90,5 +95,6 @@ by `tool_search`.
 
 Tool and skill catalogs at or below `WithShortlistLimit` go straight to the
 decision model. Larger catalogs use recent user messages for lexical recall;
-when recall finds no candidates, the catalog stays visible. An optional
-shortlist embedder adds a semantic ranking path.
+an optional shortlist embedder adds semantic ranking, including for queries
+without lexical tokens. When recall finds no candidates, the catalog stays
+visible.

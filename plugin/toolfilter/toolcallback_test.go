@@ -641,7 +641,13 @@ func TestCallback_UnaskedBeyondQuestionBudgetKept(t *testing.T) {
 
 	// Every candidate scores 0.05, so only the keep set and the four
 	// shortlisted-but-unasked candidates survive.
-	require.Len(t, req.Tools, len(defaultKeepTools)+4)
+	want := append([]string{}, defaultKeepTools...)
+	want = append(want, "helper_20", "helper_21", "helper_22", "helper_23")
+	got := make([]string, 0, len(req.Tools))
+	for name := range req.Tools {
+		got = append(got, name)
+	}
+	require.ElementsMatch(t, want, got)
 }
 
 func TestCallback_KeepAlwaysProtectsUserTools(t *testing.T) {

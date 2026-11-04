@@ -40,7 +40,9 @@ func decisionConversation(inv *agent.Invocation) (string, string) {
 			}
 			if text := conversationText(msg); text != "" {
 				lines = append(lines, conversationLine{role: msg.Role, text: text})
-				currentIncluded = evt.InvocationID == inv.InvocationID && msg.Role == model.RoleUser && model.MessagesEqual(msg, inv.Message)
+				if evt.InvocationID == inv.InvocationID && msg.Role == model.RoleUser && model.MessagesEqual(msg, inv.Message) {
+					currentIncluded = true
+				}
 			}
 		}
 	}

@@ -36,10 +36,11 @@ func TestDecisionComponentsUseSessionConversation(t *testing.T) {
 		conversationEvent(model.RoleTool, "secret tool output", "app/agent"),
 		conversationEvent(model.RoleUser, "other branch secret", "app/other"),
 		conversationEvent(model.RoleUser, "continue", "app/agent"),
+		conversationEvent(model.RoleAssistant, "more details", "app/agent"),
 	}}
 	inv := agent.NewInvocation(agent.WithInvocationSession(sess), agent.WithInvocationEventFilterKey("app/agent"),
 		agent.WithInvocationMessage(model.NewUserMessage("continue")))
-	sess.Events[len(sess.Events)-1].InvocationID = inv.InvocationID
+	sess.Events[len(sess.Events)-2].InvocationID = inv.InvocationID
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	toolsServer, toolsRec := decisionServer(t, binaryResponder(nil, 0.05), http.StatusOK)
 	cb, err := NewToolCallback(toolsServer.URL, WithHTTPClient(toolsServer.Client()), WithMinToolCount(0))
@@ -66,6 +67,7 @@ func TestDecisionComponentsUseSessionConversation(t *testing.T) {
 	require.Equal(t, toolState, routeState)
 	require.Contains(t, toolState, "find flights")
 	require.Contains(t, toolState, "checking flights")
+	require.Contains(t, toolState, "assistant: more details")
 	require.NotContains(t, toolState, "secret")
 	require.Equal(t, 1, strings.Count(toolState, "continue"))
 }
@@ -81,6 +83,20 @@ func TestDecisionConversationBudgetAndRepeatedInput(t *testing.T) {
 	require.LessOrEqual(t, len([]rune(state)), stateClipLen)
 	require.Equal(t, 2, strings.Count(state, "continue"))
 	require.True(t, strings.HasSuffix(state, "user: continue"))
+}
+
+func TestDecisionConversationCurrentMessageBeforeAssistant(t *testing.T) {
+	t.Parallel()
+	sess := &session.Session{Events: []event.Event{
+		conversationEvent(model.RoleUser, "continue", ""),
+		conversationEvent(model.RoleAssistant, "more details", ""),
+	}}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("continue")))
+	sess.Events[0].InvocationID = inv.InvocationID
+	state, users := decisionConversation(inv)
+	require.Equal(t, "user: continue\nassistant: more details", state)
+	require.Equal(t, "continue", users)
 }
 
 func TestDecisionConversationContentParts(t *testing.T) {

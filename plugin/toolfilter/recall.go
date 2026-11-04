@@ -17,8 +17,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // Candidates missed by recall are not evaluated by the decision model. The
@@ -104,8 +102,14 @@ type embedCache struct {
 	}
 	users      *runCache[[]float64]
 	candidates *runCache[[]float64]
-	flight     singleflight.Group
+	mu         sync.Mutex
+	inflight   map[string]*embeddingCall
 	permits    chan struct{}
+}
+
+type embeddingCall struct {
+	done   chan struct{}
+	vector []float64
 }
 
 func newEmbedCache(embedder interface {
@@ -115,6 +119,7 @@ func newEmbedCache(embedder interface {
 		embedder:   embedder,
 		users:      newRunCache[[]float64](userEmbeddingCacheSize),
 		candidates: newRunCache[[]float64](candidateEmbeddingCacheSize),
+		inflight:   make(map[string]*embeddingCall),
 		permits:    make(chan struct{}, maxEmbeddingConcurrency),
 	}
 }
@@ -143,31 +148,42 @@ func (c *embedCache) cachedVector(ctx context.Context, text string, cache *runCa
 	if ctx.Err() != nil {
 		return nil
 	}
-	result := c.flight.DoChan(text, func() (any, error) {
-		v, ok := cache.get(text)
-		if ok {
-			return v, nil
-		}
-		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embeddingTimeout)
-		defer cancel()
+	c.mu.Lock()
+	if v, ok := cache.get(text); ok {
+		c.mu.Unlock()
+		return v
+	}
+	call := c.inflight[text]
+	if call == nil {
 		select {
 		case c.permits <- struct{}{}:
-			defer func() { <-c.permits }()
-		case <-workCtx.Done():
-			return nil, workCtx.Err()
+		default:
+			c.mu.Unlock()
+			return nil
 		}
-		v, err := c.embedder.GetEmbedding(workCtx, text)
-		if err != nil || len(v) == 0 {
-			return nil, err
-		}
-		cache.set(text, v)
-		return v, nil
-	})
+		call = &embeddingCall{done: make(chan struct{})}
+		c.inflight[text] = call
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embeddingTimeout)
+		go func() {
+			defer cancel()
+			v, err := c.embedder.GetEmbedding(workCtx, text)
+			if err == nil && len(v) != 0 {
+				cache.set(text, v)
+				call.vector = v
+			}
+			c.mu.Lock()
+			delete(c.inflight, text)
+			<-c.permits
+			close(call.done)
+			c.mu.Unlock()
+		}()
+	}
+	c.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return nil
-	case res := <-result:
-		v, _ := res.Val.([]float64)
+	case <-call.done:
+		v := call.vector
 		if len(v) != 0 {
 			cache.set(text, v)
 		}
@@ -175,10 +191,9 @@ func (c *embedCache) cachedVector(ctx context.Context, text string, cache *runCa
 	}
 }
 
-// recallRank ranks candidates for one turn. The keyword path always runs;
-// when an embedder is configured and the user message embeds successfully,
-// both rankings are fused with reciprocal rank fusion. Candidates are
-// ordered by fused score descending, then by name for determinism.
+// recallRank ranks candidates using keyword and optional embedding recall.
+// When both paths are available their rankings are fused with reciprocal rank
+// fusion. Ties are broken by name for determinism.
 func recallRank(
 	ctx context.Context,
 	userMessage string,
@@ -186,17 +201,20 @@ func recallRank(
 	embeddings *embedCache,
 ) []scoredCandidate {
 	userTokens := tokenize(userMessage)
-	if len(userTokens) == 0 || len(candidates) == 0 {
+	if len(candidates) == 0 {
 		return nil
 	}
 
 	// Keyword ranking.
-	keyword := make([]scoredCandidate, len(candidates))
-	copy(keyword, candidates)
-	for i := range keyword {
-		keyword[i].score = lexicalScore(userTokens, keyword[i].name, keyword[i].description)
+	var keyword []scoredCandidate
+	if len(userTokens) != 0 {
+		keyword = make([]scoredCandidate, len(candidates))
+		copy(keyword, candidates)
+		for i := range keyword {
+			keyword[i].score = lexicalScore(userTokens, keyword[i].name, keyword[i].description)
+		}
+		sortScored(keyword)
 	}
-	sortScored(keyword)
 
 	// Embedding ranking, when available.
 	var userVec []float64
@@ -209,8 +227,8 @@ func recallRank(
 	}
 
 	type vectorCandidate struct {
-		name string
-		sim  float64
+		candidate scoredCandidate
+		sim       float64
 	}
 	vectors := make([][]float64, len(candidates))
 	jobs := make(chan int)
@@ -243,8 +261,8 @@ dispatch:
 			continue
 		}
 		vectorRank = append(vectorRank, vectorCandidate{
-			name: cand.name,
-			sim:  cosine(userVec, vec),
+			candidate: cand,
+			sim:       cosine(userVec, vec),
 		})
 	}
 	if len(vectorRank) == 0 {
@@ -255,8 +273,16 @@ dispatch:
 		if vectorRank[i].sim != vectorRank[j].sim {
 			return vectorRank[i].sim > vectorRank[j].sim
 		}
-		return vectorRank[i].name < vectorRank[j].name
+		return vectorRank[i].candidate.name < vectorRank[j].candidate.name
 	})
+	if len(userTokens) == 0 {
+		out := make([]scoredCandidate, len(vectorRank))
+		for rank, cand := range vectorRank {
+			out[rank] = cand.candidate
+			out[rank].score = 1 / (rrfK + float64(rank+1))
+		}
+		return out
+	}
 
 	// Fuse the two rankings by reciprocal rank fusion.
 	fused := make(map[string]float64, len(candidates))
@@ -264,7 +290,7 @@ dispatch:
 		fused[cand.name] += 1 / (rrfK + float64(rank+1))
 	}
 	for rank, cand := range vectorRank {
-		fused[cand.name] += 1 / (rrfK + float64(rank+1))
+		fused[cand.candidate.name] += 1 / (rrfK + float64(rank+1))
 	}
 	out := make([]scoredCandidate, len(keyword))
 	copy(out, keyword)

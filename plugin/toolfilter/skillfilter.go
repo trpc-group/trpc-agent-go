@@ -28,6 +28,8 @@ import (
 // calls the VisibilityFilter once per skill summary per LLM step; the batch
 // decision is computed on the first call of a run and cached, so a ReAct
 // loop pays for one decision request per run.
+// Skills added after the decision remain visible for that run and are
+// considered in the next run's decision.
 type SkillFilter struct {
 	client     *systemoneclient.Client
 	repo       skill.Repository
@@ -46,6 +48,7 @@ type SkillFilter struct {
 type skillRunResult struct {
 	outcome string
 	kept    map[string]struct{}
+	seen    map[string]struct{}
 	scores  map[string]float64
 }
 
@@ -123,7 +126,11 @@ func (f *SkillFilter) visible(ctx context.Context, summary skill.Summary) bool {
 	if result.kept == nil {
 		return true
 	}
-	_, ok := result.kept[summary.Name]
+	name := strings.TrimSpace(summary.Name)
+	if _, ok := result.seen[name]; !ok {
+		return true
+	}
+	_, ok := result.kept[name]
 	return ok
 }
 
@@ -165,6 +172,10 @@ func (f *SkillFilter) decide(ctx context.Context, inv *agent.Invocation) (*skill
 	userMessage, userHistory := decisionConversation(inv)
 
 	names, candidates := f.skillCandidates(summaries)
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		seen[name] = struct{}{}
+	}
 
 	if len(candidates) == 0 {
 		return &skillRunResult{outcome: OutcomeUntouched}, &Report{
@@ -264,7 +275,7 @@ func (f *SkillFilter) decide(ctx context.Context, inv *agent.Invocation) (*skill
 		CatalogTokensAfter:  before - skillTokensFor(summaries, dropped),
 	}
 	report.SavedTokens = report.CatalogTokensBefore - report.CatalogTokensAfter
-	return &skillRunResult{outcome: outcome, kept: kept, scores: scores}, report
+	return &skillRunResult{outcome: outcome, kept: kept, seen: seen, scores: scores}, report
 }
 
 // skillCandidates collects unique skill names and excludes always-kept skills
