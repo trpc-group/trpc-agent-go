@@ -467,3 +467,210 @@ func TestFileNameFromArtifactRef_EdgeCases(t *testing.T) {
 	invalidBase := fileref.ArtifactPrefix + "..@0"
 	assert.Equal(t, "", fileNameFromArtifactRef(invalidBase))
 }
+
+func TestUserMessageFromModelText(t *testing.T) {
+	got, err := UserMessageFromModel("message-1", model.Message{
+		Content: "hello",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "message-1", got.ID)
+	assert.Equal(t, types.RoleUser, got.Role)
+	assert.Equal(t, "hello", got.Content)
+}
+
+func TestUserMessageFromModelContentParts(t *testing.T) {
+	text := "part text"
+	got, err := UserMessageFromModel("message-2", model.Message{
+		Content: "content text",
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL:    " https://example.com/image.png ",
+					Data:   []byte("image"),
+					Format: " PNG ",
+				},
+			},
+			{
+				Type: model.ContentTypeAudio,
+				Audio: &model.Audio{
+					Data: []byte("audio"),
+				},
+			},
+			{
+				Type: model.ContentTypeVideo,
+				Video: &model.Video{
+					URL:    " https://example.com/video.mp4 ",
+					Data:   []byte("video"),
+					Format: " VIDEO/MP4 ",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     " demo.pdf ",
+					URL:      " https://example.com/demo.pdf ",
+					Data:     []byte("file"),
+					FileID:   " file-1 ",
+					MimeType: " PDF ",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "message-2", got.ID)
+	assert.Equal(t, types.RoleUser, got.Role)
+
+	contents, ok := got.ContentInputContents()
+	require.True(t, ok)
+	require.Len(t, contents, 6)
+	assert.Equal(t, types.InputContent{
+		Type: types.InputContentTypeText,
+		Text: "content text",
+	}, contents[0])
+	assert.Equal(t, types.InputContent{
+		Type: types.InputContentTypeText,
+		Text: text,
+	}, contents[1])
+	assert.Equal(t, types.InputContent{
+		Type:     types.InputContentTypeBinary,
+		MimeType: "image/png",
+		URL:      "https://example.com/image.png",
+		Data:     base64.StdEncoding.EncodeToString([]byte("image")),
+	}, contents[2])
+	assert.Equal(t, types.InputContent{
+		Type:     types.InputContentTypeBinary,
+		MimeType: "audio/*",
+		Data:     base64.StdEncoding.EncodeToString([]byte("audio")),
+	}, contents[3])
+	assert.Equal(t, types.InputContent{
+		Type:     types.InputContentTypeBinary,
+		MimeType: "video/mp4",
+		URL:      "https://example.com/video.mp4",
+		Data:     base64.StdEncoding.EncodeToString([]byte("video")),
+	}, contents[4])
+	assert.Equal(t, types.InputContent{
+		Type:     types.InputContentTypeBinary,
+		MimeType: "application/pdf",
+		ID:       "file-1",
+		URL:      "https://example.com/demo.pdf",
+		Data:     base64.StdEncoding.EncodeToString([]byte("file")),
+		Filename: "demo.pdf",
+	}, contents[5])
+}
+
+func TestUserMessageFromModelErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		message model.Message
+		wantErr string
+	}{
+		{
+			name:    "empty message",
+			message: model.Message{},
+			wantErr: "content parts are empty",
+		},
+		{
+			name: "nil text",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+			}}},
+			wantErr: "text content part is nil",
+		},
+		{
+			name: "nil image",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeImage,
+			}}},
+			wantErr: "image content part is nil",
+		},
+		{
+			name: "empty image",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{},
+			}}},
+			wantErr: "image content part is empty",
+		},
+		{
+			name: "nil audio",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeAudio,
+			}}},
+			wantErr: "audio content part is nil",
+		},
+		{
+			name: "empty audio",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{},
+			}}},
+			wantErr: "audio content part is empty",
+		},
+		{
+			name: "nil video",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeVideo,
+			}}},
+			wantErr: "video content part is nil",
+		},
+		{
+			name: "empty video",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{},
+			}}},
+			wantErr: "video content part is empty",
+		},
+		{
+			name: "nil file",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+			}}},
+			wantErr: "file content part is nil",
+		},
+		{
+			name: "empty file",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{},
+			}}},
+			wantErr: "file content part is empty",
+		},
+		{
+			name: "unsupported type",
+			message: model.Message{ContentParts: []model.ContentPart{{
+				Type: model.ContentType("unknown"),
+			}}},
+			wantErr: "content part type unsupported: unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := UserMessageFromModel("message", tt.message)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestBinaryMimeType(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   string
+		format string
+		want   string
+	}{
+		{name: "application default", kind: "application", want: "application/octet-stream"},
+		{name: "media default", kind: "image", want: "image/*"},
+		{name: "short format", kind: "audio", format: " MP3 ", want: "audio/mp3"},
+		{name: "full mime type", kind: "video", format: " VIDEO/MP4 ", want: "video/mp4"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, binaryMimeType(tt.kind, tt.format))
+		})
+	}
+}
