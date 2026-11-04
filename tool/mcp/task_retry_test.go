@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package processor
+package mcp
 
 import (
 	"context"
@@ -20,13 +20,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	toolmcp "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
-func TestExecuteCallableTool_MCPTasksDoNotReplay(t *testing.T) {
+func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		taskID    string
@@ -103,11 +102,11 @@ func TestExecuteCallableTool_MCPTasksDoNotReplay(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			set := toolmcp.NewMCPToolSet(
-				toolmcp.ConnectionConfig{Transport: "streamable_http", ServerURL: server.URL, Timeout: time.Second},
-				toolmcp.WithMCPOptions(mcp.WithProtocolVersion(mcp.ProtocolVersion_2026_07_28),
+			set := NewMCPToolSet(
+				ConnectionConfig{Transport: "streamable_http", ServerURL: server.URL, Timeout: time.Second},
+				WithMCPOptions(mcp.WithProtocolVersion(mcp.ProtocolVersion_2026_07_28),
 					mcp.WithTasks(true), mcp.WithClientGetSSEEnabled(false)),
-				toolmcp.WithSessionReconnect(1),
+				WithSessionReconnect(1),
 			)
 			defer func() { require.NoError(t, set.Close()) }()
 			require.NoError(t, set.Init(ctx))
@@ -115,12 +114,12 @@ func TestExecuteCallableTool_MCPTasksDoNotReplay(t *testing.T) {
 			require.Len(t, tools, 1)
 			callable, ok := tools[0].(tool.CallableTool)
 			require.True(t, ok)
-			p := NewFunctionCallResponseProcessor(false, nil,
-				WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 2}))
-			call := model.ToolCall{ID: "one-logical-call", Function: model.FunctionDefinitionParam{
-				Name: "charge", Arguments: []byte(`{}`),
-			}}
-			_, result, err := p.executeCallableTool(ctx, call, callable)
+			// LLMAgent and Graph both execute callable-tool retries through this runner.
+			outcome := toolretry.Execute(ctx, toolretry.ExecuteInput{
+				ToolName: "charge", ToolCallID: "one-logical-call", Arguments: []byte(`{}`),
+				Policy: &tool.RetryPolicy{MaxAttempts: 2}, Call: callable.Call,
+			})
+			result, err := outcome.Result, outcome.Error
 			require.EqualValues(t, 1, calls.Load(), "the outer retry must not replay tools/call")
 			require.Equal(t, tc.wantPolls, polls.Load())
 			require.Equal(t, tc.wantInits, discoveries.Load())
