@@ -177,5 +177,5 @@ trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb h1:hW6SMv4qf
 trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb/go.mod h1:7nbGA66/9AZ2j8+juvl7IsH0FC9jEdrxgsmBLrdKnLw=
 trpc.group/trpc-go/trpc-agent-go/storage/redis v0.6.0 h1:d6hllKJ3uUtSMRNuWurwGnPtxxsgjhrQ+0uxk2zFJw4=
 trpc.group/trpc-go/trpc-agent-go/storage/redis v0.6.0/go.mod h1:aDGUkqlbGttFVGlZW2lMg5mAgurHezq5De/gAuLhV5E=
-trpc.group/trpc-go/trpc-mcp-go v0.0.10 h1:kKPfevmikMojfOgtUBf5SJQ/v6aDugckodgyH1uDu2Q=
-trpc.group/trpc-go/trpc-mcp-go v0.0.10/go.mod h1:OT6rLglkdaQ17D2T1Y87Y/ckItzdsEldDbw7dHAbGEA=
+trpc.group/trpc-go/trpc-mcp-go v0.0.20 h1:279fmBFoZCRfR9AcKhBq7XfRX7DgoycTayiIbTU86v0=
+trpc.group/trpc-go/trpc-mcp-go v0.0.20/go.mod h1:OT6rLglkdaQ17D2T1Y87Y/ckItzdsEldDbw7dHAbGEA=

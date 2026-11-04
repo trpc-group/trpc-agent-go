@@ -23,7 +23,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/runner/bestofn v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/server/evaluation v1.6.0
 	trpc.group/trpc-go/trpc-agent-go/server/promptiter v0.8.0
-	trpc.group/trpc-go/trpc-mcp-go v0.0.10
+	trpc.group/trpc-go/trpc-mcp-go v0.0.20
 )
 
 require (

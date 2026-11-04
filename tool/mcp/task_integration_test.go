@@ -1,5 +1,3 @@
-//go:build mcptasks
-
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
@@ -25,8 +23,7 @@ import (
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
-// This integration fixture requires the companion SDK Tasks branch. It is
-// excluded until an upstream SDK version can replace the released dependency.
+// TestTasksHTTPReconnect verifies task continuation using the released SDK.
 func TestTasksHTTPReconnect(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		name := "legacy"

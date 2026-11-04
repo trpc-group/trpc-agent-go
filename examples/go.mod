@@ -30,7 +30,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia v1.1.2-0.20260108033914-7a20241f1ad5
-	trpc.group/trpc-go/trpc-mcp-go v0.0.10
+	trpc.group/trpc-go/trpc-mcp-go v0.0.20
 )
 
 require (
