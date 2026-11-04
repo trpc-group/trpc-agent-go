@@ -12,7 +12,11 @@ OpenAI prompt-cache demo remains unchanged.
 - `date-only`: `WithAddCurrentTime(true)` with the new default date-only system
   prompt.
 - `full-datetime`: `WithAddCurrentTime(true)` plus an explicit full timestamp
-  format, which changes every turn and is expected to be less cache-friendly.
+  format. System placement remains the default, so the timestamp changes the
+  system prompt every turn and is expected to be less cache-friendly.
+- `full-datetime-user`: the same full timestamp format with
+  `WithTimePromptPlacement(TimePromptPlacementUser)`, so the clock sits on the
+  latest user turn and the system prefix stays stable.
 - `precise-tool`: date-only system context plus the built-in
   `environment_context_current_time` tool for exact clock time.
 
@@ -39,6 +43,7 @@ Run a single case:
 ```bash
 go run . -case date-only
 go run . -case full-datetime
+go run . -case full-datetime-user
 go run . -case precise-tool
 ```
 
@@ -62,14 +67,17 @@ comparison for this demo is `date-only` versus `full-datetime`.
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | `baseline` | No time processor. Stable system prompt only. | Not available | 15,878 | 11,200 | 3/4 | 0 | 70.5% |
 | `date-only` | `WithAddCurrentTime(true)` with default date-only system context. | Available but not called in this case | 17,125 | 15,872 | 4/4 | 0 | 92.7% |
-| `full-datetime` | `WithAddCurrentTime(true)` with `WithTimeFormat("2006-01-02 15:04:05 MST")`; timestamp changes every turn. | Available but not called in this case | 17,112 | 10,752 | 3/4 | 0 | 62.8% |
+| `full-datetime` | `WithAddCurrentTime(true)` with `WithTimeFormat("2006-01-02 15:04:05 MST")`; default system placement, so the timestamp changes every turn. | Available but not called in this case | 17,112 | 10,752 | 3/4 | 0 | 62.8% |
+| `full-datetime-user` | Same full format with `WithTimePromptPlacement(TimePromptPlacementUser)`. | Available but not called in this case | — | — | — | — | not in this sample |
 | `precise-tool` | Date-only system context; exact time fetched only on demand. | `environment_context_current_time` called on time questions | 17,693 | 13,120 | 3/4 | 2 | 74.2% |
 
 The important comparison is `date-only` versus `full-datetime`, not
 `date-only` versus `baseline`: keeping the system prompt stable at date
-granularity preserves more of the prompt-cache prefix, while full datetime
-invalidates more of the prefix as the timestamp changes. `precise-tool` keeps
-the stable date context and still supports exact clock time via
+granularity preserves more of the prompt-cache prefix, while full datetime in
+the system message invalidates more of the prefix as the timestamp changes.
+`full-datetime-user` keeps the same full timestamp but moves it to the latest
+user turn so the system prefix can stay cacheable. `precise-tool` keeps the
+stable date context and still supports exact clock time via
 `environment_context_current_time`.
 
 For the sample above, `date-only` improves the cache rate by 29.9 percentage
@@ -81,7 +89,8 @@ precise clock values stayed out of the stable system prompt.
 
 The `date-only` case should keep a stable prompt prefix within the same day,
 while `full-datetime` changes the system prompt on every turn. The
-`precise-tool` case demonstrates that exact time can be fetched on demand via
-`environment_context_current_time` without embedding a volatile timestamp into
-every request.
+`full-datetime-user` case keeps a full timestamp without rewriting that system
+prefix. The `precise-tool` case demonstrates that exact time can be fetched on
+demand via `environment_context_current_time` without embedding a volatile
+timestamp into every request.
 

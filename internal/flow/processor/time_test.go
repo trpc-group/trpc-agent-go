@@ -164,6 +164,162 @@ func TestTimeRequestProcessor_ProcessRequest_WithExistingSystemMessage(t *testin
 	}
 }
 
+func TestTimeRequestProcessor_ProcessRequest_AppendsToUserForStablePrefix(t *testing.T) {
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithTimePromptPlacement(TimePromptPlacementUser),
+		WithCurrentTimeTool("environment_context_current_time", true),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Stable persona and instructions"),
+			model.NewUserMessage("Investigate the alert"),
+		},
+	}
+
+	processor.ProcessRequest(context.Background(), nil, req, make(chan *event.Event, 1))
+
+	if strings.Contains(req.Messages[0].Content, "The current date is:") {
+		t.Fatalf("expected stable system prefix to remain unchanged, got: %s", req.Messages[0].Content)
+	}
+	if req.Messages[1].Role != model.RoleUser {
+		t.Fatalf("expected clock context to stay on the user turn, got: %#v", req.Messages[1])
+	}
+	if !strings.Contains(req.Messages[1].Content, "Investigate the alert") {
+		t.Fatalf("expected original user content to be preserved, got: %s", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "The current date is:") {
+		t.Fatalf("expected current date on dynamic user turn, got: %s", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "call the built-in environment_context_current_time tool") {
+		t.Fatalf("expected exact-time tool guidance to be preserved, got: %s", req.Messages[1].Content)
+	}
+}
+
+func TestTimeRequestProcessor_ProcessRequest_AppendsTextPartToMultimodalUser(t *testing.T) {
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithTimePromptPlacement(TimePromptPlacementUser),
+	)
+	userText := "Describe this screenshot"
+	userMsg := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &userText},
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+		},
+	}
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Stable persona and instructions"),
+			userMsg,
+		},
+	}
+
+	processor.ProcessRequest(context.Background(), nil, req, nil)
+
+	got := req.Messages[1]
+	if got.Content != "" {
+		t.Fatalf("expected multimodal message to keep using content parts, got scalar content: %s", got.Content)
+	}
+	if len(got.ContentParts) != 3 {
+		t.Fatalf("expected clock context as an extra text part, got %d parts", len(got.ContentParts))
+	}
+	if got.ContentParts[0].Type != model.ContentTypeText || got.ContentParts[0].Text == nil ||
+		*got.ContentParts[0].Text != userText {
+		t.Fatalf("expected original text part to be preserved, got: %#v", got.ContentParts[0])
+	}
+	if got.ContentParts[1].Type != model.ContentTypeImage || got.ContentParts[1].Image == nil {
+		t.Fatalf("expected image part to be preserved, got: %#v", got.ContentParts[1])
+	}
+	clockPart := got.ContentParts[2]
+	if clockPart.Type != model.ContentTypeText || clockPart.Text == nil ||
+		!strings.Contains(*clockPart.Text, "The current date is:") {
+		t.Fatalf("expected clock text part on the user turn, got: %#v", clockPart)
+	}
+	if !strings.HasPrefix(*clockPart.Text, "\n\n") {
+		t.Fatalf("expected clock part to keep a boundary after caller text, got: %q", *clockPart.Text)
+	}
+
+	// A replayed request must not append the same clock block twice.
+	processor.ProcessRequest(context.Background(), nil, req, nil)
+
+	if len(req.Messages[1].ContentParts) != 3 {
+		t.Fatalf("expected duplicate clock injection to be skipped, got %d parts", len(req.Messages[1].ContentParts))
+	}
+}
+
+func TestTimeRequestProcessor_ProcessRequest_CreatesUserForStablePrefix(t *testing.T) {
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithTimePromptPlacement(TimePromptPlacementUser),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Stable persona and instructions"),
+		},
+	}
+
+	processor.ProcessRequest(context.Background(), nil, req, make(chan *event.Event, 1))
+
+	if len(req.Messages) != 2 {
+		t.Fatalf("expected clock user turn after system prefix, got %d messages", len(req.Messages))
+	}
+	if req.Messages[0].Content != "Stable persona and instructions" {
+		t.Fatalf("expected system prefix to remain byte-stable, got: %s", req.Messages[0].Content)
+	}
+	if req.Messages[1].Role != model.RoleUser ||
+		!strings.Contains(req.Messages[1].Content, "The current date is:") {
+		t.Fatalf("expected a dynamic clock user turn, got: %#v", req.Messages[1])
+	}
+}
+
+func TestTimeRequestProcessor_UnsupportedPlacementKeepsSystemDefault(t *testing.T) {
+	for _, placement := range []TimePromptPlacement{"", "assistant"} {
+		processor := NewTimeRequestProcessor(
+			WithAddCurrentTime(true),
+			WithTimePromptPlacement(placement),
+		)
+		if processor.PromptPlacement != TimePromptPlacementSystem {
+			t.Fatalf("expected system placement for %q, got %q", placement, processor.PromptPlacement)
+		}
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("Stable persona and instructions"),
+				model.NewUserMessage("Investigate the alert"),
+			},
+		}
+
+		processor.ProcessRequest(context.Background(), nil, req, nil)
+
+		if !strings.Contains(req.Messages[0].Content, "The current date is:") {
+			t.Fatalf("expected clock context on the system message, got: %s", req.Messages[0].Content)
+		}
+		if req.Messages[1].Content != "Investigate the alert" {
+			t.Fatalf("expected user turn to stay unchanged, got: %s", req.Messages[1].Content)
+		}
+	}
+}
+
+func TestContainsTimeInfo_RequiresClockLabel(t *testing.T) {
+	timeInfo := "The current time is: Monday, January 02, 2006 15:04:05 MST"
+	if containsTimeInfo("Alert started at Monday, January 02, 2006 15:04:05 MST", timeInfo) {
+		t.Fatal("raw timestamp in user text must not skip clock injection")
+	}
+	if !containsTimeInfo("Investigate the alert\n\n"+timeInfo, timeInfo) {
+		t.Fatal("an official clock block should skip a second injection")
+	}
+
+	dateInfo := "The current date is: 2006-01-02"
+	if containsTimeInfo("The incident started on 2006-01-02", dateInfo) {
+		t.Fatal("raw date in user text must not skip clock injection")
+	}
+	if !containsTimeInfo("Investigate the alert\n\n"+dateInfo, dateInfo) {
+		t.Fatal("an official clock block should skip a second date injection")
+	}
+}
+
 func TestTimeRequestProcessor_RebuildRequestForContextCompaction(t *testing.T) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
 	req := &model.Request{
