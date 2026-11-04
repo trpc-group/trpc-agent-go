@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/net v0.38.0
 	golang.org/x/text v0.23.0
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (
