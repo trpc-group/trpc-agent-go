@@ -1806,6 +1806,12 @@ summarizer := summary.NewSummarizer(
 
 Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
 
+Token Tailoring **默认关闭**。如需在请求发送给模型服务前自动裁剪消息，必须显式设置
+`openai.WithEnableTokenTailoring(true)`。仅设置 `openai.WithMaxInputTokens(...)`
+或 `openai.WithContextWindow(...)` 只会配置预算或窗口，不会开启裁剪。即使关闭裁剪，
+其他框架流程仍可通过 `Model.InputTokenBudget` 和 `Model.Info` 读取这些配置。
+会话摘要和上下文压缩需要单独配置。
+
 **自动模式（推荐）**：
 
 ```go

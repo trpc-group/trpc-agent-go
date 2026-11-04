@@ -1843,6 +1843,14 @@ when the same estimates are needed.
 
 Token Tailoring is an intelligent message management technique designed to automatically trim messages when they exceed the model's context window limits, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, allowing you to keep the message list within the model's token limits while preserving key context.
 
+Token Tailoring is **disabled by default**. Explicitly set
+`openai.WithEnableTokenTailoring(true)` to enable automatic message trimming
+before provider requests. Setting `openai.WithMaxInputTokens(...)` or
+`openai.WithContextWindow(...)` alone only configures the budget or window; it
+does not enable trimming. These values remain available to other framework
+consumers through `Model.InputTokenBudget` and `Model.Info` even when trimming is
+disabled. Session summaries and context compaction are configured separately.
+
 **Automatic Mode (Recommended)**:
 
 ```go
