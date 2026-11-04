@@ -14,7 +14,7 @@ require (
 	github.com/qdrant/go-client v1.16.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.79.3
-	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/storage/qdrant v1.1.2-0.20260108033914-7a20241f1ad5
 )
 
