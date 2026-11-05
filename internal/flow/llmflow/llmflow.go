@@ -1016,7 +1016,7 @@ func (p *streamingResponseProcessor) process(
 		responseErr = err
 		return false
 	}
-	p.flow.postprocessWithLatencySpans(
+	response = p.flow.postprocessWithLatencySpans(
 		p.ctx,
 		eventInvocation,
 		p.llmRequest,
@@ -3156,14 +3156,15 @@ func normalizeResponseID(resp *model.Response, currentID *string) *model.Respons
 }
 
 // postprocess handles post-LLM call processing using response processors.
+// It returns the (possibly replaced) response produced by the processors.
 func (f *Flow) postprocess(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
-) {
-	f.postprocessWithLatencySpans(
+) *model.Response {
+	return f.postprocessWithLatencySpans(
 		ctx,
 		invocation,
 		llmRequest,
@@ -3173,6 +3174,9 @@ func (f *Flow) postprocess(
 	)
 }
 
+// postprocessWithLatencySpans runs response processors, optionally wrapping each
+// in a latency-tracking span. It returns the (possibly replaced) response
+// produced by the last processor in the chain.
 func (f *Flow) postprocessWithLatencySpans(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -3180,10 +3184,10 @@ func (f *Flow) postprocessWithLatencySpans(
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 	traceDetails bool,
-) {
+) *model.Response {
 	if !traceDetails {
 		for _, processor := range f.responseProcessors {
-			processor.ProcessResponse(
+			llmResponse = processor.ProcessResponse(
 				ctx,
 				invocation,
 				llmRequest,
@@ -3191,7 +3195,7 @@ func (f *Flow) postprocessWithLatencySpans(
 				eventChan,
 			)
 		}
-		return
+		return llmResponse
 	}
 	ctx, span, started := startLatencySpan(
 		ctx,
@@ -3211,7 +3215,7 @@ func (f *Flow) postprocessWithLatencySpans(
 		finishLatencySpan(span, started, nil)
 	}()
 	if llmResponse == nil {
-		return
+		return nil
 	}
 
 	// Run response processors - they send events directly to the channel.
@@ -3228,7 +3232,7 @@ func (f *Flow) postprocessWithLatencySpans(
 				latencyProcessorName(processor),
 			),
 		)
-		processor.ProcessResponse(
+		llmResponse = processor.ProcessResponse(
 			stageCtx,
 			invocation,
 			llmRequest,
@@ -3237,6 +3241,7 @@ func (f *Flow) postprocessWithLatencySpans(
 		)
 		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
+	return llmResponse
 }
 
 // WaitEventTimeout returns the remaining time until the context deadline.

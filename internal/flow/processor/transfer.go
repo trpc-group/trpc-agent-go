@@ -46,17 +46,18 @@ func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
-// It checks for transfer requests and handles agent handoffs by actually calling
-// the target agent's Run method.
+// It checks for a pending transfer request and, when present, invokes the
+// target agent's Run method to perform the handoff. It returns the original
+// response unchanged (agent transfer does not replace the published response).
 func (p *TransferResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation == nil || rsp == nil || rsp.IsPartial {
-		return
+		return rsp
 	}
 	if calllimit.Active(invocation) {
 		// Finalization is a bounded, tool-free terminal step. Discard any
@@ -64,7 +65,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		// not retried after the model has produced its final response.
 		invocation.TransferInfo = nil
 		invocation.EndInvocation = true
-		return
+		return rsp
 	}
 
 	log.DebugfContext(
@@ -76,7 +77,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Check if there's a pending transfer in the invocation.
 	if invocation.TransferInfo == nil {
 		// No transfer requested, continue normally.
-		return
+		return rsp
 	}
 
 	transferInfo := invocation.TransferInfo
@@ -106,7 +107,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			model.ErrorTypeFlowError,
 			"Transfer failed: target agent '"+targetAgentName+"' not found",
 		))
-		return
+		return rsp
 	}
 
 	if controller, ok := agent.GetRuntimeStateValue[agent.TransferController](
@@ -129,7 +130,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 					err,
 				),
 			))
-			return
+			return rsp
 		}
 		nodeTimeout = targetTimeout
 		transferCustomizer = transferInvocationCustomizerFor(controller)
@@ -152,7 +153,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			model.ErrorTypeFlowError,
 			fmt.Sprintf("Transfer customization rejected: %v", err),
 		))
-		return
+		return rsp
 	}
 	// Create transfer event to notify about the handoff.
 	transferEvent := event.New(
@@ -179,7 +180,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 	// Send transfer event after customization succeeds.
 	if err := agent.EmitEvent(ctx, invocation, ch, transferEvent); err != nil {
-		return
+		return rsp
 	}
 	if shouldEmitTransferMessageEcho(
 		transferInfo.Message != "",
@@ -231,7 +232,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			model.ErrorTypeFlowError,
 			"Transfer failed: "+err.Error(),
 		))
-		return
+		return rsp
 	}
 
 	if !forwardTransferTargetEvents(
@@ -244,7 +245,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		transferCompletionHandler,
 		transferTerminalErrorHandler,
 	) {
-		return
+		return rsp
 	}
 
 	// Clear the transfer info and end the original invocation to stop further LLM calls.
@@ -257,6 +258,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	)
 	invocation.TransferInfo = nil
 	invocation.EndInvocation = p.endInvocationAfterTransfer
+	return rsp
 }
 
 type transferForwardResult struct {

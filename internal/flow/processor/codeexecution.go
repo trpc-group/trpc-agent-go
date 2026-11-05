@@ -50,22 +50,24 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 }
 
 // ProcessResponse processes the model response, extracts code blocks, executes them,
-// and emits events for the code execution result.
+// and emits events for the code execution result. It returns a cleared-content
+// clone of the response when execution succeeds (to avoid mutating the shared
+// response), or the original response unchanged when execution is skipped or fails.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
-	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
+	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) *model.Response {
 	if invocation == nil || rsp == nil || rsp.IsPartial {
-		return
+		return rsp
 	}
 	if calllimit.Active(invocation) {
-		return
+		return rsp
 	}
 	e := codeExecutorForInvocation(invocation)
 	if e == nil {
-		return
+		return rsp
 	}
 
 	if len(rsp.Choices) == 0 {
-		return
+		return rsp
 	}
 
 	content := rsp.Choices[0].Message.Content
@@ -74,7 +76,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		e.CodeBlockDelimiter(),
 	)
 	if len(codeBlocks) == 0 {
-		return
+		return rsp
 	}
 	truncatedContent := content // todo: truncate the content
 
@@ -111,7 +113,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 			event.WithTag(event.CodeExecutionResultTag), // Add tag for error result
 		))
-		return
+		return rsp
 	}
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
@@ -127,7 +129,14 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		event.WithTag(event.CodeExecutionResultTag),
 	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
-	rsp.Choices[0].Message.Content = ""
+	// Do not mutate the shared response in place: it is already published inside
+	// the emitted LLM response event and may be read concurrently by telemetry
+	// trackers. Return a cleared clone for downstream stages instead.
+	cleared := rsp.Clone()
+	if len(cleared.Choices) > 0 {
+		cleared.Choices[0].Message.Content = ""
+	}
+	return cleared
 }
 
 func codeExecutorForInvocation(
