@@ -1211,7 +1211,7 @@ eventChan, err := r.Run(
 
 支持的模式（图相关事件需要图式工作流）：
 
-- `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `messages`：模型输出事件（例如 `chat.completion.chunk`）及 `model.interrupted` 生命周期标记
 - `latency_diagnostics`：携带可解析、非 null 的 `event.LatencyDiagnostic` 扩展的
   `preprocessing.status` 事件
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`

@@ -144,6 +144,12 @@ iteration. It includes the disabled/default case, partial-text preservation,
 streaming/non-streaming requests, single/sequential/parallel tools, FIFO,
 withdrawal and explicit cancellation. Each configuration uses a fresh Run.
 
+The smoke matrix explicitly passes `MODEL_NAME` from the loaded configuration
+as `-model`, falling back to `OPENAI_MODEL` only when `MODEL_NAME` is empty.
+This keeps GLM validation pinned to that configuration even if the calling
+shell already exports `OPENAI_MODEL`. Individual examples retain the selection
+order `-model` → `OPENAI_MODEL` → `MODEL_NAME` → default model.
+
 Results and redacted logs are retained in a temporary directory printed at the
 end; `--output-dir` selects another directory. `summary.json` records all cases.
 A missing target phase, missing tool batch, provider error or failed invariant

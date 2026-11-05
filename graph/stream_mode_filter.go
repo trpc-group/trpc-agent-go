@@ -136,7 +136,8 @@ func isStreamModeMessageEvent(e *event.Event) bool {
 	}
 	switch e.Object {
 	case model.ObjectTypeChatCompletionChunk,
-		model.ObjectTypeChatCompletion:
+		model.ObjectTypeChatCompletion,
+		model.ObjectTypeModelInterrupted:
 		return true
 	default:
 		return false

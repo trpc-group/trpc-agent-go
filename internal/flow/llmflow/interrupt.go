@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -94,6 +94,11 @@ func finishModelCycle(ctx context.Context, inv *agent.Invocation, out chan<- *ev
 		return
 	}
 	cycle.control.End()
+	// The provider may close its sequence without yielding a cancellation
+	// response. Preserve request-local cancellation before our own cleanup.
+	if *err == nil {
+		*err = cycle.modelCtx.Err()
+	}
 	cycle.cancel()
 	for _, cleanup := range cycle.cleanup {
 		cleanup()
@@ -153,12 +158,12 @@ func (f *Flow) callSteeredLLM(ctx context.Context, inv *agent.Invocation, req *m
 	return ctx, seq, called, cycle, err
 }
 
-func responseContext(runCtx, modelCtx context.Context, cycle *modelCycle) context.Context {
+func responseContext(modelCtx context.Context, cycle *modelCycle) context.Context {
 	if cycle == nil {
 		return modelCtx
 	}
 	cycle.modelCtx = modelCtx
-	return context.WithValue(contextWithRunLifetime(runCtx, modelCtx), modelCycleKey{}, cycle)
+	return context.WithValue(modelCtx, modelCycleKey{}, cycle)
 }
 
 // Only a provider cancellation associated with our cancelled model context can

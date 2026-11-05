@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2026 Tencent. All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -110,6 +110,9 @@ type demo struct {
 	queuedAt       time.Time
 	once           sync.Once
 	transportCalls atomic.Int32
+	cancelAccepted atomic.Bool
+	cancelObserved atomic.Bool
+	cancelFinished chan struct{}
 }
 
 func (d *demo) fail(err error) {
@@ -167,11 +170,16 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			t.demo.enqueue()
 		}
 		if n == 2 && t.demo.scenario == "cancel" {
-			t.demo.runner.(runner.ManagedRunner).Cancel(t.demo.requestID)
+			t.demo.cancelAccepted.Store(t.demo.runner.(runner.ManagedRunner).Cancel(t.demo.requestID))
 			fmt.Println("[run] explicitly cancelled")
 		}
 	}}
-	return http.DefaultTransport.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	resp, err := http.DefaultTransport.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	if n == 2 && t.demo.scenario == "cancel" {
+		t.demo.cancelObserved.Store(errors.Is(err, context.Canceled) && req.Context().Err() == context.Canceled)
+		close(t.demo.cancelFinished)
+	}
+	return resp, err
 }
 
 type workArgs struct {
@@ -201,7 +209,7 @@ func (d *demo) work(ctx context.Context, in workArgs) (string, error) {
 
 func run(ctx context.Context, scenario string, c config) error {
 	started := time.Now()
-	d := &demo{config: c, scenario: scenario, requestID: fmt.Sprintf("steer-%d", time.Now().UnixNano()), counts: map[string]int{}}
+	d := &demo{config: c, scenario: scenario, requestID: fmt.Sprintf("steer-%d", time.Now().UnixNano()), counts: map[string]int{}, cancelFinished: make(chan struct{})}
 	callbacks := model.NewCallbacks()
 	callbacks.RegisterBeforeModel(func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
 		d.mu.Lock()
@@ -322,6 +330,13 @@ func run(ctx context.Context, scenario string, c config) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if c.check && scenario == "cancel" && d.transportCalls.Load() >= 2 {
+		select {
+		case <-d.cancelFinished:
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for cancelled provider request: %w", ctx.Err())
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.firstErr != nil {
@@ -330,6 +345,9 @@ func run(ctx context.Context, scenario string, c config) error {
 	if c.check {
 		if completions != 1 {
 			return fmt.Errorf("expected one completion, got %d", completions)
+		}
+		if scenario == "cancel" && (!d.cancelAccepted.Load() || !d.cancelObserved.Load()) {
+			return errors.New("run cancellation was not accepted and observed by the provider request")
 		}
 		if len(d.requests) != 2 {
 			return fmt.Errorf("scenario not covered: expected two model requests, got %d", len(d.requests))

@@ -527,9 +527,13 @@ func emitFunctionResponseEventAndWait(
 	}
 	functionResponseEvent.RequiresCompletion = true
 	if steer.Enabled(invocation) {
+		// Runner plugins may still be processing the emitted event when its
+		// receipt wait expires. The fallback owns a separate snapshot.
+		deadlineEvent := functionResponseEvent.Clone()
+		deadlineEvent.ID = functionResponseEvent.ID
 		if err := steer.EmitAndWait(ctx, invocation, eventChan, functionResponseEvent, funcRespWaitTimeout(ctx)); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				if persistErr := persistFunctionResponseAfterDeadline(ctx, invocation, functionResponseEvent); persistErr != nil {
+				if persistErr := persistFunctionResponseAfterDeadline(ctx, invocation, deadlineEvent); persistErr != nil {
 					log.WarnfContext(ctx, "Persist tool response after deadline failed: %v", persistErr)
 				}
 			}

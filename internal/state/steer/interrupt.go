@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -78,7 +78,7 @@ func (c *Cycle) Accept() bool {
 	}
 	c.queue.mu.Lock()
 	defer c.queue.mu.Unlock()
-	if c.interrupted {
+	if c.interrupted || c.queue.err != nil {
 		return false
 	}
 	c.accepted = true
@@ -128,16 +128,24 @@ func TryFinish(inv *agent.Invocation) bool {
 	return true
 }
 
-// Fail records the first persistence/protocol failure for the active run.
+// Fail records the first persistence/protocol failure and cancels the active
+// model request outside the queue lock. It does not signal a user interruption.
 func Fail(inv *agent.Invocation, err error) {
 	q := queueFor(inv)
 	if q == nil || err == nil {
 		return
 	}
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	var cancel context.CancelFunc
 	if q.enabled && q.err == nil {
 		q.err = err
+		if q.cycle != nil {
+			cancel = q.cycle.cancel
+		}
+	}
+	q.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -150,6 +158,52 @@ func Err(inv *agent.Invocation) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.err
+}
+
+type appendRecord struct {
+	done chan struct{}
+	err  error
+}
+
+// AppendOnce coordinates normal persistence and deadline fallback writes by
+// event ID. Concurrent attempts wait for the in-flight append; successful IDs
+// stay recorded for the queue lifetime, while failed attempts can be retried.
+// Disabled or unattached queues preserve the original append behavior.
+func AppendOnce(ctx context.Context, inv *agent.Invocation, id string, appendEvent func() error) error {
+	q := queueFor(inv)
+	if q == nil || id == "" || !Enabled(inv) {
+		return appendEvent()
+	}
+	for {
+		q.mu.Lock()
+		if q.appends == nil {
+			q.appends = make(map[string]*appendRecord)
+		}
+		record, exists := q.appends[id]
+		if !exists {
+			record = &appendRecord{done: make(chan struct{})}
+			q.appends[id] = record
+			q.mu.Unlock()
+			err := appendEvent()
+			q.mu.Lock()
+			record.err = err
+			if err != nil {
+				delete(q.appends, id)
+			}
+			close(record.done)
+			q.mu.Unlock()
+			return err
+		}
+		q.mu.Unlock()
+		select {
+		case <-record.done:
+			if record.err == nil {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // Acknowledge completes a registered event receipt after runner processing.

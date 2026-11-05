@@ -50,6 +50,7 @@ type Queue struct {
 	cycle    *Cycle
 	err      error
 	receipts map[string]chan error
+	appends  map[string]*appendRecord
 }
 
 // NewQueue creates an empty queue.

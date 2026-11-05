@@ -2,6 +2,11 @@
 
 Q2 interrupts the first streaming response. When the replacement HTTP request is sent, ManagedRunner.Cancel explicitly ends the Run. There is no third model request.
 
+`-check` requires successful cancellation and verifies that the replacement HTTP
+request returns `context.Canceled`. It also checks that the Run completes once.
+Generic `ManagedRunner.Cancel` does not set `RunOutcome.Status`; this example
+preserves that existing contract.
+
 ## Run
 
 Use Go 1.24.4 or later. Set `OPENAI_API_KEY` and, for a compatible endpoint,

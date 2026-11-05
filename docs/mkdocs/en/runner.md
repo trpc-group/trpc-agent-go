@@ -1295,7 +1295,8 @@ eventChan, err := r.Run(
 
 Supported modes (graph-specific events require a graph workflow):
 
-- `messages`: model output events (for example, `chat.completion.chunk`)
+- `messages`: model output events (for example, `chat.completion.chunk`) and
+  `model.interrupted` lifecycle markers
 - `latency_diagnostics`: `preprocessing.status` events carrying a decodable, non-null
   `event.LatencyDiagnostic` extension
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`

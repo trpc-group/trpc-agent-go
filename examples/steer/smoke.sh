@@ -20,6 +20,7 @@ done
 [[ -f "$env_file" ]] || { echo "environment file not found" >&2; exit 2; }
 source "$env_file"
 : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
+# Pin the smoke matrix to the env file's MODEL_NAME via the explicit -model flag.
 model_name="${MODEL_NAME:-${OPENAI_MODEL:-}}"
 : "${model_name:?MODEL_NAME or OPENAI_MODEL is required}"
 if [[ -z "$output_dir" ]]; then output_dir="$(mktemp -d -t steer-smoke-results-XXXXXX)"; fi

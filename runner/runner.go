@@ -877,7 +877,9 @@ func (r *runner) attachSessionAppender(
 			runnerLatencySpanPersistEvent,
 			runnerEventAttrs(e)...,
 		)
-		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
+		err := steer.AppendOnce(appendCtx, invocation, e.ID, func() error {
+			return r.sessionService.AppendEvent(appendCtx, persistSession, e)
+		})
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		return err
 	})
@@ -2800,11 +2802,9 @@ func (r *runner) handleEventPersistence(
 		runnerLatencySpanPersistEvent,
 		runnerEventAttrs(persistEvent)...,
 	)
-	if err := r.sessionService.AppendEvent(
-		appendCtx,
-		persistSession,
-		persistEvent,
-	); err != nil {
+	if err := steer.AppendOnce(appendCtx, invocation, persistEvent.ID, func() error {
+		return r.sessionService.AppendEvent(appendCtx, persistSession, persistEvent)
+	}); err != nil {
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		log.Errorf("Failed to append event to session: %v", err)
 		steer.Fail(invocation, fmt.Errorf("persist event %s: %w", persistEvent.ID, err))

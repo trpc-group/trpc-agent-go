@@ -271,9 +271,10 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			if err != nil {
 				runErr = err
 				steer.Close(invocation)
-				// Treat context cancellation as graceful termination (common in streaming
-				// pipelines where the client closes the stream after final event).
-				if errors.Is(err, context.Canceled) {
+				// Preserve graceful Run cancellation. With steering enabled, a
+				// request-local cancellation while the Run is live is an error;
+				// successful steering was already handled above.
+				if errors.Is(err, context.Canceled) && (!steer.Enabled(invocation) || ctx.Err() != nil) {
 					log.DebugfContext(
 						ctx,
 						"Flow context canceled for agent %s; exiting "+
@@ -773,8 +774,8 @@ func (f *Flow) runOneStep(
 	if startedSpan {
 		defer span.End()
 	}
-	// Only the provider and model callbacks receive the cancellable model
-	// context. Event delivery and accepted tools retain the run lifetime.
+	// Model callbacks share the provider's cancellation. Accepted tools are
+	// bridged to the Run lifetime during response processing.
 	runCtx := ctx
 	// 2. Call LLM (get response sequence).
 	ctx, responseSeq, modelCalled, cycle, err := f.callSteeredLLM(ctx, invocation, llmRequest, callModel)
@@ -796,7 +797,7 @@ func (f *Flow) runOneStep(
 		}
 	}
 	// 3. Process streaming responses.
-	ctx = responseContext(runCtx, ctx, cycle)
+	ctx = responseContext(ctx, cycle)
 	lastEvent, err = f.processStreamingResponses(
 		ctx,
 		invocation,
@@ -997,12 +998,8 @@ func (p *streamingResponseProcessor) process(
 		&p.partialUsageState,
 	)
 	eventInvocation := p.eventInvocation()
-	callbackCtx := p.ctx
-	if cycle != nil {
-		callbackCtx = contextWithRunLifetime(cycle.modelCtx, p.ctx)
-	}
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
-		callbackCtx,
+		p.ctx,
 		eventInvocation,
 		p.currentInvocation,
 		p.llmRequest,
@@ -1014,12 +1011,6 @@ func (p *streamingResponseProcessor) process(
 		*p.err = cbErr
 		responseErr = cbErr
 		return false
-	}
-	if cycle != nil {
-		// Keep a fixed lifetime parent. Using p.ctx here duplicates the entire
-		// previous callback-value chain on every chunk, making missing-value
-		// lookups exponential in the number of streaming responses.
-		updatedCtx = contextWithRunLifetime(cycle.runCtx, updatedCtx)
 	}
 	p.ctx = updatedCtx
 	p.currentInvocation = invocationFromContextOrDefault(
@@ -1069,8 +1060,14 @@ func (p *streamingResponseProcessor) process(
 		responseErr = err
 		return false
 	}
+	toolCtx := p.ctx
+	if cycle != nil {
+		// Accepted tool batches use the Run lifetime. Keep this value-only
+		// bridge out of p.ctx so callback contexts do not grow per chunk.
+		toolCtx = contextWithRunLifetime(cycle.runCtx, p.ctx)
+	}
 	p.flow.postprocessWithLatencySpans(
-		p.ctx,
+		toolCtx,
 		eventInvocation,
 		p.llmRequest,
 		response,

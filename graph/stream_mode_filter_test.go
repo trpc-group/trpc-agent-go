@@ -41,6 +41,7 @@ func TestStreamModeFilter_Messages(t *testing.T) {
 	f := NewStreamModeFilter(true, []agent.StreamMode{agent.StreamModeMessages})
 
 	require.True(t, f.Allows(eventWithObject(model.ObjectTypeChatCompletionChunk)))
+	require.True(t, f.Allows(eventWithObject(model.ObjectTypeModelInterrupted)))
 	require.True(t, f.Allows(eventWithObject(model.ObjectTypeChatCompletion)))
 	require.True(t, f.Allows(eventWithError()))
 	require.False(t, f.Allows(eventWithObject(ObjectTypeGraphExecution)))

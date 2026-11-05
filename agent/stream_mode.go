@@ -16,7 +16,7 @@ type StreamMode string
 
 // StreamMode constants for supported stream categories.
 const (
-	// StreamModeMessages forwards model message events.
+	// StreamModeMessages forwards model message events and model interruption markers.
 	StreamModeMessages StreamMode = "messages"
 	// StreamModeLatencyDiagnostics forwards preprocessing.status events carrying a
 	// decodable, non-null event.LatencyDiagnostic extension. It selects status

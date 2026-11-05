@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2026 Tencent. All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -160,4 +160,52 @@ func TestInterruptQueueInvocationIsolation(t *testing.T) {
 	require.NoError(t, secondCtx.Err())
 	require.True(t, a.Interrupted())
 	require.False(t, b.Interrupted())
+}
+
+func TestInterruptAppendOnceRetryAndCancellation(t *testing.T) {
+	inv, _ := interruptQueue()
+	ctx, cancel := context.WithCancel(context.Background())
+	entered, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	failure := errors.New("append failed")
+	go func() {
+		done <- AppendOnce(context.Background(), inv, "event", func() error {
+			close(entered)
+			<-release
+			return failure
+		})
+	}()
+	<-entered
+	cancel()
+	require.ErrorIs(t, AppendOnce(ctx, inv, "event", func() error {
+		t.Error("cancelled waiter must not append")
+		return nil
+	}), context.Canceled)
+	close(release)
+	require.ErrorIs(t, <-done, failure)
+	calls := 0
+	for i := 0; i < 2; i++ {
+		require.NoError(t, AppendOnce(context.Background(), inv, "event", func() error { calls++; return nil }))
+	}
+	require.Equal(t, 1, calls, "failed persistence is retryable; success is not repeated")
+}
+
+func TestInterruptFailureCancelsModelWithoutSteering(t *testing.T) {
+	inv, _ := interruptQueue()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failure := errors.New("plugin failed")
+	cycle, ready := BeginModel(inv, func() {
+		// Cancellation must run outside the queue mutex.
+		require.ErrorIs(t, Err(inv), failure)
+		cancel()
+	})
+	require.True(t, ready)
+	defer cycle.End()
+	Fail(inv, failure)
+	Fail(inv, errors.New("later failure"))
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.ErrorIs(t, Err(inv), failure)
+	require.False(t, cycle.Interrupted())
+	require.False(t, cycle.Accept())
 }
