@@ -35,20 +35,25 @@ type NotFoundError struct {
 
 func (e *NotFoundError) Error() string { return "not found: " + e.Message }
 
-// TimeoutError is returned when an HTTP request or a code-execution stream
-// exceeds its own deadline.
+// TimeoutError is returned when a RunCode header or body deadline fires, and
+// for some other HTTP failures, including a non-stream request timeout and a
+// gateway timeout.
 //
-// Message identifies which deadline fired. A request timeout means the client
-// stopped waiting for response headers. An execution timeout means the client
-// stopped reading the execution stream after headers arrived. Neither means
-// the remote code or sandbox was killed.
+// For a RunCode deadline, Message identifies which one fired. A request timeout means the
+// client stopped waiting for response headers. An execution timeout means the
+// client stopped reading the response body after headers arrived, including
+// an HTTP error body. Neither means the remote code or sandbox was killed.
+// An http.Client.Timeout or other transport deadline is not a TimeoutError.
+// RunCode keeps that error and records whether headers had already arrived.
+// Increasing RequestTimeout or Timeout does not extend the client deadline.
 //
 // Caller cancellation and a caller context deadline are returned as that
 // context error, not as TimeoutError. Unwrap returns the RunCode deadline
 // cause when one was recorded, and nil for TimeoutError values created
 // without a cause, including HTTP status errors. The cause chain identifies
 // the header or execution deadline and does not match context.Canceled or
-// context.DeadlineExceeded.
+// context.DeadlineExceeded. A transport timeout stays outside this chain, so
+// its own net/http error can still match context.DeadlineExceeded.
 type TimeoutError struct {
 	Message string
 	cause   error
@@ -98,7 +103,7 @@ const (
 // It is not a caller cancellation or a caller deadline.
 var errRequestTimeout = errors.New("code interpreter: request timeout")
 
-// errExecutionTimeout is the cause of a RunCode execution-stream deadline.
+// errExecutionTimeout is the cause of a RunCode body-read deadline.
 // It is not a caller cancellation or a caller deadline.
 var errExecutionTimeout = errors.New("code interpreter: execution timeout")
 
@@ -137,18 +142,7 @@ func timeoutCauseOf(sentinel, trigger error) error {
 }
 
 func (e *timeoutCause) Error() string {
-	if e == nil || e.sentinel == nil {
-		return ""
-	}
-	if e.trigger == nil {
-		return e.sentinel.Error()
-	}
 	return e.sentinel.Error() + ": " + e.trigger.Error()
 }
 
-func (e *timeoutCause) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.sentinel
-}
+func (e *timeoutCause) Unwrap() error { return e.sentinel }

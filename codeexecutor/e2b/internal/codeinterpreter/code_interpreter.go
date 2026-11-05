@@ -82,7 +82,11 @@ type CreateCodeContextOpts struct {
 // Ending the client wait does not kill the remote execution or the sandbox.
 // An http.Client.Timeout configured on the sandbox client still covers the
 // whole exchange, including the body, and should be left unset or longer than
-// a stream that must stay open.
+// a stream that must stay open. When that deadline or another transport
+// deadline fires, the error names the source and whether the client was
+// waiting for headers or reading the body. It is not a TimeoutError, and
+// increasing RequestTimeout or Timeout does not extend it. The transport
+// error remains in the unwrap chain.
 func (s *Sandbox) RunCode(ctx context.Context, code string, opts *RunCodeOpts) (*Execution, error) {
 	if opts == nil {
 		opts = &RunCodeOpts{}
@@ -121,9 +125,8 @@ func (s *Sandbox) RunCode(ctx context.Context, code string, opts *RunCodeOpts) (
 	defer cancel(nil)
 	timers := newCodeExecTimer(cancel)
 	defer timers.stop()
-	if !timers.arm(timeoutPhaseRequest, requestTimeout, requestTimed, errRequestTimeout) {
-		return nil, classifyRunCodeError(ctx, streamCtx, timers, context.Cause(streamCtx))
-	}
+	// The timer starts idle, so this first arm cannot lose a race.
+	timers.arm(timeoutPhaseRequest, requestTimeout, requestTimed, errRequestTimeout)
 
 	u := s.jupyterURL() + "/execute"
 	req, err := http.NewRequestWithContext(streamCtx, "POST", u, bytes.NewReader(body))

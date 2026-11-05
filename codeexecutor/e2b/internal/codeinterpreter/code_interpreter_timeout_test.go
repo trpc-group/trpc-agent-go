@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -287,22 +288,91 @@ func TestRunCodeTimeout_DisabledExecutionAllowsLongStream(t *testing.T) {
 	}
 }
 
-func TestRunCodeTimeout_ClientTimeoutDuringStreamIsRequestTimeout(t *testing.T) {
+func TestRunCodeTimeout_ClientTimeoutDuringStreamIsTransportTimeout(t *testing.T) {
 	h := newExecuteHandler(t, executeStreamThenBlock)
+	sbx := newTimeoutSandbox(t, h, timeoutOther)
+	sbx.connection.HTTPClient.Timeout = phaseBudget
+	var stdout int
+	start := time.Now()
+	_, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
+		Timeout:        timeoutOther,
+		RequestTimeout: timeoutOther,
+		OnStdout:       func(OutputMessage) { stdout++ },
+	})
+	elapsed := time.Since(start)
+	h.waitExit(t)
+	assertPhaseElapsed(t, elapsed)
+	assertClientTransportTimeout(t, err, clientTimeoutBodyText, clientTimeoutHeaderText)
+	if stdout != 1 {
+		t.Fatalf("stdout callbacks = %d, want the body read to start", stdout)
+	}
+	if sbx.connection.HTTPClient.Timeout != phaseBudget {
+		t.Fatalf("client timeout = %s, want it unchanged", sbx.connection.HTTPClient.Timeout)
+	}
+}
+
+func TestRunCodeTimeout_ClientTimeoutDuringErrorBodyIsTransportTimeout(t *testing.T) {
+	h := newExecuteHandler(t, executeErrorThenBlock)
 	sbx := newTimeoutSandbox(t, h, timeoutOther)
 	sbx.connection.HTTPClient.Timeout = phaseBudget
 	start := time.Now()
 	_, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
-		Timeout:        timeoutOther,
+		Timeout:        -time.Second,
 		RequestTimeout: timeoutOther,
 	})
 	elapsed := time.Since(start)
 	h.waitExit(t)
 	assertPhaseElapsed(t, elapsed)
-	assertRequestTimeout(t, err)
-	if sbx.connection.HTTPClient.Timeout != phaseBudget {
-		t.Fatalf("client timeout = %s, want it unchanged", sbx.connection.HTTPClient.Timeout)
+	assertClientTransportTimeout(t, err, clientTimeoutBodyText, clientTimeoutHeaderText)
+	var sandboxErr *SandboxError
+	if errors.As(err, &sandboxErr) {
+		t.Fatalf("incomplete error body returned HTTP mapping: %v", err)
 	}
+}
+
+func TestRunCodeTimeout_ClientTimeoutDuringHeaderWaitIsTransportTimeout(t *testing.T) {
+	h := newExecuteHandler(t, executeBlockHeaders)
+	sbx := newTimeoutSandbox(t, h, timeoutOther)
+	sbx.connection.HTTPClient.Timeout = phaseBudget
+	start := time.Now()
+	_, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
+		Timeout:        timeoutOther,
+		RequestTimeout: -time.Second,
+	})
+	elapsed := time.Since(start)
+	h.waitExit(t)
+	assertPhaseElapsed(t, elapsed)
+	assertClientTransportTimeout(t, err, clientTimeoutHeaderText, clientTimeoutBodyText)
+}
+
+func TestRunCodeTimeout_HeaderDeadlineWinsOverLongerClientTimeout(t *testing.T) {
+	h := newExecuteHandler(t, executeBlockHeaders)
+	sbx := newTimeoutSandbox(t, h, phaseBudget)
+	sbx.connection.HTTPClient.Timeout = timeoutOther
+	start := time.Now()
+	_, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
+		Timeout:        timeoutOther,
+		RequestTimeout: phaseBudget,
+	})
+	elapsed := time.Since(start)
+	h.waitExit(t)
+	assertPhaseElapsed(t, elapsed)
+	assertRequestTimeout(t, err)
+}
+
+func TestRunCodeTimeout_ExecutionDeadlineWinsOverLongerClientTimeout(t *testing.T) {
+	h := newExecuteHandler(t, executeStreamThenBlock)
+	sbx := newTimeoutSandbox(t, h, timeoutOther)
+	sbx.connection.HTTPClient.Timeout = timeoutOther
+	start := time.Now()
+	_, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
+		Timeout:        phaseBudget,
+		RequestTimeout: timeoutOther,
+	})
+	elapsed := time.Since(start)
+	h.waitExit(t)
+	assertPhaseElapsed(t, elapsed)
+	assertExecutionTimeout(t, err)
 }
 
 func TestRunCodeTimeout_LongStreamIgnoresRequestTimeout(t *testing.T) {
@@ -365,22 +435,34 @@ func TestRunCodeTimeout_CallerCancelDuringStream(t *testing.T) {
 	h := newExecuteHandler(t, executeStreamThenBlock)
 	sbx := newTimeoutSandbox(t, h, timeoutOther)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	stdoutSeen := make(chan struct{})
+	cancelDone := make(chan struct{})
 	go func() {
+		defer close(cancelDone)
 		select {
-		case <-h.headersSent:
-			time.Sleep(50 * time.Millisecond)
-			cancel()
+		case <-stdoutSeen:
 		case <-time.After(2 * time.Second):
-			cancel()
 		}
+		cancel()
 	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-cancelDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("cancel goroutine did not return")
+		}
+	})
 	var stdout int
+	var once sync.Once
 	start := time.Now()
 	_, err := sbx.RunCode(ctx, "print(1)", &RunCodeOpts{
 		Timeout:        timeoutOther,
 		RequestTimeout: timeoutOther,
-		OnStdout:       func(OutputMessage) { stdout++ },
+		OnStdout: func(OutputMessage) {
+			stdout++
+			once.Do(func() { close(stdoutSeen) })
+		},
 	})
 	elapsed := time.Since(start)
 	h.waitExit(t)
@@ -506,6 +588,10 @@ func TestTimeoutErrorWithoutCauseUnwrapsNil(t *testing.T) {
 	if errors.Unwrap(err) != nil {
 		t.Fatalf("unwrap = %v, want nil", errors.Unwrap(err))
 	}
+	var nilTimeout *TimeoutError
+	if nilTimeout.Unwrap() != nil {
+		t.Fatal("nil TimeoutError unwrap")
+	}
 	if errors.Is(err, errRequestTimeout) {
 		t.Fatal("status-style timeout error matched a RunCode request cause")
 	}
@@ -596,6 +682,159 @@ func TestCodeExecTimerExecutionDeadlineFires(t *testing.T) {
 	}
 }
 
+func TestCodeExecTimerArmAfterStopReturnsFalse(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	timer := newCodeExecTimer(cancel)
+	if !timer.arm(timeoutPhaseRequest, time.Hour, true, errRequestTimeout) {
+		t.Fatal("arm request deadline")
+	}
+	timer.stop()
+	if timer.arm(timeoutPhaseExecution, time.Hour, true, errExecutionTimeout) {
+		t.Fatal("arm after stop succeeded")
+	}
+	if ctx.Err() != nil || timer.cause() != nil {
+		t.Fatalf("stopped timer changed state: ctx %v cause %v", ctx.Err(), timer.cause())
+	}
+}
+
+func TestCodeExecTimerStaleFireDoesNotCancel(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	timer := newCodeExecTimer(cancel)
+	if !timer.arm(timeoutPhaseRequest, time.Hour, true, errRequestTimeout) {
+		t.Fatal("arm request deadline")
+	}
+	if !timer.arm(timeoutPhaseExecution, time.Hour, true, errExecutionTimeout) {
+		t.Fatal("arm execution deadline")
+	}
+	timer.fire(timeoutPhaseRequest, errRequestTimeout)
+	if ctx.Err() != nil || timer.cause() != nil {
+		t.Fatalf("stale header callback canceled execution: ctx %v cause %v", ctx.Err(), timer.cause())
+	}
+	timer.stop()
+}
+
+func TestClassifyRunCodeErrorTimerCauseBeforeCancel(t *testing.T) {
+	stream, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	timer := newCodeExecTimer(nil)
+	if !timer.arm(timeoutPhaseExecution, time.Hour, true, errExecutionTimeout) {
+		t.Fatal("arm execution deadline")
+	}
+	timer.fire(timeoutPhaseExecution, errExecutionTimeout)
+	err := classifyRunCodeError(context.Background(), stream, timer, nil)
+	assertExecutionTimeout(t, err)
+	if stream.Err() != nil {
+		t.Fatalf("stream err = %v, want the deadline recorded before cancel", stream.Err())
+	}
+}
+
+func TestClassifyRunCodeErrorUsesTimerCauseWhenStreamCauseDiffers(t *testing.T) {
+	stream, cancel := context.WithCancelCause(context.Background())
+	cancel(errors.New("transport closed"))
+	timer := newCodeExecTimer(nil)
+	if !timer.arm(timeoutPhaseExecution, time.Hour, true, errExecutionTimeout) {
+		t.Fatal("arm execution deadline")
+	}
+	timer.fire(timeoutPhaseExecution, errExecutionTimeout)
+	err := classifyRunCodeError(context.Background(), stream, timer, nil)
+	assertExecutionTimeout(t, err)
+}
+
+func TestClassifyRunCodeErrorPreservesCallerWithoutTransportError(t *testing.T) {
+	caller, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream, stop := context.WithCancel(context.Background())
+	defer stop()
+	err := classifyRunCodeError(caller, stream, newCodeExecTimer(nil), nil)
+	assertCallerCancel(t, err)
+}
+
+func TestClassifyRunCodeErrorJoinsUnrelatedTransportError(t *testing.T) {
+	caller, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream, stop := context.WithCancel(context.Background())
+	defer stop()
+	err := classifyRunCodeError(caller, stream, newCodeExecTimer(nil), errors.New("reset by peer"))
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "reset by peer") {
+		t.Fatalf("error = %v, want caller cancellation and the transport error", err)
+	}
+	var timeoutErr *TimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("joined caller cancellation reported as TimeoutError: %v", err)
+	}
+}
+
+func TestClassifyRunCodeErrorKeepsNonTimeoutNetError(t *testing.T) {
+	err := classifyRunCodeError(context.Background(), context.Background(), newCodeExecTimer(nil), temporaryNetError{})
+	if err.Error() != "temporary outage" {
+		t.Fatalf("error = %v", err)
+	}
+	var timeoutErr *TimeoutError
+	if errors.As(err, &timeoutErr) || errors.Is(err, errRequestTimeout) || errors.Is(err, errExecutionTimeout) {
+		t.Fatalf("non-timeout network error was relabeled: %v", err)
+	}
+}
+
+func TestTransportTimeoutWithoutPhaseDoesNotClaimOne(t *testing.T) {
+	err := newTransportTimeout(timeoutPhaseDone, nil)
+	if err.Error() != clientTimeoutPlainText {
+		t.Fatalf("error = %q", err.Error())
+	}
+	if errors.Unwrap(err) != nil {
+		t.Fatal("unwrap of a timeout without a transport error")
+	}
+	wrapped := classifyRunCodeError(
+		context.Background(), context.Background(), newCodeExecTimer(nil), timeoutNetError{},
+	)
+	if !strings.HasPrefix(wrapped.Error(), clientTimeoutPlainText) ||
+		strings.Contains(wrapped.Error(), "while waiting") ||
+		strings.Contains(wrapped.Error(), "while reading") {
+		t.Fatalf("unspecified phase = %v", wrapped)
+	}
+	var netErr net.Error
+	if !errors.As(wrapped, &netErr) || !netErr.Timeout() {
+		t.Fatalf("error = %v, want the transport timeout", wrapped)
+	}
+}
+
+func TestRunCodeTimeout_NonTimeoutTransportErrorIsUnchanged(t *testing.T) {
+	h := newExecuteHandler(t, executeBlockHeaders)
+	sbx := newTimeoutSandbox(t, h, time.Second)
+	sbx.connection.HTTPClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})
+	_, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
+		Timeout:        time.Second,
+		RequestTimeout: time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "dial failed") {
+		t.Fatalf("error = %v", err)
+	}
+	var timeoutErr *TimeoutError
+	if errors.As(err, &timeoutErr) || errors.Is(err, errRequestTimeout) || errors.Is(err, errExecutionTimeout) {
+		t.Fatalf("transport error was relabeled: %v", err)
+	}
+}
+
+func TestRunCodeTimeout_HeaderDeadlineBeforePhaseSwitchStaysRequestTimeout(t *testing.T) {
+	h := newExecuteHandler(t, executeImmediate)
+	sbx := newTimeoutSandbox(t, h, phaseBudget)
+	sbx.connection.HTTPClient.Transport = respondAfterCancel{}
+	start := time.Now()
+	exec, err := sbx.RunCode(context.Background(), "print(1)", &RunCodeOpts{
+		Timeout:        timeoutOther,
+		RequestTimeout: phaseBudget,
+	})
+	elapsed := time.Since(start)
+	assertPhaseElapsed(t, elapsed)
+	assertRequestTimeout(t, err)
+	if exec != nil {
+		t.Fatalf("execution = %#v, want nil after the header deadline won", exec)
+	}
+}
+
 func TestCodeExecTimerStopPreventsFire(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
@@ -672,6 +911,33 @@ func assertMappedBadRequest(t *testing.T, err error, message string) {
 	}
 	if errors.Is(err, errRequestTimeout) || errors.Is(err, errExecutionTimeout) {
 		t.Fatalf("completed HTTP error matched a RunCode deadline: %v", err)
+	}
+}
+
+func assertClientTransportTimeout(t *testing.T, err error, want, reject string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("error = nil, want an HTTP client or transport timeout")
+	}
+	var timeoutErr *TimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("HTTP client timeout reported as TimeoutError: %v", err)
+	}
+	if errors.Is(err, errRequestTimeout) || errors.Is(err, errExecutionTimeout) {
+		t.Fatalf("HTTP client timeout matched a local deadline: %v", err)
+	}
+	if strings.Contains(err.Error(), "RequestTimeout") || strings.Contains(err.Error(), "the 'Timeout' option") {
+		t.Fatalf("error suggests a deadline option that does not apply: %v", err)
+	}
+	if !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), reject) {
+		t.Fatalf("error = %v, want %q without %q", err, want, reject)
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("error = %v, want the transport timeout in the chain", err)
+	}
+	if !strings.Contains(err.Error(), "Client.Timeout") {
+		t.Fatalf("error = %v, want the original client timeout text", err)
 	}
 }
 
@@ -830,6 +1096,38 @@ func (h *executeHandler) payloadHasTimeoutKey() bool {
 	}
 	_, ok := h.payload["timeout"]
 	return ok
+}
+
+type temporaryNetError struct{}
+
+func (temporaryNetError) Error() string   { return "temporary outage" }
+func (temporaryNetError) Timeout() bool   { return false }
+func (temporaryNetError) Temporary() bool { return true }
+
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "net deadline" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+// respondAfterCancel returns headers only after the caller context is
+// canceled, so RunCode observes a header deadline that won before it can
+// switch to the body phase.
+type respondAfterCancel struct{}
+
+func (respondAfterCancel) RoundTrip(req *http.Request) (*http.Response, error) {
+	<-req.Context().Done()
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/x-ndjson")
+	rec.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(rec, "{\"type\":\"result\",\"text\":\"late\",\"is_main_result\":true}\n")
+	return rec.Result(), nil
 }
 
 func newTimeoutSandbox(t *testing.T, h http.Handler, requestTimeout time.Duration) *Sandbox {

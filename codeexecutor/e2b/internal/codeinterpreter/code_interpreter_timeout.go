@@ -131,10 +131,51 @@ func (p *codeExecTimer) cause() error {
 	return p.fired
 }
 
-// classifyRunCodeError maps one failed header wait or stream read to a stable
-// error. Our deadlines win only when they are the context's first cause.
-// Caller cancellation and caller deadlines stay recognizable and are not
-// returned as TimeoutError.
+func (p *codeExecTimer) currentPhase() timeoutPhase {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.phase
+}
+
+const (
+	clientTimeoutHeaderText = "HTTP client or transport timed out while waiting for response headers"
+	clientTimeoutBodyText   = "HTTP client or transport timed out while reading the response body"
+	clientTimeoutPlainText  = "HTTP client or transport timed out"
+)
+
+// transportTimeout is an http.Client or other transport deadline observed by
+// RunCode. It is not the header timer or the execution timer. Unwrap keeps
+// the transport error, whose own chain may match context.DeadlineExceeded.
+type transportTimeout struct {
+	phase timeoutPhase
+	err   error
+}
+
+func newTransportTimeout(phase timeoutPhase, err error) error {
+	return &transportTimeout{phase: phase, err: err}
+}
+
+func (e *transportTimeout) Error() string {
+	msg := clientTimeoutPlainText
+	switch e.phase {
+	case timeoutPhaseRequest:
+		msg = clientTimeoutHeaderText
+	case timeoutPhaseExecution:
+		msg = clientTimeoutBodyText
+	}
+	if e.err == nil {
+		return msg
+	}
+	return msg + ": " + e.err.Error()
+}
+
+func (e *transportTimeout) Unwrap() error { return e.err }
+
+// classifyRunCodeError maps one failed header wait or body read to a stable
+// error. Header and execution deadlines win only when they are the context's
+// first cause or the timer has recorded that cause. Caller cancellation and
+// caller deadlines stay recognizable and are not returned as TimeoutError.
+// An http.Client or transport timeout keeps that error and the active phase.
 func classifyRunCodeError(caller, stream context.Context, timers *codeExecTimer, err error) error {
 	if err == nil && stream != nil {
 		err = stream.Err()
@@ -156,7 +197,7 @@ func classifyRunCodeError(caller, stream context.Context, timers *codeExecTimer,
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return runCodeRequestTimeout(err)
+		return newTransportTimeout(timers.currentPhase(), err)
 	}
 	return err
 }
@@ -181,9 +222,6 @@ func firstNonNil(primary, fallback error) error {
 
 func preserveCallerError(caller context.Context, err error) error {
 	callerErr := caller.Err()
-	if callerErr == nil {
-		return err
-	}
 	if err == nil || errors.Is(err, callerErr) {
 		if err == nil {
 			return callerErr

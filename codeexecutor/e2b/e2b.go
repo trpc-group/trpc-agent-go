@@ -83,7 +83,9 @@ func WithSandboxTimeout(t time.Duration) Option {
 // WithExecutionTimeout.
 // An http.Client.Timeout on the configured client still covers the whole
 // exchange, including a response body, and should be left unset or longer
-// than streams that must stay open.
+// than streams that must stay open. RunCode reports that deadline separately
+// from this option and records whether headers had already arrived. Increasing
+// this option does not extend http.Client.Timeout.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
@@ -94,7 +96,9 @@ func WithRequestTimeout(t time.Duration) Option {
 // uses the default of 300 seconds. A negative value disables that body
 // deadline and does not disable the request timeout.
 // Ending the client wait does not stop the remote code or kill the sandbox.
-// This option does not apply to RunProgram.
+// This option does not apply to RunProgram. An http.Client.Timeout is
+// independent of this deadline; when it fires while the body is being read,
+// RunCode does not report it as an execution TimeoutError.
 func WithExecutionTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.executionTimeout = t }
 }

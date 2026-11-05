@@ -181,7 +181,11 @@ separate and does not use this stream. Only its envd process deadline sets
 `RunResult.TimedOut`, using the error type and chain rather than the error
 text. A configured `http.Client.Timeout` still covers the whole HTTP exchange,
 including the body. Leave it unset, or longer than any stream that must stay
-open.
+open. If it or another transport deadline fires, the error names that source
+and whether the client was still waiting for headers or already reading the
+body. It is not a `TimeoutError` for `RequestTimeout` or `Timeout`, and
+increasing those options does not extend the client deadline. The transport
+error remains available through unwrapping.
 
 ### E2B workspace programs
 

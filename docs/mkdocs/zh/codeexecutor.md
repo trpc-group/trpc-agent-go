@@ -166,6 +166,9 @@ timeout 字段。客户端有两段时限；调用方 context 上更早的取消
 只有 envd 进程 deadline 会设置 `RunResult.TimedOut`，并且按错误类型和错误链识别，
 不看错误文本里是否碰巧包含 “timeout”。显式配置的 `http.Client.Timeout` 仍覆盖
 整个 HTTP 交换，包括响应体。需要保持流打开时，请不要设置它，或把它设得比流更长。
+该时限或其他传输层时限到期时，错误会标明来源，以及当时是在等待响应头还是在读取
+响应体。它不是 `RequestTimeout` 或 `Timeout` 对应的 `TimeoutError`，加大这两个
+选项也不会延长客户端时限。原始传输错误仍可通过 unwrap 取得。
 
 ### E2B workspace 程序执行
 
