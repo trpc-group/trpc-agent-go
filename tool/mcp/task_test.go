@@ -191,6 +191,8 @@ func (h *taskDeadlineHandler) Handle(ctx context.Context, _ *http.Client, _ *htt
 	return nil, errors.New("stop after observing reconnect initialization")
 }
 
+// TestToolTaskDeadlineAcrossReconnect preserves task-wide deadlines through
+// initialization while retaining per-attempt timeouts for ordinary clients.
 func TestToolTaskDeadlineAcrossReconnect(t *testing.T) {
 	for _, mode := range []string{"legacy", "disabled", "enabled", "caller-deadline"} {
 		t.Run(mode, func(t *testing.T) {

@@ -34,6 +34,8 @@ func TestTasksHTTPReconnect(t *testing.T) {
 	}
 }
 
+// testTasksHTTPReconnect loses one transport exchange and verifies recovery
+// resumes the original handle through a replacement client with the same identity.
 func testTasksHTTPReconnect(t *testing.T, modern bool) {
 	var calls, polls, initializations atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

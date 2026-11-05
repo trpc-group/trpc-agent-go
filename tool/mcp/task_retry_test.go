@@ -25,6 +25,8 @@ import (
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
+// TestTasksFrameworkRetryDoesNotReplay submits once when a tool response is lost
+// or polling a known task exhausts recovery, even with outer retries enabled.
 func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
