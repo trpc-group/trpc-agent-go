@@ -172,6 +172,34 @@ type persistenceIdentity struct {
 	originalID string
 }
 
+type persistenceQueueKey struct{}
+type persistenceQueue struct {
+	invocationID string
+	queue        *Queue
+}
+
+// WithPersistence retains the invocation's append coordination for an operation
+// that may finish after Clear. It must be called before event delivery. The
+// returned context preserves cancellation and does not keep the Run open; only
+// AppendOnce for the same invocation can use the retained queue. Nil or
+// unattached invocations leave ctx unchanged.
+func WithPersistence(ctx context.Context, inv *agent.Invocation) context.Context {
+	q := queueFor(inv)
+	if q == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, persistenceQueueKey{}, persistenceQueue{invocationID: inv.InvocationID, queue: q})
+}
+
+// queueForPersistence allows views of the same invocation to finish an append
+// after cleanup without granting that retained state to a child invocation.
+func queueForPersistence(ctx context.Context, inv *agent.Invocation) *Queue {
+	if retained, ok := ctx.Value(persistenceQueueKey{}).(persistenceQueue); ok && inv != nil && retained.invocationID == inv.InvocationID {
+		return retained.queue
+	}
+	return queueFor(inv)
+}
+
 // WithPersistenceIdentity associates a plugin's replacement event with the
 // original event for AppendOnce. It does not alter the public event ID or apply
 // to appends of other events using the same context.
@@ -184,10 +212,11 @@ func WithPersistenceIdentity(ctx context.Context, eventID, originalID string) co
 // stay recorded for the queue lifetime, while failed attempts can be retried.
 // A panicking callback releases waiters with an error and is not retried; the
 // original panic continues to propagate to the caller.
-// Disabled or unattached queues preserve the original append behavior.
+// Disabled queues, and unattached invocations without retained coordination,
+// preserve the original append behavior.
 func AppendOnce(ctx context.Context, inv *agent.Invocation, id string, appendEvent func() error) error {
-	q := queueFor(inv)
-	if q == nil || id == "" || !Enabled(inv) {
+	q := queueForPersistence(ctx, inv)
+	if q == nil || id == "" {
 		return appendEvent()
 	}
 	if identity, ok := ctx.Value(persistenceIdentityKey{}).(persistenceIdentity); ok && identity.eventID == id && identity.originalID != "" {
@@ -195,6 +224,10 @@ func AppendOnce(ctx context.Context, inv *agent.Invocation, id string, appendEve
 	}
 	for {
 		q.mu.Lock()
+		if !q.enabled {
+			q.mu.Unlock()
+			return appendEvent()
+		}
 		if q.appends == nil {
 			q.appends = make(map[string]*appendRecord)
 		}
@@ -217,6 +250,8 @@ func AppendOnce(ctx context.Context, inv *agent.Invocation, id string, appendEve
 	}
 }
 
+// appendEvent settles every exit path without recovering the caller's panic.
+// Only returned errors release the identity for a later retry.
 func (q *Queue) appendEvent(id string, record *appendRecord, appendEvent func() error) (err error) {
 	returned := false
 	defer func() {

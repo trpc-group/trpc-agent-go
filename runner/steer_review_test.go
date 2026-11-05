@@ -403,20 +403,52 @@ func (s *replacedDeadlineSession) AppendEvent(ctx context.Context, sess *session
 }
 
 func TestRunner_InterruptDeadlineReplacementIdentity(t *testing.T) {
+	for _, clone := range []bool{false, true} {
+		for _, afterCleanup := range []bool{false, true} {
+			t.Run(fmt.Sprintf("clone=%t/afterCleanup=%t", clone, afterCleanup), func(t *testing.T) {
+				testInterruptDeadlineReplacementIdentity(t, clone, afterCleanup)
+			})
+		}
+	}
+}
+
+func testInterruptDeadlineReplacementIdentity(t *testing.T, clone, afterCleanup bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	runCtx := interruptDeadlineContext{Context: context.Background(), done: make(chan struct{})}
 	service := &replacedDeadlineSession{Service: sessioninmemory.NewSessionService(), appended: make(chan struct{}), release: make(chan struct{})}
+	fallbackCtx, releaseFallback := context.WithCancel(ctx)
+	defer releaseFallback()
+	fallbackInvocation := make(chan *agent.Invocation, 1)
+	agentFinished := make(chan struct{})
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(context.Context, *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		close(agentFinished)
+		return nil, nil
+	})
 	var replacements atomic.Int32
 	ids := make(chan string, 2)
 	p := &testPlugin{name: "replace-tool-result", reg: func(reg *plugin.Registry) {
-		reg.OnEvent(func(_ context.Context, _ *agent.Invocation, evt *event.Event) (*event.Event, error) {
+		reg.OnEvent(func(pluginCtx context.Context, inv *agent.Invocation, evt *event.Event) (*event.Event, error) {
 			if evt.IsToolResultResponse() {
-				evt = evt.Clone()
+				if clone {
+					evt = evt.Clone()
+				}
 				evt.Choices[0].Message.Content = "redacted"
 				ids <- evt.ID
 				if replacements.Add(1) == 2 {
+					fallbackInvocation <- inv
 					close(service.release)
+					if afterCleanup {
+						// Let the normal append and Runner cleanup finish before
+						// the detached fallback reaches persistence.
+						select {
+						case <-fallbackCtx.Done():
+						case <-pluginCtx.Done():
+							return nil, pluginCtx.Err()
+						}
+					}
 				}
 			}
 			return evt, nil
@@ -430,7 +462,7 @@ func TestRunner_InterruptDeadlineReplacementIdentity(t *testing.T) {
 			yield(resp)
 		}
 	}}
-	r := NewRunner("replacement", llmagent.New("agent", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{tl}), llmagent.WithInterruptOnUserMessage(true)), WithSessionService(service), WithPlugins(p))
+	r := NewRunner("replacement", llmagent.New("agent", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{tl}), llmagent.WithInterruptOnUserMessage(true), llmagent.WithAgentCallbacks(callbacks)), WithSessionService(service), WithPlugins(p))
 	defer r.Close()
 	ch, err := r.Run(runCtx, "user", "session", model.NewUserMessage("Q1"))
 	require.NoError(t, err)
@@ -441,10 +473,29 @@ func TestRunner_InterruptDeadlineReplacementIdentity(t *testing.T) {
 	}
 	close(runCtx.done)
 	events := interruptRead(t, ctx, ch, nil)
+	if afterCleanup {
+		select {
+		case inv := <-fallbackInvocation:
+			require.False(t, appender.IsAttached(inv), "Runner must clear the appender before fallback resumes")
+			require.False(t, steer.IsAttached(inv), "Runner must clear the queue before fallback resumes")
+		case <-ctx.Done():
+			t.Fatal("fallback was not reached")
+		}
+		releaseFallback()
+	}
+	select {
+	case <-agentFinished:
+	case <-ctx.Done():
+		t.Fatal("detached fallback did not finish")
+	}
 	require.EqualValues(t, 2, replacements.Load(), "normal and deadline paths must both run the plugin")
 	require.EqualValues(t, 1, service.results.Load())
 	firstID, secondID := <-ids, <-ids
-	require.NotEqual(t, firstID, secondID)
+	if clone {
+		require.NotEqual(t, firstID, secondID)
+	} else {
+		require.Equal(t, firstID, secondID)
+	}
 	require.Equal(t, 1, interruptCount(events, model.ObjectTypeRunnerCompletion))
 	sess, err := service.GetSession(ctx, session.Key{AppName: "replacement", UserID: "user", SessionID: "session"})
 	require.NoError(t, err)

@@ -516,6 +516,9 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	)
 }
 
+// emitFunctionResponseEventAndWait publishes a complete tool-result batch and
+// waits for Runner processing. Steering runs require a persistence receipt and
+// retain coordination for deadline fallback before exposing the event to Runner.
 func emitFunctionResponseEventAndWait(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -527,13 +530,16 @@ func emitFunctionResponseEventAndWait(
 	}
 	functionResponseEvent.RequiresCompletion = true
 	if steer.Enabled(invocation) {
+		// Retain append coordination before Runner can receive the event and
+		// clear invocation state while a detached deadline fallback is pending.
+		persistCtx := steer.WithPersistence(ctx, invocation)
 		// Runner plugins may still be processing the emitted event when its
 		// receipt wait expires. The fallback owns a separate snapshot.
 		deadlineEvent := functionResponseEvent.Clone()
 		deadlineEvent.ID = functionResponseEvent.ID
 		if err := steer.EmitAndWait(ctx, invocation, eventChan, functionResponseEvent, funcRespWaitTimeout(ctx)); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				if persistErr := persistFunctionResponseAfterDeadline(ctx, invocation, deadlineEvent); persistErr != nil {
+				if persistErr := persistFunctionResponseAfterDeadline(persistCtx, invocation, deadlineEvent); persistErr != nil {
 					log.WarnfContext(ctx, "Persist tool response after deadline failed: %v", persistErr)
 				}
 			}
@@ -697,6 +703,9 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	return nil, err
 }
 
+// persistFunctionResponseAfterDeadline gives tool results a bounded, detached
+// persistence attempt. It preserves routing across plugins and uses any retained
+// coordination even when Runner has already cleared its invocation attachments.
 func persistFunctionResponseAfterDeadline(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -735,9 +744,7 @@ func persistFunctionResponseAfterDeadline(
 		)
 	}
 
-	if steer.Enabled(invocation) {
-		persistCtx = steer.WithPersistenceIdentity(persistCtx, functionResponseEvent.ID, originalID)
-	}
+	persistCtx = steer.WithPersistenceIdentity(persistCtx, functionResponseEvent.ID, originalID)
 	attached, err := appender.Invoke(
 		persistCtx,
 		invocation,
@@ -762,11 +769,11 @@ func persistFunctionResponseAfterDeadline(
 	if persistSession == nil {
 		return errors.New("session unavailable after deadline")
 	}
-	return invocation.SessionService.AppendEvent(
-		persistCtx,
-		persistSession,
-		functionResponseEvent,
-	)
+	// Runner may have cleared its appender while OnEvent was still running.
+	// The retained coordinator also guards this direct fallback write.
+	return steer.AppendOnce(persistCtx, invocation, functionResponseEvent.ID, func() error {
+		return invocation.SessionService.AppendEvent(persistCtx, persistSession, functionResponseEvent)
+	})
 }
 
 func applyEventPluginsAfterDeadline(

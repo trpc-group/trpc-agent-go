@@ -269,3 +269,56 @@ func TestInterruptAppendOnceReplacementIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestInterruptPersistenceSurvivesClear(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("enabled=%t/failed=%t", enabled, failed), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				inv := agent.NewInvocation()
+				q := NewQueue()
+				Attach(inv, q)
+				if enabled {
+					EnableInterrupt(inv)
+				}
+				retained := WithPersistence(ctx, inv)
+				failure := errors.New("append failed")
+				calls := 0
+				err := AppendOnce(ctx, inv, "event", func() error {
+					calls++
+					if failed {
+						return failure
+					}
+					return nil
+				})
+				if failed {
+					require.ErrorIs(t, err, failure)
+				} else {
+					require.NoError(t, err)
+				}
+				Clear(inv)
+				require.False(t, IsAttached(inv))
+				require.False(t, q.Enqueue(model.NewUserMessage("late")), "retained persistence must not reopen the Run")
+				// Event processing may use another view of the same invocation.
+				fallbackCtx := WithPersistenceIdentity(retained, "replacement", "event")
+				require.NoError(t, AppendOnce(fallbackCtx, inv.View(), "replacement", func() error { calls++; return nil }))
+				want := 1
+				if !enabled || failed {
+					want = 2
+				}
+				require.Equal(t, want, calls, "successful writes stay deduplicated; failures remain retryable")
+
+				other, _ := interruptQueue()
+				require.NoError(t, AppendOnce(fallbackCtx, other, "replacement", func() error { calls++; return nil }))
+				require.Equal(t, want+1, calls, "an inherited context must not share persistence across invocations")
+				cancel()
+				require.ErrorIs(t, retained.Err(), context.Canceled, "retaining state must not detach cancellation")
+			})
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.Same(t, ctx, WithPersistence(ctx, nil))
+	require.Same(t, ctx, WithPersistence(ctx, agent.NewInvocation()))
+}
