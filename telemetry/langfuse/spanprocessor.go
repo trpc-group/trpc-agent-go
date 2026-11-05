@@ -73,7 +73,7 @@ func defaultLangfuseTraceAttributeFilter(member baggage.Member) bool {
 		version, release,
 		traceTags, traceName, environment,
 		"langfuse.experiment.id", "langfuse.experiment.name",
-		"langfuse.experiment.description", "langfuse.experiment.metadata",
+		"langfuse.experiment.metadata",
 		"langfuse.experiment.dataset.id", "langfuse.experiment.item.id",
 		"langfuse.experiment.item.metadata", "langfuse.experiment.item.root_observation_id":
 		return true

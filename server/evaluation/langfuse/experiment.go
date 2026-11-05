@@ -128,9 +128,6 @@ func (h *Handler) v4CaseAttributes(spec *CaseSpec, opts executionOptions, sessio
 		attribute.String(attrExperimentDataset, opts.datasetID),
 		attribute.String(attrExperimentItemID, spec.DatasetItemID),
 	}
-	if strings.TrimSpace(opts.runDescription) != "" {
-		attrs = append(attrs, attribute.String(attrExperimentDesc, opts.runDescription))
-	}
 	experimentMetadata, err := json.Marshal(map[string]any{"appName": h.appName, "runName": opts.runName})
 	if err != nil {
 		return nil, fmt.Errorf("encode experiment metadata: %w", err)
@@ -168,8 +165,14 @@ type experimentSpanKey struct{}
 
 // startExperimentItem follows Langfuse's experiment task-span convention. The
 // item span supplies a root observation ID before agent/tool spans start.
-func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs []attribute.KeyValue) (context.Context, oteltrace.Span, error) {
-	ctx, span := atrace.Tracer.Start(ctx, "experiment-item-task", oteltrace.WithNewRoot(), oteltrace.WithAttributes(attrs...))
+// The run description is set on the item span only, as Langfuse does not
+// propagate it to child observations.
+func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs []attribute.KeyValue, description string) (context.Context, oteltrace.Span, error) {
+	startOpts := []oteltrace.SpanStartOption{oteltrace.WithNewRoot(), oteltrace.WithAttributes(attrs...)}
+	if strings.TrimSpace(description) != "" {
+		startOpts = append(startOpts, oteltrace.WithAttributes(attribute.String(attrExperimentDesc, description)))
+	}
+	ctx, span := atrace.Tracer.Start(ctx, "experiment-item-task", startOpts...)
 	if !span.IsRecording() {
 		span.End()
 		return nil, nil, errors.New("langfuse v4 experiments require a recording OpenTelemetry exporter")

@@ -92,6 +92,28 @@ func (t *caseTrace) spanForSession(sessionID string) oteltrace.SpanContext {
 // evaluateCases submits one batch so the evaluator owns both stage schedulers.
 // Per-call additive callbacks preserve callbacks configured by the application
 // and keep case metadata out of the shared inference request.
+// beginV4Case starts the Langfuse v4 experiment item span for one inference
+// case and returns the context that agent spans must inherit, together with the
+// experiment attributes to set on them.
+func (h *Handler) beginV4Case(ctx context.Context, spec *CaseSpec, args *service.BeforeInferenceCaseArgs,
+	trace *caseTrace, execution executionOptions) (context.Context, []attribute.KeyValue, error) {
+	sessionID := spec.SessionID
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = args.SessionID
+	}
+	attrs, err := h.v4CaseAttributes(spec, execution, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build trace attributes for case %s: %w", args.EvalCaseID, err)
+	}
+	ctx, span, err := h.startExperimentItem(ctx, spec, attrs, execution.runDescription)
+	if err != nil {
+		return nil, nil, err
+	}
+	trace.addSpan(span)
+	trace.record(args.SessionID, span.SpanContext())
+	return ctx, attrs, nil
+}
+
 func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution executionOptions, specs []*CaseSpec) (
 	*coreevaluation.EvaluationResult, map[string]*caseTrace, error,
 ) {
@@ -130,22 +152,11 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution
 		trace := traces[args.EvalCaseID]
 		var v4Attributes []attribute.KeyValue
 		if h.apiVersion == APIVersionV4 {
-			sessionID := spec.SessionID
-			if strings.TrimSpace(sessionID) == "" {
-				sessionID = args.SessionID
-			}
 			var err error
-			v4Attributes, err = h.v4CaseAttributes(spec, execution, sessionID)
-			if err != nil {
-				return nil, fmt.Errorf("build trace attributes for case %s: %w", args.EvalCaseID, err)
-			}
-			var span oteltrace.Span
-			ctx, span, err = h.startExperimentItem(ctx, spec, v4Attributes)
+			ctx, v4Attributes, err = h.beginV4Case(ctx, spec, args, trace, execution)
 			if err != nil {
 				return nil, err
 			}
-			trace.addSpan(span)
-			trace.record(args.SessionID, span.SpanContext())
 		}
 		args.RunOptions = append(args.RunOptions,
 			agent.WithExecutionTraceEnabled(true),

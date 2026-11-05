@@ -93,7 +93,7 @@ func TestV4CaseAttributesCarryTheFieldsTheTraceUpsertSent(t *testing.T) {
 	}
 	assert.Equal(t, "exp-1", got[attrExperimentID].AsString())
 	assert.Equal(t, "run", got[attrExperimentName].AsString())
-	assert.Equal(t, "nightly", got[attrExperimentDesc].AsString())
+	assert.NotContains(t, got, attrExperimentDesc, "the description belongs on the item span only")
 	assert.Equal(t, "ds-1", got[attrExperimentDataset].AsString())
 	assert.Equal(t, "item-1", got[attrExperimentItemID].AsString())
 	assert.JSONEq(t, `{"appName":"demo-app","runName":"run"}`, got[attrExperimentMetadata].AsString())
@@ -204,7 +204,7 @@ func TestV4WritesNoLegacyEndpointsAndAttachesRunScoresToTheExperiment(t *testing
 		}
 		assert.Equal(t, wantID, got[attrExperimentID])
 		assert.Equal(t, "nightly-run", got[attrExperimentName])
-		assert.Equal(t, "desc", got[attrExperimentDesc])
+		assert.Empty(t, got[attrExperimentDesc])
 		assert.Equal(t, "set", got[attrExperimentDataset])
 		assert.Contains(t, []string{"one", "two"}, got[attrExperimentItemID])
 		assert.Equal(t, call.session, got[attrSessionID])
@@ -307,7 +307,7 @@ func TestV4ExportsExperimentAssociationOnRootAndChildren(t *testing.T) {
 	spec.TraceInput = "question"
 	spec.TraceMetadata = map[string]any{"datasetItemMetadata": map[string]any{"category": "billing"}}
 	require.NoError(t, h.syncEvalSet(ctx, "set", []*CaseSpec{spec}))
-	response, err := h.executeRemoteExperiment(ctx, &remoteExperimentRequest{ProjectID: "project", DatasetID: "set"}, executionOptions{runName: "run"}, []*CaseSpec{spec})
+	response, err := h.executeRemoteExperiment(ctx, &remoteExperimentRequest{ProjectID: "project", DatasetID: "set"}, executionOptions{runName: "run", runDescription: "nightly"}, []*CaseSpec{spec})
 	require.NoError(t, err)
 	recording.mu.Lock()
 	defer recording.mu.Unlock()
@@ -332,6 +332,9 @@ func TestV4ExportsExperimentAssociationOnRootAndChildren(t *testing.T) {
 		assert.Equal(t, response.Cases[0].TraceID, hex.EncodeToString(span.TraceId), span.Name)
 		if span.Name == "experiment-item-task" {
 			assert.Equal(t, "hello", attrs["langfuse.observation.output"])
+			assert.Equal(t, "nightly", attrs[attrExperimentDesc])
+		} else {
+			assert.Empty(t, attrs[attrExperimentDesc], span.Name)
 		}
 	}
 	require.NotEmpty(t, recording.headers)
@@ -346,7 +349,7 @@ func TestV4FailsWithoutRecordingTelemetry(t *testing.T) {
 	atrace.Tracer = noop.NewTracerProvider().Tracer("test")
 	defer func() { atrace.Tracer = oldTracer }()
 	h := &Handler{}
-	_, _, err := h.startExperimentItem(context.Background(), &CaseSpec{}, nil)
+	_, _, err := h.startExperimentItem(context.Background(), &CaseSpec{}, nil, "")
 	require.ErrorContains(t, err, "recording OpenTelemetry exporter")
 }
 
