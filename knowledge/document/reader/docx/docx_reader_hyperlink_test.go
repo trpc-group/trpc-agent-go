@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -158,6 +158,7 @@ func TestDOCXReader_ExtractionEdgeCases(t *testing.T) {
     <w:p><w:r><w:t>书签：</w:t></w:r><w:hyperlink w:anchor="bookmark1"><w:r><w:t>跳转</w:t></w:r></w:hyperlink></w:p>
     <w:p><w:r><w:t>邮件：</w:t></w:r><w:hyperlink r:id="rId7"><w:r><w:t>发邮件</w:t></w:r></w:hyperlink></w:p>
     <w:p><w:r><w:t>删除前</w:t></w:r><w:del><w:r><w:delText>已删除文本</w:delText></w:r></w:del><w:r><w:t>删除后</w:t></w:r></w:p>
+    <w:p><w:r><w:t>移动前</w:t></w:r><w:moveFrom><w:r><w:t>移走文本</w:t></w:r></w:moveFrom><w:r><w:t>移动后</w:t></w:r></w:p>
     <w:p><mc:AlternateContent><mc:Choice Requires="wps"><w:r><w:t>选择文本</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>降级文本</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>
     <w:p><w:r><w:t>外文命名空间</w:t></w:r><a:t>绘图文本</a:t></w:p>
   </w:body>
@@ -193,6 +194,8 @@ func TestDOCXReader_ExtractionEdgeCases(t *testing.T) {
 	require.NotContains(t, content, "mailto:")
 	require.Contains(t, content, "删除前删除后")
 	require.NotContains(t, content, "已删除文本")
+	require.Contains(t, content, "移动前移动后")
+	require.NotContains(t, content, "移走文本")
 	require.Contains(t, content, "选择文本")
 	require.NotContains(t, content, "降级文本")
 	require.Contains(t, content, "外文命名空间")
@@ -313,4 +316,127 @@ func TestDOCXReader_ReadFromFileCases(t *testing.T) {
 
 	_, err = New(reader.WithChunk(false)).ReadFromFile(filepath.Join(dir, "missing.docx"))
 	require.Error(t, err)
+}
+
+// TestDOCXReader_NestedTextboxHyperlink guards the nested-paragraph case: a
+// text box (with its own w:p) inside an external hyperlink must neither corrupt
+// the enclosing paragraph state nor lose the destination URL.
+func TestDOCXReader_NestedTextboxHyperlink(t *testing.T) {
+	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r><w:t>prefix </w:t></w:r>
+      <w:hyperlink r:id="rId2">
+        <w:r><w:t>anchor</w:t></w:r>
+        <w:r><w:drawing><w:txbxContent><w:p><w:r><w:t>boxed</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r>
+        <w:r><w:t> tail</w:t></w:r>
+      </w:hyperlink>
+    </w:p>
+  </w:body>
+</w:document>`
+
+	relsXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+      Target="https://example.com/nested" TargetMode="External"/>
+</Relationships>`
+
+	data := buildDOCXPackage(t, map[string]string{
+		"word/document.xml":            documentXML,
+		"word/_rels/document.xml.rels": relsXML,
+	})
+
+	// Baseline code panicked here with a slice-bounds error; the fix must both
+	// survive extraction and keep the anchor text and the destination URL.
+	docs, err := New(reader.WithChunk(false)).ReadFromReader("nested", bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+
+	content := docs[0].Content
+	require.Contains(t, content, "prefix")
+	require.Contains(t, content, "anchor")
+	require.Contains(t, content, "boxed")
+	require.Contains(t, content, "tail")
+	require.Contains(t, content, "https://example.com/nested")
+}
+
+// TestDOCXReader_HyperlinkDestinationMatchesExactly guards the duplicate-URL
+// check: an anchor that is a different URL sharing the target's prefix must
+// keep the destination, while an anchor equal to its target must not repeat it.
+func TestDOCXReader_HyperlinkDestinationMatchesExactly(t *testing.T) {
+	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:r><w:t>子串锚文本：</w:t></w:r>
+      <w:hyperlink r:id="rId2"><w:r><w:t>https://example.com/docs/other</w:t></w:r></w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:r><w:t>完全一致：</w:t></w:r>
+      <w:hyperlink r:id="rId3"><w:r><w:t>https://example.com/same</w:t></w:r></w:hyperlink>
+    </w:p>
+  </w:body>
+</w:document>`
+
+	relsXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+      Target="https://example.com/docs" TargetMode="External"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+      Target="https://example.com/same" TargetMode="External"/>
+</Relationships>`
+
+	data := buildDOCXPackage(t, map[string]string{
+		"word/document.xml":            documentXML,
+		"word/_rels/document.xml.rels": relsXML,
+	})
+
+	docs, err := New(reader.WithChunk(false)).ReadFromReader("destinations", bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+
+	content := docs[0].Content
+	// The displayed URL is not the destination; both must be preserved.
+	require.Contains(t, content, "https://example.com/docs/other (https://example.com/docs)",
+		"the relationship target was dropped as a duplicate, got: %s", content)
+	// An anchor that already is the destination must not be repeated.
+	require.Equal(t, 1, strings.Count(content, "https://example.com/same"),
+		"an anchor equal to its target must not be duplicated, got: %s", content)
+}
+
+// TestDOCXReader_ChoiceFallbackOnlyText guards mc:AlternateContent handling:
+// when no mc:Choice can be read (for example a math choice), the fallback text
+// is the only extractable content and must not be dropped.
+func TestDOCXReader_ChoiceFallbackOnlyText(t *testing.T) {
+	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <w:body>
+    <w:p>
+      <mc:AlternateContent>
+        <mc:Choice Requires="m">
+          <m:oMath><m:r><m:t>MATH</m:t></m:r></m:oMath>
+        </mc:Choice>
+        <mc:Fallback>
+          <w:r><w:t>降级唯一文本</w:t></w:r>
+        </mc:Fallback>
+      </mc:AlternateContent>
+    </w:p>
+  </w:body>
+</w:document>`
+
+	data := buildDOCXPackage(t, map[string]string{
+		"word/document.xml": documentXML,
+	})
+
+	docs, err := New(reader.WithChunk(false)).ReadFromReader("fallback", bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Contains(t, docs[0].Content, "降级唯一文本")
+	require.NotContains(t, docs[0].Content, "MATH")
 }
