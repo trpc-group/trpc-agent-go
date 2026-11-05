@@ -453,7 +453,7 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
-#### Queue a New User Message into the Same Run
+#### Queue a New User Message into the Same Run (Default Behavior)
 
 Sometimes you do not want to start a second run. You want to keep the current
 `requestID`, queue a new `role=user` message, and insert it only after the
@@ -547,6 +547,57 @@ If you want the implementation-level mapping, this happens after one
 `runOneStep()` finishes and before the next `runOneStep()` starts.
 
 Runnable example: `examples/steer/`
+
+#### Interrupt Model Generation with New Input
+
+Enable this on an LLMAgent managed directly by Runner:
+
+```go
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInterruptOnUserMessage(true),
+)
+r := runner.NewRunner("app", ag)
+// While r.Run is active, call runner.EnqueueUserMessage(r, requestID, message).
+```
+
+The option defaults to false. With it enabled, queued input cancels the current
+model request, including waiting for its first response. After cleanup, the
+same Run consumes the new user message and requests the model again. Q1 stays
+in history; Q2 is a separate user message. The request ID, root invocation ID,
+session and output channel stay unchanged.
+
+New input never cancels an accepted tool batch. If A is running and B/C have
+not started, all three still execute under the original tool rules. All tool
+results are persisted before Q2 is consumed. Explicit cancellation, deadlines,
+limits and tool failures retain their existing behavior. There is no tool yield
+notification or automatic conversion to background execution.
+
+The non-final `model.interrupted` event has no choices or error. Its response
+ID identifies the old response when available; no deltas for that response
+follow it. Only `runner.completion` ends the Run. Model implementations and
+callbacks must cooperate with context cancellation; no hard latency bound is
+promised.
+
+A nil enqueue error means acceptance into memory, not consumption or durable
+delivery. The queued user-message event confirms successful persistence.
+Messages are consumed FIFO, without content deduplication. On normal completion,
+an enqueue either keeps the Run active or returns `runner.ErrRunNotFound`.
+Explicit termination or fatal errors can leave accepted messages unconsumed.
+`CancelQueuedUserMessages` removes only unclaimed input and cannot undo an
+already issued model cancellation; a replacement generation can still occur.
+
+`runner.WithPersistInterruptedAssistant(true)` (or its per-run override) also
+persists interrupted text for this feature, marked with reason `user_input`.
+The default drops incomplete text from subsequent context. Incomplete tool-call
+arguments are never executed. Necessary persistence/plugin failures stop the
+Run rather than issuing a request with missing history. Input does not reset
+budgets or deadlines.
+
+This capability is process-local. Cross-instance routing, durable inboxes,
+restart recovery and directed steering of child agents are outside its scope.
+See `examples/steer/` for six runnable scenarios and `smoke.sh` for real-provider
+validation using a local environment file such as `glm.sh`.
 
 #### Receive a Result Event for Each Tool Call
 

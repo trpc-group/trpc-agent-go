@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -525,6 +526,17 @@ func emitFunctionResponseEventAndWait(
 		return nil, nil
 	}
 	functionResponseEvent.RequiresCompletion = true
+	if steer.Enabled(invocation) {
+		if err := steer.EmitAndWait(ctx, invocation, eventChan, functionResponseEvent, funcRespWaitTimeout(ctx)); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				if persistErr := persistFunctionResponseAfterDeadline(ctx, invocation, functionResponseEvent); persistErr != nil {
+					log.WarnfContext(ctx, "Persist tool response after deadline failed: %v", persistErr)
+				}
+			}
+			return nil, err
+		}
+		return functionResponseEvent, nil
+	}
 	emitErr := agent.EmitEvent(
 		ctx,
 		invocation,

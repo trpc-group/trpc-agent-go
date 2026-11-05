@@ -200,7 +200,8 @@ func WithExecutionTraceEnabled(enabled bool) Option {
 
 // WithPersistInterruptedAssistant sets the runner default for whether a
 // cancelled streaming run persists already-emitted assistant text as a final
-// assistant message.
+// assistant message. It also applies when LLMAgent interrupts generation for
+// queued user input; the persisted message is marked with reason "user_input".
 //
 // The default is false to preserve cancellation semantics for callers that
 // expect cancelled partial text not to affect later turns. A single run can
@@ -269,6 +270,10 @@ type ManagedRunner interface {
 // EnqueueUserMessage never mutates the session immediately. The message is
 // queued and then appended by llmflow only after the current tool_call /
 // tool_response boundary is complete and before the next model request.
+// LLMAgent.WithInterruptOnUserMessage additionally interrupts model generation;
+// accepted tool batches still finish. Successful enqueue means in-memory
+// acceptance, not persistence or consumption. Consumption is confirmed by the
+// queued user-message event. Finished runs return ErrRunNotFound.
 type SteerableRunner interface {
 	ManagedRunner
 
@@ -1613,6 +1618,8 @@ func (r *runner) processSingleAgentEvent(
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
+	receipt := r.beginSteeredEvent(ctx, loop, agentEvent)
+	defer receipt.acknowledge()
 	hasToolResultRoundMarker := toolresultround.HasMarker(agentEvent)
 	toolResultRoundIncomplete := toolresultround.IsIncomplete(agentEvent)
 	if toolResultRoundIncomplete {
@@ -1633,7 +1640,7 @@ func (r *runner) processSingleAgentEvent(
 		agentEvent,
 		traceDetails,
 	)
-	if agentEvent == nil {
+	if !receipt.accept(agentEvent) {
 		return nil
 	}
 	restoreToolResultRoundMarker(agentEvent, hasToolResultRoundMarker, toolResultRoundIncomplete)
@@ -1676,6 +1683,7 @@ func (r *runner) processSingleAgentEvent(
 		agentEvent,
 		&loop.persistedEvents,
 	)
+	shouldForwardEvent = receipt.forwardable(shouldForwardEvent, persisted)
 	if !excludeRootCompletion {
 		r.recordPersistedAssistantEvent(
 			loop,
@@ -1955,6 +1963,7 @@ func (r *runner) applyEventPluginsNoSpan(
 	updated, err := invocation.Plugins.OnEvent(ctx, invocation, e)
 	if err != nil {
 		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
+		steer.Fail(invocation, fmt.Errorf("event plugin: %w", err))
 		return e
 	}
 	if updated == nil {
@@ -2318,6 +2327,7 @@ func (r *runner) recordInterruptedAssistantDelta(
 	if responseID == "" {
 		responseID = "interrupted-assistant-" + uuid.NewString()
 	}
+	resetSteeredAccumulator(loop, acc, responseID)
 	recorded := false
 	for _, choice := range rsp.Choices {
 		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
@@ -2797,6 +2807,7 @@ func (r *runner) handleEventPersistence(
 	); err != nil {
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		log.Errorf("Failed to append event to session: %v", err)
+		steer.Fail(invocation, fmt.Errorf("persist event %s: %w", persistEvent.ID, err))
 		return false
 	}
 	finishRunnerLatencySpan(appendSpan, appendStarted, nil)

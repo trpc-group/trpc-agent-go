@@ -106,6 +106,7 @@ func InvocationFilteredTraceableUserToolNames(invocation *agent.Invocation) ([]s
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
+	InterruptOnUserMessage          bool
 	ChannelBufferSize               int // Buffer size for event channels (default: 256).
 	ModelCallbacks                  *model.Callbacks
 	BaseModelResolver               BaseModelResolver
@@ -136,6 +137,7 @@ type BaseModelResolver func(inv *agent.Invocation) ModelBaseResolution
 
 // Flow provides the basic flow implementation.
 type Flow struct {
+	interruptOnUserMessage          bool
 	requestProcessors               []flow.RequestProcessor
 	responseProcessors              []flow.ResponseProcessor
 	channelBufferSize               int
@@ -182,6 +184,7 @@ func New(
 	opts Options,
 ) *Flow {
 	return &Flow{
+		interruptOnUserMessage:  opts.InterruptOnUserMessage,
 		requestProcessors:       requestProcessors,
 		responseProcessors:      responseProcessors,
 		channelBufferSize:       opts.ChannelBufferSize,
@@ -200,8 +203,13 @@ func New(
 // Run executes the flow in a loop until completion.
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
+	if f.interruptOnUserMessage {
+		steer.EnableInterrupt(invocation)
+	}
 
-	runCtx := agent.CloneContext(ctx)
+	// A child flow may inherit the parent's tool context, but must never
+	// inherit its model-cycle control or cancellation registration.
+	runCtx := agent.CloneContext(context.WithValue(ctx, modelCycleKey{}, false))
 	go func(ctx context.Context) {
 		ctx, runSpan, runStarted := startLatencySpan(
 			ctx,
@@ -235,6 +243,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// emit start event and wait for completion notice.
 			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
 				runErr = err
+				f.emitSteeringError(ctx, invocation, eventChan, err)
 				return
 			}
 
@@ -250,11 +259,15 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				eventChan,
 			); err != nil {
 				runErr = err
+				f.emitSteeringError(ctx, invocation, eventChan, err)
 				return
 			}
 
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
+			if shouldContinueSteeredRun(ctx, invocation, err) {
+				continue
+			}
 			if err != nil {
 				runErr = err
 				steer.Close(invocation)
@@ -307,6 +320,9 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// If no events were produced in this step, treat as terminal to avoid busy loop.
 			// Also break when EndInvocation is set or a final response is observed.
 			if lastEvent == nil || invocation.EndInvocation || lastEvent.IsFinalResponse() {
+				if !shouldFinishSteeredRun(ctx, invocation, lastEvent) {
+					continue
+				}
 				steer.Close(invocation)
 				break
 			}
@@ -431,6 +447,12 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 			),
 		)
 		evt.RequiresCompletion = true
+		if steer.Enabled(invocation) {
+			if err := steer.EmitAndWait(ctx, invocation, eventChan, evt, flowEventWaitTimeout(ctx)); err != nil {
+				return err
+			}
+			continue
+		}
 
 		if err := agent.EmitEvent(
 			ctx,
@@ -593,6 +615,9 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	}
 	startEvent := event.New(invocationID, agentName)
 	startEvent.RequiresCompletion = true
+	if steer.Enabled(invocation) {
+		return steer.EmitAndWait(ctx, invocation, eventChan, startEvent, flowEventWaitTimeout(ctx))
+	}
 	agent.EmitEvent(ctx, invocation, eventChan, startEvent)
 
 	// Wait for completion notice.
@@ -748,8 +773,12 @@ func (f *Flow) runOneStep(
 	if startedSpan {
 		defer span.End()
 	}
+	// Only the provider and model callbacks receive the cancellable model
+	// context. Event delivery and accepted tools retain the run lifetime.
+	runCtx := ctx
 	// 2. Call LLM (get response sequence).
-	ctx, responseSeq, modelCalled, err := f.callLLM(ctx, invocation, llmRequest, callModel)
+	ctx, responseSeq, modelCalled, cycle, err := f.callSteeredLLM(ctx, invocation, llmRequest, callModel)
+	defer finishModelCycle(runCtx, invocation, eventChan, cycle, &err)
 	if err != nil {
 		return nil, err
 	}
@@ -767,6 +796,7 @@ func (f *Flow) runOneStep(
 		}
 	}
 	// 3. Process streaming responses.
+	ctx = responseContext(runCtx, ctx, cycle)
 	lastEvent, err = f.processStreamingResponses(
 		ctx,
 		invocation,
@@ -858,6 +888,7 @@ func (f *Flow) processStreamingResponses(
 }
 
 type streamingResponseProcessor struct {
+	cycle                   *modelCycle
 	flow                    *Flow
 	ctx                     context.Context
 	invocation              *agent.Invocation
@@ -900,7 +931,9 @@ func newStreamingResponseProcessor(
 	if metricsInvocation == nil {
 		metricsInvocation = currentInvocation
 	}
+	cycle, _ := ctx.Value(modelCycleKey{}).(*modelCycle)
 	processor := &streamingResponseProcessor{
+		cycle:                   cycle,
 		flow:                    flow,
 		ctx:                     ctx,
 		invocation:              invocation,
@@ -929,6 +962,10 @@ func newStreamingResponseProcessor(
 func (p *streamingResponseProcessor) process(
 	response *model.Response,
 ) bool {
+	cycle := p.cycle
+	if p.stopForInterruptedResponse(response) {
+		return false
+	}
 	p.recordResponseStats(response)
 	traceDetails := latencyTraceResponseDetails(response)
 	responseCtx := p.ctx
@@ -960,8 +997,12 @@ func (p *streamingResponseProcessor) process(
 		&p.partialUsageState,
 	)
 	eventInvocation := p.eventInvocation()
+	callbackCtx := p.ctx
+	if cycle != nil {
+		callbackCtx = contextWithRunLifetime(cycle.modelCtx, p.ctx)
+	}
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
-		p.ctx,
+		callbackCtx,
 		eventInvocation,
 		p.currentInvocation,
 		p.llmRequest,
@@ -973,6 +1014,12 @@ func (p *streamingResponseProcessor) process(
 		*p.err = cbErr
 		responseErr = cbErr
 		return false
+	}
+	if cycle != nil {
+		// Keep a fixed lifetime parent. Using p.ctx here duplicates the entire
+		// previous callback-value chain on every chunk, making missing-value
+		// lookups exponential in the number of streaming responses.
+		updatedCtx = contextWithRunLifetime(cycle.runCtx, updatedCtx)
 	}
 	p.ctx = updatedCtx
 	p.currentInvocation = invocationFromContextOrDefault(
@@ -1002,12 +1049,18 @@ func (p *streamingResponseProcessor) process(
 		}
 		return true
 	}
+	if p.stopForInterruptedResponse(response) || !p.acceptModelResponse(response) {
+		return false
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
 		traceDetails,
 	)
 	p.lastEvent = llmResponseEvent
+	if *p.err != nil {
+		return false
+	}
 	if p.tracker != nil {
 		p.tracker.SetLastEvent(p.lastEvent)
 	}
@@ -1027,6 +1080,10 @@ func (p *streamingResponseProcessor) process(
 	if err := agent.CheckContextCancelled(p.ctx); err != nil {
 		*p.err = err
 		responseErr = err
+		return false
+	}
+	if failure := steer.Err(p.invocation); failure != nil {
+		*p.err = failure
 		return false
 	}
 	p.traceChat(eventInvocation, response, llmResponseEvent)
@@ -1209,8 +1266,16 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 			latencyResponseAttrs(response)...,
 		)
 	}
-	agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
-	finishLatencySpan(emitSpan, emitStarted, nil)
+	var emitErr error
+	if steer.Enabled(p.invocation) && response != nil && !response.IsPartial {
+		emitErr = steer.EmitAndWait(emitCtx, p.invocation, p.eventChan, llmResponseEvent, flowEventWaitTimeout(emitCtx))
+	} else {
+		emitErr = agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
+	}
+	if emitErr != nil && steer.Enabled(p.invocation) {
+		*p.err = emitErr
+	}
+	finishLatencySpan(emitSpan, emitStarted, emitErr)
 	return llmResponseEvent
 }
 
@@ -2547,7 +2612,17 @@ func (f *Flow) callLLM(
 		)
 	}
 	// Run before model callbacks if they exist.
+	modelLifetime := ctx
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
+	if cycle, ok := modelLifetime.Value(modelCycleKey{}).(*modelCycle); ok {
+		callbackCtx, cancel := context.WithCancelCause(ctx)
+		stop := context.AfterFunc(modelLifetime, func() { cancel(context.Cause(modelLifetime)) })
+		cycle.cleanup = append(cycle.cleanup, func() { stop(); cancel(context.Canceled) })
+		if modelLifetime.Err() != nil {
+			cancel(context.Cause(modelLifetime))
+		}
+		ctx = callbackCtx
+	}
 	if err != nil {
 		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
@@ -3107,9 +3182,22 @@ func (f *Flow) generateContentSeq(
 	}
 
 	return normalizeResponseIDs(func(yield func(*model.Response) bool) {
-		for resp := range responseChan {
-			if !yield(resp) {
+		if !steer.Enabled(invocation) {
+			for resp := range responseChan {
+				if !yield(resp) {
+					return
+				}
+			}
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case resp, ok := <-responseChan:
+				if !ok || !yield(resp) {
+					return
+				}
 			}
 		}
 	}), nil

@@ -276,6 +276,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
+		InterruptOnUserMessage:          options.interruptOnUserMessage,
 		ChannelBufferSize:               options.ChannelBufferSize,
 		ModelCallbacks:                  options.ModelCallbacks,
 		BaseModelResolver:               a.resolveFlowBaseModel,

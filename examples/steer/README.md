@@ -112,3 +112,41 @@ is running”.
 In production, the enqueue usually happens from another goroutine, request
 handler, websocket callback, or stream consumer that already knows the active
 `requestID`.
+
+## Interruptible Generation Examples
+
+The root example above keeps the default safe-boundary behavior. The following
+examples enable `llmagent.WithInterruptOnUserMessage(true)`:
+
+| Directory | Scenario |
+| --- | --- |
+| [stream](stream/README.md) | Interrupt streaming; optionally preserve partial text |
+| [before_response](before_response/README.md) | Interrupt before first response, streaming or non-streaming |
+| [tool_batch](tool_batch/README.md) | Preserve a single tool or a complete sequential/parallel batch |
+| [multi_input](multi_input/README.md) | FIFO input and withdrawal before consumption |
+| [cancel](cancel/README.md) | Resume after steering, then explicitly cancel |
+| [chat](chat/README.md) | Type new input while the current Run is active |
+
+New input only cancels model generation. Accepted tools retain their original
+execution, error and cancellation rules. There is no tool yield API.
+
+### Real GLM Smoke Tests
+
+From the repository root:
+
+```bash
+bash examples/steer/smoke.sh --env-file "$PWD/glm.sh" --repeat 3 --timeout 120s
+```
+
+The script loads `OPENAI_API_KEY`, `OPENAI_BASE_URL` and `MODEL_NAME` in its own
+shell, builds each automatic example once, and runs 11 configurations per
+iteration. It includes the disabled/default case, partial-text preservation,
+streaming/non-streaming requests, single/sequential/parallel tools, FIFO,
+withdrawal and explicit cancellation. Each configuration uses a fresh Run.
+
+Results and redacted logs are retained in a temporary directory printed at the
+end; `--output-dir` selects another directory. `summary.json` records all cases.
+A missing target phase, missing tool batch, provider error or failed invariant
+is a failure, never a silent skip or mock replacement. Default unit tests do
+not contact providers. Run `go test ./steer/...` from the examples module for
+local checks.

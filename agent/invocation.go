@@ -502,7 +502,8 @@ func WithResume(enabled bool) RunOption {
 }
 
 // WithPersistInterruptedAssistant controls whether a cancelled streaming run
-// persists already-emitted assistant text as a final assistant message.
+// persists already-emitted assistant text as a final assistant message. It also
+// applies to generation interrupted by queued user input when enabled on LLMAgent.
 //
 // By default this is not set, so the Runner uses its own default. The built-in
 // Runner default is false to preserve the "cancel discards partial text"

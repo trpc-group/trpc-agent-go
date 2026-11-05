@@ -1557,3 +1557,11 @@ for evt := range events {
 - `Error`：步骤失败时记录的终态错误
 
 完整示例见 [examples/graph/execution_trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace)。
+
+### 新用户输入打断生成
+
+`llmagent.WithInterruptOnUserMessage(true)` 允许 Runner 管理的 LLMAgent 在收到
+`runner.EnqueueUserMessage` 追加输入时取消当前模型生成，并在同一个 Run 中继续。
+默认关闭；已经接受的工具批次仍会完整执行，之后才消费输入。显式取消和预算限制保持
+原有行为。生命周期、持久化和事件约定详见 [Runner](runner.md#用新输入打断模型生成)
+以及 `examples/steer/`。
