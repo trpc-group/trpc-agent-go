@@ -121,6 +121,26 @@ func TestVisibility_NormalizesSnapshotNames(t *testing.T) {
 	require.Equal(t, 1, rec.requests())
 }
 
+func TestVisibility_SpacedNamePreservesDescriptionAndTokenReport(t *testing.T) {
+	server, rec := decisionServer(t, binaryResponder(map[string]float64{"skill:kept": 0.9}, 0.05), http.StatusOK)
+	summaries := []skill.Summary{
+		{Name: "kept", Description: "keep this skill"},
+		{Name: " dropped ", Description: "a long description for the dropped skill"},
+	}
+	var report *Report
+	f, err := NewSkillFilter(server.URL, &fakeSkillRepo{summaries: summaries},
+		WithHTTPClient(server.Client()), WithObserver(func(r *Report) { report = r }))
+	require.NoError(t, err)
+	ctx := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test"))))
+	require.False(t, f.VisibilityFilter()(ctx, summaries[1]))
+	state := rec.lastState().(map[string]any)
+	catalog := state["skill_catalog"].([]any)
+	require.Contains(t, catalog, map[string]any{"name": "dropped", "description": "a long description for the dropped skill"})
+	require.Equal(t, 4, report.CatalogTokensAfter)
+	require.Equal(t, 12, report.SavedTokens)
+}
+
 func TestVisibility_SkillsAddedAfterDecision(t *testing.T) {
 	root := t.TempDir()
 	writeSkill := func(name string) {

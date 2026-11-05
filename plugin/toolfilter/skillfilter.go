@@ -362,7 +362,7 @@ func (f *SkillFilter) emit(report *Report) {
 // missing summaries.
 func skillDescription(summaries []skill.Summary, name string) string {
 	for _, s := range summaries {
-		if s.Name == name {
+		if strings.TrimSpace(s.Name) == name {
 			return s.Description
 		}
 	}
@@ -380,9 +380,15 @@ func skillTokens(summaries []skill.Summary) int {
 
 // skillTokensFor estimates the token cost of the named skills.
 func skillTokensFor(summaries []skill.Summary, names []string) int {
-	total := 0
+	dropped := make(map[string]struct{}, len(names))
 	for _, name := range names {
-		total += estimateToolTokens(name, skillDescription(summaries, name))
+		dropped[name] = struct{}{}
+	}
+	total := 0
+	for _, summary := range summaries {
+		if _, ok := dropped[strings.TrimSpace(summary.Name)]; ok {
+			total += estimateToolTokens(summary.Name, summary.Description)
+		}
 	}
 	return total
 }
