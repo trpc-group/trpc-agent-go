@@ -336,6 +336,9 @@ func WithSkillsDescription(description string) Option {
 // The model cannot pick an arbitrary agent, model, or executor; it can only run
 // within the configured boundary and any explicitly registered model profiles.
 //
+// Resumable subagents are not supported: NewDynamicTool panics when
+// WithResumableSubAgents or WithSubAgentNamespace is set.
+//
 // Minimal usage exposes a tool named "dynamic_agent":
 //
 //	main := llmagent.New("main",
@@ -350,6 +353,14 @@ func NewDynamicTool(opts ...Option) *Tool {
 		if opt != nil {
 			opt(options)
 		}
+	}
+	if options.resumableSubAgents {
+		panic("Invalid Dynamic AgentTool configuration: " +
+			"WithResumableSubAgents is not supported by NewDynamicTool")
+	}
+	if options.subAgentNamespace != nil {
+		panic("Invalid Dynamic AgentTool configuration: " +
+			"WithSubAgentNamespace is not supported by NewDynamicTool")
 	}
 
 	name := DefaultDynamicToolName
