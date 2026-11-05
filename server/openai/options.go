@@ -10,6 +10,8 @@
 package openai
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -20,13 +22,14 @@ type Option func(*options)
 
 // options holds the configuration for the OpenAI server.
 type options struct {
-	basePath       string // basePath is the base path for the service.
-	path           string // path is the chat completions endpoint path.
-	sessionService session.Service
-	agent          agent.Agent
-	runner         runner.Runner
-	modelName      string
-	appName        string
+	basePath          string // basePath is the base path for the service.
+	path              string // path is the chat completions endpoint path.
+	sessionService    session.Service
+	agent             agent.Agent
+	runner            runner.Runner
+	modelName         string
+	appName           string
+	heartbeatInterval time.Duration
 }
 
 // WithBasePath sets the base path for the server.
@@ -82,5 +85,14 @@ func WithModelName(name string) Option {
 func WithAppName(name string) Option {
 	return func(opts *options) {
 		opts.appName = name
+	}
+}
+
+// WithHeartbeatInterval sets how often the streaming endpoint sends SSE
+// comment frames while no application event is available. A non-positive
+// interval disables heartbeat frames. The default is 15 seconds.
+func WithHeartbeatInterval(interval time.Duration) Option {
+	return func(opts *options) {
+		opts.heartbeatInterval = interval
 	}
 }
