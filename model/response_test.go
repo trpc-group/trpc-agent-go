@@ -1348,3 +1348,218 @@ func TestResponse_IsUserMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestResponse_IsTruncatedToolCallResponse(t *testing.T) {
+	length := FinishReasonLength
+	stop := "stop"
+	toolCall := ToolCall{ID: "call-1", Type: "function"}
+	anthropicMaxTokens := "max_tokens"
+	geminiMaxTokens := "MAX_TOKENS"
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: false,
+		},
+		{
+			name:     "empty choices",
+			rsp:      &Response{},
+			expected: false,
+		},
+		{
+			name: "partial response",
+			rsp: &Response{
+				IsPartial: true,
+				Choices: []Choice{{
+					FinishReason: &length,
+					Message:      Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "length with message tool call",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					FinishReason: &length,
+					Message:      Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: true,
+		},
+		{
+			name: "length with delta tool call",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					FinishReason: &length,
+					Delta:        Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: true,
+		},
+		{
+			name: "length without tool calls",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					FinishReason: &length,
+					Message:      Message{Content: "truncated text"},
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "stop with tool call",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					FinishReason: &stop,
+					Message:      Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "no finish reason with tool call",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					Message: Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: false,
+		},
+		{
+			name: "truncated second choice is not the executed choice",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{
+					{
+						FinishReason: &stop,
+						Message:      Message{Content: "plain"},
+					},
+					{
+						FinishReason: &length,
+						Message:      Message{ToolCalls: []ToolCall{toolCall}},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "first choice truncated with a normal second choice",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{
+					{
+						FinishReason: &length,
+						Message:      Message{ToolCalls: []ToolCall{toolCall}},
+					},
+					{
+						FinishReason: &stop,
+						Message:      Message{Content: "plain"},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "anthropic output limit with tool call",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					FinishReason: &anthropicMaxTokens,
+					Message:      Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: true,
+		},
+		{
+			name: "gemini output limit with tool call",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{{
+					FinishReason: &geminiMaxTokens,
+					Message:      Message{ToolCalls: []ToolCall{toolCall}},
+				}},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.rsp.IsTruncatedToolCallResponse())
+		})
+	}
+}
+
+func TestResponse_HasOutputLimitFinishReason(t *testing.T) {
+	length := FinishReasonLength
+	anthropicMaxTokens := "max_tokens"
+	geminiMaxTokens := "MAX_TOKENS"
+	stop := "stop"
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{name: "nil response", rsp: nil, expected: false},
+		{
+			name: "partial response",
+			rsp: &Response{
+				IsPartial: true,
+				Choices:   []Choice{{FinishReason: &length}},
+			},
+			expected: false,
+		},
+		{
+			name: "openai length without tool calls",
+			rsp: &Response{
+				Done:    true,
+				Choices: []Choice{{FinishReason: &length}},
+			},
+			expected: true,
+		},
+		{
+			name: "anthropic max tokens without tool calls",
+			rsp: &Response{
+				Done:    true,
+				Choices: []Choice{{FinishReason: &anthropicMaxTokens}},
+			},
+			expected: true,
+		},
+		{
+			name: "gemini max tokens without tool calls",
+			rsp: &Response{
+				Done:    true,
+				Choices: []Choice{{FinishReason: &geminiMaxTokens}},
+			},
+			expected: true,
+		},
+		{
+			name: "stop response",
+			rsp: &Response{
+				Done:    true,
+				Choices: []Choice{{FinishReason: &stop}},
+			},
+			expected: false,
+		},
+		{
+			name:     "no finish reason",
+			rsp:      &Response{Done: true, Choices: []Choice{{}}},
+			expected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.rsp.HasOutputLimitFinishReason())
+		})
+	}
+}

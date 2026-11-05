@@ -483,6 +483,9 @@ agent := llmagent.New(
 | `llmagent.WithMaxToolIterations(n)` | 限制每次调用的工具迭代次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
 | `llmagent.WithLLMCallLimitFinalization(instruction)` | 将 `WithMaxLLMCalls` 允许的最后一次调用用于不带工具的最终回复。 |
 | `llmagent.WithToolIterationLimitFinalization(instruction)` | 在 `WithMaxToolIterations` 允许的最后一轮完全由框架执行的工具调用之后请求一次不带工具的最终回复，前提是当前 invocation 和 LLM 调用预算仍允许下一次调用。 |
+| `llmagent.WithTruncatedToolCallPolicy(policy)` | 控制模型因输出上限而截断的已完成工具调用响应。默认会在参数修复和工具执行之前拒绝并返回截断错误；`agent.TruncatedToolCallPolicyIgnore` 恢复修复并执行这些调用的旧行为。 |
+
+**行为变更：** 已完成响应如果同时带有输出上限停止原因（`length`、Anthropic 的 `max_tokens` 或 Gemini 的 `MAX_TOKENS`）和工具调用，过去会被修复并执行；现在会在工具执行前拒绝，并以 `flow_error` 结束。依赖旧行为的应用可以传入 `agent.TruncatedToolCallPolicyIgnore` 保持原状。
 
 **使用示例：**
 

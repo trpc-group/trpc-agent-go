@@ -536,6 +536,9 @@ To prevent Agents from entering infinite loops or consuming excessive resources,
 | `llmagent.WithMaxToolIterations(n)` | Limits the maximum number of tool-call iterations per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
 | `llmagent.WithLLMCallLimitFinalization(instruction)` | Uses the last call allowed by `WithMaxLLMCalls` for a tool-free final response. |
 | `llmagent.WithToolIterationLimitFinalization(instruction)` | Requests a tool-free final response after the last fully framework-executed iteration allowed by `WithMaxToolIterations`, if the current invocation and LLM-call budget permit another call. |
+| `llmagent.WithTruncatedToolCallPolicy(policy)` | Controls a completed tool-call response that the model cut off at its output limit. By default such calls are rejected before argument repair and tool execution and a terminal truncation error is reported; `agent.TruncatedToolCallPolicyIgnore` restores the previous behavior of repairing and executing them. |
+
+**Behavior change:** a completed response that reports an output-limit finish reason (`length`, Anthropic `max_tokens` or Gemini `MAX_TOKENS`) together with tool calls used to be repaired and executed. It is now rejected before tool execution and the run ends with a `flow_error`; pass `agent.TruncatedToolCallPolicyIgnore` to keep the old behavior for applications that rely on it.
 
 **Usage Example:**
 
