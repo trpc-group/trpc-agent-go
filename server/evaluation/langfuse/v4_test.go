@@ -12,6 +12,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -34,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -51,6 +56,7 @@ func TestExperimentIDMatchesLangfuseDerivation(t *testing.T) {
 		{"cm0abc", "cm0def", "", "6f7f881763098a69"},
 		{"p", "d", `\u2028`, "3b9a4b4ed47da837"},
 		{"p", "d", `\u2029`, "7f7d8c1fb439f380"},
+		{"p", "d", "a\u2028b\u2029c", "283ce69a551cdfea"},
 	} {
 		got, err := experimentID(tc.project, tc.dataset, tc.run)
 		require.NoError(t, err)
@@ -349,8 +355,132 @@ func TestV4FailsWithoutRecordingTelemetry(t *testing.T) {
 	atrace.Tracer = noop.NewTracerProvider().Tracer("test")
 	defer func() { atrace.Tracer = oldTracer }()
 	h := &Handler{}
-	_, _, err := h.startExperimentItem(context.Background(), &CaseSpec{}, nil, "")
-	require.ErrorContains(t, err, "recording OpenTelemetry exporter")
+	_, _, _, err := h.startExperimentItem(context.Background(), &CaseSpec{}, nil, "")
+	require.ErrorContains(t, err, "experiment item span to be recorded")
+}
+
+func TestV4NamesTheSamplerWhenTheItemSpanIsSampledOut(t *testing.T) {
+	oldTracer := atrace.Tracer
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	atrace.Tracer = provider.Tracer("test")
+	defer func() { atrace.Tracer = oldTracer }()
+	h := &Handler{}
+	_, _, _, err := h.startExperimentItem(context.Background(), &CaseSpec{}, nil, "")
+	require.ErrorContains(t, err, "sampler")
+	require.ErrorContains(t, err, "AlwaysSample")
+}
+
+func TestV4ReturnsItemAttributesForDescendantSpans(t *testing.T) {
+	oldTracer := atrace.Tracer
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	atrace.Tracer = provider.Tracer("test")
+	defer func() { atrace.Tracer = oldTracer }()
+	h := &Handler{environment: "ci"}
+	spec := &CaseSpec{TraceMetadata: map[string]any{"datasetItemMetadata": map[string]any{"k": "v"}}}
+
+	_, span, itemAttrs, err := h.startExperimentItem(context.Background(), spec, nil, "")
+	require.NoError(t, err)
+	span.End()
+
+	got := map[string]string{}
+	for _, attr := range itemAttrs {
+		got[string(attr.Key)] = attr.Value.Emit()
+	}
+	assert.Equal(t, span.SpanContext().SpanID().String(), got[attrExperimentRootID])
+	assert.JSONEq(t, `{"k":"v"}`, got[attrExperimentItemMetadata])
+	assert.NotContains(t, got, "langfuse.observation.input", "item input stays on the root span")
+	require.Len(t, recorder.Ended(), 1)
+	rootAttrs := map[string]string{}
+	for _, attr := range recorder.Ended()[0].Attributes() {
+		rootAttrs[string(attr.Key)] = attr.Value.Emit()
+	}
+	assert.Equal(t, got[attrExperimentRootID], rootAttrs[attrExperimentRootID])
+}
+
+func TestV4RejectsUnserializableMetadata(t *testing.T) {
+	h := &Handler{appName: "demo-app"}
+	_, err := h.v4CaseAttributes(&CaseSpec{TraceMetadata: map[string]any{"bad": make(chan int)}}, executionOptions{}, "")
+	require.ErrorContains(t, err, "trace metadata bad")
+
+	_, _, err = h.beginV4Case(context.Background(), &CaseSpec{TraceInput: make(chan int)},
+		&service.BeforeInferenceCaseArgs{EvalCaseID: "case-1"}, &caseTrace{}, executionOptions{})
+	require.ErrorContains(t, err, "build trace attributes for case case-1")
+
+	oldTracer := atrace.Tracer
+	provider := sdktrace.NewTracerProvider()
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	atrace.Tracer = provider.Tracer("test")
+	defer func() { atrace.Tracer = oldTracer }()
+	_, _, _, err = h.startExperimentItem(context.Background(),
+		&CaseSpec{TraceMetadata: map[string]any{"datasetItemMetadata": make(chan int)}}, nil, "")
+	require.ErrorContains(t, err, "experiment item metadata")
+}
+
+func TestFinishExperimentItemRecordsOutputAndFailures(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	tracer := provider.Tracer("test")
+	start := func(name string) context.Context {
+		_, span := tracer.Start(context.Background(), name)
+		return context.WithValue(context.Background(), experimentSpanKey{}, span)
+	}
+
+	_, err := finishExperimentItem(context.Background(), &service.AfterInferenceCaseArgs{})
+	require.NoError(t, err, "no item span in the context is a no-op")
+
+	_, err = finishExperimentItem(start("ok"), &service.AfterInferenceCaseArgs{Result: &service.InferenceResult{
+		Inferences: []*evalset.Invocation{{FinalResponse: &model.Message{Content: "done"}}},
+	}})
+	require.NoError(t, err)
+	_, err = finishExperimentItem(start("case-error"), &service.AfterInferenceCaseArgs{Result: &service.InferenceResult{ErrorMessage: "model failed"}})
+	require.NoError(t, err)
+	_, err = finishExperimentItem(start("callback-error"), &service.AfterInferenceCaseArgs{Error: errors.New("runner crashed")})
+	require.NoError(t, err)
+
+	byName := map[string]sdktrace.ReadOnlySpan{}
+	for _, span := range recorder.Ended() {
+		byName[span.Name()] = span
+	}
+	require.Len(t, byName, 3, "each item span is ended by the callback")
+	assert.Contains(t, byName["ok"].Attributes(), attribute.String("langfuse.observation.output", "done"))
+	assert.Equal(t, codes.Unset, byName["ok"].Status().Code)
+	assert.Equal(t, sdktrace.Status{Code: codes.Error, Description: "model failed"}, byName["case-error"].Status())
+	assert.Equal(t, sdktrace.Status{Code: codes.Error, Description: "runner crashed"}, byName["callback-error"].Status())
+}
+
+func TestCaseUserIDPrefersTheInferenceSessionUser(t *testing.T) {
+	spec := &CaseSpec{UserID: "case-user", EvalCase: &evalset.EvalCase{SessionInput: &evalset.SessionInput{UserID: "session-user"}}}
+	assert.Equal(t, "session-user", caseUserID(spec))
+	spec.EvalCase.SessionInput.UserID = " "
+	assert.Equal(t, "case-user", caseUserID(spec))
+	assert.Equal(t, "case-user", caseUserID(&CaseSpec{UserID: "case-user"}))
+	assert.Equal(t, "case-user", caseUserID(&CaseSpec{UserID: "case-user", EvalCase: &evalset.EvalCase{}}))
+}
+
+func TestEndSpansMarksUnfinishedExperimentItemsAsErrors(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer func() { _ = provider.Shutdown(context.Background()) }()
+	tracer := provider.Tracer("test")
+	_, finished := tracer.Start(context.Background(), "finished")
+	finished.End()
+	_, unfinished := tracer.Start(context.Background(), "unfinished")
+	trace := &caseTrace{}
+	trace.addSpan(finished)
+	trace.addSpan(unfinished)
+
+	trace.endSpans()
+
+	status := map[string]codes.Code{}
+	for _, span := range recorder.Ended() {
+		status[span.Name()] = span.Status().Code
+	}
+	assert.Equal(t, codes.Unset, status["finished"], "a span finished by the callback keeps its status")
+	assert.Equal(t, codes.Error, status["unfinished"], "a span the callback never finished is an error")
 }
 
 func TestV4DoesNotPublishScoresWithoutAnExperimentItemSpan(t *testing.T) {
@@ -416,7 +546,7 @@ func TestV4NativeRunnerKeepsPublishedTraceAndItemAssociation(t *testing.T) {
 	defer recording.mu.Unlock()
 	roots := map[string]string{}
 	traceIDs := map[string]bool{}
-	var children int
+	var children, tagged int
 	for _, span := range recording.spans {
 		id := hex.EncodeToString(span.TraceId)
 		traceIDs[id] = true
@@ -440,6 +570,7 @@ func TestV4NativeRunnerKeepsPublishedTraceAndItemAssociation(t *testing.T) {
 		assert.True(t, strings.HasPrefix(attrs["langfuse.trace.name"], "trace-"), span.Name)
 		for _, attr := range span.Attributes {
 			if attr.Key == attrTraceTags {
+				tagged++
 				values := attr.Value.GetArrayValue().GetValues()
 				require.Len(t, values, 2, span.Name)
 				assert.Equal(t, "tag-a", values[0].GetStringValue())
@@ -451,6 +582,7 @@ func TestV4NativeRunnerKeepsPublishedTraceAndItemAssociation(t *testing.T) {
 		}
 	}
 	assert.GreaterOrEqual(t, children, 8, "native agent and model spans are exported for each run")
+	assert.Positive(t, tagged, "at least one exported span carries the trace tags, so tag loss fails the test")
 	for _, result := range response.Cases {
 		assert.True(t, traceIDs[result.TraceID], "published trace is among exported spans")
 	}

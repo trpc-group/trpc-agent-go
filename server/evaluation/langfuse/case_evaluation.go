@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -37,10 +38,17 @@ func (t *caseTrace) addSpan(span oteltrace.Span) {
 	t.spans = append(t.spans, span)
 }
 
+// endSpans ends any experiment item span the after-inference callback did not
+// finish. That happens when an earlier application callback fails and the
+// remaining callbacks are skipped; the case failed, so the span is marked as an
+// error rather than left with an unset status.
 func (t *caseTrace) endSpans() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, span := range t.spans {
+		if span.IsRecording() {
+			span.SetStatus(codes.Error, "inference case did not finish")
+		}
 		span.End()
 	}
 }
@@ -89,12 +97,9 @@ func (t *caseTrace) spanForSession(sessionID string) oteltrace.SpanContext {
 	return t.parent
 }
 
-// evaluateCases submits one batch so the evaluator owns both stage schedulers.
-// Per-call additive callbacks preserve callbacks configured by the application
-// and keep case metadata out of the shared inference request.
 // beginV4Case starts the Langfuse v4 experiment item span for one inference
 // case and returns the context that agent spans must inherit, together with the
-// experiment attributes to set on them.
+// experiment attributes to set on them, including the item root observation ID.
 func (h *Handler) beginV4Case(ctx context.Context, spec *CaseSpec, args *service.BeforeInferenceCaseArgs,
 	trace *caseTrace, execution executionOptions) (context.Context, []attribute.KeyValue, error) {
 	sessionID := spec.SessionID
@@ -105,15 +110,18 @@ func (h *Handler) beginV4Case(ctx context.Context, spec *CaseSpec, args *service
 	if err != nil {
 		return nil, nil, fmt.Errorf("build trace attributes for case %s: %w", args.EvalCaseID, err)
 	}
-	ctx, span, err := h.startExperimentItem(ctx, spec, attrs, execution.runDescription)
+	ctx, span, itemAttrs, err := h.startExperimentItem(ctx, spec, attrs, execution.runDescription)
 	if err != nil {
 		return nil, nil, err
 	}
 	trace.addSpan(span)
 	trace.record(args.SessionID, span.SpanContext())
-	return ctx, attrs, nil
+	return ctx, append(attrs, itemAttrs...), nil
 }
 
+// evaluateCases submits one batch so the evaluator owns both stage schedulers.
+// Per-call additive callbacks preserve callbacks configured by the application
+// and keep case metadata out of the shared inference request.
 func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution executionOptions, specs []*CaseSpec) (
 	*coreevaluation.EvaluationResult, map[string]*caseTrace, error,
 ) {
@@ -164,7 +172,7 @@ func (h *Handler) evaluateCases(ctx context.Context, datasetID string, execution
 				attrs := append([]attribute.KeyValue(nil), opts.SpanAttributes...)
 				attrs = append(attrs,
 					attribute.String("langfuse.trace.name", spec.TraceName),
-					attribute.String("langfuse.user.id", spec.UserID),
+					attribute.String("langfuse.user.id", caseUserID(spec)),
 					attribute.String("langfuse.environment", h.environment))
 				opts.SpanAttributes = append(attrs, v4Attributes...)
 			},

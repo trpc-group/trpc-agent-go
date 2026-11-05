@@ -163,11 +163,28 @@ func (h *Handler) v4CaseAttributes(spec *CaseSpec, opts executionOptions, sessio
 
 type experimentSpanKey struct{}
 
+// caseUserID returns the user a case runs as. Like resolveUserID on the v3
+// path, the inference session user wins over the case user, so a CaseBuilder
+// that sets a different SessionInput.UserID is reported under that user.
+func caseUserID(spec *CaseSpec) string {
+	if spec.EvalCase != nil && spec.EvalCase.SessionInput != nil &&
+		strings.TrimSpace(spec.EvalCase.SessionInput.UserID) != "" {
+		return spec.EvalCase.SessionInput.UserID
+	}
+	return spec.UserID
+}
+
 // startExperimentItem follows Langfuse's experiment task-span convention. The
 // item span supplies a root observation ID before agent/tool spans start.
 // The run description is set on the item span only, as Langfuse does not
 // propagate it to child observations.
-func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs []attribute.KeyValue, description string) (context.Context, oteltrace.Span, error) {
+//
+// It also returns the item-scoped attributes that only exist once the span has
+// started (the root observation ID and the dataset item metadata). Callers set
+// them on descendant spans directly, because Langfuse requires the root
+// observation ID on every observation of an item trace and custom exporter
+// setups do not install the baggage span processor.
+func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs []attribute.KeyValue, description string) (context.Context, oteltrace.Span, []attribute.KeyValue, error) {
 	startOpts := []oteltrace.SpanStartOption{oteltrace.WithNewRoot(), oteltrace.WithAttributes(attrs...)}
 	if strings.TrimSpace(description) != "" {
 		startOpts = append(startOpts, oteltrace.WithAttributes(attribute.String(attrExperimentDesc, description)))
@@ -175,22 +192,25 @@ func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs
 	ctx, span := atrace.Tracer.Start(ctx, "experiment-item-task", startOpts...)
 	if !span.IsRecording() {
 		span.End()
-		return nil, nil, errors.New("langfuse v4 experiments require a recording OpenTelemetry exporter")
+		return nil, nil, nil, errors.New("langfuse v4 experiments need the experiment item span to be recorded: " +
+			"register a tracer provider with an exporter, and use a sampler that records every root span " +
+			"(for example sdktrace.AlwaysSample); a ratio sampler drops some cases")
 	}
-	attrs = append(attrs,
-		attribute.String("langfuse.trace.name", spec.TraceName),
-		attribute.String("langfuse.user.id", spec.UserID),
-		attribute.String("langfuse.environment", h.environment),
-		attribute.String("langfuse.observation.input", attributeValue(attrs, attrTraceInput)),
-		attribute.String(attrExperimentRootID, span.SpanContext().SpanID().String()))
+	itemAttrs := []attribute.KeyValue{attribute.String(attrExperimentRootID, span.SpanContext().SpanID().String())}
 	metadata, err := stringifyValue("experiment item metadata", spec.TraceMetadata["datasetItemMetadata"])
 	if err != nil {
 		span.End()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if metadata != "" {
-		attrs = append(attrs, attribute.String(attrExperimentItemMetadata, metadata))
+		itemAttrs = append(itemAttrs, attribute.String(attrExperimentItemMetadata, metadata))
 	}
+	attrs = append(attrs,
+		attribute.String("langfuse.trace.name", spec.TraceName),
+		attribute.String("langfuse.user.id", caseUserID(spec)),
+		attribute.String("langfuse.environment", h.environment),
+		attribute.String("langfuse.observation.input", attributeValue(attrs, attrTraceInput)))
+	attrs = append(attrs, itemAttrs...)
 	span.SetAttributes(attrs...)
 	bag := baggage.FromContext(ctx)
 	for _, attr := range attrs {
@@ -206,23 +226,23 @@ func (h *Handler) startExperimentItem(ctx context.Context, spec *CaseSpec, attrs
 			encoded, err := json.Marshal(attr.Value.AsStringSlice())
 			if err != nil {
 				span.End()
-				return nil, nil, fmt.Errorf("encode experiment tags: %w", err)
+				return nil, nil, nil, fmt.Errorf("encode experiment tags: %w", err)
 			}
 			value = string(encoded)
 		}
 		member, err := baggage.NewMemberRaw(key, value)
 		if err != nil {
 			span.End()
-			return nil, nil, fmt.Errorf("encode experiment baggage: %w", err)
+			return nil, nil, nil, fmt.Errorf("encode experiment baggage: %w", err)
 		}
 		bag, err = bag.SetMember(member)
 		if err != nil {
 			span.End()
-			return nil, nil, fmt.Errorf("set experiment baggage: %w", err)
+			return nil, nil, nil, fmt.Errorf("set experiment baggage: %w", err)
 		}
 	}
 	ctx = baggage.ContextWithBaggage(ctx, bag)
-	return context.WithValue(ctx, experimentSpanKey{}, span), span, nil
+	return context.WithValue(ctx, experimentSpanKey{}, span), span, itemAttrs, nil
 }
 
 func attributeValue(attrs []attribute.KeyValue, key string) string {
