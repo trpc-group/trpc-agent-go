@@ -35,6 +35,8 @@ type toolCallAttempt struct {
 	blocked error
 }
 
+// call resumes a known task and blocks unsafe submissions without a handle.
+// Other attempts continue through Connector.CallTool.
 func (a *toolCallAttempt) call(ctx context.Context, client mcp.Connector, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if a.blocked != nil {
 		return nil, a.blocked

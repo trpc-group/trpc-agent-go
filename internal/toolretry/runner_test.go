@@ -137,6 +137,9 @@ type replaySafetyError struct {
 }
 
 func (e *replaySafetyError) Error() string { return "interrupted tool call" }
+
+// Unwrap supplies a retryable cause so tests must stop through replay safety,
+// rather than because the default policy declines to retry the error.
 func (e *replaySafetyError) Unwrap() error {
 	if e.cause != nil {
 		return e.cause
@@ -150,6 +153,8 @@ type replaySafetyAlias struct {
 }
 
 func (*replaySafetyAlias) Error() string { return "aliased replay safety" }
+
+// As exposes a marker without an Unwrap chain, protecting custom error aliases.
 func (e *replaySafetyAlias) As(target any) bool {
 	if marker, ok := target.(*interface{ ToolCallReplaySafe() bool }); ok {
 		*marker = e.marker
@@ -158,6 +163,8 @@ func (e *replaySafetyAlias) As(target any) bool {
 	return false
 }
 
+// TestExecute_ReplaySafetyErrorTree ensures safe wrappers and siblings cannot
+// hide an unsafe marker from either default or custom retry policies.
 func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
 	unsafe := &replaySafetyError{}
 	safe := &replaySafetyError{safe: true}
@@ -199,6 +206,8 @@ func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
 	}
 }
 
+// TestExecute_RespectsToolCallReplaySafety preserves the original failure and
+// partial result when replay is unsafe, while allowing replay-safe retries.
 func TestExecute_RespectsToolCallReplaySafety(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

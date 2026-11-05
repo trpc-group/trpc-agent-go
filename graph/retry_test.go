@@ -37,6 +37,8 @@ func (*replaySafetyTestError) Error() string              { return "tool task in
 func (e *replaySafetyTestError) Unwrap() error            { return e.cause }
 func (e *replaySafetyTestError) ToolCallReplaySafe() bool { return e.safe }
 
+// TestNodeRetry_ReplayUnsafeToolRunsOnce exercises full graph execution: node
+// policies must report the task failure without repeating the tool's side effect.
 func TestNodeRetry_ReplayUnsafeToolRunsOnce(t *testing.T) {
 	for _, mode := range []string{"node policy", "node and tool policies", "default node policy"} {
 		for _, joined := range []bool{false, true} {

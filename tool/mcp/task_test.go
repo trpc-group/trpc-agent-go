@@ -103,6 +103,8 @@ type finalReconnectHandler struct {
 	failure error
 }
 
+// Handle terminates the parent context during reconnect initialization, after
+// the retry loop's initial context check has already passed.
 func (h *finalReconnectHandler) Handle(ctx context.Context, _ *http.Client, _ *http.Request) (*http.Response, error) {
 	if h.cancel != nil {
 		h.cancel()
@@ -118,6 +120,9 @@ type reconnectDeadlineContext struct {
 }
 
 func (c *reconnectDeadlineContext) Done() <-chan struct{} { return c.done }
+
+// Err exposes deadline expiry under explicit test control, avoiding timer races
+// when exercising initialization failure in the last reconnect attempt.
 func (c *reconnectDeadlineContext) Err() error {
 	select {
 	case <-c.done:
@@ -127,6 +132,8 @@ func (c *reconnectDeadlineContext) Err() error {
 	}
 }
 
+// TestToolTaskFinalReconnectPreservesCauses keeps the context cause, task handle
+// and reconnect failure together, while preserving active-context behavior.
 func TestToolTaskFinalReconnectPreservesCauses(t *testing.T) {
 	for _, mode := range []string{"cancelled", "deadline", "active"} {
 		t.Run(mode, func(t *testing.T) {

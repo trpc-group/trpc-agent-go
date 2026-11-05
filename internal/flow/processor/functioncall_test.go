@@ -12015,6 +12015,8 @@ func (*replayUnsafeCallError) Error() string            { return "tool task inte
 func (e *replayUnsafeCallError) Unwrap() error          { return e.cause }
 func (*replayUnsafeCallError) ToolCallReplaySafe() bool { return false }
 
+// TestExecuteCallableTool_PreservesReplaySafety checks the LLMAgent processor
+// retains an unsafe tool error without replaying it or stopping the entire agent.
 func TestExecuteCallableTool_PreservesReplaySafety(t *testing.T) {
 	for _, custom := range []bool{false, true} {
 		t.Run(fmt.Sprintf("custom=%t", custom), func(t *testing.T) {

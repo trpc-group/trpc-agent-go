@@ -119,6 +119,8 @@ func isSuccessfulAttempt(outcome attemptOutcome) bool {
 	return outcome.RawError == nil && !outcome.ResultError
 }
 
+// shouldReturnAttempt applies replay-safety and terminal-error constraints before
+// a retry policy can request another execution of the tool call.
 func shouldReturnAttempt(
 	policy *tool.RetryPolicy,
 	attempt int,

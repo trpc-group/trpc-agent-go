@@ -1957,6 +1957,8 @@ func TestCallToolWithRetry_UsesAgentToolGraphRuntimeWhenAvailable(t *testing.T) 
 	require.True(t, fallbackTool.calledCall)
 }
 
+// TestCallToolWithRetry_PreservesReplaySafety checks the Graph callable-tool
+// closure retains the unsafe marker and cause under default and custom policies.
 func TestCallToolWithRetry_PreservesReplaySafety(t *testing.T) {
 	for _, custom := range []bool{false, true} {
 		t.Run(fmt.Sprintf("custom=%t", custom), func(t *testing.T) {
