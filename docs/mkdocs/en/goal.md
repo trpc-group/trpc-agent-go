@@ -73,12 +73,14 @@ Callers may see intermediate assistant output before the agent continues; that
 output does not mean the goal has completed. The run is still terminal only when
 `runner.completion` is emitted.
 
-Goal tools need serial semantics. Do not enable `llmagent.WithEnableParallelTools(true)`
-on the same `LLMAgent` that owns the Goal extension. A model response should not
-call `create_goal` and `update_goal` in the same parallel tool batch, because
-parallel execution uses isolated invocation/session views for each tool call.
-If an application needs parallel business tools, keep Goal on a serial owner
-agent or use a separate agent for the parallel work.
+Goal tools need serial semantics, and the mutating ones enforce it. `create_goal`
+and `update_goal` are read-modify-write transitions over the session, while
+parallel execution hands each tool call an invocation/session view cloned before
+any call starts, so they implement `tool.ConcurrencyAware` and object to sharing
+a turn. With `llmagent.WithEnableParallelTools(true)`, any turn that includes one
+of them runs every call in it sequentially; turns made only of other tools keep
+their parallelism. `get_goal` only reads and does not object. See
+[Declining to share a turn](tool.md#declining-to-share-a-turn).
 
 ## Boundaries
 

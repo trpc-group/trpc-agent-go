@@ -513,6 +513,17 @@ func browserDescription(evaluateEnabled bool) string {
 		"runtime."
 }
 
+// IsConcurrencySafe keeps browser calls off the parallel tool path.
+//
+// The crash guard that degrades a profile after repeated backend crashes lives
+// in the invocation's state and is created on first use. A parallel worker runs
+// against a cloned invocation view that is discarded when it finishes, so a
+// call that shares a turn before the guard exists creates and increments it on
+// the view: the authoritative invocation never accumulates the failure, and
+// repeated crashes keep reaching the driver. Serializing browser calls is also
+// what the shared profile and driver want.
+func (t *Tool) IsConcurrencySafe() bool { return false }
+
 func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	var in input
 	if err := json.Unmarshal(args, &in); err != nil {
