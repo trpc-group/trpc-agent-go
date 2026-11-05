@@ -61,6 +61,7 @@ func TestNew(t *testing.T) {
 	t.Setenv(deepSeekAPIKeyName, testKey)
 	t.Setenv(miniMaxAPIKeyName, testKey)
 	t.Setenv(kimiAPIKeyName, testKey)
+	t.Setenv(orcarouterAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -137,6 +138,37 @@ func TestNew(t *testing.T) {
 				WithAPIKey(testKey),
 			},
 			expectOpts: nil,
+		},
+		{
+			name:      "variant orcarouter",
+			modelName: "auto",
+			opts: []Option{
+				WithVariant(VariantOrcaRouter),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultOrcaRouterBaseURL),
+			},
+		},
+		{
+			name:      "does not infer orcarouter from official model name",
+			modelName: "auto",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infers orcarouter from official api base url",
+			modelName: "auto",
+			opts: []Option{
+				WithBaseURL("https://api.orcarouter.ai/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.orcarouter.ai/v1"),
+				WithVariant(VariantOrcaRouter),
+			},
 		},
 		{
 			name:      "infers minimax from international api base url",
@@ -398,6 +430,46 @@ func TestIsKimiBaseURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isKimiBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestIsOrcaRouterBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches official api host",
+			rawURL: "https://api.orcarouter.ai/v1",
+			want:   true,
+		},
+		{
+			name:   "matches official api host after trim and lowercase",
+			rawURL: " HTTPS://API.ORCAROUTER.AI/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match website host",
+			rawURL: "https://www.orcarouter.ai",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://orcarouter-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.orcarouter.ai/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isOrcaRouterBaseURL(tt.rawURL))
 		})
 	}
 }
