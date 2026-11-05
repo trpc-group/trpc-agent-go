@@ -18,6 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // newDeclareBlockerTool falls back to package defaults whenever
@@ -125,5 +129,78 @@ func TestCall_HappyPath_NoEnforcer_NoNotify(t *testing.T) {
 	assert.Equal(t, "missing creds", res.Reason,
 		"the output must echo the reason — the wire schema declares both ok and reason as required")
 	assert.True(t, blockerDeclared(inv))
+	assert.Equal(t, "missing creds", blockerReason(inv))
+}
+
+// readStubTool is a sibling that raises no objection, so that a turn pairing it
+// with todo_declare_blocker is a mixed batch the parallel path would otherwise
+// admit.
+type readStubTool struct{}
+
+func (readStubTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "read", Description: "read a file"}
+}
+
+func (readStubTool) Call(context.Context, []byte) (any, error) {
+	return map[string]any{"content": "ok"}, nil
+}
+
+// TestDeclareBlockerStaysOffTheParallelPath pins the objection that
+// keeps the blocker latch on the invocation the enforcer reads.
+//
+// The first half runs the tool against the invocation view a
+// parallel worker would hand it — agent.Invocation.View(), the
+// shape the function-call processor builds per call — and shows
+// the latch landing on that view and not on the base. Views are
+// never synced back, so on the parallel path the declaration is
+// discarded while the tool still reports ok.
+//
+// The second half is what prevents it: the tool objects through
+// tool.ConcurrencyAware, and a mixed batch run through the
+// function-call processor with parallel tools enabled therefore
+// stays sequential, so Call receives the base invocation and the
+// latch is where AfterModel reads it back.
+func TestDeclareBlockerStaysOffTheParallelPath(t *testing.T) {
+	_, base, _ := newTestInvocation(t, "agent-A")
+	tl := newDeclareBlockerTool("", "", nil)
+
+	view := base.View()
+	_, err := tl.Call(agent.NewInvocationContext(context.Background(), view),
+		[]byte(`{"reason":"missing creds"}`))
+	require.NoError(t, err)
+	require.True(t, blockerDeclared(view),
+		"precondition: the latch is set on whatever invocation Call is given")
+	require.False(t, blockerDeclared(base),
+		"precondition: a parallel worker's view never reaches the base invocation")
+
+	require.False(t, tool.IsConcurrencySafe(tl),
+		"todo_declare_blocker must not be admitted to the parallel path")
+
+	// A mixed batch — a safe sibling plus the blocker — with parallel tools
+	// enabled. The objection keeps it sequential, so the latch lands on the
+	// invocation the enforcer reads.
+	ctx, inv, _ := newTestInvocation(t, "agent-A")
+	p := processor.NewFunctionCallResponseProcessor(true, nil)
+	req := &model.Request{Tools: map[string]tool.Tool{
+		"read":  readStubTool{},
+		tl.name: tl,
+	}}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "call-read", Function: model.FunctionDefinitionParam{
+				Name: "read", Arguments: []byte(`{}`)}},
+			{ID: "call-blocker", Function: model.FunctionDefinitionParam{
+				Name: tl.name, Arguments: []byte(`{"reason":"missing creds"}`)}},
+		},
+	}}}}
+	ch := make(chan *event.Event, 16)
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+	close(ch)
+	for range ch { //revive:disable-line:empty-block
+	}
+
+	assert.True(t, blockerDeclared(inv),
+		"the declaration must reach the base invocation, not a discarded view")
 	assert.Equal(t, "missing creds", blockerReason(inv))
 }
