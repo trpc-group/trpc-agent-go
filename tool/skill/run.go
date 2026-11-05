@@ -1797,13 +1797,14 @@ func normalizeCommandForList(cmd string) string {
 	return path.Clean(cmd)
 }
 
+func isUnquotedShellMeta(r rune, inSingle bool, inDouble bool) bool {
+	return !inSingle && !inDouble &&
+		strings.ContainsRune(disallowedShellMeta, r)
+}
+
 func splitCommandLine(s string) ([]string, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, fmt.Errorf("skill_run: command is empty")
-	}
-	if idx := strings.IndexAny(s, disallowedShellMeta); idx >= 0 {
-		meta := s[idx : idx+1]
-		return nil, fmt.Errorf(errShellMetaFmt, meta)
 	}
 	var args []string
 	var cur strings.Builder
@@ -1834,6 +1835,9 @@ func splitCommandLine(s string) ([]string, error) {
 		if !inSingle && r == '"' {
 			inDouble = !inDouble
 			continue
+		}
+		if isUnquotedShellMeta(r, inSingle, inDouble) {
+			return nil, fmt.Errorf(errShellMetaFmt, string(r))
 		}
 		if !inSingle && !inDouble && (r == ' ' || r == '\t') {
 			flush()
