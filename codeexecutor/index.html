@@ -935,6 +935,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#e2b-code-execution-deadlines" class="md-nav__link">
+    <span class="md-ellipsis">
+      E2B code execution deadlines
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#e2b-workspace-programs" class="md-nav__link">
     <span class="md-ellipsis">
       E2B workspace programs
@@ -3969,6 +3978,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#e2b-code-execution-deadlines" class="md-nav__link">
+    <span class="md-ellipsis">
+      E2B code execution deadlines
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#e2b-workspace-programs" class="md-nav__link">
     <span class="md-ellipsis">
       E2B workspace programs
@@ -4510,6 +4528,40 @@ change the sandbox ID, management API URL, or client ID metadata. Existing
 users retain the original behavior when the option is omitted or set to <code>true</code>.
 <code>true</code> retains the conditional legacy rule; it does not force a suffix when
 the response domain is non-empty.</p>
+<h3 id="e2b-code-execution-deadlines">E2B code execution deadlines</h3>
+<p><code>ExecuteCode</code> sends code to the Code Interpreter <code>/execute</code> stream. The execute
+request does not include a timeout field. Two client deadlines apply, and an
+earlier cancellation or deadline on the caller context is returned unchanged:</p>
+<ul>
+<li><code>WithRequestTimeout</code> limits how long the client waits for HTTP response
+  headers. Zero uses 30 seconds. A negative value disables that default.
+  <code>RunCodeOpts.RequestTimeout</code> overrides it for one call: zero inherits the
+  sandbox value, and a negative value disables the header deadline. The header
+  deadline is cleared once headers arrive. It is not added to the execution
+  budget and does not limit a long output stream or an HTTP error body.</li>
+<li><code>WithExecutionTimeout</code> limits how long the client reads the response body
+  after headers arrive, including the execution stream and an HTTP error body.
+  Zero uses 300 seconds. A negative value disables that body deadline without
+  disabling the header wait, and it does not leave the header deadline running
+  for the body. <code>RunCodeOpts.Timeout</code> has the same zero and negative meanings
+  for one call.</li>
+</ul>
+<p>A request timeout and an execution timeout are <code>TimeoutError</code> values with
+different messages. Caller cancellation stays <code>context.Canceled</code>, and a caller
+deadline stays <code>context.DeadlineExceeded</code>; neither is reported as an execution
+timeout. Stopping the client wait does not kill the remote kernel, the
+in-flight program, or the sandbox. Workspace filesystem helpers that still call
+<code>/execute</code> use the same split: their operation deadline bounds the stream after
+headers, and <code>WithRequestTimeout</code> bounds only the header wait. <code>RunProgram</code> is
+separate and does not use this stream. Only its envd process deadline sets
+<code>RunResult.TimedOut</code>, using the error type and chain rather than the error
+text. A configured <code>http.Client.Timeout</code> still covers the whole HTTP exchange,
+including the body. Leave it unset, or longer than any stream that must stay
+open. If it or another transport deadline fires, the error names that source
+and whether the client was still waiting for headers or already reading the
+body. It is not a <code>TimeoutError</code> for <code>RequestTimeout</code> or <code>Timeout</code>, and
+increasing those options does not extend the client deadline. The transport
+error remains available through unwrapping.</p>
 <h3 id="e2b-workspace-programs">E2B workspace programs</h3>
 <p><code>e2b.CodeExecutor.RunProgram</code> and <code>Engine().Runner().RunProgram</code> use native
 envd Process RPCs. They do not require the Code Interpreter <code>/execute</code>
@@ -5655,7 +5707,7 @@ exposes it depends on the higher-level Agent and tool wiring.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 3, 2026 06:23:00 UTC">2026-11-03 06:23:00</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 5, 2026 12:25:47 UTC">2026-11-05 12:25:47</span>
   </span>
 
     

@@ -935,6 +935,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#e2b" class="md-nav__link">
+    <span class="md-ellipsis">
+      E2B 代码执行时限
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#e2b-workspace" class="md-nav__link">
     <span class="md-ellipsis">
       E2B workspace 程序执行
@@ -3969,6 +3978,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#e2b" class="md-nav__link">
+    <span class="md-ellipsis">
+      E2B 代码执行时限
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#e2b-workspace" class="md-nav__link">
     <span class="md-ellipsis">
       E2B workspace 程序执行
@@ -4503,6 +4521,30 @@ executor<strong>且</strong>响应处理器开着。</p>
 Code Interpreter、原生进程请求及 <code>executor.Sandbox().GetHost(port)</code>，不改变
 sandbox ID、管理 API 地址或 client ID 元数据。不传入此选项或设为 <code>true</code> 时
 保持原有行为；<code>true</code> 仅保留旧有的条件性追加规则，不会在响应域名非空时强制追加后缀。</p>
+<h3 id="e2b">E2B 代码执行时限</h3>
+<p><code>ExecuteCode</code> 把代码送到 Code Interpreter 的 <code>/execute</code> 流。执行请求体不包含
+timeout 字段。客户端有两段时限；调用方 context 上更早的取消或 deadline 会原样返回：</p>
+<ul>
+<li><code>WithRequestTimeout</code> 只限制等待 HTTP 响应头的时间。零值使用 30 秒，负值关闭
+  该默认时限。单次调用可用 <code>RunCodeOpts.RequestTimeout</code> 覆盖：零值沿用 sandbox
+  的请求时限，负值关闭这一次的响应头时限。收到响应头后该时限即清除，不会加到
+  执行预算上，也不再限制后续的长输出流或 HTTP 错误响应体。</li>
+<li><code>WithExecutionTimeout</code> 限制收到响应头之后读取响应体的时间，包括执行流和 HTTP
+  错误响应体。零值使用 300 秒，负值只关闭这段读取时限，不关闭响应头等待，也不会
+  让已经结束职责的响应头时限继续截断响应体。<code>RunCodeOpts.Timeout</code> 的零值和负值
+  含义相同。</li>
+</ul>
+<p>请求超时和执行超时都是 <code>TimeoutError</code>，由消息区分。调用方取消仍是
+<code>context.Canceled</code>，调用方 deadline 仍是 <code>context.DeadlineExceeded</code>，二者都不会
+被报成执行超时。停止客户端等待不会杀掉远端 kernel、正在运行的程序或 sandbox。
+仍调用 <code>/execute</code> 的 workspace 文件操作使用同一套分段时限：操作时限只限制
+响应头之后的流，<code>WithRequestTimeout</code> 只限制响应头等待。<code>RunProgram</code> 不走这条流；
+只有 envd 进程 deadline 会设置 <code>RunResult.TimedOut</code>，并且按错误类型和错误链识别，
+不看错误文本里是否碰巧包含 “timeout”。显式配置的 <code>http.Client.Timeout</code> 仍覆盖
+整个 HTTP 交换，包括响应体。需要保持流打开时，请不要设置它，或把它设得比流更长。
+该时限或其他传输层时限到期时，错误会标明来源，以及当时是在等待响应头还是在读取
+响应体。它不是 <code>RequestTimeout</code> 或 <code>Timeout</code> 对应的 <code>TimeoutError</code>，加大这两个
+选项也不会延长客户端时限。原始传输错误仍可通过 unwrap 取得。</p>
 <h3 id="e2b-workspace">E2B workspace 程序执行</h3>
 <p><code>e2b.CodeExecutor.RunProgram</code> 和 <code>Engine().Runner().RunProgram</code> 使用原生
 envd Process RPC，不再依赖 Code Interpreter <code>/execute</code>。<code>ExecuteCode</code>
@@ -5547,7 +5589,7 @@ deny，攻击者只要能找到任何不在 deny 集合里的二进制——包�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月3日 06:23:00 UTC">2026-11-03 06:23:00</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月5日 12:25:47 UTC">2026-11-05 12:25:47</span>
   </span>
 
     
