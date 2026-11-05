@@ -161,18 +161,37 @@ func Err(inv *agent.Invocation) error {
 }
 
 type appendRecord struct {
-	done chan struct{}
-	err  error
+	done     chan struct{}
+	err      error
+	panicked bool
+}
+
+type persistenceIdentityKey struct{}
+type persistenceIdentity struct {
+	eventID    string
+	originalID string
+}
+
+// WithPersistenceIdentity associates a plugin's replacement event with the
+// original event for AppendOnce. It does not alter the public event ID or apply
+// to appends of other events using the same context.
+func WithPersistenceIdentity(ctx context.Context, eventID, originalID string) context.Context {
+	return context.WithValue(ctx, persistenceIdentityKey{}, persistenceIdentity{eventID: eventID, originalID: originalID})
 }
 
 // AppendOnce coordinates normal persistence and deadline fallback writes by
 // event ID. Concurrent attempts wait for the in-flight append; successful IDs
 // stay recorded for the queue lifetime, while failed attempts can be retried.
+// A panicking callback releases waiters with an error and is not retried; the
+// original panic continues to propagate to the caller.
 // Disabled or unattached queues preserve the original append behavior.
 func AppendOnce(ctx context.Context, inv *agent.Invocation, id string, appendEvent func() error) error {
 	q := queueFor(inv)
 	if q == nil || id == "" || !Enabled(inv) {
 		return appendEvent()
+	}
+	if identity, ok := ctx.Value(persistenceIdentityKey{}).(persistenceIdentity); ok && identity.eventID == id && identity.originalID != "" {
+		id = identity.originalID
 	}
 	for {
 		q.mu.Lock()
@@ -184,26 +203,37 @@ func AppendOnce(ctx context.Context, inv *agent.Invocation, id string, appendEve
 			record = &appendRecord{done: make(chan struct{})}
 			q.appends[id] = record
 			q.mu.Unlock()
-			err := appendEvent()
-			q.mu.Lock()
-			record.err = err
-			if err != nil {
-				delete(q.appends, id)
-			}
-			close(record.done)
-			q.mu.Unlock()
-			return err
+			return q.appendEvent(id, record, appendEvent)
 		}
 		q.mu.Unlock()
 		select {
 		case <-record.done:
-			if record.err == nil {
-				return nil
+			if record.err == nil || record.panicked {
+				return record.err
 			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+}
+
+func (q *Queue) appendEvent(id string, record *appendRecord, appendEvent func() error) (err error) {
+	returned := false
+	defer func() {
+		q.mu.Lock()
+		record.err = err
+		if !returned {
+			record.panicked = true
+			record.err = fmt.Errorf("event persistence callback panicked: %s", id)
+		} else if err != nil {
+			delete(q.appends, id)
+		}
+		close(record.done)
+		q.mu.Unlock()
+	}()
+	err = appendEvent()
+	returned = true
+	return err
 }
 
 // Acknowledge completes a registered event receipt after runner processing.

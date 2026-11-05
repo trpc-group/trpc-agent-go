@@ -710,6 +710,7 @@ func persistFunctionResponseAfterDeadline(
 		funcRespDeadlinePersistenceTimeout,
 	)
 	defer cancel()
+	originalID := functionResponseEvent.ID
 	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
 	hasToolResultRoundMarker :=
 		toolresultround.HasMarker(functionResponseEvent)
@@ -734,6 +735,9 @@ func persistFunctionResponseAfterDeadline(
 		)
 	}
 
+	if steer.Enabled(invocation) {
+		persistCtx = steer.WithPersistenceIdentity(persistCtx, functionResponseEvent.ID, originalID)
+	}
 	attached, err := appender.Invoke(
 		persistCtx,
 		invocation,

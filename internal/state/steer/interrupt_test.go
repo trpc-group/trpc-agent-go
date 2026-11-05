@@ -12,6 +12,7 @@ package steer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -208,4 +209,63 @@ func TestInterruptFailureCancelsModelWithoutSteering(t *testing.T) {
 	require.ErrorIs(t, Err(inv), failure)
 	require.False(t, cycle.Interrupted())
 	require.False(t, cycle.Accept())
+}
+
+func TestInterruptAppendOncePanicSettlesWaiters(t *testing.T) {
+	inv, _ := interruptQueue()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	panicked := make(chan any, 1)
+	go func() {
+		defer func() { panicked <- recover() }()
+		_ = AppendOnce(ctx, inv, "event", func() error {
+			close(entered)
+			<-release
+			panic("storage panic")
+		})
+	}()
+	<-entered
+	waiter := make(chan error, 1)
+	go func() {
+		waiter <- AppendOnce(ctx, inv, "event", func() error {
+			t.Error("a panicking append must not be retried")
+			return nil
+		})
+	}()
+	close(release)
+	require.Equal(t, "storage panic", <-panicked)
+	err := <-waiter
+	require.ErrorContains(t, err, "panicked")
+	require.NoError(t, ctx.Err(), "waiters must be released without their timeout")
+	require.Equal(t, err, AppendOnce(ctx, inv, "event", func() error {
+		t.Error("later attempts must retain the panic failure")
+		return nil
+	}))
+}
+
+func TestInterruptAppendOnceReplacementIdentity(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			inv := agent.NewInvocation()
+			Attach(inv, NewQueue())
+			if enabled {
+				EnableInterrupt(inv)
+			}
+			ctx := WithPersistenceIdentity(context.Background(), "normal-replacement", "original")
+			calls := 0
+			appendEvent := func() error { calls++; return nil }
+			require.NoError(t, AppendOnce(ctx, inv, "normal-replacement", appendEvent))
+			// The same context may also be used by the appender for another
+			// event. Only the replacement event inherits the original identity.
+			require.NoError(t, AppendOnce(ctx, inv, "unrelated", appendEvent))
+			fallbackCtx := WithPersistenceIdentity(context.Background(), "fallback-replacement", "original")
+			require.NoError(t, AppendOnce(fallbackCtx, inv, "fallback-replacement", appendEvent))
+			if enabled {
+				require.Equal(t, 2, calls)
+			} else {
+				require.Equal(t, 3, calls)
+			}
+		})
+	}
 }

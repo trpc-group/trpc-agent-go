@@ -87,6 +87,13 @@ func (r *steerEventReceipt) acknowledge() {
 	}
 }
 
+func (r *steerEventReceipt) persistenceContext(ctx context.Context, eventID string) context.Context {
+	if r == nil {
+		return ctx
+	}
+	return steer.WithPersistenceIdentity(ctx, eventID, r.id)
+}
+
 func (r *steerEventReceipt) accept(evt *event.Event) bool {
 	if evt == nil {
 		if r != nil && r.required {

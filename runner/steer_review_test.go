@@ -221,6 +221,11 @@ func TestRunner_InterruptAfterModelCancellation(t *testing.T) {
 			require.Zero(t, calls)
 			require.Len(t, m.snapshot(), 1)
 			require.Zero(t, interruptCount(events, model.ObjectTypeModelInterrupted))
+			if enabled {
+				for _, evt := range events {
+					require.False(t, evt.IsToolCallResponse(), "a cancelled callback must not publish tool calls")
+				}
+			}
 		})
 	}
 }
@@ -299,4 +304,157 @@ func TestRunner_InterruptPluginFailureStopsStalledModel(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestRunner_InterruptMetadataReceipt(t *testing.T) {
+	for _, iter := range []bool{false, true} {
+		t.Run(fmt.Sprintf("iter=%t", iter), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			modelStopped := make(chan struct{})
+			m := &interruptTestModel{generate: func(modelCtx context.Context, n int) model.Seq[*model.Response] {
+				return func(yield func(*model.Response) bool) {
+					if n == 1 {
+						defer close(modelStopped)
+						yield(&model.Response{ID: "old", Object: "model.metadata"})
+						<-modelCtx.Done()
+						return
+					}
+					yield(interruptFinal("new", "done"))
+				}
+			}}
+			var provider model.Model = m
+			if iter {
+				provider = interruptIterModel{m}
+			}
+			var r Runner
+			p := &testPlugin{name: "enqueue-on-metadata", reg: func(reg *plugin.Registry) {
+				reg.OnEvent(func(_ context.Context, _ *agent.Invocation, evt *event.Event) (*event.Event, error) {
+					if evt.Response != nil && evt.Object == "model.metadata" {
+						require.NoError(t, EnqueueUserMessage(r, "req", model.NewUserMessage("Q2")))
+						// Keep the receipt pending while cancellation is handled.
+						// An iterator must not exit its yield before this receipt.
+						if iter {
+							select {
+							case <-modelStopped:
+								t.Error("iterator left the required receipt wait on user interruption")
+							case <-time.After(20 * time.Millisecond):
+							}
+						} else {
+							<-modelStopped
+						}
+					}
+					return evt, nil
+				})
+			}}
+			r = NewRunner("metadata", llmagent.New("agent", llmagent.WithModel(provider), llmagent.WithInterruptOnUserMessage(true)), WithPlugins(p))
+			defer r.Close()
+			ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("Q1"), agent.WithRequestID("req"))
+			require.NoError(t, err)
+			events := interruptRead(t, ctx, ch, nil)
+			require.Len(t, m.snapshot(), 2)
+			require.Equal(t, []string{"Q1", "Q2"}, interruptUsers(m.snapshot()[1]))
+			require.Equal(t, 1, interruptCount(events, model.ObjectTypeModelInterrupted))
+			require.Equal(t, 1, interruptCount(events, model.ObjectTypeRunnerCompletion))
+			for _, evt := range events {
+				require.Nil(t, evt.Error)
+				require.Equal(t, "req", evt.RequestID)
+			}
+		})
+	}
+}
+
+// Closing done simulates a deadline without a racing receipt timer.
+type interruptDeadlineContext struct {
+	context.Context
+	done chan struct{}
+}
+
+func (c interruptDeadlineContext) Done() <-chan struct{} { return c.done }
+func (c interruptDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+type replacedDeadlineSession struct {
+	session.Service
+	results  atomic.Int32
+	appended chan struct{}
+	release  chan struct{}
+}
+
+func (s *replacedDeadlineSession) AppendEvent(ctx context.Context, sess *session.Session, evt *event.Event, opts ...session.Option) error {
+	if err := s.Service.AppendEvent(ctx, sess, evt, opts...); err != nil {
+		return err
+	}
+	if evt.IsToolResultResponse() && s.results.Add(1) == 1 {
+		close(s.appended)
+		select {
+		case <-s.release:
+		case <-time.After(3 * time.Second):
+			return errors.New("fallback was not reached")
+		}
+	}
+	return nil
+}
+
+func TestRunner_InterruptDeadlineReplacementIdentity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	runCtx := interruptDeadlineContext{Context: context.Background(), done: make(chan struct{})}
+	service := &replacedDeadlineSession{Service: sessioninmemory.NewSessionService(), appended: make(chan struct{}), release: make(chan struct{})}
+	var replacements atomic.Int32
+	ids := make(chan string, 2)
+	p := &testPlugin{name: "replace-tool-result", reg: func(reg *plugin.Registry) {
+		reg.OnEvent(func(_ context.Context, _ *agent.Invocation, evt *event.Event) (*event.Event, error) {
+			if evt.IsToolResultResponse() {
+				evt = evt.Clone()
+				evt.Choices[0].Message.Content = "redacted"
+				ids <- evt.ID
+				if replacements.Add(1) == 2 {
+					close(service.release)
+				}
+			}
+			return evt, nil
+		})
+	}}
+	tl := function.NewFunctionTool(func(context.Context, struct{}) (string, error) { return "result", nil }, function.WithName("work"))
+	m := &interruptTestModel{generate: func(context.Context, int) model.Seq[*model.Response] {
+		return func(yield func(*model.Response) bool) {
+			resp := interruptFinal("batch", "")
+			resp.Choices[0].Message.ToolCalls = []model.ToolCall{{ID: "A", Type: "function", Function: model.FunctionDefinitionParam{Name: "work", Arguments: []byte(`{}`)}}}
+			yield(resp)
+		}
+	}}
+	r := NewRunner("replacement", llmagent.New("agent", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{tl}), llmagent.WithInterruptOnUserMessage(true)), WithSessionService(service), WithPlugins(p))
+	defer r.Close()
+	ch, err := r.Run(runCtx, "user", "session", model.NewUserMessage("Q1"))
+	require.NoError(t, err)
+	select {
+	case <-service.appended:
+	case <-ctx.Done():
+		t.Fatal("normal append was not reached")
+	}
+	close(runCtx.done)
+	events := interruptRead(t, ctx, ch, nil)
+	require.EqualValues(t, 2, replacements.Load(), "normal and deadline paths must both run the plugin")
+	require.EqualValues(t, 1, service.results.Load())
+	firstID, secondID := <-ids, <-ids
+	require.NotEqual(t, firstID, secondID)
+	require.Equal(t, 1, interruptCount(events, model.ObjectTypeRunnerCompletion))
+	sess, err := service.GetSession(ctx, session.Key{AppName: "replacement", UserID: "user", SessionID: "session"})
+	require.NoError(t, err)
+	results := 0
+	for _, evt := range sess.Events {
+		if evt.IsToolResultResponse() {
+			results++
+			require.Equal(t, firstID, evt.ID, "plugin replacement IDs must remain public")
+			require.Equal(t, "redacted", evt.Choices[0].Message.Content)
+		}
+	}
+	require.Equal(t, 1, results)
 }

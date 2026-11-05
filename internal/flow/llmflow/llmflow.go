@@ -1253,18 +1253,28 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 		p.llmRequest,
 	)
 	emitCtx := p.ctx
+	requiresReceipt := steer.Enabled(p.invocation) && response != nil && !response.IsPartial
+	if requiresReceipt && p.cycle != nil {
+		if err := p.ctx.Err(); err != nil {
+			*p.err = err
+			return llmResponseEvent
+		}
+		// User input cancels generation, but an already emitted event must
+		// finish Runner processing before the next model cycle can begin.
+		emitCtx = contextWithRunLifetime(p.cycle.runCtx, emitCtx)
+	}
 	var emitSpan oteltrace.Span
 	emitStarted := false
 	if traceDetails {
 		emitCtx, emitSpan, emitStarted = startLatencySpan(
-			p.ctx,
+			emitCtx,
 			eventInvocation,
 			latencySpanEmitResponse,
 			latencyResponseAttrs(response)...,
 		)
 	}
 	var emitErr error
-	if steer.Enabled(p.invocation) && response != nil && !response.IsPartial {
+	if requiresReceipt {
 		emitErr = steer.EmitAndWait(emitCtx, p.invocation, p.eventChan, llmResponseEvent, flowEventWaitTimeout(emitCtx))
 	} else {
 		emitErr = agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)

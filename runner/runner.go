@@ -1678,7 +1678,7 @@ func (r *runner) processSingleAgentEvent(
 
 	// Append qualifying events to session and trigger summarization.
 	persisted := r.handleEventPersistenceOnce(
-		ctx,
+		receipt.persistenceContext(ctx, agentEvent.ID),
 		loop.invocation,
 		loop.sess,
 		persistSession,
