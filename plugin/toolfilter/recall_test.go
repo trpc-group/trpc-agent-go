@@ -27,6 +27,36 @@ type controlledEmbedder struct {
 	release chan struct{}
 }
 
+type uncooperativeEmbedder struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (e *uncooperativeEmbedder) GetEmbedding(_ context.Context, _ string) ([]float64, error) {
+	close(e.started)
+	<-e.release
+	return []float64{1, 2}, nil
+}
+
+func TestEmbedCache_TimeoutStopsWaitingWithoutReleasingPermit(t *testing.T) {
+	e := &uncooperativeEmbedder{started: make(chan struct{}), release: make(chan struct{})}
+	cache := newEmbedCache(e)
+	done := make(chan []float64, 1)
+	go func() { done <- cache.vector(context.Background(), "stuck") }()
+	<-e.started
+	select {
+	case result := <-done:
+		require.Nil(t, result)
+	case <-time.After(embeddingTimeout + 5*time.Second):
+		close(e.release)
+		t.Fatal("caller did not stop waiting after embedding timeout")
+	}
+	require.Len(t, cache.permits, 1)
+	close(e.release)
+	require.Eventually(t, func() bool { return len(cache.permits) == 0 }, time.Second, time.Millisecond)
+	require.Equal(t, []float64{1, 2}, cache.vector(context.Background(), "stuck"))
+}
+
 func (e *controlledEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
 	e.mu.Lock()
 	e.calls[text]++

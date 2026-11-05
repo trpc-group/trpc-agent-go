@@ -108,8 +108,9 @@ type embedCache struct {
 }
 
 type embeddingCall struct {
-	done   chan struct{}
-	vector []float64
+	done    chan struct{}
+	expired <-chan struct{}
+	vector  []float64
 }
 
 func newEmbedCache(embedder interface {
@@ -161,11 +162,14 @@ func (c *embedCache) cachedVector(ctx context.Context, text string, cache *runCa
 			c.mu.Unlock()
 			return nil
 		}
-		call = &embeddingCall{done: make(chan struct{})}
+		expired := make(chan struct{})
+		expiry := time.AfterFunc(embeddingTimeout, func() { close(expired) })
+		call = &embeddingCall{done: make(chan struct{}), expired: expired}
 		c.inflight[text] = call
 		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), embeddingTimeout)
 		go func() {
 			defer cancel()
+			defer expiry.Stop()
 			v, err := c.embedder.GetEmbedding(workCtx, text)
 			if err == nil && len(v) != 0 {
 				cache.set(text, v)
@@ -182,13 +186,19 @@ func (c *embedCache) cachedVector(ctx context.Context, text string, cache *runCa
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-call.done:
-		v := call.vector
-		if len(v) != 0 {
-			cache.set(text, v)
+	case <-call.expired:
+		select {
+		case <-call.done:
+		default:
+			return nil
 		}
-		return v
+	case <-call.done:
 	}
+	v = call.vector
+	if len(v) != 0 {
+		cache.set(text, v)
+	}
+	return v
 }
 
 // recallRank ranks candidates using keyword and optional embedding recall.

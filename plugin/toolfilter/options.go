@@ -205,8 +205,9 @@ func WithKeepSkills(names ...string) Option {
 // catalogs above the shortlist limit, fused with the
 // keyword path by reciprocal rank fusion. When the embedder fails, the
 // keyword path alone decides (fail-open). Concurrent requests for the same
-// text share one embedding operation per filter, with a 30-second timeout;
-// each caller may stop waiting when its context is canceled. When all 8
+// text share one embedding operation per filter. Callers stop waiting after
+// 30 seconds or when their context is canceled. An embedder that ignores its
+// context retains its slot until it returns. When all 8
 // embedding slots are occupied, new distinct texts skip embedding; keyword
 // recall remains available. Successful embeddings are cached per filter in
 // separate least-recently-used caches for
