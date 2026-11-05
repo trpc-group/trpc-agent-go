@@ -1107,6 +1107,18 @@ type StateInitializationService interface {
 	) (value []byte, didInitialize bool, err error)
 }
 
+// StateInitializationAvailability optionally reports whether a service's
+// StateInitializationService capability is available. Services that implement
+// StateInitializationService without implementing this interface are treated
+// as available. Decorators should omit StateInitializationService when the
+// wrapped service reports that the capability is unavailable.
+type StateInitializationAvailability interface {
+	// StateInitializationAvailable reports whether callers may use
+	// StateInitializationService. The result must remain stable for the service
+	// lifetime.
+	StateInitializationAvailable() bool
+}
+
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.

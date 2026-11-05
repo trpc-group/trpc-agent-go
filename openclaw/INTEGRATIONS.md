@@ -514,6 +514,27 @@ Common config fields:
 - `skip_db_init`: set true if your DB schema is pre-created
 - `table_prefix`: optional prefix for table names
 
+MySQL also accepts `state_initialization`, which defaults to `false` for
+compatibility with existing schemas. Set it to `true` only after staging the
+coordinated state-initialization schema migration. Disabled mode avoids the
+lease table and keeps lenient anonymous A2A on its per-agent fallback; strict
+coordination remains fail-closed. With `skip_db_init: true`, provision all of
+the following before enabling it:
+
+- Add the nullable `session_states.state_initialization_active` column and
+  backfill it to `1` for every row with `deleted_at IS NULL`; keep soft-deleted
+  rows `NULL`.
+- Resolve duplicate active rows, then create a unique index on
+  `(app_name, user_id, session_id, state_initialization_active)`.
+- Create the `state_initialization_leases` table and its required unique and
+  expiration indexes.
+- Ensure `session_states.created_at` uses `TIMESTAMP(6)`.
+
+Apply the configured `table_prefix` to the table and index names, including the
+documented fallback for overlong MySQL index names. See the [complete MySQL
+coordinated-initialization migration](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/session/mysql.md#coordinated-initialization-migration)
+for the DDL and deployment order.
+
 MySQL example:
 
 ```yaml
@@ -522,6 +543,7 @@ session:
   config:
     dsn: "user:pass@tcp(127.0.0.1:3306)/openclaw"
     skip_db_init: false
+    state_initialization: true
     table_prefix: "oc_"
 ```
 
