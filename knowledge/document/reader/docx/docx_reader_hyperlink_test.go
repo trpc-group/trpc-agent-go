@@ -421,6 +421,7 @@ func TestDOCXReader_ChoiceFallbackOnlyText(t *testing.T) {
       <mc:AlternateContent>
         <mc:Choice Requires="m">
           <m:oMath><m:r><m:t>MATH</m:t></m:r></m:oMath>
+          <w:r><w:t>MATHCHOICE</w:t></w:r>
         </mc:Choice>
         <mc:Fallback>
           <w:r><w:t>降级唯一文本</w:t></w:r>
@@ -439,4 +440,7 @@ func TestDOCXReader_ChoiceFallbackOnlyText(t *testing.T) {
 	require.Len(t, docs, 1)
 	require.Contains(t, docs[0].Content, "降级唯一文本")
 	require.NotContains(t, docs[0].Content, "MATH")
+	// A choice whose required namespace cannot be read must be skipped even if
+	// it also contains plain w:t text; the fallback is the readable branch.
+	require.NotContains(t, docs[0].Content, "MATHCHOICE")
 }

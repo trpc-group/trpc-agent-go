@@ -400,7 +400,7 @@ func (e *textExtractor) handleMarkupCompatStart(decoder *xml.Decoder, token xml.
 		if frame == nil {
 			return nil
 		}
-		if frame.supported || !choiceSupported(attrValue(token.Attr, namespaceMarkupCompat, "Requires")) {
+		if frame.supported || !choiceSupported(choiceRequires(token.Attr)) {
 			return decoder.Skip()
 		}
 		frame.choiceActive = true
@@ -529,6 +529,22 @@ func choiceSupported(requires string) bool {
 		}
 	}
 	return true
+}
+
+// choiceRequires returns the Requires attribute of an mc:Choice element. The
+// attribute is unprefixed, so Go's XML decoder reports an empty namespace for
+// it; tolerate the markup-compatibility namespace as well for packages that
+// qualify it.
+func choiceRequires(attrs []xml.Attr) string {
+	for _, attr := range attrs {
+		if attr.Name.Local != "Requires" {
+			continue
+		}
+		if attr.Name.Space == "" || attr.Name.Space == namespaceMarkupCompat {
+			return attr.Value
+		}
+	}
+	return ""
 }
 
 // attrValue returns the value of the namespaced attribute.
