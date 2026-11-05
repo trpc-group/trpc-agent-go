@@ -131,8 +131,7 @@ func shouldReturnAttempt(
 	}
 	// A new attempt would submit the original tool call again, even when a
 	// transport has already stopped retrying an uncertain submission or task.
-	var replaySafety interface{ ToolCallReplaySafe() bool }
-	if errors.As(outcome.RawError, &replaySafety) && !replaySafety.ToolCallReplaySafe() {
+	if IsReplayUnsafe(outcome.RawError) {
 		return true
 	}
 	if isTerminalError != nil && outcome.RawError != nil && isTerminalError(outcome.RawError) {

@@ -132,19 +132,80 @@ func TestExecute_DoesNotRetryTerminalErrors(t *testing.T) {
 }
 
 type replaySafetyError struct {
-	safe bool
+	safe  bool
+	cause error
 }
 
-func (e *replaySafetyError) Error() string            { return "interrupted tool call" }
-func (e *replaySafetyError) Unwrap() error            { return io.ErrUnexpectedEOF }
+func (e *replaySafetyError) Error() string { return "interrupted tool call" }
+func (e *replaySafetyError) Unwrap() error {
+	if e.cause != nil {
+		return e.cause
+	}
+	return io.ErrUnexpectedEOF
+}
 func (e *replaySafetyError) ToolCallReplaySafe() bool { return e.safe }
+
+type replaySafetyAlias struct {
+	marker interface{ ToolCallReplaySafe() bool }
+}
+
+func (*replaySafetyAlias) Error() string { return "aliased replay safety" }
+func (e *replaySafetyAlias) As(target any) bool {
+	if marker, ok := target.(*interface{ ToolCallReplaySafe() bool }); ok {
+		*marker = e.marker
+		return true
+	}
+	return false
+}
+
+func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
+	unsafe := &replaySafetyError{}
+	safe := &replaySafetyError{safe: true}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"safe before unsafe", errors.Join(safe, unsafe)},
+		{"unsafe before safe", errors.Join(unsafe, safe)},
+		{"wrapped join", fmt.Errorf("wrapped: %w", errors.Join(safe, unsafe))},
+		{"safe wrapper", &replaySafetyError{safe: true, cause: unsafe}},
+		{"nested join", errors.Join(safe, errors.Join(nil, unsafe))},
+		{"custom As", &replaySafetyAlias{marker: unsafe}},
+		{"custom As after safe", errors.Join(safe, &replaySafetyAlias{marker: unsafe})},
+	} {
+		for _, custom := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/custom=%t", tc.name, custom), func(t *testing.T) {
+				calls, policyCalls := 0, 0
+				policy := &tool.RetryPolicy{MaxAttempts: 2}
+				if custom {
+					policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) {
+						policyCalls++
+						return true, nil
+					}
+				}
+				outcome := Execute(context.Background(), ExecuteInput{
+					Policy: policy,
+					Call: func(context.Context, []byte) (any, error) {
+						calls++
+						return "partial", tc.err
+					},
+				})
+				require.Equal(t, 1, calls)
+				require.Zero(t, policyCalls)
+				require.Same(t, tc.err, outcome.Error)
+				require.Equal(t, "partial", outcome.Result)
+			})
+		}
+	}
+}
 
 func TestExecute_RespectsToolCallReplaySafety(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		safe   bool
-		joined bool
-		custom bool
+		name    string
+		safe    bool
+		joined  bool
+		custom  bool
+		aliased bool
 	}{
 		{name: "unsafe wrapped"},
 		{name: "unsafe joined", joined: true},
@@ -152,9 +213,13 @@ func TestExecute_RespectsToolCallReplaySafety(t *testing.T) {
 		{name: "unsafe joined custom policy", joined: true, custom: true},
 		{name: "safe wrapped", safe: true},
 		{name: "safe custom policy", safe: true, custom: true},
+		{name: "safe custom As", safe: true, custom: true, aliased: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			callErr := fmt.Errorf("wrapped: %w", &replaySafetyError{safe: tc.safe})
+			if tc.aliased {
+				callErr = &replaySafetyAlias{marker: &replaySafetyError{safe: tc.safe}}
+			}
 			if tc.joined {
 				callErr = errors.Join(errors.New("connection interrupted"), callErr)
 			}

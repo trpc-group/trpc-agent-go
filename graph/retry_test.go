@@ -12,7 +12,10 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,7 +24,72 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type replaySafetyTestError struct {
+	safe  bool
+	cause error
+}
+
+func (*replaySafetyTestError) Error() string              { return "tool task interrupted" }
+func (e *replaySafetyTestError) Unwrap() error            { return e.cause }
+func (e *replaySafetyTestError) ToolCallReplaySafe() bool { return e.safe }
+
+func TestNodeRetry_ReplayUnsafeToolRunsOnce(t *testing.T) {
+	for _, mode := range []string{"node policy", "node and tool policies", "default node policy"} {
+		for _, joined := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/joined=%t", mode, joined), func(t *testing.T) {
+				var calls atomic.Int32
+				original := &replaySafetyTestError{cause: io.ErrUnexpectedEOF}
+				var callErr error = fmt.Errorf("wrapped: %w", original)
+				if joined {
+					callErr = errors.Join(&replaySafetyTestError{safe: true}, callErr)
+				}
+				policy := RetryPolicy{MaxAttempts: 2, RetryOn: []RetryCondition{
+					RetryConditionFunc(func(error) bool { return true }),
+				}}
+				var options []Option
+				if mode != "default node policy" {
+					options = append(options, WithRetryPolicy(policy))
+				}
+				if mode == "node and tool policies" {
+					options = append(options, WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 2}))
+				}
+				sg := NewStateGraph(NewStateSchema())
+				sg.AddToolsNode("tools", map[string]tool.Tool{"charge": &retryTool{
+					name: "charge", callFn: func(context.Context, []byte) (any, error) {
+						calls.Add(1)
+						return nil, callErr
+					},
+				}}, options...)
+				g, err := sg.SetEntryPoint("tools").SetFinishPoint("tools").Compile()
+				require.NoError(t, err)
+				var execOptions []ExecutorOption
+				if mode == "default node policy" {
+					execOptions = append(execOptions, WithDefaultRetryPolicy(policy))
+				}
+				exec, err := NewExecutor(g, execOptions...)
+				require.NoError(t, err)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				events, err := exec.Execute(ctx, State{StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant, ToolCalls: makeToolCalls("charge"),
+				}}}, agent.NewInvocation())
+				require.NoError(t, err)
+				var reported bool
+				for evt := range events {
+					if evt.Error != nil && strings.Contains(evt.Error.Message, original.Error()) {
+						reported = true
+					}
+				}
+				require.EqualValues(t, 1, calls.Load())
+				require.True(t, reported, "the original task failure must be emitted")
+			})
+		}
+	}
+}
 
 // Test that a node with retry policy succeeds after initial failures and downstream runs once.
 func TestNodeRetry_SucceedsAfterFailures(t *testing.T) {

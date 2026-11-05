@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2026 Tencent. All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -96,6 +96,74 @@ func TestToolTaskCancelledReconnectRetainsHandle(t *testing.T) {
 	var taskErr toolTaskFailure
 	require.ErrorAs(t, err, &taskErr)
 	require.Equal(t, "task-1", taskErr.TaskID())
+}
+
+type finalReconnectHandler struct {
+	cancel  context.CancelFunc
+	failure error
+}
+
+func (h *finalReconnectHandler) Handle(ctx context.Context, _ *http.Client, _ *http.Request) (*http.Response, error) {
+	if h.cancel != nil {
+		h.cancel()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return nil, h.failure
+}
+
+type reconnectDeadlineContext struct {
+	context.Context
+	done chan struct{}
+}
+
+func (c *reconnectDeadlineContext) Done() <-chan struct{} { return c.done }
+func (c *reconnectDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func TestToolTaskFinalReconnectPreservesCauses(t *testing.T) {
+	for _, mode := range []string{"cancelled", "deadline", "active"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			handler := &finalReconnectHandler{failure: errors.New("initialization failed")}
+			var want error
+			switch mode {
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				defer cancel()
+				handler.cancel, want = cancel, context.Canceled
+			case "deadline":
+				// Expire the context only after initialization starts, without a timer race.
+				deadlineCtx := &reconnectDeadlineContext{Context: ctx, done: make(chan struct{})}
+				ctx = deadlineCtx
+				handler.cancel = func() { close(deadlineCtx.done) }
+				want = context.DeadlineExceeded
+			}
+			manager := newMCPSessionManager(ConnectionConfig{Transport: "streamable_http", ServerURL: "http://localhost/unused"},
+				[]mcp.ClientOption{mcp.WithClientGetSSEEnabled(false), mcp.WithHTTPReqHandler(handler)},
+				&SessionReconnectConfig{EnableAutoReconnect: true, MaxReconnectAttempts: 1})
+			original := &interruptedTask{id: "task-1"}
+			err := manager.executeWithSessionReconnect(ctx, func() error { return original })
+			require.ErrorIs(t, err, original)
+			var taskErr toolTaskFailure
+			require.ErrorAs(t, err, &taskErr)
+			require.Equal(t, "task-1", taskErr.TaskID())
+			require.False(t, taskErr.ToolCallReplaySafe())
+			if want != nil {
+				require.ErrorIs(t, err, want)
+				require.ErrorIs(t, err, mcp.ErrHTTPRequestFailed)
+			} else {
+				require.Same(t, original, err)
+			}
+		})
+	}
 }
 
 type taskConfiguredConnector struct {

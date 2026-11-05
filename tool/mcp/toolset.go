@@ -523,6 +523,9 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 			if attempt >= maxAttempts {
 				log.WarnfContext(ctx, "Max session reconnect attempts reached for this operation, "+
 					"giving up (attempts=%d/%d)", attempt, maxAttempts)
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return fmt.Errorf("reconnection aborted: %w", errors.Join(ctxErr, err, reconnectErr))
+				}
 				return err
 			}
 

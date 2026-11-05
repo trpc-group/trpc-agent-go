@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2026 Tencent. All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -114,7 +114,8 @@ func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 			require.Len(t, tools, 1)
 			callable, ok := tools[0].(tool.CallableTool)
 			require.True(t, ok)
-			// LLMAgent and Graph both execute callable-tool retries through this runner.
+			// Exercise HTTP faults through the shared runner; caller-specific tests
+			// separately verify LLMAgent and Graph error propagation.
 			outcome := toolretry.Execute(ctx, toolretry.ExecuteInput{
 				ToolName: "charge", ToolCallID: "one-logical-call", Arguments: []byte(`{}`),
 				Policy: &tool.RetryPolicy{MaxAttempts: 2}, Call: callable.Call,

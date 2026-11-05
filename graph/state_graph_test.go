@@ -1957,6 +1957,32 @@ func TestCallToolWithRetry_UsesAgentToolGraphRuntimeWhenAvailable(t *testing.T) 
 	require.True(t, fallbackTool.calledCall)
 }
 
+func TestCallToolWithRetry_PreservesReplaySafety(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		t.Run(fmt.Sprintf("custom=%t", custom), func(t *testing.T) {
+			original := &replaySafetyTestError{cause: io.ErrUnexpectedEOF}
+			calls := 0
+			tl := &retryTool{name: "charge", callFn: func(context.Context, []byte) (any, error) {
+				calls++
+				return nil, fmt.Errorf("wrapped: %w", original)
+			}}
+			policy := &tool.RetryPolicy{MaxAttempts: 2}
+			if custom {
+				policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) { return true, nil }
+			}
+			result, err := callToolWithRetry(context.Background(), makeToolCalls("charge")[0], tl,
+				policy, agent.NewInvocation(), State{}, 0)
+			require.Equal(t, 1, calls)
+			require.Nil(t, result)
+			require.ErrorIs(t, err, original)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			var marker *replaySafetyTestError
+			require.ErrorAs(t, err, &marker)
+			require.Same(t, original, marker)
+		})
+	}
+}
+
 type assertAnError struct{}
 
 func (assertAnError) Error() string { return "boom" }
