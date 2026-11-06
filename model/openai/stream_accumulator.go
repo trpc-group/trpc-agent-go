@@ -73,6 +73,21 @@ func (a *chatStreamAccumulator) addChunk(chunk openaigo.ChatCompletionChunk) boo
 	return true
 }
 
+// addCacheTokens adds the provider-specific cache token counts reported by a
+// chunk to the accumulated usage. The SDK accumulator only sums prompt,
+// completion, and total tokens, so the counts are added here with the same
+// additive semantics. Gateways that repeat cumulative usage snapshots should
+// use WithAccumulateChunkTokenUsage to keep the latest snapshot instead.
+func (a *chatStreamAccumulator) addCacheTokens(usage openaigo.CompletionUsage) {
+	cacheReadTokens, cacheCreationTokens := usageCacheTokens(usage)
+	if cacheReadTokens == 0 && cacheCreationTokens == 0 {
+		return
+	}
+	currentReadTokens, currentCreationTokens := usageCacheTokens(a.acc.Usage)
+	setUsageCacheTokens(&a.acc.Usage,
+		currentReadTokens+cacheReadTokens, currentCreationTokens+cacheCreationTokens)
+}
+
 func (a *chatStreamAccumulator) choiceState(index int) *chatStreamChoiceAccumulator {
 	if index >= len(a.choices) {
 		a.choices = append(a.choices, make([]*chatStreamChoiceAccumulator, index-len(a.choices)+1)...)

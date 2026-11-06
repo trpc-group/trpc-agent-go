@@ -401,6 +401,12 @@ func main() {
 }
 ```
 
+对于非流式 OpenAI 兼容调用，如果 HTTP 200 响应的整个 JSON 响应体是 `null`，
+框架会通过 `Response.Error` 报告错误，其中 `Type` 为 `model.ErrorTypeAPIError`，
+`Done` 为 `true`。这适用于 `GenerateContent` 和 `GenerateContentIter`，
+此类无效响应不会触发 chat response callback。合法响应中的 `message.content: null`
+（例如工具调用响应）不受影响。
+
 ### 结构化输出
 
 直接调用 `model.GenerateContent` 时，可以用 `model.NewRequest` 和
@@ -668,8 +674,8 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 | `CompletionTokens` | 服务方上报的模型输出 token 总量 |
 | `TotalTokens` | 服务方上报的总 token，通常等于 prompt 加 completion |
 | `PromptTokensDetails.CachedTokens` | OpenAI-compatible Prompt Cache 命中的输入 token，通常是 `PromptTokens` 的子集 |
-| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token，主要对应 Anthropic 风格缓存 |
-| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token，主要对应 Anthropic 风格缓存 |
+| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token。网关上报 `prompt_tokens_details.cache_creation_tokens` 时填充 |
+| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token。网关上报 `prompt_tokens_details.cache_read_tokens` 时填充 |
 | `CompletionTokensDetails.ReasoningTokens` | Completion usage 中服务方上报的推理 token |
 | `TimingInfo` | 可选的框架耗时信息，不属于计费 token |
 | `TimingInfo.FirstTokenDuration` | 每次模型调用从请求开始到第一个有效 reasoning、content 或 tool-call chunk 的耗时，多个模型调用会累加 |
@@ -679,6 +685,16 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 `WithAccumulateChunkTokenUsage` 属于 OpenAI-compatible adapter，因此回调
 只会收到上游 OpenAI-compatible 响应和 adapter 映射支持的字段；其他服务方
 专用字段保持为零。
+
+OpenAI-compatible adapter 还会读取网关放在 `prompt_tokens_details` 里的
+Prompt Cache 计数：`cache_read_tokens` 映射到
+`PromptTokensDetails.CacheReadTokens`，`cache_creation_tokens` 映射到
+`PromptTokensDetails.CacheCreationTokens`。严格遵循 OpenAI schema 的服务方
+这两个值保持为 `0`。
+
+流式响应中这两个计数与其他 token 字段一样按 chunk 累加；配置了
+`WithAccumulateChunkTokenUsage` 回调时，最终值由回调的返回值决定，因此
+上报累计快照的服务方可以保留最新一次快照。
 
 `TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
 OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator
@@ -1789,6 +1805,12 @@ summarizer := summary.NewSummarizer(
 #### 7. Token 裁剪（Token Tailoring）
 
 Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
+
+Token Tailoring **默认关闭**。如需在请求发送给模型服务前自动裁剪消息，必须显式设置
+`openai.WithEnableTokenTailoring(true)`。仅设置 `openai.WithMaxInputTokens(...)`
+或 `openai.WithContextWindow(...)` 只会配置预算或窗口，不会开启裁剪。即使关闭裁剪，
+其他框架流程仍可通过 `Model.InputTokenBudget` 和 `Model.Info` 读取这些配置。
+会话摘要和上下文压缩需要单独配置。
 
 **自动模式（推荐）**：
 

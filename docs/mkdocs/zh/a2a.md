@@ -117,6 +117,34 @@ server, _ := a2aserver.New(
 兼容继续镜像到 `status.message.metadata`，展示文本位于
 `status.message.parts`。
 
+#### 流式 Message 只输出增量文本
+
+默认情况下，流式 Message 会输出 `choice.Delta` 中的增量文本和思考内容，
+也会在非 partial 事件中输出 `choice.Message` 中的完整文本和思考内容。
+客户端可通过 `metadata.object_type` 区分 `chat.completion.chunk` 与
+`chat.completion`，并通过 `metadata.llm_response_id` 关联响应。
+
+如果需要兼容将每个 TextPart 都追加显示的客户端，可以在 Message 流式模式下
+开启 `WithStreamingMessageTextDeltaOnly(true)`：
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+	a2aserver.WithStreamingMessageTextDeltaOnly(true),
+)
+```
+
+此选项默认为 `false`。开启后，默认事件转换器只从 `choice.Delta` 读取文本和
+思考内容，恢复 v1.11.0 之前的行为。如果正文只存在于 `choice.Message` 中，
+即使此前没有任何增量，正文也不会输出；需要接收这类完整回复的调用方不应开启。
+
+携带 `object_type` 等有效 metadata 的完成事件仍会输出。空事件沿用现有规则：
+如果没有剩余的 Part，且 metadata 只包含 `llm_response_id`，整条事件会被省略。
+事件 Part mapper、工具调用、代码执行和任务状态更新仍正常工作。非流式响应、Artifact 流式输出及自定义
+`EventToA2AMessage` 转换器不受影响，也不会增加文本缓存或去重判断。
+
 #### 直接使用 A2A 协议客户端调用
 
 ```go
@@ -958,6 +986,7 @@ subAgent, _ := a2aagent.New(
 | `WithResponseRewriter(rewriter)` | 改写或丢弃出站 A2A unary/streaming 结果 |
 | `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
 | `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
+| `WithStreamingMessageTextDeltaOnly(enabled)` | Message 流式模式只输出 Delta 文本和思考内容（默认 false） |
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
 | `WithADKCompatibility(enabled)` | ADK 兼容模式（默认：开启） |
 | `WithErrorHandler(handler)` | 自定义错误处理 |

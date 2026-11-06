@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/ollama/ollama v0.17.1
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

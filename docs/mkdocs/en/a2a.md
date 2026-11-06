@@ -121,6 +121,39 @@ machine-readable fields preferred on the outer metadata, mirrored into
 `status.message.metadata` for `0.1` compatibility, and display text in
 `status.message.parts`.
 
+#### Delta-only text in streaming Messages
+
+By default, streaming Messages include both incremental text and reasoning
+from `choice.Delta` and complete text and reasoning from `choice.Message` on
+non-partial events. Clients can distinguish `chat.completion.chunk` from
+`chat.completion` using `metadata.object_type` and associate responses using
+`metadata.llm_response_id`.
+
+For compatibility with clients that append every text part, enable
+`WithStreamingMessageTextDeltaOnly(true)` together with Message streaming:
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+	a2aserver.WithStreamingMessageTextDeltaOnly(true),
+)
+```
+
+This option defaults to `false`. When enabled, the default event converter
+takes text and reasoning only from `choice.Delta`, restoring the behavior
+before v1.11.0. Text present only in `choice.Message` is omitted even if no
+deltas preceded it, so do not enable this mode when the caller needs replies
+that are available only as complete messages.
+
+Completion events with meaningful metadata, such as `object_type`, are still
+emitted. Existing empty-event rules apply: if no parts remain and the only
+metadata is `llm_response_id`, the entire event is omitted. Event Part mappers,
+tool calls, code execution, and task status updates continue to work.
+Unary responses, artifact streaming, and custom `EventToA2AMessage` converters
+are unaffected. No text buffering or duplicate detection is performed.
+
 #### Direct A2A Protocol Client Call
 
 ```go
@@ -607,6 +640,11 @@ a2aAgent, err := a2aagent.New(
 )
 ```
 
+When a streaming run is canceled, `A2AAgent` stops waiting for remote events
+even if the remote event channel remains open and silent. Cancellation does not
+produce a successful final response. The HTTP handler and SDK remain responsible
+for releasing their own network resources.
+
 Whether the client sends a streaming request follows this priority:
 
 1. Per-call override via `agent.WithStream(...)`
@@ -991,6 +1029,7 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithResponseRewriter(rewriter)` | Rewrite or drop outbound A2A unary/streaming results |
 | `WithRunOptions(opts...)` | Append RunOptions to every invocation |
 | `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
+| `WithStreamingMessageTextDeltaOnly(enabled)` | Use only Delta text and reasoning in Message streaming (default: false) |
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
 | `WithADKCompatibility(enabled)` | ADK compatibility mode (default: enabled) |
 | `WithErrorHandler(handler)` | Custom error handler |

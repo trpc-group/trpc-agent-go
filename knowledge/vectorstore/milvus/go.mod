@@ -11,7 +11,7 @@ require (
 	github.com/milvus-io/milvus/client/v2 v2.6.1
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.79.3
-	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.0.0-20251216100013-73147c973dde
 )
 

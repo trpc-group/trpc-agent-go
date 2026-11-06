@@ -65,12 +65,12 @@ MP3, WAV, M4A, FLAC, OGG, AAC, WMA, and more (via FFmpeg)
 ## Dependencies
 
 - Python 3.8+
-- openai-whisper
+- openai-whisper 20250625 (pinned; latest release on PyPI as of 2026-11)
 - ffmpeg
 
 ## Installation
 
 ```bash
-pip install openai-whisper
+pip install "openai-whisper==20250625"
 sudo apt-get install ffmpeg  # Ubuntu/Debian
 ```

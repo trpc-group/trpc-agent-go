@@ -124,6 +124,52 @@ agent := llmagent.New(
 - 生产环境或更强调隔离：优先 `container`
 - 明确需要 Jupyter kernel：使用 `jupyter`
 
+### E2B sandbox 主机名兼容性
+
+默认情况下，API 响应缺少 `domain`、返回 `null` 或空字符串时，如果 `clientID`
+非空，主机名保留旧格式 `<port>-<sandboxID>-<clientID>.<配置域名>`。
+对于仅按 sandbox ID 路由的部署（例如省略 `domain` 的 AGS 入口），在
+`e2b.New` 或 `e2b.NewWithContext` 中将该选项设为 `false`：
+
+```go
+executor, err := e2b.New(
+    e2b.WithDomain("your-sandbox-domain"),
+    e2b.WithClientIDHostSuffix(false),
+)
+```
+
+设为 `false` 后，回退地址为 `<port>-<sandboxID>.<配置域名>`。响应中的非空 `domain`
+仍优先于配置域名，且不会追加 client ID 后缀。该选项同时作用于创建和重连、
+Code Interpreter、原生进程请求及 `executor.Sandbox().GetHost(port)`，不改变
+sandbox ID、管理 API 地址或 client ID 元数据。不传入此选项或设为 `true` 时
+保持原有行为；`true` 仅保留旧有的条件性追加规则，不会在响应域名非空时强制追加后缀。
+
+### E2B 代码执行时限
+
+`ExecuteCode` 把代码送到 Code Interpreter 的 `/execute` 流。执行请求体不包含
+timeout 字段。客户端有两段时限；调用方 context 上更早的取消或 deadline 会原样返回：
+
+- `WithRequestTimeout` 只限制等待 HTTP 响应头的时间。零值使用 30 秒，负值关闭
+  该默认时限。单次调用可用 `RunCodeOpts.RequestTimeout` 覆盖：零值沿用 sandbox
+  的请求时限，负值关闭这一次的响应头时限。收到响应头后该时限即清除，不会加到
+  执行预算上，也不再限制后续的长输出流或 HTTP 错误响应体。
+- `WithExecutionTimeout` 限制收到响应头之后读取响应体的时间，包括执行流和 HTTP
+  错误响应体。零值使用 300 秒，负值只关闭这段读取时限，不关闭响应头等待，也不会
+  让已经结束职责的响应头时限继续截断响应体。`RunCodeOpts.Timeout` 的零值和负值
+  含义相同。
+
+请求超时和执行超时都是 `TimeoutError`，由消息区分。调用方取消仍是
+`context.Canceled`，调用方 deadline 仍是 `context.DeadlineExceeded`，二者都不会
+被报成执行超时。停止客户端等待不会杀掉远端 kernel、正在运行的程序或 sandbox。
+仍调用 `/execute` 的 workspace 文件操作使用同一套分段时限：操作时限只限制
+响应头之后的流，`WithRequestTimeout` 只限制响应头等待。`RunProgram` 不走这条流；
+只有 envd 进程 deadline 会设置 `RunResult.TimedOut`，并且按错误类型和错误链识别，
+不看错误文本里是否碰巧包含 “timeout”。显式配置的 `http.Client.Timeout` 仍覆盖
+整个 HTTP 交换，包括响应体。需要保持流打开时，请不要设置它，或把它设得比流更长。
+该时限或其他传输层时限到期时，错误会标明来源，以及当时是在等待响应头还是在读取
+响应体。它不是 `RequestTimeout` 或 `Timeout` 对应的 `TimeoutError`，加大这两个
+选项也不会延长客户端时限。原始传输错误仍可通过 unwrap 取得。
+
 ### E2B workspace 程序执行
 
 `e2b.CodeExecutor.RunProgram` 和 `Engine().Runner().RunProgram` 使用原生

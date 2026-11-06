@@ -404,6 +404,13 @@ func main() {
 }
 ```
 
+For non-streaming OpenAI-compatible calls, an HTTP 200 response whose entire
+JSON body is `null` is reported through `Response.Error` with
+`Type: model.ErrorTypeAPIError` and `Done: true`. This applies to both
+`GenerateContent` and `GenerateContentIter`; the chat response callback is not
+invoked for this invalid completion. A valid completion containing
+`message.content: null`, such as a tool-call response, is unaffected.
+
 ### Structured Output
 
 When calling `model.GenerateContent` directly, use `model.NewRequest` and
@@ -683,8 +690,8 @@ The accumulator state is a complete `model.Usage` value:
 | `CompletionTokens` | Total generated output tokens reported by the provider |
 | `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
 | `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
-| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache, primarily for Anthropic-style caching |
-| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache, primarily for Anthropic-style caching |
+| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache. Populated from `prompt_tokens_details.cache_creation_tokens` when a gateway reports it |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. Populated from `prompt_tokens_details.cache_read_tokens` when a gateway reports it |
 | `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
 | `TimingInfo` | Optional framework timing metadata, not billable token usage |
 | `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
@@ -694,6 +701,18 @@ These fields form a provider-agnostic structure.
 `WithAccumulateChunkTokenUsage` belongs to the OpenAI-compatible adapter, so
 its callback only receives fields that the upstream OpenAI-compatible response
 and adapter mapping support. Other provider-specific fields remain zero.
+
+The OpenAI-compatible adapter also surfaces prompt cache counts that gateways
+report in `prompt_tokens_details`: `cache_read_tokens` maps to
+`PromptTokensDetails.CacheReadTokens`, and `cache_creation_tokens` maps to
+`PromptTokensDetails.CacheCreationTokens`. Providers that follow the OpenAI
+schema strictly leave both counts at `0`.
+
+In streaming responses both counts accumulate across chunks, matching the
+default accumulation of prompt, completion, and total tokens. When a
+`WithAccumulateChunkTokenUsage` callback is configured, its return value
+determines the final cache counts, so providers that report cumulative
+snapshots can keep the latest one.
 
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
@@ -1823,6 +1842,14 @@ when the same estimates are needed.
 #### 7. Token Tailoring
 
 Token Tailoring is an intelligent message management technique designed to automatically trim messages when they exceed the model's context window limits, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, allowing you to keep the message list within the model's token limits while preserving key context.
+
+Token Tailoring is **disabled by default**. Explicitly set
+`openai.WithEnableTokenTailoring(true)` to enable automatic message trimming
+before provider requests. Setting `openai.WithMaxInputTokens(...)` or
+`openai.WithContextWindow(...)` alone only configures the budget or window; it
+does not enable trimming. These values remain available to other framework
+consumers through `Model.InputTokenBudget` and `Model.Info` even when trimming is
+disabled. Session summaries and context compaction are configured separately.
 
 **Automatic Mode (Recommended)**:
 
