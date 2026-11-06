@@ -249,7 +249,15 @@ server, err := agui.New(
 
 所有已启用历史追踪且刷新间隔为正的 run，都会在记录初始 `RUN_STARTED` 事件后、将其发布到实时 SSE 流之前执行一次启动尽力刷新。启动刷新成功后，Runner 会先完成 session 初始化，再启动定时写入、RunHook 和被包装的 Runner。开启消息快照续传且同步 `TrackService` 刷新成功时，其他共享同一个 `SessionService` 的实例可在 `RUN_STARTED` 已发出后观察到非终态事件；后续事件继续按周期缓冲写入。如果启动刷新失败，错误会被记录但不会阻止 run 继续执行，本次已取出的 batch 也不会重试。为避免首次 session 创建竞态，定时刷新此时只会在被包装的 Runner 完成同步初始化后启动；期间记录的新事件仍保留在队列中，可由之后的定时刷新或最终关闭处理。异步 `TrackService` 在刷新调用返回后仍可能延迟跨实例可见性。
 
-相关配置如下：
+Redis 续传使用原子快照游标和按写入顺序读取的分页，因此稍后写入、时间戳相同的事件也会被读取一次。hashidx 和 zset 均支持；不支持游标的后端继续使用时间戳续传。游标属于内部存储元数据，不进入 AG-UI 消息。会话重建、轨迹位置过期或游标不可用时返回 `RUN_ERROR`，不会静默重新开始回放。首次请求游标会补齐旧 session 的 generation 元数据，并为空轨迹创建一个小型过期标识；保留已有 session 和轨迹的 TTL，重复读取快照不会刷新该标识。标识遵循轨迹保留时间并随会话删除，因此空快照之后尚未读取的事件过期，也会使原游标失效。
+
+zset 新写入在轨迹 JSON 中增加序号，并维护 TTL 与轨迹一致的 `trackcursor` 有序集合索引；旧读取端仍能解码这些 JSON。历史无序号记录仍可读取，但无法恢复相同时间戳内的原始顺序；同时间戳的新记录按写入顺序排在旧记录之后。依赖游标续传前应升级全部写入端：续传期间新增旧格式记录会被检测并拒绝。额外索引会复制轨迹 payload，占用额外存储，并随会话删除。会话级序号分配与事件写入在同一事务内完成。
+
+hashidx 有限快照按批扫描边界时间戳，限制选择过程的内存占用；极大的同分组仍需在原子 Redis 脚本内扫描。续传每页最多读取 512 个序号位置，不重复扫描该时间戳分组。游标前进时，follow 会立即连续读取后续页，追平后才等待下一个 flush tick；读取和事件发送均受 follow 截止时间与请求取消控制。
+
+可用独立 Redis 运行 HTTP/SSE 回归：`cd test && TRPC_TEST_REDIS_URL=redis://127.0.0.1:6379 go test -race -run TestAGUIRedisCursor`。测试覆盖两种存储、同步/异步持久化、跨轮询同时间戳追加、多页积压、终止事件及会话重建；每个用例使用独立 Redis 前缀。
+
+相关配置：
 
 - `agui.WithMessagesSnapshotFollowEnabled(true)` 用于启用消息快照续传。
 - `agui.WithMessagesSnapshotFollowMaxDuration(time.Duration)` 用于限制续传最长时间，避免一直等待正在运行的对话结束。

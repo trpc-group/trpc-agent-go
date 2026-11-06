@@ -76,6 +76,12 @@ func (s *Service) GetTrackEvents(
 	if err != nil {
 		return nil, fmt.Errorf("check session exists: %w", err)
 	}
+	if !zsetExists && !hashidxExists && opt.TrackCursor != nil {
+		if *opt.TrackCursor != "" {
+			return nil, fmt.Errorf("track cursor session expired")
+		}
+		opt.TrackCursor = nil
+	}
 	if s.compatEnabled() && zsetExists {
 		return s.getZSetTrackEvents(ctx, key, track, opt)
 	}
@@ -100,6 +106,9 @@ func (s *Service) getZSetTrackEvents(
 	track session.Track,
 	opt *session.Options,
 ) (*session.TrackEvents, error) {
+	if opt.TrackCursor != nil {
+		return s.zsetClient.ReadTrackCursor(ctx, key, track, opt)
+	}
 	events, err := s.zsetClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("get track events (zset): %w", err)
@@ -113,6 +122,9 @@ func (s *Service) getHashIdxTrackEvents(
 	track session.Track,
 	opt *session.Options,
 ) (*session.TrackEvents, error) {
+	if opt.TrackCursor != nil {
+		return s.hashidxClient.ReadTrackCursor(ctx, key, track, opt)
+	}
 	events, err := s.hashidxClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("get track events (hashidx): %w", err)
