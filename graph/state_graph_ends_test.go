@@ -260,6 +260,48 @@ type captureTool struct {
 	err     error
 }
 
+func TestToolArgumentRepairSkipsNativeProviderDataCalls(t *testing.T) {
+	enabled := true
+	invocation := agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+		ToolCallArgumentsJSONRepairEnabled: &enabled,
+	}))
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	toolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call_native",
+		Function: model.FunctionDefinitionParam{
+			Name:      "capture",
+			Arguments: []byte("{a:2}"),
+		},
+	}
+	for _, tc := range []struct {
+		name               string
+		skipArgumentRepair bool
+		want               string
+	}{
+		{name: "legacy", want: `{"a":2}`},
+		{name: "native replay", skipArgumentRepair: true, want: "{a:2}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			captured := &captureTool{name: "capture", result: "ok"}
+			_, _, _, _, _, modifiedArgs, err := runToolWithEventContexts(
+				ctx,
+				toolCall,
+				nil,
+				captured,
+				State{},
+				nil,
+				0,
+				tc.skipArgumentRepair,
+			)
+			require.NoError(t, err)
+			require.True(t, captured.called)
+			require.Equal(t, tc.want, string(captured.gotArgs))
+			require.Equal(t, tc.want, string(modifiedArgs))
+		})
+	}
+}
+
 func (t *captureTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: t.name}
 }

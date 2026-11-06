@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
@@ -323,6 +324,7 @@ func (c *Client) loadRecentEvents(
 	}
 
 	var events []event.Event
+	decodeErrorLogged := false
 	for offset := int64(0); ; {
 		batchSize := eventLoadBatchSize
 		if offset == 0 && limit > 0 && limit < batchSize {
@@ -339,6 +341,10 @@ func (c *Client) loadRecentEvents(
 		for _, raw := range rawEvents {
 			var evt event.Event
 			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				if !decodeErrorLogged {
+					log.WarnfContext(ctx, "skip malformed events in redis history; first error: %v", err)
+					decodeErrorLogged = true
+				}
 				continue
 			}
 			if !afterTime.IsZero() && evt.Timestamp.Before(afterTime) {

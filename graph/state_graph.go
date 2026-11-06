@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
@@ -1667,6 +1668,14 @@ func (r *llmRunner) executeModel(
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
+	if callModel != nil && providerdata.MessagesHaveData(request.Messages) {
+		if err := providerdata.ValidateMessages(
+			request.Messages,
+			callModel.Info(),
+		); err != nil {
+			return nil, err
+		}
+	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	emittedModelStartEvent := false
@@ -2118,6 +2127,11 @@ func shouldEmitModelResponseEvent(
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	currentInvocation := invocationFromContextOrDefault(ctx, config.Invocation)
+	var nativeSnapshot providerdata.ResponseSnapshot
+	hasAfterCallbacks := hasAfterModelCallbacks(currentInvocation, config.ModelCallbacks)
+	if hasAfterCallbacks {
+		nativeSnapshot = providerdata.SnapshotResponse(config.Response)
+	}
 	timingInfo := responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
@@ -2166,6 +2180,11 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 	}
 	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
+	if hasAfterCallbacks {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel); err != nil {
+			return ctx, nil, err
+		}
+	}
 	timingInfo = responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
@@ -2184,6 +2203,13 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if currentInvocation != nil &&
 		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
 		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
+	}
+	var producer model.Info
+	if config.LLMModel != nil {
+		producer = config.LLMModel.Info()
+	}
+	if err := providerdata.ValidateResponse(config.Response, producer); err != nil {
+		return ctx, nil, err
 	}
 	llmEvent := event.NewResponseEvent(
 		config.InvocationID,
@@ -2266,6 +2292,13 @@ func generateModelStream(
 	request *model.Request,
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
+	if request != nil && providerdata.MessagesHaveData(request.Messages) {
+		if err := providerdata.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return modelResponseStream{}, err
+		}
+	}
 	// Generate content.
 	if iterModel, ok := llmModel.(model.IterModel); ok {
 		seq, err := iterModel.GenerateContentIter(ctx, request)
@@ -2476,17 +2509,18 @@ func newToolsNodeRuntime(
 		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
-			ToolCalls:      toolCalls,
-			Tools:          effectiveTools,
-			InvocationID:   invocationID,
-			EventChan:      eventChan,
-			Span:           span,
-			State:          state,
-			NodeID:         nodeID,
-			EnableParallel: parallel,
-			Concurrency:    concurrencyLimiter,
-			ToolCallbacks:  toolCallbacks,
-			RetryPolicy:    configuredRetryPolicy,
+			ToolCalls:          toolCalls,
+			SkipArgumentRepair: hasNativeProviderDataToolCallInState(state),
+			Tools:              effectiveTools,
+			InvocationID:       invocationID,
+			EventChan:          eventChan,
+			Span:               span,
+			State:              state,
+			NodeID:             nodeID,
+			EnableParallel:     parallel,
+			Concurrency:        concurrencyLimiter,
+			ToolCallbacks:      toolCallbacks,
+			RetryPolicy:        configuredRetryPolicy,
 		})
 		if err != nil {
 			if workflow != nil {
@@ -4373,6 +4407,14 @@ func runTool(
 	return finalCtx, result, modifiedArgs, err
 }
 
+func repairToolCallArguments(ctx context.Context, toolCall *model.ToolCall, skipArgumentRepair []bool) {
+	skipJSONRepair := len(skipArgumentRepair) > 0 && skipArgumentRepair[0]
+	if invocation, ok := agent.InvocationFromContext(ctx); ok && !skipJSONRepair &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+		jsonrepair.RepairToolCallArgumentsInPlace(ctx, toolCall)
+	}
+}
+
 func runToolWithEventContexts(
 	ctx context.Context,
 	toolCall model.ToolCall,
@@ -4381,11 +4423,10 @@ func runToolWithEventContexts(
 	state State,
 	retryPolicy *tool.RetryPolicy,
 	toolCallIndex int,
+	skipArgumentRepair ...bool,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
-	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
-		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
-	}
+	repairToolCallArguments(ctx, &toolCall, skipArgumentRepair)
 	decl := t.Declaration()
 	startInvocation := invocationFromContextOrFallback(ctx, nil)
 
@@ -4944,6 +4985,9 @@ func mergeToolCallsIntoFinalResponse(
 	if resp == nil || len(resp.Choices) == 0 {
 		return
 	}
+	if providerdata.ResponseHasData(resp) {
+		return
+	}
 	if len(resp.Choices[0].Message.ToolCalls) >= len(toolCalls) {
 		return
 	}
@@ -5351,7 +5395,14 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	}
 	p.tap.WriteDelta(response)
 	trackModelResponseTelemetry(response, p.tracker)
-	p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	nativeResponse := providerdata.ResponseHasData(response)
+	if nativeResponse {
+		// A native completion supplies the full tool list. Use the callback's
+		// final list without restoring calls collected before the callback.
+		p.toolCalls = nil
+	} else {
+		p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	}
 	p.finalResponse = response
 	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
 	var responseErr error
@@ -5395,6 +5446,10 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	// Trace the same processed response used by metrics, including callback replacements.
 	if p.lastEvent != nil {
 		response = p.lastEvent.Response
+		if response != nil && !response.IsPartial &&
+			(nativeResponse || providerdata.ResponseHasData(response)) {
+			p.finalResponse = response
+		}
 	}
 	traceProcessedModelResponse(
 		p.config.Span,
@@ -5523,7 +5578,7 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 		switch m.Role {
 		case model.RoleAssistant:
 			if len(m.ToolCalls) > 0 {
-				return m.ToolCalls, nil
+				return providerdata.ToolCallsForExecution(m), nil
 			}
 		case model.RoleUser:
 			// Stop scanning when we encounter a user message.
@@ -5538,6 +5593,25 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 
 	span.SetAttributes(attribute.String("trpc.go.agent.error", "no assistant message with tool calls found"))
 	return nil, errors.New("no assistant message with tool calls found")
+}
+
+func hasNativeProviderDataToolCallInState(state State) bool {
+	messages, ok := state[StateKeyMessages].([]model.Message)
+	if !ok {
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		switch message.Role {
+		case model.RoleAssistant:
+			if len(message.ToolCalls) > 0 {
+				return message.ProviderData != nil
+			}
+		case model.RoleUser:
+			return false
+		}
+	}
+	return false
 }
 
 // toolCallsConfig contains configuration for processing tool calls.
@@ -5559,6 +5633,9 @@ type toolCallsConfig struct {
 	RetryPolicy *tool.RetryPolicy
 	// Concurrency limits active calls across invocations of the owning node.
 	Concurrency *toolcall.Limiter
+	// SkipArgumentRepair is true when these calls came from a ProviderData
+	// message whose editable arguments must not be rewritten automatically.
+	SkipArgumentRepair bool
 }
 
 type parallelToolCallCancelCause struct {
@@ -5593,16 +5670,17 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				continue
 			}
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
-				ToolCall:      toolCall,
-				ToolCallIndex: i,
-				Tools:         config.Tools,
-				InvocationID:  config.InvocationID,
-				EventChan:     config.EventChan,
-				Span:          config.Span,
-				ToolCallbacks: toolCallbacks,
-				State:         config.State,
-				RetryPolicy:   config.RetryPolicy,
-				Concurrency:   config.Concurrency,
+				ToolCall:           toolCall,
+				SkipArgumentRepair: config.SkipArgumentRepair,
+				ToolCallIndex:      i,
+				Tools:              config.Tools,
+				InvocationID:       config.InvocationID,
+				EventChan:          config.EventChan,
+				Span:               config.Span,
+				ToolCallbacks:      toolCallbacks,
+				State:              config.State,
+				RetryPolicy:        config.RetryPolicy,
+				Concurrency:        config.Concurrency,
 			})
 			if err != nil {
 				if IsInterruptError(err) {
@@ -5661,17 +5739,18 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		go func(ctx context.Context) {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
-				ToolCall:      tc,
-				ToolCallIndex: i,
-				Tools:         config.Tools,
-				InvocationID:  config.InvocationID,
-				EventChan:     config.EventChan,
-				Span:          config.Span,
-				ToolCallbacks: toolCallbacks,
-				State:         config.State,
-				RetryPolicy:   config.RetryPolicy,
-				Concurrency:   config.Concurrency,
-				TraceRecorder: traceRecorder,
+				ToolCall:           tc,
+				SkipArgumentRepair: config.SkipArgumentRepair,
+				ToolCallIndex:      i,
+				Tools:              config.Tools,
+				InvocationID:       config.InvocationID,
+				EventChan:          config.EventChan,
+				Span:               config.Span,
+				ToolCallbacks:      toolCallbacks,
+				State:              config.State,
+				RetryPolicy:        config.RetryPolicy,
+				Concurrency:        config.Concurrency,
+				TraceRecorder:      traceRecorder,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
@@ -5854,17 +5933,18 @@ func agentToolCallKey(index int, toolCall model.ToolCall) string {
 
 // singleToolCallConfig contains configuration for executing a single tool call.
 type singleToolCallConfig struct {
-	ToolCall      model.ToolCall
-	ToolCallIndex int
-	Tools         map[string]tool.Tool
-	InvocationID  string
-	EventChan     chan<- *event.Event
-	Span          oteltrace.Span
-	ToolCallbacks *tool.Callbacks
-	State         State
-	RetryPolicy   *tool.RetryPolicy
-	Concurrency   *toolcall.Limiter
-	TraceRecorder *graphToolTraceRecorder
+	ToolCall           model.ToolCall
+	SkipArgumentRepair bool
+	ToolCallIndex      int
+	Tools              map[string]tool.Tool
+	InvocationID       string
+	EventChan          chan<- *event.Event
+	Span               oteltrace.Span
+	ToolCallbacks      *tool.Callbacks
+	State              State
+	RetryPolicy        *tool.RetryPolicy
+	Concurrency        *toolcall.Limiter
+	TraceRecorder      *graphToolTraceRecorder
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -5950,6 +6030,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		config.State,
 		config.RetryPolicy,
 		config.ToolCallIndex,
+		config.SkipArgumentRepair,
 	)
 	eventInvocation := invocationFromContextOrFallback(
 		finalCtx,

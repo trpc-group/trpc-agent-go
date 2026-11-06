@@ -11,6 +11,7 @@ package jsonrepair
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -199,6 +200,38 @@ func TestRepairResponseToolCallArgumentsInPlace_RepairsAllChoices(t *testing.T) 
 	RepairResponseToolCallArgumentsInPlace(ctx, response)
 	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 	require.Equal(t, "{\"c\":4}", string(response.Choices[0].Delta.ToolCalls[0].Function.Arguments))
+}
+
+func TestRepairResponseToolCallArgumentsInPlaceSkipsNativeProviderData(t *testing.T) {
+	ctx := context.Background()
+	native := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name: "native", Arguments: []byte("{a:2}"),
+			},
+		}},
+	}
+	native.ProviderData = &model.ProviderData{
+		Protocol: "test.native",
+		Model:    "native-model",
+		Payload:  json.RawMessage(`[]`),
+	}
+	response := &model.Response{Choices: []model.Choice{
+		{Message: native},
+		{Message: model.Message{ToolCalls: []model.ToolCall{{
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name: "legacy", Arguments: []byte("{b:3}"),
+			},
+		}}}},
+	}}
+
+	RepairResponseToolCallArgumentsInPlace(ctx, response)
+	require.Equal(t, "{a:2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.Equal(t, `{"b":3}`, string(response.Choices[1].Message.ToolCalls[0].Function.Arguments),
+		"legacy repair behavior remains unchanged")
 }
 
 // TestChooseToolCallArguments_ReturnsOriginalForInvalidOutput verifies invalid repair output does not replace arguments.
