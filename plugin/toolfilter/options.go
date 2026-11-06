@@ -161,7 +161,9 @@ func WithMinToolCount(count int) Option {
 // limit are sent directly to the decision model. Larger catalogs use lexical
 // recall, optionally combined with embeddings; if recall finds no candidates,
 // the catalog remains visible. Embeddings can also rank queries without lexical
-// tokens. The limit must be at least 1; the default is 16.
+// tokens. Without lexical tokens, the catalog remains visible if any
+// candidate embedding is unavailable. The limit must be at least 1; the
+// default is 16.
 func WithShortlistLimit(limit int) Option {
 	return func(o *options) {
 		if limit >= 1 {

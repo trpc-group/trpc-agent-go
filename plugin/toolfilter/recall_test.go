@@ -199,13 +199,15 @@ func TestRecallRank_EmbeddingWithoutKeywordTokens(t *testing.T) {
 	for _, query := range []string{"مرحبا", "привет", "x"} {
 		t.Run(query, func(t *testing.T) {
 			emb := &stubEmbedder{vectors: map[string][]float64{
-				query: {1, 0}, "alpha\nfirst": {0, 1}, "beta\nsecond": {1, 0},
+				query: {1, 0}, "alpha\nfirst": {0, 1}, "beta\nsecond": {1, 0}, "missing\nno vector": {0, -1},
 			}}
 			ranked := recallRank(context.Background(), query, candidates, newEmbedCache(emb))
-			require.Len(t, ranked, 2)
+			require.Len(t, ranked, 3)
 			require.Equal(t, "beta", ranked[0].name)
 			require.Greater(t, ranked[0].score, ranked[1].score)
 			require.Positive(t, ranked[1].score)
+			delete(emb.vectors, "missing\nno vector")
+			require.Empty(t, recallRank(context.Background(), query, candidates, newEmbedCache(emb)))
 		})
 	}
 	require.Empty(t, recallRank(context.Background(), "x", candidates, nil))

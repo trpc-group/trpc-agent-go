@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func conversationEvent(role model.Role, text, filter string) event.Event {
@@ -108,4 +109,28 @@ func TestDecisionConversationContentParts(t *testing.T) {
 	state, users := decisionConversation(inv)
 	require.Equal(t, "user: find flights", state)
 	require.Equal(t, "find flights", users)
+}
+
+func TestTokenlessPartialEmbeddingFailureKeepsCatalogs(t *testing.T) {
+	server, rec := decisionServer(t, binaryResponder(nil, 0.05), http.StatusOK)
+	emb := &stubEmbedder{vectors: map[string][]float64{
+		"x": {1, 0}, "alpha\nfirst": {1, 0},
+	}}
+	opts := []Option{WithHTTPClient(server.Client()), WithShortlistLimit(1), WithShortlistEmbedder(emb)}
+	cb, err := NewToolCallback(server.URL, append(opts, WithMinToolCount(0))...)
+	require.NoError(t, err)
+	summaries := []skill.Summary{{Name: "alpha", Description: "first"}, {Name: "beta", Description: "second"}}
+	sf, err := NewSkillFilter(server.URL, &fakeSkillRepo{summaries: summaries}, opts...)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(model.NewUserMessage("x")))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := newToolMap(&stubTool{name: "alpha", description: "first"}, &stubTool{name: "beta", description: "second"})
+	req := newUserRequest("x", tools)
+	_, err = cb.Callback()(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	require.Equal(t, tools, req.Tools)
+	for _, summary := range summaries {
+		require.True(t, sf.VisibilityFilter()(ctx, summary), summary.Name)
+	}
+	require.Zero(t, rec.requests())
 }

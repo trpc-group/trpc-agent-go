@@ -286,6 +286,9 @@ dispatch:
 		return vectorRank[i].candidate.name < vectorRank[j].candidate.name
 	})
 	if len(userTokens) == 0 {
+		if len(vectorRank) < len(candidates) {
+			return nil
+		}
 		out := make([]scoredCandidate, len(vectorRank))
 		for rank, cand := range vectorRank {
 			out[rank] = cand.candidate
