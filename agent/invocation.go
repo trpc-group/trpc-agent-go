@@ -537,6 +537,9 @@ func WithGraphTerminalMessagesOnly(enabled bool) RunOption {
 
 // WithStreamMode sets StreamMode selection for this run.
 //
+// Modes in one call form a union: each matching event is forwarded once.
+// A later WithStreamMode call replaces the previous mode selection.
+//
 // When StreamModeMessages is present, graph-based Large Language Model (LLM)
 // nodes will also emit their final (Done=true) model responses by default.
 // If you need to override that behavior, call WithGraphEmitFinalModelResponses

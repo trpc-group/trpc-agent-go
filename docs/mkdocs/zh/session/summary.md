@@ -187,11 +187,28 @@ summarizer := summary.NewSummarizer(
 当作待总结的源数据，而不是需要继续执行的任务。其他 standalone fallback（包括
 bounded 请求和 retry 请求）也使用相同结构。
 
-无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查：如果模型
-能够提供 provider-specific input budget，框架会取它与“模型 context window 的
-70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
-请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
-的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
+无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查。默认情况下，
+如果模型能够提供 provider-specific input budget，框架会取它与“模型 context window
+的 70%”这层保守上限中的较小值。
+
+使用 `WithRequestInputTokenBudget(tokens)` 可以用正数 token 预算替代默认的 70%
+预算。有效预算仍不能超过模型 context window 和 provider-specific input budget。
+如果无法解析 context window，沿用现有的 8192-token fallback window。传入零或负数
+会恢复自动预算；多次配置时最后一次生效。预算统计完整摘要请求的估算输入 token，
+包含提示词、对话和 tool schemas，同时适用于 standalone 和 cache-safe fork 请求，
+不改变摘要触发阈值或摘要输出限制。
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(2000),
+    summary.WithRequestInputTokenBudget(8192),
+)
+```
+
+fork 请求超预算时，框架只修改 clone，不会污染父请求：先移除摘要调用不会使用的
+tool schemas，必要时再用明确的省略标记替换较大的 tool arguments/results payload，
+但不会删除 source conversation turn。如果仍然
 放不下，再重建为 bounded standalone 请求。完整渲染后的 fork prompt（包括自定义
 内容）在 fork 和 standalone 两种请求中都会占用输入预算。当预算能够容纳全部尚未
 覆盖的新对话时，standalone 路径会完整保留这些内容；使用
@@ -618,11 +635,12 @@ summary.WithChecksAny(
 | 选项 | 说明 |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | 限制摘要的最大字数，包含在提示词中指导模型生成 |
+| `WithRequestInputTokenBudget(tokens int)` | 覆盖默认的摘要请求输入预算；正数仍受模型 context window 和 provider 预算限制，零或负数恢复自动预算 |
 | `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}`，可选包含 `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` 或 `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
 | `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 请求的最终指令；standalone fallback 会在 source-data boundary 后追加同一指令，其渲染结果会计入输入预算。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` 或 `{previous_summary}` |
-| `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
+| `WithSkipRecentContext(skipFunc ContextSkipRecentFunc)` | 使用请求 `context.Context` 决定跳过最近事件；最后配置的 skip-recent 选项生效 |
 
 ### Hook 选项
 
@@ -631,6 +649,15 @@ summary.WithChecksAny(
 | `WithPreSummaryHook(h PreSummaryHook)` | 摘要前的 Hook，可修改输入文本 |
 | `WithPostSummaryHook(h PostSummaryHook)` | 摘要后的 Hook，可修改输出摘要 |
 | `WithSummaryHookAbortOnError(abort bool)` | Hook 报错时是否中断，默认 `false`（忽略错误） |
+
+### 消息内容
+
+对于普通消息，摘要器先读取 `Content`，再按顺序读取 `ContentParts` 中非空的文本
+part。这些文本用于判断消息是否可摘要，以及构造独立摘要请求的输入。图片、音频
+等非文本 part 不会转写为文本。
+
+cache-safe fork 复用选中的父请求消息，保留原始内容及 part 顺序，再追加摘要指令。
+上文所述的请求预算规则仍然适用。
 
 ### 工具调用格式化
 
@@ -808,7 +835,7 @@ summarizer := summary.NewSummarizer(
 
 ## Token 计数器配置
 
-默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果需要自定义 token 计数行为，可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
+摘要检查默认使用内置的 `SimpleTokenCounter`。可以通过 `summary.SetTokenCounter` 设置进程默认计数器，用于摘要检查、摘要请求估算，以及自动摘要和 LLM 调用前摘要触发所需的模型可见请求计数。Agent 显式设置的 `WithContextCompactionTokenCounter(...)` 对该 agent 的请求计数优先：
 
 `SimpleTokenCounter` 的 `WithApproxRunesPerToken(v)` 表示约 `v` 个 UTF-8 字符对应 1 个 token，估算公式是 `estimatedTokens = countedUTF8Runes / v`。例如 `v=1.5` 表示约 `1.5` 字符/token；不要把它当成 token 乘数。
 
@@ -869,26 +896,28 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 **注意**：
 
-- **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估，建议在应用初始化时一次性设置
-- **默认计数器**：如果不设置，将使用默认的 `SimpleTokenCounter`（约每 token 对应 4 个字符）
+- **计数器优先级**：模型可见请求计数优先使用 agent 显式设置的 `WithContextCompactionTokenCounter(...)`，其次是 `summary.SetTokenCounter(...)` 配置的进程默认值，最后回落到内置 `SimpleTokenCounter`。LLM 调用前摘要触发和使用最终 request view 的自动摘要检查都遵循此规则。关闭 context compaction 时，自动摘要检查仍遵循此规则。
+- **更新与重置**：建议在应用初始化时设置进程默认值；后续更新会作用于接下来的评估，已创建的 agent 也会生效。`SetTokenCounter(nil)` 恢复内置默认值。自定义计数器须支持并发调用。
+- **独立计数器**：Tool result 压缩和模型层 token tailoring 保留各自的默认值。如需统一估算口径，应为这些路径显式配置相同的计数器。
+- **默认计数器**：内置 `SimpleTokenCounter` 按每 token 约 4 个字符估算。
 - **参数语义**：`WithApproxRunesPerToken(v)` 中的 `v` 是字符/token。传入 `2.0/3.0` 表示约 `0.67` 字符/token，等价于约 `1.5` token/字符
 
 ## 跳过最近事件
 
-使用 `WithSkipRecent` 可以在摘要时跳过最近的事件：
+使用 `WithSkipRecentContext` 可以在摘要时跳过最近的事件：
 
 ```go
 // 跳过固定数量的事件
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }), // 跳过最后 2 个事件
+    summary.WithSkipRecentContext(func(_ context.Context, _ []event.Event) int { return 2 }), // 跳过最后 2 个事件
     summary.WithEventThreshold(10),
 )
 
 // 跳过最近 5 分钟的事件（时间窗口）
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         cutoff := time.Now().Add(-5 * time.Minute)
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
@@ -906,7 +935,7 @@ summarizer := summary.NewSummarizer(
 // 只跳过尾部的工具调用消息
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
             if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
@@ -1286,10 +1315,14 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底。它按消息轮次裁剪，因此恢复片段应保持足够小，避免在最后的模型请求中被整体挤出
-- Context compaction 默认使用 `SimpleTokenCounter` 估算 token。如果业务使用了针对中文
-  或特定 provider 的自定义 counter，建议同时通过
-  `WithContextCompactionTokenCounter(...)` 传入同一个 counter，让 Pass 1 判断和
-  Pass 2 截断与模型层 token tailoring 使用一致的估算口径。
+- LLM 调用前摘要触发和自动摘要检查的请求计数，优先采用 agent 显式设置的
+  `WithContextCompactionTokenCounter(...)`，其次是当前
+  `summary.SetTokenCounter(...)` 进程默认值，最后回落到内置 `SimpleTokenCounter`。
+  关闭 context compaction 时，自动摘要检查仍遵循此规则。
+- Tool result 压缩和模型层 token tailoring 保留独立默认值。如需统一中文或特定
+  provider 的估算口径，应通过 `WithContextCompactionTokenCounter(...)` 为
+  Pass 1/Pass 2 显式配置计数器，并通过模型的 token-counter 选项为 token tailoring
+  配置相同的计数器。
 
 ```go
 counter := model.NewSimpleTokenCounter(
@@ -1700,7 +1733,7 @@ SessionService API，也不新增诊断开关。
 | --- | --- |
 | `selected` | hook 前选定了事件；这不证明这些事件就是后来送进模型的 payload |
 | `no_candidates` | 该阶段本来就没有候选事件 |
-| `skip_recent_all` | `WithSkipRecent` 回调要求跳过的数量不少于可用事件数 |
+| `skip_recent_all` | `WithSkipRecentContext` 回调要求跳过的数量不少于可用事件数 |
 | `unsafe_prefix` | skip-recent 之后仍有事件，但保留的前缀既没有用户消息也没有前置的历史摘要作为锚点，因此被丢弃 |
 | `session_filter_empty` | 候选事件通过了 skip-recent，随后被摘要的分支作用域全部过滤掉 |
 | `unbound_view` | 存在模型可见视图，但未绑定到模型真正回答的请求 |
@@ -1708,7 +1741,7 @@ SessionService API，也不新增诊断开关。
 | `custom` | 本次摘要调用没有发布内置事件选择，计数未知 |
 | `none` | 没有 summarizer 运行，未观测到任何选择 |
 
-配套的计数描述的是接收 `WithSkipRecent` 回调的那个阶段：
+配套的计数描述的是接收 `WithSkipRecentContext` 回调的那个阶段：
 
 - `eligible_events`：交给该阶段的候选事件数，在 skip-recent 执行之前统计。对已
   绑定的模型可见视图，它包含前置的历史摘要；对未绑定视图，它是未被考虑的视图条

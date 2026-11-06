@@ -408,9 +408,11 @@ type Options struct {
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
 	// ContextCompactionTokenCounter estimates request and tool-result size for
-	// context compaction. Compaction thresholds are compared against this
-	// estimate, not provider-reported usage tokens. When nil,
-	// SimpleTokenCounter is used.
+	// context compaction and model-visible request size for automatic summary
+	// checks. Thresholds use these estimates, not provider-reported usage tokens.
+	// When nil, request estimates use the current process default configured by
+	// summary.SetTokenCounter (SimpleTokenCounter unless overridden), while
+	// tool-result compaction uses its independent SimpleTokenCounter default.
 	ContextCompactionTokenCounter model.TokenCounter
 	// ToolResultCompactionConfig declares tool-name based compaction rules.
 	ToolResultCompactionConfig *ToolResultCompactionConfig
@@ -1875,6 +1877,8 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 // budgets use the counter's estimated token count, not provider-reported usage
 // tokens. For SimpleTokenCounter, WithApproxRunesPerToken is runes per token
 // (estimated tokens = counted runes / value).
+// The counter also takes precedence over summary.SetTokenCounter for
+// model-visible request estimates used by automatic summary checks.
 func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *Options) {
 		if counter != nil {
@@ -1926,6 +1930,10 @@ func WithPreserveForeignMessages(preserve bool) Option {
 
 // WithEventMessageProjector rewrites one event-derived message before
 // it is appended to the model request.
+// For messages carrying ProviderData, editing display fields does not change
+// the native input sent to the model. The projector may explicitly replace or
+// clear ProviderData; its payload and producer identity are checked before use.
+// Clearing it from an unfinished native tool round may prevent continuation.
 func WithEventMessageProjector(
 	projector EventMessageProjector,
 ) Option {
@@ -2007,6 +2015,9 @@ func WithMessageBranchFilterMode(mode string) Option {
 // multi-turn conversations. This is particularly important for DeepSeek models
 // where ordinary previous-turn reasoning_content may be omitted, but tool-call
 // reasoning_content must be replayed in later turns.
+//
+// This option changes message reasoning fields, not a native ProviderData payload.
+// A native adapter may therefore still send reasoning retained in ProviderData.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from

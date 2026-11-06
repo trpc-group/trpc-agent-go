@@ -10,7 +10,9 @@
 package json
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -309,5 +311,29 @@ func TestJSONReader_ExtractFileNameFromURL(t *testing.T) {
 				t.Errorf("extractFileNameFromURL(%q) = %q, want %q", tt.url, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestJSONReaderPreservesNumbers(t *testing.T) {
+	for _, chunk := range []bool{false, true} {
+		for _, literal := range []string{"9007199254740993", "18446744073709551615", "0.1234567890123456789", "1e400"} {
+			t.Run(fmt.Sprintf("chunk=%t/%s", chunk, literal), func(t *testing.T) {
+				input := `{"value":` + literal + `}`
+				docs, err := New(reader.WithChunk(chunk)).ReadFromReader("numbers", strings.NewReader(input))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(docs) != 1 {
+					t.Fatalf("got %d documents, want 1", len(docs))
+				}
+				var got map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(docs[0].Content), &got); err != nil {
+					t.Fatal(err)
+				}
+				if string(got["value"]) != literal {
+					t.Fatalf("number = %s, want %s", got["value"], literal)
+				}
+			})
+		}
 	}
 }

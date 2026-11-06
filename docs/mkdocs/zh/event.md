@@ -17,6 +17,10 @@ type Event struct {
     // Response 是 Event 的基础响应结构，承载 LLM 的响应
     *model.Response
 
+    // RunOutcome 描述 runner completion 结果，例如显式取消或超时。
+    // 非 completion 事件、正常完成和通用取消时为 nil。
+    RunOutcome *RunOutcome `json:"run_outcome,omitempty"`
+
     // RequestID 记录关联本次请求的ID，可由runner.Run通过agent.WithRequestID("request-ID")传递.
 	RequestID string `json:"requestID,omitempty"`
 

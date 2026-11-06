@@ -242,6 +242,9 @@ Strategy。Reader 会按文档类型选择默认行为：
 PDF、DOCX、Go 和 Python Reader 都是按需导入的包。应用需要显式导入所需
 Reader，让它注册到 Reader registry。
 
+Python AST 实体签名和类骨架会保留仅限位置（`/`）、可变参数及仅限关键字（`*`）
+参数，包括参数的类型注解和默认值。
+
 **默认参数**：
 
 | 参数 | 默认值 | 说明 |

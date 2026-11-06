@@ -124,6 +124,90 @@ agent := llmagent.New(
 - 生产环境或更强调隔离：优先 `container`
 - 明确需要 Jupyter kernel：使用 `jupyter`
 
+### E2B sandbox 主机名兼容性
+
+默认情况下，API 响应缺少 `domain`、返回 `null` 或空字符串时，如果 `clientID`
+非空，主机名保留旧格式 `<port>-<sandboxID>-<clientID>.<配置域名>`。
+对于仅按 sandbox ID 路由的部署（例如省略 `domain` 的 AGS 入口），在
+`e2b.New` 或 `e2b.NewWithContext` 中将该选项设为 `false`：
+
+```go
+executor, err := e2b.New(
+    e2b.WithDomain("your-sandbox-domain"),
+    e2b.WithClientIDHostSuffix(false),
+)
+```
+
+设为 `false` 后，回退地址为 `<port>-<sandboxID>.<配置域名>`。响应中的非空 `domain`
+仍优先于配置域名，且不会追加 client ID 后缀。该选项同时作用于创建和重连、
+Code Interpreter、原生进程请求及 `executor.Sandbox().GetHost(port)`，不改变
+sandbox ID、管理 API 地址或 client ID 元数据。不传入此选项或设为 `true` 时
+保持原有行为；`true` 仅保留旧有的条件性追加规则，不会在响应域名非空时强制追加后缀。
+
+### E2B 代码执行时限
+
+`ExecuteCode` 把代码送到 Code Interpreter 的 `/execute` 流。执行请求体不包含
+timeout 字段。客户端有两段时限；调用方 context 上更早的取消或 deadline 会原样返回：
+
+- `WithRequestTimeout` 只限制等待 HTTP 响应头的时间。零值使用 30 秒，负值关闭
+  该默认时限。单次调用可用 `RunCodeOpts.RequestTimeout` 覆盖：零值沿用 sandbox
+  的请求时限，负值关闭这一次的响应头时限。收到响应头后该时限即清除，不会加到
+  执行预算上，也不再限制后续的长输出流或 HTTP 错误响应体。
+- `WithExecutionTimeout` 限制收到响应头之后读取响应体的时间，包括执行流和 HTTP
+  错误响应体。零值使用 300 秒，负值只关闭这段读取时限，不关闭响应头等待，也不会
+  让已经结束职责的响应头时限继续截断响应体。`RunCodeOpts.Timeout` 的零值和负值
+  含义相同。
+
+请求超时和执行超时都是 `TimeoutError`，由消息区分。调用方取消仍是
+`context.Canceled`，调用方 deadline 仍是 `context.DeadlineExceeded`，二者都不会
+被报成执行超时。停止客户端等待不会杀掉远端 kernel、正在运行的程序或 sandbox。
+仍调用 `/execute` 的 workspace 文件操作使用同一套分段时限：操作时限只限制
+响应头之后的流，`WithRequestTimeout` 只限制响应头等待。`RunProgram` 不走这条流；
+只有 envd 进程 deadline 会设置 `RunResult.TimedOut`，并且按错误类型和错误链识别，
+不看错误文本里是否碰巧包含 “timeout”。显式配置的 `http.Client.Timeout` 仍覆盖
+整个 HTTP 交换，包括响应体。需要保持流打开时，请不要设置它，或把它设得比流更长。
+该时限或其他传输层时限到期时，错误会标明来源，以及当时是在等待响应头还是在读取
+响应体。它不是 `RequestTimeout` 或 `Timeout` 对应的 `TimeoutError`，加大这两个
+选项也不会延长客户端时限。原始传输错误仍可通过 unwrap 取得。
+
+### E2B workspace 程序执行
+
+`e2b.CodeExecutor.RunProgram` 和 `Engine().Runner().RunProgram` 使用原生
+envd Process RPC，不再依赖 Code Interpreter `/execute`。`ExecuteCode`
+（包括显式提交的 Bash 代码块）继续使用 Code Interpreter kernel。
+Workspace 文件系统操作仍使用 `/execute`，本次迁移仅覆盖程序执行。
+
+- `RunProgramSpec.Timeout` 非正时默认 **30 秒**，覆盖目录准备和命令执行。
+  `WithExecutionTimeout` 作用于代码单元，不控制 workspace 程序。
+- stdout/stderr 保留原始字节、末尾换行及与旧哨兵字符串相同的内容，不做截断。
+- 正常的非零退出通过 `RunResult.ExitCode` 返回，Go error 为 nil。
+  调用方取消、HTTP/RPC 故障返回错误；只有进程自身的 deadline 设置 `TimedOut`，
+  调用方 deadline 不会设置该标志。取消或流异常会触发有界、尽力而为的进程清理，
+  清理可能增加返回耗时，也可能失败。
+- `CleanEnv` 使用 `env -i`，保留 workspace 变量及调用者的 `Env`，同名变量由
+  调用者覆盖。未提供 `PATH` 时，干净环境补入最小系统路径。Linux 模板须提供
+  `/bin/bash`、`/bin/mkdir` 和 `/usr/bin/env` 以完成目录准备。
+- 非空 `Stdin` 需要 **envd 0.5.2 或更新版本**才能发送 EOF。版本来自新建或连接
+  sandbox 的元数据；缺失时通过 sandbox info 刷新。版本未知或不支持时，在启动
+  命令前明确报错。空 stdin 在旧版 envd 上也会收到 EOF，不回退 `/execute`。
+
+原生路径复用新建或连接 sandbox 得到的 domain、数据面 token 和配置的 HTTP
+client，并保留显式设置的 `http.Client.Timeout`；该值不应短于需要运行的长命令。
+默认 `WithRequestTimeout` 不作为整个 Process 流的总超时。远端 Process endpoint
+要求 HTTPS；本地调试可组合 `WithDebug(true)` 与 `WithDomain("localhost")`
+或回环 IP，但 HTTP 不允许携带 access token 或自定义 header。
+
+远端 workspace 程序默认使用 `root`，与标准 Code Interpreter kernel 创建目录、
+写入文件和读取输出时的账号一致。这样能继续访问已有 workspace 和私有文件，
+无需修改其所有权或权限。原生模板的默认账号可能不同，因此 Code Interpreter
+适配层会显式选择账号，该选择不依赖 envd 版本。
+
+若自定义模板的 kernel 使用其他账号，应通过 `WithHeaders` 配置相同账号的
+Basic 认证，例如在 HTTPS 上使用 `Authorization: Basic dXNlcjo=` 表示 `user:`。
+显式配置的 `Authorization` header 优先。无凭据的回环地址调试使用本地服务端
+账号。kernel 进程内临时修改的环境不会被原生进程继承；自定义模板迁移时仍需
+核对 HOME/PATH。
+
 ## Workspace 中有哪些目录
 
 执行器会在一个 workspace 中运行程序。常见目录约定如下：

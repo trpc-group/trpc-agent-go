@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
@@ -625,7 +626,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 			p.attachmentBudget,
 		)
 	}
-	toolCalls := llmResponse.Choices[0].Message.ToolCalls
+	toolCalls := providerdata.ToolCallsForExecution(llmResponse.Choices[0].Message)
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
 	if p.enableParallelTools &&
 		!toolCallsRequireSerialExecution(toolCalls, tools) {
@@ -819,7 +820,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			p.attachmentBudget,
 		)
 	}
-	toolCalls := llmResponse.Choices[0].Message.ToolCalls
+	toolCalls := providerdata.ToolCallsForExecution(llmResponse.Choices[0].Message)
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
 	// unless a tool opts out of concurrency (for example session-mutating
@@ -1573,6 +1574,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		defer span.End()
 	}
 	startTime := time.Now()
+	ctx = withNativeProviderDataToolCallArgs(ctx, llmResponseHasNativeProviderData(llmResponse))
 	execution, err := p.executeToolCall(
 		ctx,
 		invocation,
@@ -1937,6 +1939,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		defer span.End()
 	}
 	startTime := time.Now()
+	ctx = withNativeProviderDataToolCallArgs(ctx, llmResponseHasNativeProviderData(llmResponse))
 	// Execute the tool (streamable or callable) with callbacks.
 	execution, err := p.executeToolCall(
 		ctx,
@@ -3553,7 +3556,8 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
-	if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+	if !hasNativeProviderDataToolCallArgs(ctx) &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
@@ -3677,6 +3681,34 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+func llmResponseHasNativeProviderData(response *model.Response) bool {
+	return response != nil && len(response.Choices) > 0 &&
+		response.Choices[0].Message.ProviderData != nil
+}
+
+type nativeProviderDataToolCallArgsContextKey struct{}
+
+func withNativeProviderDataToolCallArgs(ctx context.Context, native bool) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	if native {
+		return context.WithValue(ctx, nativeProviderDataToolCallArgsContextKey{}, true)
+	}
+	if hasNativeProviderDataToolCallArgs(ctx) {
+		return context.WithValue(ctx, nativeProviderDataToolCallArgsContextKey{}, false)
+	}
+	return ctx
+}
+
+func hasNativeProviderDataToolCallArgs(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	native, _ := ctx.Value(nativeProviderDataToolCallArgsContextKey{}).(bool)
+	return native
 }
 
 func (p *FunctionCallResponseProcessor) checkToolPermission(

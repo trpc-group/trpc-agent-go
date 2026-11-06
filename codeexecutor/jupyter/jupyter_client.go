@@ -79,9 +79,9 @@ type executionMessage struct {
 }
 
 // NewClient creates a new Jupyter client from connectionInfo.
-// If readiness fails after startup, NewClient attempts to delete the started
-// kernel and closes the websocket. The returned error may include both the
-// readiness error and any cleanup error.
+// If initialization fails after the kernel starts, NewClient attempts to delete
+// the kernel and closes the websocket if one was established. The returned
+// error may include both the initialization error and any cleanup error.
 func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	baseURL := fmt.Sprintf("http://%s:%d", connectionInfo.Host, connectionInfo.Port)
 	c := &Client{
@@ -119,7 +119,7 @@ func NewClient(connectionInfo ConnectionInfo) (*Client, error) {
 	}
 	ws, _, err := websocket.DefaultDialer.Dial(wsUrl, reqHeader)
 	if err != nil {
-		return nil, err
+		return nil, c.cleanupAfterStartupFailure(err)
 	}
 
 	c.ws = ws
@@ -266,11 +266,14 @@ func (c *Client) deleteKernel() error {
 	return nil
 }
 
+// cleanupAfterStartupFailure deletes the started kernel and closes the websocket after startup fails.
 func (c *Client) cleanupAfterStartupFailure(err error) error {
 	if cleanupErr := c.deleteKernel(); cleanupErr != nil {
 		err = errors.Join(err, cleanupErr)
 	}
-	_ = c.ws.Close()
+	if c.ws != nil {
+		_ = c.ws.Close()
+	}
 	return err
 }
 

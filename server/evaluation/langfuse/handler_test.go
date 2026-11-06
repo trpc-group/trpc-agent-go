@@ -1115,7 +1115,7 @@ func TestProcessCaseReturnsTraceCreationErrors(t *testing.T) {
 			}},
 		},
 	}}))
-	_, _, _, err = handler.processCase(context.Background(), "dataset-1", executionOptions{
+	_, _, _, err = handler.publishCase(context.Background(), handler.agentEvaluator.(*fakeAgentEvaluator).result, &caseTrace{fallback: "trace-1"}, executionOptions{
 		runName:   "nightly-run",
 		userID:    "demo-user",
 		traceTags: []string{"framework-tag"},
@@ -1161,7 +1161,7 @@ func TestProcessCaseReturnsDatasetRunItemCreationErrors(t *testing.T) {
 		WithSecretKey("sk"),
 	)
 	require.NoError(t, err)
-	_, _, _, err = handler.processCase(context.Background(), "dataset-1", executionOptions{
+	_, _, _, err = handler.publishCase(context.Background(), handler.agentEvaluator.(*fakeAgentEvaluator).result, &caseTrace{fallback: "trace-1"}, executionOptions{
 		runName: "nightly-run",
 		userID:  "demo-user",
 	}, buildTestCaseSpec("item-1"))
@@ -1206,7 +1206,7 @@ func TestProcessCaseReturnsScoreCreationErrors(t *testing.T) {
 		WithSecretKey("sk"),
 	)
 	require.NoError(t, err)
-	_, _, scoreCount, err := handler.processCase(context.Background(), "dataset-1", executionOptions{
+	_, _, scoreCount, err := handler.publishCase(context.Background(), handler.agentEvaluator.(*fakeAgentEvaluator).result, &caseTrace{fallback: "trace-1"}, executionOptions{
 		runName: "nightly-run",
 		userID:  "demo-user",
 	}, buildTestCaseSpec("item-1"))
@@ -1248,7 +1248,7 @@ func TestProcessCaseReturnsSummaryWithoutMetricReasons(t *testing.T) {
 		WithSecretKey("sk"),
 	)
 	require.NoError(t, err)
-	summary, datasetRunID, scoreCount, err := handler.processCase(context.Background(), "dataset-1", executionOptions{
+	summary, datasetRunID, scoreCount, err := handler.publishCase(context.Background(), handler.agentEvaluator.(*fakeAgentEvaluator).result, &caseTrace{fallback: "trace-1"}, executionOptions{
 		runName: "nightly-run",
 		userID:  "demo-user",
 	}, buildTestCaseSpec("item-1"))

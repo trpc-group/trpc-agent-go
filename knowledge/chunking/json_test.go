@@ -583,3 +583,40 @@ func TestJSONChunkingOrderIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestJSONChunkingPreservesNumbers(t *testing.T) {
+	for _, input := range []string{
+		`{"id":9007199254740993}`,
+		`{"values":[18446744073709551615,0.1234567890123456789,1e400]}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			chunker := NewJSONChunking()
+			chunks, err := chunker.SplitJSONString(input, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(chunks) != 1 || chunks[0] != input {
+				t.Fatalf("SplitJSONString() = %v, want [%s]", chunks, input)
+			}
+			docs, err := chunker.Chunk(&document.Document{Content: input})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(docs) != 1 || docs[0].Content != input {
+				t.Fatalf("Chunk() = %v, want %s", docs, input)
+			}
+		})
+	}
+}
+
+func TestJSONChunkingRejectsTrailingData(t *testing.T) {
+	for _, input := range []string{`{"id":1} {"id":2}`, `{"id":1} trailing`} {
+		chunker := NewJSONChunking()
+		if _, err := chunker.SplitJSONString(input, false); err == nil {
+			t.Errorf("SplitJSONString(%q) accepted trailing data", input)
+		}
+		if _, err := chunker.Chunk(&document.Document{Content: input}); err == nil {
+			t.Errorf("Chunk(%q) accepted trailing data", input)
+		}
+	}
+}

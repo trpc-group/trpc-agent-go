@@ -42,6 +42,17 @@ func WithDomain(domain string) Option {
 	return func(c *CodeExecutor) { c.domain = domain }
 }
 
+// WithClientIDHostSuffix controls the legacy client ID suffix in sandbox
+// hostnames. It is enabled by default. When enabled, the suffix is appended
+// only when the response domain is empty and the client ID is non-empty.
+// When disabled, fallback hostnames use only the sandbox ID and configured
+// domain. A non-empty response domain always takes precedence without a suffix.
+// This applies to Code Interpreter, native processes, and Sandbox().GetHost
+// for both new and connected sandboxes.
+func WithClientIDHostSuffix(enabled bool) Option {
+	return func(c *CodeExecutor) { c.disableClientIDHostSuffix = !enabled }
+}
+
 // WithAPIURL overrides the full base URL of the E2B management API
 // (e.g. "https://api.e2b.app" or "http://127.0.0.1:8080"). When set it
 // takes precedence over WithDomain/WithDebug URL construction. Falls back
@@ -65,13 +76,29 @@ func WithSandboxTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.sandboxTimeout = t }
 }
 
-// WithRequestTimeout sets the HTTP request timeout.
+// WithRequestTimeout sets the default HTTP request timeout.
+// Zero uses the default of 30 seconds. A negative value disables that default
+// deadline. For code execution it bounds the wait for response headers, not
+// reading the execution stream or an HTTP error body, and it is not added to
+// WithExecutionTimeout.
+// An http.Client.Timeout on the configured client still covers the whole
+// exchange, including a response body, and should be left unset or longer
+// than streams that must stay open. RunCode reports that deadline separately
+// from this option and records whether headers had already arrived. Increasing
+// this option does not extend http.Client.Timeout.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
 
-// WithExecutionTimeout sets the per-cell code execution timeout.
-// Use a negative value to disable timeouts.
+// WithExecutionTimeout sets the per-cell code execution deadline used by
+// ExecuteCode. It bounds how long the client reads the response body after
+// headers arrive, including the execution stream and an HTTP error body. Zero
+// uses the default of 300 seconds. A negative value disables that body
+// deadline and does not disable the request timeout.
+// Ending the client wait does not stop the remote code or kill the sandbox.
+// This option does not apply to RunProgram. An http.Client.Timeout is
+// independent of this deadline; when it fires while the body is being read,
+// RunCode does not report it as an execution TimeoutError.
 func WithExecutionTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.executionTimeout = t }
 }
@@ -141,6 +168,8 @@ type CodeExecutor struct {
 	mu sync.Mutex
 
 	// Connection-level options.
+	disableClientIDHostSuffix bool
+
 	apiKey         string
 	accessToken    string
 	domain         string
@@ -191,6 +220,8 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	}
 
 	sbxOpts := &ci.SandboxOpts{
+		DisableClientIDHostSuffix: c.disableClientIDHostSuffix,
+
 		APIKey:         c.apiKey,
 		AccessToken:    c.accessToken,
 		Domain:         c.domain,
@@ -245,7 +276,10 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 }
 
 // ExecuteCode executes all code blocks sequentially in the sandbox and
-// aggregates their output.
+// aggregates their output. Each block uses WithExecutionTimeout as its stream
+// deadline and WithRequestTimeout as its header deadline. A timeout stops the
+// client wait and returns an error; it does not kill the remote code or the
+// sandbox.
 func (c *CodeExecutor) ExecuteCode(
 	ctx context.Context, input codeexecutor.CodeExecutionInput,
 ) (codeexecutor.CodeExecutionResult, error) {
@@ -478,7 +512,19 @@ func (c *CodeExecutor) StageDirectory(
 	return c.ensureRuntime().StageDirectory(ctx, ws, src, to, opt)
 }
 
-// RunProgram executes a command inside the sandbox workspace.
+// RunProgram executes a command through native envd inside the sandbox workspace.
+// A non-positive timeout uses 30 seconds. Non-zero program exits are returned
+// in RunResult with a nil error; cancellation and transport failures are errors.
+// TimedOut is set only for the envd process deadline and is identified from
+// that error's type and chain. Caller cancellation, a caller deadline, and an
+// unrelated failure whose text contains "timeout" do not set TimedOut.
+// Recognized Linux signal termination returns exit code 128 + signal with a
+// nil error, preserving captured output (for example, SIGTERM returns 143).
+// Finite stdin requires a known envd version of at least 0.5.2. Output is
+// captured without trimming or truncation. There is no Code Interpreter fallback.
+// Remote programs default to root to match standard Code Interpreter workspace
+// ownership. Custom templates should set Authorization through WithHeaders to
+// select their kernel account; an explicit Authorization header takes precedence.
 func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
@@ -527,16 +573,9 @@ func (c *CodeExecutor) ExecuteInline(
 // tool/workspaceexec policy mode run on the e2b backend instead of
 // failing closed.
 //
-// Scope note: the e2b Jupyter `/execute` API exposes no hook to
-// launch the *framing* shell (the kernel-side bash that runs our
-// script and the output sentinels) in an empty environment, so that
-// shell still inherits the sandbox environment. This is not a
-// model-injection vector: the sandbox environment is fixed by the
-// template / WithEnvVars at sandbox creation (operator-controlled),
-// and model-supplied env (spec.Env) is confined to the `env -i`
-// invocation rather than the framing shell. The SupportsCleanEnv
-// contract is about the spawned program's environment, which `env -i`
-// satisfies.
+// RunProgram uses native envd processes with separate stdout and stderr.
+// ExecuteCode continues to use Code Interpreter kernels. Workspace filesystem
+// operations still require the Code Interpreter endpoint.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(

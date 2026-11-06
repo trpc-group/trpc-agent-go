@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/runoutcome"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -44,7 +45,7 @@ var (
 	// ErrRunNotFound is returned when a run key cannot be found.
 	ErrRunNotFound = errors.New("agui: run not found")
 	// errExplicitCancel marks a run that was terminated by the AG-UI cancel API.
-	errExplicitCancel = errors.New("agui: explicit cancel")
+	errExplicitCancel = runoutcome.ErrExplicitCancel
 )
 
 const (

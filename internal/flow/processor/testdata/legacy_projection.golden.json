@@ -1,0 +1,1343 @@
+{
+  "encodings": {
+    "empty_message": {
+      "role": ""
+    },
+    "event": {
+      "object": "",
+      "created": 0,
+      "model": "",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "content",
+            "content_parts": [
+              {
+                "type": "text",
+                "text": "part text"
+              }
+            ],
+            "tool_id": "tool-id",
+            "tool_name": "tool-name",
+            "tool_calls": [
+              {
+                "type": "function",
+                "function": {
+                  "arguments": "{\"q\":\"one\"}",
+                  "name": "lookup"
+                },
+                "id": "call_1",
+                "index": 2,
+                "extra_fields": {
+                  "thought_signature": "abc"
+                }
+              }
+            ],
+            "reasoning_content": "reasoning",
+            "reasoning_signature": "signature"
+          },
+          "delta": {
+            "role": "assistant",
+            "content": "delta"
+          }
+        }
+      ],
+      "done": true,
+      "is_partial": false,
+      "requestID": "req1",
+      "invocationId": "inv1",
+      "author": "golden-agent",
+      "id": "c1",
+      "timestamp": "2025-03-01T08:02:00Z",
+      "branch": "golden-agent",
+      "filterKey": "golden",
+      "version": 1,
+      "response": {
+        "timestamp": "0001-01-01T00:00:00Z"
+      }
+    },
+    "message": {
+      "role": "assistant",
+      "content": "content",
+      "content_parts": [
+        {
+          "type": "text",
+          "text": "part text"
+        }
+      ],
+      "tool_id": "tool-id",
+      "tool_name": "tool-name",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "arguments": "{\"q\":\"one\"}",
+            "name": "lookup"
+          },
+          "id": "call_1",
+          "index": 2,
+          "extra_fields": {
+            "thought_signature": "abc"
+          }
+        }
+      ],
+      "reasoning_content": "reasoning",
+      "reasoning_signature": "signature"
+    }
+  },
+  "projections": {
+    "compaction": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ],
+        "reasoning_content": "plan one"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool \n\n[... 207 characters truncated from tool result; event_id=t1; tool_call_id=call_1; tool_name=lookup; re-run only safe read-only/idempotent tools]\n\nool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer",
+        "reasoning_content": "final one"
+      },
+      {
+        "role": "user",
+        "content": "For context: [other-agent] called tool `lookup` with parameters: {\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n\nFor context: [other-agent] said: foreign result\n\nFor context: [other-agent] said: foreign note",
+        "content_parts": [
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool\n\n[... 207 characters truncated from tool result; event_id=t2a; tool_call_id=call_2a; tool_name=lookup; re-run only safe read-only/idempotent tools]\n\nol output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool\n\n[... 207 characters truncated from tool result; event_id=t3a; tool_call_id=call_3a; tool_name=lookup; re-run only safe read-only/idempotent tools]\n\nol output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "default": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ],
+        "reasoning_content": "plan one"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer",
+        "reasoning_content": "final one"
+      },
+      {
+        "role": "user",
+        "content": "For context: [other-agent] called tool `lookup` with parameters: {\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n\nFor context: [other-agent] said: foreign result\n\nFor context: [other-agent] said: foreign note",
+        "content_parts": [
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "incomplete_per_call_round": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ],
+        "reasoning_content": "plan one"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer",
+        "reasoning_content": "final one"
+      },
+      {
+        "role": "user",
+        "content": "For context: [other-agent] called tool `lookup` with parameters: {\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n\nFor context: [other-agent] said: foreign result\n\nFor context: [other-agent] said: foreign note",
+        "content_parts": [
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      }
+    ],
+    "max_history_runs_4": [
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "max_history_runs_7": [
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "no_context_prefix": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ],
+        "reasoning_content": "plan one"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer",
+        "reasoning_content": "final one"
+      },
+      {
+        "role": "user",
+        "content": "Tool `lookup` called with parameters: {\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      },
+      {
+        "role": "user",
+        "content": "foreign result"
+      },
+      {
+        "role": "user",
+        "content": "foreign note"
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "preserve_foreign": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ],
+        "reasoning_content": "plan one"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer",
+        "reasoning_content": "final one"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_f"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "foreign result",
+        "tool_id": "call_f",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "foreign note",
+        "reasoning_content": "foreign plan"
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "reasoning_discard_all": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer"
+      },
+      {
+        "role": "user",
+        "content": "For context: [other-agent] called tool `lookup` with parameters: {\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n\nFor context: [other-agent] said: foreign result\n\nFor context: [other-agent] said: foreign note",
+        "content_parts": [
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "reasoning_keep_all": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_1\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_1"
+          }
+        ],
+        "reasoning_content": "plan one"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_1",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer",
+        "reasoning_content": "final one"
+      },
+      {
+        "role": "user",
+        "content": "For context: [other-agent] called tool `lookup` with parameters: {\"q\":\"call_f\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n\nFor context: [other-agent] said: foreign result\n\nFor context: [other-agent] said: foreign note",
+        "content_parts": [
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          },
+          {
+            "type": "text",
+            "text": "For context:"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "summary_after_first_request": [
+      {
+        "role": "system",
+        "content": "Here is a brief summary of your previous interactions:\n\n\u003csummary_of_previous_interactions\u003e\nsummary of earlier work\n\u003c/summary_of_previous_interactions\u003e\n\nNote: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.\n"
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ],
+        "reasoning_content": "plan two"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_2a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "summary_inside_current_round": [
+      {
+        "role": "system",
+        "content": "Here is a brief summary of your previous interactions:\n\n\u003csummary_of_previous_interactions\u003e\nsummary of earlier work\n\u003c/summary_of_previous_interactions\u003e\n\nNote: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.\n"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "summary_inside_current_round_compaction": [
+      {
+        "role": "system",
+        "content": "Here is a brief summary of your previous interactions:\n\n\u003csummary_of_previous_interactions\u003e\nsummary of earlier work\n\u003c/summary_of_previous_interactions\u003e\n\nNote: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.\n"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "summary_inside_previous_round": [
+      {
+        "role": "system",
+        "content": "Here is a brief summary of your previous interactions:\n\n\u003csummary_of_previous_interactions\u003e\nsummary of earlier work\n\u003c/summary_of_previous_interactions\u003e\n\nNote: this information is from previous interactions and may be outdated. You should ALWAYS prefer information from this conversation over the past summary.\n"
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_2b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_2b"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "small",
+        "tool_id": "call_2b",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer",
+        "reasoning_content": "final two"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ],
+    "tool_transcript_omit_previous": [
+      {
+        "role": "user",
+        "content": "first question"
+      },
+      {
+        "role": "assistant",
+        "content": "first answer"
+      },
+      {
+        "role": "user",
+        "content": "For context: [other-agent] said: foreign note",
+        "content_parts": [
+          {
+            "type": "text",
+            "text": "For context:"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "second question"
+      },
+      {
+        "role": "assistant",
+        "content": "checking"
+      },
+      {
+        "role": "assistant",
+        "content": "second answer"
+      },
+      {
+        "role": "user",
+        "content": "third question"
+      },
+      {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3a\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3a"
+          },
+          {
+            "type": "function",
+            "function": {
+              "arguments": "{\"q\":\"call_3b\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+              "name": "lookup"
+            },
+            "id": "call_3b"
+          }
+        ],
+        "reasoning_content": "plan three"
+      },
+      {
+        "role": "tool",
+        "content": "large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output large tool output ",
+        "tool_id": "call_3a",
+        "tool_name": "lookup"
+      },
+      {
+        "role": "tool",
+        "content": "pending",
+        "tool_id": "call_3b",
+        "tool_name": "lookup"
+      }
+    ]
+  }
+}

@@ -36,12 +36,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytoken"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -227,7 +229,14 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
 		// after an assistant tool_call response but before tools executed.
-		f.maybeResumePendingToolCalls(ctx, invocation, eventChan)
+		pendingResume := pendingToolCallResponse(invocation)
+		// Native records are resumed by selectModelAndResumeTools after the
+		// first model selection and provider data validation, before the model request.
+		// Records without ProviderData retain the existing resume timing here.
+		if !providerdata.ResponseHasData(pendingResume) {
+			f.resumePendingToolCalls(ctx, invocation, pendingResume, eventChan)
+			pendingResume = nil
+		}
 
 		firstIteration := true
 		for {
@@ -253,7 +262,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			}
 
 			// Run one step (one LLM call cycle).
-			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
+			lastEvent, err := f.runOneStepWithResume(ctx, invocation, eventChan, pendingResume)
+			pendingResume = nil
 			if err != nil {
 				runErr = err
 				steer.Close(invocation)
@@ -469,14 +479,30 @@ func flowEventWaitTimeout(ctx context.Context) time.Duration {
 	return eventCompletionTimeout
 }
 
-// maybeResumePendingToolCalls inspects the latest session events and, when
-// RunOptions.Resume is enabled, executes any pending tool calls before the
-// next LLM request. A pending tool call is defined as the latest persisted
-// event being an assistant response that contains tool calls but no tool
-// results after it.
-func (f *Flow) maybeResumePendingToolCalls(
+// pendingToolCallResponse retains the existing last-event resume boundary.
+// Native calls are validated against the first selected model before execution.
+func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
+	if invocation == nil || !invocation.RunOptions.Resume || invocation.Session == nil {
+		return nil
+	}
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	events := invocation.Session.Events
+	if len(events) == 0 {
+		return nil
+	}
+	last := events[len(events)-1]
+	if last.Response != nil && !last.IsPartial &&
+		last.IsValidContent() && last.Response.IsToolCallResponse() {
+		return last.Response
+	}
+	return nil
+}
+
+func (f *Flow) resumePendingToolCalls(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	lastResp *model.Response,
 	eventChan chan<- *event.Event,
 ) {
 	ctx, span, started := startLatencySpan(
@@ -491,25 +517,6 @@ func (f *Flow) maybeResumePendingToolCalls(
 		}
 		finishLatencySpan(span, started, nil)
 	}()
-	if invocation == nil || !invocation.RunOptions.Resume {
-		return
-	}
-	if invocation.Session == nil {
-		return
-	}
-
-	invocation.Session.EventMu.RLock()
-	events := invocation.Session.Events
-	var lastResp *model.Response
-	if len(events) > 0 {
-		last := events[len(events)-1]
-		if last.Response != nil && !last.IsPartial &&
-			last.IsValidContent() && last.Response.IsToolCallResponse() {
-			lastResp = last.Response
-		}
-	}
-	invocation.Session.EventMu.RUnlock()
-
 	if lastResp == nil {
 		return
 	}
@@ -526,6 +533,35 @@ func (f *Flow) maybeResumePendingToolCalls(
 			break
 		}
 	}
+}
+
+func (f *Flow) selectModelAndResumeTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	pending *model.Response,
+	eventChan chan<- *event.Event,
+) (model.Model, error) {
+	selected, err := f.selectModelForStep(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if pending == nil {
+		return selected, nil
+	}
+	if err := agent.CheckContextCancelled(ctx); err != nil {
+		return nil, err
+	}
+	if selected == nil {
+		return nil, errors.New("native tool resume requires a model")
+	}
+	if err := providerdata.ValidateResponse(pending, selected.Info()); err != nil {
+		return nil, fmt.Errorf("cannot resume native tool calls: %w", err)
+	}
+	originalModel := invocation.Model
+	invocation.Model = selected
+	defer func() { invocation.Model = originalModel }()
+	f.resumePendingToolCalls(ctx, invocation, pending, eventChan)
+	return selected, agent.CheckContextCancelled(ctx)
 }
 
 func (f *Flow) maybeSyncSummaryIntraRun(
@@ -678,6 +714,15 @@ func (f *Flow) runOneStep(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
+) (*event.Event, error) {
+	return f.runOneStepWithResume(ctx, invocation, eventChan, nil)
+}
+
+func (f *Flow) runOneStepWithResume(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	pendingResume *model.Response,
 ) (lastEvent *event.Event, err error) {
 	ctx, stepSpan, stepStarted := startLatencySpan(
 		ctx,
@@ -704,7 +749,7 @@ func (f *Flow) runOneStep(
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
 	}
-	callModel, err := f.selectModelForStep(ctx, invocation)
+	callModel, err := f.selectModelAndResumeTools(ctx, invocation, pendingResume, eventChan)
 	if err != nil {
 		return nil, err
 	}
@@ -862,6 +907,8 @@ type streamingResponseProcessor struct {
 	invocation              *agent.Invocation
 	observabilityInvocation *agent.Invocation
 	currentInvocation       *agent.Invocation
+	producerInfo            model.Info
+	producer                model.Model
 	llmRequest              *model.Request
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
@@ -911,6 +958,16 @@ func newStreamingResponseProcessor(
 		startedSpan:             startedSpan,
 		err:                     err,
 	}
+	// Capture the selected producer before callbacks can replace the invocation
+	// or its model. A response retains the identity of the actual model call.
+	producer := observabilityInvocation
+	if producer == nil || producer.Model == nil {
+		producer = invocation
+	}
+	if producer != nil && producer.Model != nil {
+		processor.producerInfo = producer.Model.Info()
+		processor.producer = producer.Model
+	}
 	if metricsInvocation != nil {
 		processor.timingInfo = responseUsageTimingInfo(currentInvocation)
 		processor.tracker = itelemetry.NewChatMetricsTracker(
@@ -959,6 +1016,11 @@ func (p *streamingResponseProcessor) process(
 		&p.partialUsageState,
 	)
 	eventInvocation := p.eventInvocation()
+	var nativeSnapshot providerdata.ResponseSnapshot
+	hasAfterCallbacks := p.flow.hasAfterModelCallbacks(p.currentInvocation)
+	if hasAfterCallbacks {
+		nativeSnapshot = providerdata.SnapshotResponse(response)
+	}
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
 		p.ctx,
 		eventInvocation,
@@ -980,9 +1042,21 @@ func (p *streamingResponseProcessor) process(
 	)
 	p.updateMetricsState()
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
+	if hasAfterCallbacks {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, response, p.producer); err != nil {
+			*p.err = err
+			responseErr = err
+			return false
+		}
+	}
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
+	if err := providerdata.ValidateResponse(response, p.producerInfo); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	if err := validateCompletedToolCallNames(response); err != nil {
 		*p.err = err
 		responseErr = err
@@ -1167,7 +1241,7 @@ func responseMayContainTextToolCall(response *model.Response) bool {
 	}
 	for i := range response.Choices {
 		msg := &response.Choices[i].Message
-		if msg.Role != model.RoleAssistant {
+		if msg.Role != model.RoleAssistant || msg.ProviderData != nil {
 			continue
 		}
 		text, ok := repairableMessageText(msg)
@@ -1235,6 +1309,17 @@ func (p *streamingResponseProcessor) traceChat(
 		EventID:          llmResponseEvent.ID,
 		TimeToFirstToken: ttfb,
 	})
+}
+
+func (f *Flow) hasAfterModelCallbacks(invocation *agent.Invocation) bool {
+	if f.modelCallbacks != nil && len(f.modelCallbacks.AfterModel) > 0 {
+		return true
+	}
+	if invocation == nil || invocation.Plugins == nil {
+		return false
+	}
+	callbacks := invocation.Plugins.ModelCallbacks()
+	return callbacks != nil && len(callbacks.AfterModel) > 0
 }
 
 // handleAfterModelCallbacks processes after model callbacks.
@@ -2190,7 +2275,7 @@ func syncCompactContextDecision(
 		ratio,
 	)
 	if counter == nil {
-		counter = model.NewSimpleTokenCounter()
+		counter = summarytoken.Get()
 	}
 	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
 	decision.tokenCount = tokens
@@ -2793,7 +2878,7 @@ func finalizeSummaryView(
 		return
 	}
 	if counter == nil {
-		counter = model.NewSimpleTokenCounter()
+		counter = summarytoken.Get()
 	}
 	tokens, err := counter.CountTokensRange(
 		ctx,
@@ -3059,6 +3144,11 @@ func (f *Flow) generateContentSeq(
 ) (model.Seq[*model.Response], error) {
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
+	}
+	if callModel != nil && providerdata.MessagesHaveData(llmRequest.Messages) {
+		if err := providerdata.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
+			return nil, err
+		}
 	}
 	ctx, span, started := startLatencySpan(
 		ctx,

@@ -1789,7 +1789,7 @@ func (r *A2AAgent) executeStreaming(
 		streamChan,
 		anonymousCookie,
 	)
-	if streamResult.terminalError != nil {
+	if streamResult.terminalError != nil || ctx.Err() != nil {
 		return
 	}
 	r.emitFinalEvent(
@@ -1850,9 +1850,24 @@ func (r *A2AAgent) processStreamingEvents(
 		result.aggregatedContentParts = contentPartsBuffer.ContentParts()
 	}()
 
-	for streamEvent := range streamChan {
+	for {
+		var streamEvent protocol.StreamingMessageEvent
+		var ok bool
+		select {
+		case <-ctx.Done():
+			result.terminalError = &model.ResponseError{
+				Type: model.ErrorTypeCancelled, Message: ctx.Err().Error(),
+			}
+			return result
+		case streamEvent, ok = <-streamChan:
+		}
 		if err := agent.CheckContextCancelled(ctx); err != nil {
-			result.aggregatedContent = contentBuffer.Content()
+			result.terminalError = &model.ResponseError{
+				Type: model.ErrorTypeCancelled, Message: err.Error(),
+			}
+			return result
+		}
+		if !ok {
 			return result
 		}
 		artifactUpdate, _ := streamEvent.Result.(*protocol.TaskArtifactUpdateEvent)
@@ -1966,7 +1981,6 @@ func (r *A2AAgent) processStreamingEvents(
 			artifactContentRecorded,
 		)
 	}
-	return result
 }
 
 func (r *A2AAgent) flushPendingContentBeforeEvent(

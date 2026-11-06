@@ -16,6 +16,12 @@ Users obtain event streams through the `runner.Run()` method, then listen to eve
 type Event struct {
     // Response is the basic response structure of Event, carrying LLM responses.
     *model.Response
+
+    // RunOutcome describes runner completion outcomes such as explicit cancellation
+    // or deadline expiration. It is nil for non-completion events, normal
+    // completion, and generic cancellation.
+    RunOutcome *RunOutcome `json:"run_outcome,omitempty"`
+
     // RequestID The unique identifier for this request.
     // It can be passed via runner.Run using agent.WithRequestID.
 	RequestID string `json:"requestID,omitempty"`

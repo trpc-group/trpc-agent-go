@@ -1242,26 +1242,73 @@ eventChan, err := r.Run(
 )
 ```
 
-Supported modes (graph workflows):
+Supported modes (graph-specific events require a graph workflow):
 
 - `messages`: model output events (for example, `chat.completion.chunk`)
+- `latency_diagnostics`: `preprocessing.status` events carrying a decodable, non-null
+  `event.LatencyDiagnostic` extension
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`: `graph.checkpoint.*`
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
-- `debug`: same as `checkpoints` + `tasks`
+- `debug`: a preset combining `checkpoints` + `tasks`
 - `custom`: node-emitted events (`graph.node.custom`)
 
 Notes:
 
+- Modes supplied in one `WithStreamMode` call form a union; each matching event
+  is forwarded once. A later call replaces the previous mode selection.
+- `debug` is a preset over existing categories, not another disjoint category.
+  It does not include latency diagnostics.
+- Omitting `WithStreamMode` leaves StreamMode filtering disabled. Calling
+  `WithStreamMode()` with no arguments enables an empty selection, forwarding
+  only error events plus the Runner-generated completion event.
+- Selecting every supported mode is not equivalent to disabling filtering:
+  successful `tool.response` and `agent.transfer` events match no category and
+  are still filtered out. `custom` only matches `graph.node.custom`.
+- Events carrying `Response.Error` bypass StreamMode filtering. Runner emits
+  its final `runner.completion` independently of the selected categories.
+- StreamMode filtering does not bypass Runner's internal event processing or
+  persistence rules. Some graph producers also inspect the selected modes, as
+  described below; these existing generation behaviors are separate from
+  filtering.
 - When `agent.StreamModeMessages` is selected, graph-based Large Language Model
   (LLM) nodes enable final model response events automatically for that run.
   To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
   `agent.WithStreamMode(...)`.
-- StreamMode only affects what Runner forwards to your `eventChan`. Runner still
-  processes and persists events internally.
-- For graph workflows, some event types (for example, `graph.checkpoint.*`)
-  are emitted only when their corresponding mode is selected.
-- Runner always emits a final `runner.completion` event.
+- Graph checkpoint lifecycle events require selecting `checkpoints` or `debug`;
+  disabling graph executor events still suppresses them. Omitting StreamMode
+  does not enable their generation.
+
+To receive pre-LLM progress alongside model messages, enable diagnostic emission
+and subscribe to both categories:
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithLatencyDiagnostics(true),
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeLatencyDiagnostics,
+    ),
+)
+```
+
+For example, context compaction emits `started` before creating a summary and a
+terminal status (`completed`, `skipped`, or `error`) afterward. Both travel on
+the same event channel as model output. Applications can read the extension
+with `event.GetExtension[event.LatencyDiagnostic]` and select the stages they
+want to display, such as `context_compaction`.
+
+These are latency diagnostic status events, not OpenTelemetry spans. The current
+payload carries stage/status and context information; it does not include a
+duration field. This subscription works with an LLMAgent through Runner as well
+as graph workflows.
+
+`latency_diagnostics` only controls forwarding: it does not enable diagnostic
+emission or trigger compaction. `WithLatencyDiagnosticsEvents(false)` still suppresses
+diagnostic events. Selecting only `messages` continues to filter diagnostics;
+omitting StreamMode preserves the default unfiltered stream. `debug` and
+`custom` do not include diagnostics. Transport-specific mappings, such as A2A
+parts or UI progress events, remain the application's responsibility.
 
 ## 💾 Session Management
 

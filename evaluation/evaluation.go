@@ -69,6 +69,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalCaseResultAggregator:          opts.evalCaseResultAggregator,
 		evalService:                       opts.evalService,
 		callbacks:                         opts.callbacks,
+		additionalCallbacks:               append([]*service.Callbacks(nil), opts.additionalCallbacks...),
 		expectedRunner:                    opts.expectedRunner,
 		toolMockRunner:                    opts.toolMockRunner,
 		numRuns:                           opts.numRuns,
@@ -135,6 +136,7 @@ type agentEvaluator struct {
 	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
+	additionalCallbacks               []*service.Callbacks
 	expectedRunner                    runner.Runner
 	toolMockRunner                    runner.Runner
 	numRuns                           int
@@ -233,6 +235,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		evalCaseResultAggregator:          a.evalCaseResultAggregator,
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
+		additionalCallbacks:               append([]*service.Callbacks(nil), a.additionalCallbacks...),
 		expectedRunner:                    a.expectedRunner,
 		toolMockRunner:                    a.toolMockRunner,
 		judgeRunner:                       a.judgeRunner,
@@ -470,6 +473,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if opts.callbacks != nil {
 		inferenceOpts = append(inferenceOpts, service.WithCallbacks(opts.callbacks))
 	}
+	for _, callbacks := range opts.additionalCallbacks {
+		inferenceOpts = append(inferenceOpts, withAdditionalCallbacks(callbacks))
+	}
 	if opts.userSimulator != nil {
 		inferenceOpts = append(inferenceOpts, service.WithUserSimulator(opts.userSimulator))
 	}
@@ -512,6 +518,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	}
 	if opts.callbacks != nil {
 		evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
+	}
+	for _, callbacks := range opts.additionalCallbacks {
+		evaluateOpts = append(evaluateOpts, withAdditionalCallbacks(callbacks))
 	}
 	if opts.expectedRunner != nil {
 		evaluateOpts = append(evaluateOpts, service.WithExpectedRunner(opts.expectedRunner))

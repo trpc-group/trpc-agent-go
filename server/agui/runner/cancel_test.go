@@ -24,10 +24,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type waitCancelRunner struct {
@@ -46,6 +48,87 @@ func (w *waitCancelRunner) Run(ctx context.Context, userID, sessionID string, _ 
 }
 
 func (w *waitCancelRunner) Close() error { return nil }
+
+type cancelOutcomeAgent struct {
+	started chan struct{}
+}
+
+func (a *cancelOutcomeAgent) Info() agent.Info { return agent.Info{Name: "cancel-outcome"} }
+
+func (a *cancelOutcomeAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *cancelOutcomeAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (a *cancelOutcomeAgent) Tools() []tool.Tool { return nil }
+
+func (a *cancelOutcomeAgent) Run(ctx context.Context, _ *agent.Invocation) (<-chan *agentevent.Event, error) {
+	close(a.started)
+	events := make(chan *agentevent.Event)
+	go func() {
+		<-ctx.Done()
+		close(events)
+	}()
+	return events, nil
+}
+
+func TestCancelMarksCoreCompletionEventOutcome(t *testing.T) {
+	statusCh := make(chan agentevent.RunOutcomeStatus, 1)
+	sessionService := inmemory.NewSessionService(inmemory.WithAppendEventHook(
+		func(ctx *session.AppendEventContext, next func() error) error {
+			if ctx.Event != nil && ctx.Event.RunOutcome != nil {
+				statusCh <- ctx.Event.RunOutcome.Status
+			}
+			return next()
+		},
+	))
+	agent := &cancelOutcomeAgent{started: make(chan struct{})}
+	underlying := baserunner.NewRunner(
+		"app",
+		agent,
+		baserunner.WithSessionService(sessionService),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	r := New(
+		underlying,
+		WithAppName("app"),
+		WithSessionService(sessionService),
+		WithFlushInterval(0),
+	).(*runner)
+
+	events, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	select {
+	case evt, ok := <-events:
+		require.True(t, ok)
+		require.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for RUN_STARTED")
+	}
+	select {
+	case <-agent.started:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for agent start")
+	}
+
+	require.NoError(t, r.Cancel(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+	}))
+	collectEvents(t, events)
+
+	select {
+	case status := <-statusCh:
+		require.Equal(t, agentevent.RunOutcomeStatusCancelled, status)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for cancelled run outcome")
+	}
+}
 
 type updateFailSessionService struct {
 	session.Service

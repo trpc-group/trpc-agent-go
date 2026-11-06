@@ -18,6 +18,11 @@ type StreamMode string
 const (
 	// StreamModeMessages forwards model message events.
 	StreamModeMessages StreamMode = "messages"
+	// StreamModeLatencyDiagnostics forwards preprocessing.status events carrying a
+	// decodable, non-null event.LatencyDiagnostic extension. It selects status
+	// events, not trace spans, and does not enable emission. Use
+	// WithLatencyDiagnostics to enable diagnostic spans and status events.
+	StreamModeLatencyDiagnostics StreamMode = "latency_diagnostics"
 	// StreamModeUpdates forwards graph/state update events.
 	StreamModeUpdates StreamMode = "updates"
 	// StreamModeCheckpoints forwards checkpoint lifecycle events.

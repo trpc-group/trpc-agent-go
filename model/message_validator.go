@@ -20,11 +20,11 @@ const (
 )
 
 // HasPayload reports whether the message has non-empty Content, ContentParts,
-// or ReasoningContent.
+// ReasoningContent, or native provider data.
 func HasPayload(msg Message) bool {
 	return msg.Content != "" ||
 		len(msg.ContentParts) > 0 ||
-		msg.ReasoningContent != ""
+		msg.ReasoningContent != "" || msg.ProviderData != nil
 }
 
 func roleGroupOf(role Role) roleGroupKind {
@@ -95,7 +95,8 @@ func removeInvalidRoleMessages(messages []Message) []Message {
 func ensureNonEmptyContent(messages []Message) []Message {
 	result := make([]Message, 0, len(messages))
 	for _, msg := range messages {
-		if msg.Content != "" {
+		// Native records must retain their bound projection without placeholders.
+		if msg.Content != "" || msg.ProviderData != nil {
 			result = append(result, msg)
 			continue
 		}

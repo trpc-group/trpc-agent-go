@@ -61,6 +61,10 @@ curl -X POST http://localhost:8080/cancel \
 
 取消成功后，框架仍会执行必要的运行结束收尾，补齐协议结束事件，并将聚合缓存尽量写入 `SessionService`。取消请求返回成功不表示同一个 `SessionKey` 已经可以立即发起新的实时对话请求；如果需要继续发起下一次运行，应等待原实时对话流返回终态事件。因此，后续通过 `/history` 读取历史时，拿到的是取消后的合法一致状态，而不是一段未收尾的中间状态。收尾流程和超时配置可参考 [Session 存储与事件聚合](history.md#session-存储与事件聚合)。
 
+如果需要从框架事件流判断本次是否由 `/cancel` 主动取消，可以检查最终 runner completion 事件的 `RunOutcome` 字段。当 `RunOutcome` 非空且 `Status` 为 `event.RunOutcomeStatusCancelled` 时，表示本次运行由 `/cancel` 主动取消。
+
+如果运行因配置的超时时间到达而结束，则同一字段的 `Status` 为 `event.RunOutcomeStatusTimedOut`。
+
 ## 多实例分布式取消
 
 如果多实例部署中无法保证同一个 `SessionKey` 的实时对话请求和取消请求落到同一个实例，可以开启分布式取消：

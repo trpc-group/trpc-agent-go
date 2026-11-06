@@ -59,9 +59,11 @@ type Request struct {
 // set only when the corresponding Client capture limit discards output;
 // capture is exact and unlimited by default.
 type Result struct {
-	PID             uint32
-	Stdout          string
-	Stderr          string
+	PID    uint32
+	Stdout string
+	Stderr string
+	// ExitCode uses the shell convention 128 + signal for recognized Linux
+	// signal termination. Unknown terminal statuses are returned as errors.
 	ExitCode        int
 	TimedOut        bool
 	StdoutTruncated bool
@@ -212,12 +214,13 @@ func handleReceivedEvent(
 				errors.New("envd process: received empty EndEvent"),
 			)
 		}
-		if !event.End.Exited {
+		exitCode, ok := endEventExitCode(event.End)
+		if !ok {
 			return failedRunEvent(endEventError(event.End))
 		}
 		return runEventOutcome{
 			action:   runEventComplete,
-			exitCode: event.End.ExitCode,
+			exitCode: exitCode,
 		}
 	case *process.ProcessEvent_Keepalive:
 		return runEventOutcome{action: runEventContinue}

@@ -26,15 +26,25 @@ func TestAppendMessages(t *testing.T) {
 }
 
 func TestReplaceLastUser(t *testing.T) {
+	imageURL := "https://example.com/a.png"
 	messages := []model.Message{
 		model.NewUserMessage("u1"),
 		model.NewAssistantMessage("a1"),
-		model.NewUserMessage("u2"),
+		{
+			Role:    model.RoleUser,
+			Content: "u2",
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: imageURL},
+			}},
+		},
 	}
 	out := (ReplaceLastUser{Content: "u2-new"}).Apply(messages)
 	require.Len(t, out, 3)
 	require.Equal(t, model.RoleUser, out[2].Role)
 	require.Equal(t, "u2-new", out[2].Content)
+	require.Len(t, out[2].ContentParts, 1)
+	require.Equal(t, imageURL, out[2].ContentParts[0].Image.URL)
 }
 
 func TestReplaceLastUserNoUserAppends(t *testing.T) {

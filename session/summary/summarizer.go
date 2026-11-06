@@ -268,15 +268,17 @@ const standaloneSummarySourceBoundary = "The content above is source " +
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model               model.Model
-	name                string
-	prompt              string
-	systemPrompt        string
-	cacheSafeForking    bool
-	cacheSafeForkPrompt string
-	checks              []checkEvaluator
-	maxSummaryWords     int
-	skipRecentFunc      SkipRecentFunc
+	model                   model.Model
+	name                    string
+	prompt                  string
+	systemPrompt            string
+	cacheSafeForking        bool
+	cacheSafeForkPrompt     string
+	checks                  []checkEvaluator
+	maxSummaryWords         int
+	requestInputTokenBudget int
+	skipRecentFunc          SkipRecentFunc
+	skipRecentContextFunc   ContextSkipRecentFunc
 
 	preHook          PreSummaryHook
 	postHook         PostSummaryHook
@@ -377,7 +379,7 @@ func (s *sessionSummarizer) evaluateTrigger(
 		return Trigger{}
 	}
 
-	checkSess := s.buildCheckSessionWithSelection(sess, selection)
+	checkSess := s.buildCheckSessionWithSelection(ctx, sess, selection)
 	if len(s.checks) == 0 {
 		return Trigger{
 			Fired:     true,
@@ -477,6 +479,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		// Prefer Pensieve-visible events so masked content is never summarized
 		// when a model-visible projection is unavailable.
 		retained, decision := s.filterEventsForSummaryObserved(
+			ctx,
 			sess.GetVisibleEvents(),
 		)
 		events := filterSummaryInputEventsForSession(retained, sess)
@@ -526,7 +529,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		)
 		boundaries = append([]summaryview.Boundary{{}}, boundaries...)
 	}
-	events, decision := s.filterEventsForSummaryObserved(events)
+	events, decision := s.filterEventsForSummaryObserved(ctx, events)
 	if len(boundaries) > len(events) {
 		boundaries = boundaries[:len(events)]
 	}
@@ -980,18 +983,21 @@ func (state summaryBoundaryState) restore(sess *session.Session) {
 }
 
 func (s *sessionSummarizer) buildCheckSession(
+	ctx context.Context,
 	sess *session.Session,
 ) *session.Session {
 	if sess == nil {
 		return nil
 	}
 	return s.buildCheckSessionWithSelection(
+		ctx,
 		sess,
-		s.selectSummaryEvents(context.Background(), sess),
+		s.selectSummaryEvents(ctx, sess),
 	)
 }
 
 func (s *sessionSummarizer) buildCheckSessionWithSelection(
+	ctx context.Context,
 	sess *session.Session,
 	selection summaryEventSelection,
 ) *session.Session {
@@ -1005,7 +1011,7 @@ func (s *sessionSummarizer) buildCheckSessionWithSelection(
 		checkSess.Events = append([]event.Event(nil), filtered...)
 	} else {
 		delta := filterDeltaEvents(checkSess)
-		filtered = s.filterEventsForSummary(delta)
+		filtered = s.filterEventsForSummary(ctx, delta)
 	}
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
 	var thresholdMessage model.Message
@@ -1041,8 +1047,11 @@ type skipRecentDecision struct {
 
 // filterEventsForSummary filters events for summarization, excluding recent events
 // and ensuring that retained events still have enough context to summarize.
-func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
-	filtered, _ := s.filterEventsForSummaryObserved(events)
+func (s *sessionSummarizer) filterEventsForSummary(
+	ctx context.Context,
+	events []event.Event,
+) []event.Event {
+	filtered, _ := s.filterEventsForSummaryObserved(ctx, events)
 	return filtered
 }
 
@@ -1051,14 +1060,23 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 // diagnostics can distinguish a skip-recent callback that consumed everything
 // from a retained prefix rejected as unsafe.
 func (s *sessionSummarizer) filterEventsForSummaryObserved(
+	ctx context.Context,
 	events []event.Event,
 ) ([]event.Event, skipRecentDecision) {
 	decision := skipRecentDecision{eligible: len(events)}
-	if s.skipRecentFunc == nil {
+	if s.skipRecentFunc == nil && s.skipRecentContextFunc == nil {
 		return events, decision
 	}
 
-	skipCount := s.skipRecentFunc(events)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	skipCount := 0
+	if s.skipRecentContextFunc != nil {
+		skipCount = s.skipRecentContextFunc(ctx, events)
+	} else {
+		skipCount = s.skipRecentFunc(events)
+	}
 	decision.requested = skipCount
 	decision.applied = skipRecentApplied(skipCount, len(events))
 	if skipCount <= 0 {
@@ -1114,11 +1132,34 @@ func eventHasTextContent(e event.Event) bool {
 		return false
 	}
 	for _, choice := range e.Response.Choices {
-		if strings.TrimSpace(choice.Message.Content) != "" {
+		if summaryMessageText(choice.Message) != "" {
 			return true
 		}
 	}
 	return false
+}
+
+// summaryMessageText returns the summarizable text of a regular message:
+// Content followed by text content parts in their original order, matching
+// how model adapters send both. Non-text parts are not summarized.
+func summaryMessageText(msg model.Message) string {
+	content := strings.TrimSpace(msg.Content)
+	if len(msg.ContentParts) == 0 {
+		return content
+	}
+	texts := make([]string, 0, 1+len(msg.ContentParts))
+	if content != "" {
+		texts = append(texts, content)
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if text := strings.TrimSpace(*part.Text); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.Join(texts, "\n")
 }
 
 func eventHasSummarizableContent(
@@ -1142,7 +1183,7 @@ func eventHasSummarizableContent(
 			}
 			continue
 		}
-		if strings.TrimSpace(msg.Content) != "" {
+		if summaryMessageText(msg) != "" {
 			return true
 		}
 	}
@@ -1224,13 +1265,14 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:         modelName,
-		metadataKeySummarizerName:    s.name,
-		metadataKeyMaxSummaryWords:   s.maxSummaryWords,
-		metadataKeyModelAvailable:    modelAvailable,
-		metadataKeyCheckFunctions:    len(s.checks),
-		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil,
-		metadataKeyCacheSafeForking:  s.cacheSafeForking,
+		metadataKeyModelName:       modelName,
+		metadataKeySummarizerName:  s.name,
+		metadataKeyMaxSummaryWords: s.maxSummaryWords,
+		metadataKeyModelAvailable:  modelAvailable,
+		metadataKeyCheckFunctions:  len(s.checks),
+		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil ||
+			s.skipRecentContextFunc != nil,
+		metadataKeyCacheSafeForking: s.cacheSafeForking,
 	}
 }
 
@@ -1297,8 +1339,8 @@ func extractConversationText(
 			}
 
 			// Handle regular message content.
-			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
-				parts = append(parts, fmt.Sprintf("%s: %s", author, trimmed))
+			if text := summaryMessageText(msg); text != "" {
+				parts = append(parts, fmt.Sprintf("%s: %s", author, text))
 			}
 		}
 	}
@@ -2021,6 +2063,9 @@ func (s *sessionSummarizer) summaryRequestInputBudget(
 		contextWindow = resolved
 	}
 	budget := int(float64(contextWindow) * summaryRequestInputRatio)
+	if s.requestInputTokenBudget > 0 {
+		budget = min(s.requestInputTokenBudget, contextWindow)
+	}
 	var requestWithoutTools *model.Request
 	if request != nil {
 		cloned := *request

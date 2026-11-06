@@ -8,7 +8,7 @@ require (
 	github.com/itchyny/gojq v0.12.16
 	github.com/stretchr/testify v1.11.1
 	mvdan.cc/sh/v3 v3.8.0
-	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

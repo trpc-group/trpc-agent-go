@@ -56,6 +56,18 @@ type Model interface {
 	Info() Info
 }
 
+// ProviderDataProjector is an optional model capability for rebuilding message
+// fields after an AfterModel callback edits native provider data. It does not
+// change the Model interface or the behavior of messages without ProviderData.
+// Wrappers around a model that implements this capability should forward it.
+type ProviderDataProjector interface {
+	// ProjectProviderData returns the display fields and tool calls represented
+	// by data. It must not mutate data or perform model or tool execution. The
+	// framework applies the projection before publishing the completed response.
+	// Invalid records return an error before any local tools execute.
+	ProjectProviderData(data *ProviderData) (Message, error)
+}
+
 // Seq is a callback-based sequence that yields values.
 type Seq[T any] func(yield func(T) bool)
 
@@ -75,4 +87,10 @@ type Info struct {
 	// ContextWindow is the model context window in tokens.
 	// A non-positive value means the window is unknown for this model instance.
 	ContextWindow int
+	// ProviderDataProtocol identifies the protocol of provider data consumed by this
+	// model. An empty value means ProviderData is unsupported. LLM flows and
+	// Graph LLM nodes reject history from another protocol or configured model
+	// before calling the adapter. Wrappers must preserve this value when
+	// forwarding Info.
+	ProviderDataProtocol string `json:"ProviderDataProtocol,omitempty"`
 }

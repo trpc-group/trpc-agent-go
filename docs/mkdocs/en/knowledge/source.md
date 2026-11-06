@@ -203,6 +203,10 @@ PDF, DOCX, Go, and Python Readers are opt-in packages. Import the Reader package
 for the formats an application needs so it registers itself with the Reader
 registry.
 
+Python AST entity signatures and class skeletons preserve positional-only (`/`),
+variadic, and keyword-only (`*`) parameters, including their annotations and
+default values.
+
 **Default Parameters**:
 
 | Parameter | Default | Description |

@@ -93,6 +93,7 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 		WithStructuredOutputPayload(map[string]any{"x": 1}),
 		WithSkipSummarization(),
 	)
+	sevt.RunOutcome = &RunOutcome{Status: RunOutcomeStatusCancelled}
 
 	require.Equal(t, "b1", sevt.Branch)
 	require.Equal(t, "obj-x", sevt.Object)
@@ -110,6 +111,21 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	clone := sevt.Clone()
 	require.NotNil(t, clone)
 	require.NotSame(t, sevt, clone)
+	require.NotNil(t, clone.RunOutcome)
+	require.NotSame(t, sevt.RunOutcome, clone.RunOutcome)
+	require.Equal(t, RunOutcomeStatusCancelled, clone.RunOutcome.Status)
+	raw, err := json.Marshal(sevt)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &fields))
+	_, hasRunOutcome := fields["run_outcome"]
+	require.True(t, hasRunOutcome)
+	_, hasLegacyExtensionKey := fields["trpc_agent.run_outcome"]
+	require.False(t, hasLegacyExtensionKey)
+	var roundTrip Event
+	require.NoError(t, json.Unmarshal(raw, &roundTrip))
+	require.NotNil(t, roundTrip.RunOutcome)
+	require.Equal(t, RunOutcomeStatusCancelled, roundTrip.RunOutcome.Status)
 	require.Equal(t, sevt.InvocationID, clone.InvocationID)
 	require.Equal(t, sevt.Author, clone.Author)
 	require.NotNil(t, clone.Response)

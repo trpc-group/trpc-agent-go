@@ -12,6 +12,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type fixedSummaryViewTokenCounter struct {
@@ -150,4 +152,51 @@ func TestFinalizeSummaryViewUsesDefaultCounter(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, view.Bound)
 	require.Positive(t, view.RequestTokens)
+}
+
+func TestSummaryRequestCountersFollowDefaultChanges(t *testing.T) {
+	t.Cleanup(func() { summary.SetTokenCounter(nil) })
+	flow := &Flow{requestProcessors: []iflow.RequestProcessor{
+		processor.NewContentRequestProcessor(),
+	}}
+	request := &model.Request{Messages: []model.Message{
+		model.NewUserMessage(strings.Repeat("中", 9600)),
+	}}
+	custom := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.5))
+	for _, tc := range []struct {
+		name     string
+		fallback model.TokenCounter
+		explicit model.TokenCounter
+		tokens   int
+		compact  bool
+	}{
+		{name: "built-in default", tokens: 2400},
+		{name: "set after construction", fallback: custom, tokens: 6400, compact: true},
+		{name: "explicit counter wins", fallback: custom, explicit: model.NewSimpleTokenCounter(), tokens: 2400},
+		{name: "nil resets default", tokens: 2400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary.SetTokenCounter(tc.fallback)
+			invocation := agent.NewInvocation(agent.WithInvocationModel(
+				&compactingModel{name: "counter-probe", window: 10000},
+			))
+			summaryview.AttachProjection(invocation, &summaryview.View{
+				ContentRequestLength: 1,
+				Items:                []summaryview.Item{{Message: request.Messages[0], RequestIndex: 0}},
+			})
+			counter := flow.summaryViewTokenCounter()
+			if tc.explicit != nil {
+				counter = tc.explicit
+			}
+			decision := syncCompactContextDecision(context.Background(), invocation, request, 0.6, counter)
+			require.NoError(t, decision.err)
+			require.Equal(t, tc.tokens, decision.tokenCount)
+			require.Equal(t, tc.compact, decision.shouldCompact)
+			finalizeSummaryView(context.Background(), invocation, request, counter)
+			view, ok := summaryview.Snapshot(invocation)
+			require.True(t, ok)
+			require.True(t, view.Bound)
+			require.Equal(t, decision.tokenCount, view.RequestTokens)
+		})
+	}
 }

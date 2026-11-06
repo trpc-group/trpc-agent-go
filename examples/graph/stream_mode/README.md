@@ -21,6 +21,7 @@ emitted only when their corresponding mode is selected.
 Supported modes for graph workflows:
 
 - `messages`: model output events (`chat.completion.chunk`, `chat.completion`)
+- `latency_diagnostics`: preprocessing status events carrying `event.LatencyDiagnostic`
 - `updates`: state/channel execution updates (`graph.state.update`, etc.)
 - `checkpoints`: checkpoint lifecycle events (`graph.checkpoint.*`)
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
@@ -28,6 +29,25 @@ Supported modes for graph workflows:
 - `custom`: node-emitted custom events (`graph.node.custom`)
 
 Note: Runner always emits a final `runner.completion` event.
+
+Modes in one `WithStreamMode` call form a union and forward each matching event
+once. A later call replaces the previous mode selection. For an agent that emits
+latency diagnostics, subscribe alongside messages with:
+
+```go
+agent.WithLatencyDiagnostics(true),
+agent.WithStreamMode(
+    agent.StreamModeMessages,
+    agent.StreamModeLatencyDiagnostics,
+),
+```
+
+The diagnostic mode selects existing status events; it does not enable their
+production or trigger context compaction. `WithLatencyDiagnosticsEvents(false)`
+still suppresses them. These are status notifications, not trace spans. This toy
+graph does not run compaction, so it does not generate those notifications. See
+the [Runner documentation](../../../docs/mkdocs/en/runner.md) for producer
+configuration and application mapping responsibilities.
 
 ## Run
 

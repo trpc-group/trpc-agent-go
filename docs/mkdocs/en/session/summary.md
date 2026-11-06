@@ -193,12 +193,32 @@ same construction is used for other standalone fallbacks, including bounded
 and retry requests.
 
 Before sending either form of request, the summarizer admits it against the
-summary model's effective input budget. The framework uses the smaller of the
-provider-specific input budget, when the model exposes one, and a conservative
-ceiling of 70% of the model context window. An oversized fork is reduced without
-mutating the parent request: unused tool schemas are removed first, and large
-tool argument/result payloads are replaced with explicit omission markers as
-needed. Source conversation turns are not dropped. The complete rendered fork
+summary model's effective input budget. By default, the framework uses the
+smaller of the provider-specific input budget, when the model exposes one, and
+a conservative ceiling of 70% of the model context window.
+
+Use `WithRequestInputTokenBudget(tokens)` to replace the default 70% budget with
+a positive token count. The effective budget is still capped by the model
+context window and any provider-specific input budget. If the context window
+cannot be resolved, the existing 8192-token fallback window applies. A value
+of zero or less restores the automatic budget; the last configured value wins.
+The budget covers the estimated input tokens of the complete summary request,
+including prompts, conversation, and tool schemas. It applies to both
+standalone and cache-safe fork requests and does not change the trigger
+threshold or the summary output limit.
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(2000),
+    summary.WithRequestInputTokenBudget(8192),
+)
+```
+
+An oversized fork is reduced without mutating the parent request: unused tool
+schemas are removed first, and large tool argument/result payloads are replaced
+with explicit omission markers as needed. Source conversation turns are not
+dropped. The complete rendered fork
 prompt, including a custom one, counts against this input budget in both fork
 and standalone forms. If the fork still cannot fit, the summarizer rebuilds a
 bounded standalone request. When that request can fit all newly uncovered
@@ -673,11 +693,12 @@ summary.WithChecksAny(
 | Option | Description |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | Limit summary word count; included in prompt to guide model |
+| `WithRequestInputTokenBudget(tokens int)` | Override the default summary request input budget; positive values remain capped by the model context window and provider budget, and values <= 0 restore automatic budgeting |
 | `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` and may contain `{previous_summary}` |
 | `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` or `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
 | `WithCacheSafeForkPrompt(prompt string)` | Customize the final instruction used by cache-safe fork requests and appended after a source-data boundary in standalone fallbacks. Its rendered text counts against the input budget. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
-| `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
+| `WithSkipRecentContext(skipFunc ContextSkipRecentFunc)` | Context-aware function to skip recent events; the last configured skip-recent option takes precedence |
 
 ### Hook Options
 
@@ -686,6 +707,17 @@ summary.WithChecksAny(
 | `WithPreSummaryHook(h PreSummaryHook)` | Pre-summary hook; can modify input text |
 | `WithPostSummaryHook(h PostSummaryHook)` | Post-summary hook; can modify output summary |
 | `WithSummaryHookAbortOnError(abort bool)` | Whether to abort on hook error; default `false` (ignore errors) |
+
+### Message Content
+
+For regular messages, the summarizer reads `Content` followed by non-empty text
+parts in `ContentParts`, in order. This text is used to determine summary
+eligibility and build standalone summary input. Images, audio, and other
+non-text parts are not transcribed.
+
+Cache-safe forks reuse the selected parent messages with their original content
+and part order, then append the summary instruction. The request budget rules
+described above still apply.
 
 ### Tool Call Formatting
 
@@ -866,7 +898,7 @@ Notes:
 
 ## Token Counter Configuration
 
-By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
+Summary checks use a built-in `SimpleTokenCounter` by default. Use `summary.SetTokenCounter` to customize the process default for summary checks, summary-request estimates, and model-visible request estimates used by automatic summaries and pre-LLM summary triggers. An agent's explicit `WithContextCompactionTokenCounter(...)` takes precedence for its request estimates:
 
 For `SimpleTokenCounter`, `WithApproxRunesPerToken(v)` means roughly `v` UTF-8 characters per token. The formula is `estimatedTokens = countedUTF8Runes / v`. For example, `v=1.5` means about `1.5` characters per token; do not treat it as a token multiplier.
 
@@ -931,26 +963,28 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 **Notes**:
 
-- **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
-- **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
+- **Counter precedence**: Model-visible request estimates use the agent's explicit `WithContextCompactionTokenCounter(...)`, otherwise the process default from `summary.SetTokenCounter(...)`, otherwise the built-in `SimpleTokenCounter`. This applies to pre-LLM summary triggers and automatic checks using a finalized request view. Automatic checks follow this rule even when context compaction is disabled.
+- **Updates and reset**: Set the process default during application initialization. Later updates apply to subsequent evaluations, including for existing agents; `SetTokenCounter(nil)` restores the built-in default. Custom counters must support concurrent calls.
+- **Independent counters**: Tool-result compaction and model token tailoring retain their separate defaults. Configure the same counter explicitly for those paths when consistent estimates are needed.
+- **Default counter**: The built-in `SimpleTokenCounter` estimates approximately 4 characters per token.
 - **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `2.0/3.0` means about `0.67` characters per token, which is about `1.5` tokens per character
 
 ## Skip Recent Events
 
-Use `WithSkipRecent` to skip recent events during summarization:
+Use `WithSkipRecentContext` to skip recent events during summarization:
 
 ```go
 // Skip a fixed number of events
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(_ []event.Event) int { return 2 }),
+    summary.WithSkipRecentContext(func(_ context.Context, _ []event.Event) int { return 2 }),
     summary.WithEventThreshold(10),
 )
 
 // Skip events from the last 5 minutes (time window)
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         cutoff := time.Now().Add(-5 * time.Minute)
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
@@ -968,7 +1002,7 @@ summarizer := summary.NewSummarizer(
 // Skip only trailing tool call messages
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithSkipRecent(func(events []event.Event) int {
+    summary.WithSkipRecentContext(func(_ context.Context, events []event.Event) int {
         skip := 0
         for i := len(events) - 1; i >= 0; i-- {
             if events[i].Response != nil && len(events[i].Response.Choices) > 0 &&
@@ -1364,10 +1398,15 @@ Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
 - Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request
-- Context compaction uses `SimpleTokenCounter` by default. If your application
-  uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
-  pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1
-  decisions and Pass 2 truncation use the same estimate as token tailoring.
+- Request estimates for the pre-LLM summary trigger and automatic summary checks
+  use the agent's explicit `WithContextCompactionTokenCounter(...)`, otherwise
+  the current `summary.SetTokenCounter(...)` process default, otherwise the
+  built-in `SimpleTokenCounter`. Automatic checks follow this rule even when
+  context compaction is disabled.
+- Tool-result compaction and model token tailoring retain independent defaults.
+  For consistent CJK or provider-specific estimates, configure the same counter
+  explicitly for Pass 1/Pass 2 with `WithContextCompactionTokenCounter(...)` and
+  for model token tailoring with the model's token-counter option.
 
 ```go
 counter := model.NewSimpleTokenCounter(
@@ -1802,7 +1841,7 @@ an idle session:
 | --- | --- |
 | `selected` | Events were selected before the hook; this does not prove they were the later model payload |
 | `no_candidates` | The stage had no candidate event to consider at all |
-| `skip_recent_all` | The `WithSkipRecent` callback asked to skip at least as many events as were available |
+| `skip_recent_all` | The `WithSkipRecentContext` callback asked to skip at least as many events as were available |
 | `unsafe_prefix` | Events remained after skip-recent, but the retained prefix had neither a user message nor a prepended previous summary to anchor the summary, so it was dropped |
 | `session_filter_empty` | Candidates survived skip-recent and were then all removed by the summary's branch scoping |
 | `unbound_view` | A model-visible view existed but was not bound to the request the model answered |
@@ -1810,7 +1849,7 @@ an idle session:
 | `custom` | The summary call did not publish the built-in event selection, so counts are unknown |
 | `none` | No summarizer ran, so no selection was observed |
 
-The accompanying counts describe the stage that receives the `WithSkipRecent`
+The accompanying counts describe the stage that receives the `WithSkipRecentContext`
 callback:
 
 - `eligible_events` is the number of candidate events handed to that stage,

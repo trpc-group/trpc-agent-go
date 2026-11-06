@@ -61,6 +61,10 @@ Typical responses:
 
 After cancellation succeeds, the framework still performs the required run finalization, fills in protocol closing events, and tries to write the aggregation cache to `SessionService`. A successful cancel response does not mean the same `SessionKey` can immediately start a new real-time conversation request. If you need to start the next run, wait for the original real-time conversation stream to return a terminal event. Therefore, when history is later read through `/history`, the result is a valid and consistent state after cancellation rather than an unfinished intermediate state. For finalization and timeout configuration, see [Session Storage and Event Aggregation](history.md#session-storage-and-event-aggregation).
 
+To determine whether a run was actively cancelled by `/cancel` from the framework event stream, inspect the `RunOutcome` field on the final runner completion event. When `RunOutcome` is non-nil and `Status` is `event.RunOutcomeStatusCancelled`, the run was actively cancelled by `/cancel`.
+
+When a run ends because its configured deadline is exceeded, the same field is set to `event.RunOutcomeStatusTimedOut`.
+
 ## Multi-Instance Distributed Cancel
 
 If a multi-instance deployment cannot guarantee that the real-time conversation request and cancel request for the same `SessionKey` hit the same instance, enable distributed cancel:

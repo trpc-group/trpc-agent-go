@@ -37,7 +37,7 @@ func TestStartReturnsControllableProcess(t *testing.T) {
 			return err
 		}
 		<-killed
-		return stream.Send(&processrpc.StartResponse{Event: endEvent(137)})
+		return stream.Send(&processrpc.StartResponse{Event: signalEndEvent("signal: killed")})
 	}
 	handler.sendInput = func(
 		_ context.Context,
@@ -164,6 +164,8 @@ func TestProcessCallerCancellationDisconnectsStream(t *testing.T) {
 }
 
 func TestConnectedProcessDeadlineIsNotRemoteProcessTimeout(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
 	handler := &testProcessHandler{}
 	handler.connect = func(
 		ctx context.Context,
@@ -176,6 +178,9 @@ func TestConnectedProcessDeadlineIsNotRemoteProcessTimeout(t *testing.T) {
 			return err
 		}
 		<-ctx.Done()
+		// A server deadline can expire before the client's local deadline.
+		// Keep its serialized RPC error from winning this local-context test.
+		<-release
 		return ctx.Err()
 	}
 
