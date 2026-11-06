@@ -433,6 +433,57 @@ func TestMaskEvents_expandsToolCallRound(t *testing.T) {
 	}
 }
 
+func TestMaskEvents_expandsMultiToolCallRound(t *testing.T) {
+	sess := NewSession("app", "user", "multi-tool-round")
+	sess.Events = []event.Event{
+		newTestEvent("user-1"),
+		newToolCallEvent("call-1", "tc-1", "tc-2"),
+		newToolResultEvent("result-1", "tc-1", "answer-1"),
+		newToolResultEvent("result-2", "tc-2", "answer-2"),
+	}
+
+	masked := sess.MaskEvents("result-1")
+	if masked != 3 {
+		t.Fatalf("expected call+both results masked, got %d", masked)
+	}
+	visible := sess.GetVisibleEvents()
+	if len(visible) != 1 || visible[0].ID != "user-1" {
+		t.Fatalf("expected only user event visible, got %v", visible)
+	}
+}
+
+func TestUnmaskEvents_restoresMultiToolCallRound(t *testing.T) {
+	sess := NewSession("app", "user", "multi-tool-unmask")
+	sess.Events = []event.Event{
+		newTestEvent("user-1"),
+		newToolCallEvent("call-1", "tc-1", "tc-2"),
+		newToolResultEvent("result-1", "tc-1", "answer-1"),
+		newToolResultEvent("result-2", "tc-2", "answer-2"),
+	}
+	if n := sess.MaskEvents("result-1"); n != 3 {
+		t.Fatalf("expected full multi-tool round masked, got %d", n)
+	}
+
+	unmasked := sess.UnmaskEvents("result-2")
+	if unmasked != 3 {
+		t.Fatalf("expected call+both results unmasked, got %d", unmasked)
+	}
+	visible := sess.GetVisibleEvents()
+	if len(visible) != 4 {
+		t.Fatalf("expected full transcript restored, got %v", visible)
+	}
+	got := make([]string, len(visible))
+	for i, evt := range visible {
+		got[i] = evt.ID
+	}
+	want := []string{"user-1", "call-1", "result-1", "result-2"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("visible IDs = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestHydrateSkipsEmptyMaskedIDs(t *testing.T) {
 	sess := NewSession("app", "user", "sess-skip-empty-id")
 	sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}

@@ -101,7 +101,15 @@ func addPairedToolRoundIDs(
 	if !ok || callIdx < 0 || callIdx >= len(events) {
 		return
 	}
+	// Masking or unmasking one result must include the assistant call event and
+	// every sibling result matched to that call, so a multi-tool round never
+	// leaves visible results without their call (or a call without all results).
 	expanded[events[callIdx].ID] = struct{}{}
+	for _, match := range matches[callIdx] {
+		if match.eventIndex >= 0 && match.eventIndex < len(events) {
+			expanded[events[match.eventIndex].ID] = struct{}{}
+		}
+	}
 }
 
 func orderedExpandedIDs(original []string, expanded map[string]struct{}) []string {
