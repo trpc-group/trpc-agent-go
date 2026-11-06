@@ -148,6 +148,8 @@ func (h *memoryScriptHook) ProcessPipelineHook(
 	return next
 }
 
+// TestBuildUserMemKey preserves ordinary keys while escaping field delimiters,
+// hash-tag braces, and literal escape sequences independently.
 func TestBuildUserMemKey(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -169,6 +171,41 @@ func TestBuildUserMemKey(t *testing.T) {
 				UserID:  "user_456",
 			},
 			expected: "mem:{my-app-123:user_456}",
+		},
+		{
+			name:     "colon in app name",
+			userKey:  memory.UserKey{AppName: "a:b", UserID: "c"},
+			expected: "mem:{a%3Ab:c}",
+		},
+		{
+			name:     "colon in user id",
+			userKey:  memory.UserKey{AppName: "a", UserID: "b:c"},
+			expected: "mem:{a:b%3Ac}",
+		},
+		{
+			name:     "braces in identity",
+			userKey:  memory.UserKey{AppName: "{app}", UserID: "{user}"},
+			expected: "mem:{%7Bapp%7D:%7Buser%7D}",
+		},
+		{
+			name:     "literal escape sequence",
+			userKey:  memory.UserKey{AppName: "a%3Ab", UserID: "c"},
+			expected: "mem:{a%253Ab:c}",
+		},
+		{
+			name:     "all reserved characters",
+			userKey:  memory.UserKey{AppName: "%:{}", UserID: "%:{}"},
+			expected: "mem:{%25%3A%7B%7D:%25%3A%7B%7D}",
+		},
+		{
+			name:     "readable unicode names",
+			userKey:  memory.UserKey{AppName: "应用", UserID: "用户"},
+			expected: "mem:{应用:用户}",
+		},
+		{
+			name:     "other characters remain unchanged",
+			userKey:  memory.UserKey{AppName: "app/a+b", UserID: "user@org.example"},
+			expected: "mem:{app/a+b:user@org.example}",
 		},
 	}
 
