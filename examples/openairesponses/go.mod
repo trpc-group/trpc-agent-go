@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v1.11.1
+	trpc.group/trpc-go/trpc-agent-go v1.13.0-beta.1
 	trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3 v1.11.1
 )
 
