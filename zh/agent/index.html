@@ -5062,6 +5062,10 @@
 <li><strong><code>discard_all</code></strong>：在发送给模型之前，所有历史消息的 <code>reasoning_content</code> 都会被清除。</li>
 </ul>
 <p><strong>注意：</strong> 此选项仅影响发送给模型之前对历史消息的处理方式。当前响应的 <code>reasoning_content</code> 始终会被捕获并存储在会话事件中。</p>
+<p>框架将 <code>ProviderData</code> payload 字节视为不透明数据。对于带有原生 ProviderData 的消息，
+这些模式只修改投影出的 reasoning 字段，不会删除 ProviderData 中的 reasoning 或加密状态，
+匹配的原生适配器仍可能在下一轮发送它们。要改变这部分输入，可以编辑
+<code>Message.ProviderData.Payload</code>。需要恢复未完成的工具轮时，保留该轮的 ProviderData。</p>
 <h3 id="_6">工具调用记录历史模式</h3>
 <p>默认情况下，LLMAgent 会在后续请求中继续把历史工具调用及其对应工具结果发送给模型。这是最保守、兼容性最强的行为；但在包含大量已完成工具调用轮次的长会话中，这些历史 tool transcript 可能会占用不必要的上下文。</p>
 <p>LLMAgent 提供 <code>WithToolTranscriptMode</code> 来控制已完成历史工具调用/工具结果对在模型请求中的投影方式：</p>
@@ -6709,7 +6713,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月27日 08:58:00 UTC">2026-08-27 08:58:00</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月6日 09:49:29 UTC">2026-11-06 09:49:29</span>
   </span>
 
     
