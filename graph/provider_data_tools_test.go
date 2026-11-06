@@ -65,16 +65,19 @@ func (m *nativeToolModel) Info() model.Info {
 	return model.Info{Name: "native-model", ProviderDataProtocol: "test.native"}
 }
 
-func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
+func TestGraphNativeToolCallsAfterModel(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		edit             bool
 		dropProviderData bool
+		replaceResponse  bool
+		wantExecutions   int32
 		wantInput        int32
 	}{
-		{name: "unchanged", wantInput: 1},
-		{name: "edited with the record retained", edit: true, wantInput: 1000},
-		{name: "edited with the record dropped", edit: true, dropProviderData: true, wantInput: 1000},
+		{name: "unchanged", wantExecutions: 1, wantInput: 1},
+		{name: "edited with the record retained", edit: true, wantExecutions: 1, wantInput: 1000},
+		{name: "edited with the record dropped", edit: true, dropProviderData: true, wantExecutions: 1, wantInput: 1000},
+		{name: "replaced with plain text", replaceResponse: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var executed, input atomic.Int32
@@ -92,7 +95,15 @@ func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
 				rsp *model.Response,
 				_ error,
 			) (*model.Response, error) {
-				if tc.edit && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0 {
+				if len(rsp.Choices) == 0 || len(rsp.Choices[0].Message.ToolCalls) == 0 {
+					return nil, nil
+				}
+				if tc.replaceResponse {
+					return &model.Response{Done: true, Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("tool call declined"),
+					}}}, nil
+				}
+				if tc.edit {
 					rsp.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"a":1000}`)
 					if tc.dropProviderData {
 						rsp.Choices[0].Message.ProviderData = nil
@@ -124,9 +135,9 @@ func TestGraphToolsNodeExecutesCallbackEditedNativeCalls(t *testing.T) {
 			}
 
 			require.Empty(t, errMessage)
-			require.EqualValues(t, 1, executed.Load())
+			require.Equal(t, tc.wantExecutions, executed.Load())
 			require.Equal(t, tc.wantInput, input.Load())
-			require.Equal(t, 2, llm.calls)
+			require.Equal(t, int(tc.wantExecutions)+1, llm.calls)
 		})
 	}
 }

@@ -5396,7 +5396,13 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	p.tap.WriteDelta(response)
 	trackModelResponseTelemetry(response, p.tracker)
 	nativeResponse := providerdata.ResponseHasData(response)
-	p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	if nativeResponse {
+		// A native completion supplies the full tool list. Use the callback's
+		// final list without restoring calls collected before the callback.
+		p.toolCalls = nil
+	} else {
+		p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	}
 	p.finalResponse = response
 	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
 	var responseErr error
