@@ -153,6 +153,7 @@ func createMemoryEntry(
 }
 
 // AddMemory adds or updates a memory for a user (idempotent).
+// Updating an existing memory ID does not require additional capacity.
 func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string,
 	topics []string, opts ...memory.AddOption) error {
 	if err := userKey.CheckUserKey(); err != nil {
@@ -170,8 +171,9 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Check memory limit.
-	if len(app.memories[userKey.UserID]) >= s.opts.memoryLimit {
+	// Only new IDs consume capacity; retries and topic updates reuse an entry.
+	_, exists := app.memories[userKey.UserID][memoryEntry.ID]
+	if !exists && len(app.memories[userKey.UserID]) >= s.opts.memoryLimit {
 		return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
 			userKey.UserID, s.opts.memoryLimit, len(app.memories[userKey.UserID]))
 	}
