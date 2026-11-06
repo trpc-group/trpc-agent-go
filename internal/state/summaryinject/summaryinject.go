@@ -28,7 +28,7 @@ const (
 	// LookupStrategyExact searches only the request's own filter key.
 	LookupStrategyExact = "exact"
 	// LookupStrategyPrefix searches the request's key and its hierarchical
-	// descendants.
+	// descendants, then falls back to its nearest ancestor.
 	LookupStrategyPrefix = "prefix"
 	// LookupStrategyAll searches the full-session summary regardless of the
 	// request's own filter key.
@@ -45,6 +45,9 @@ const (
 	LookupResultExact = "exact"
 	// LookupResultPrefix marks summaries aggregated from a key prefix.
 	LookupResultPrefix = "prefix"
+	// LookupResultAncestor marks a summary taken from the nearest ancestor key
+	// when neither the searched key nor its descendants have one.
+	LookupResultAncestor = "ancestor"
 	// LookupResultNone marks a lookup that found nothing in scope.
 	LookupResultNone = "none"
 )
