@@ -255,6 +255,13 @@ func (m *mockTestClient) GetObject(ctx context.Context, key string) ([]byte, str
 	return nil, "", nil
 }
 
+func (m *mockTestClient) HeadObject(ctx context.Context, req *s3storage.HeadObjectRequest, _ ...s3storage.HeadObjectOption) (*s3storage.HeadObjectResponse, error) {
+	if req == nil {
+		return nil, nil
+	}
+	return &s3storage.HeadObjectResponse{}, nil
+}
+
 func (m *mockTestClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	return nil, nil
 }
