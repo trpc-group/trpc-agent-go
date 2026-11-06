@@ -312,6 +312,7 @@ tools:
       backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
+      read_mode: "granted" # granted|host; granted hides ungranted host files
       default_timeout: "30s"
       output_max_bytes: 1048576
       shell_env:
@@ -348,6 +349,17 @@ memory:
   auto:
     enabled: false
 ```
+
+The sandbox executor defaults to `read_mode: granted` for both `workspace_write`
+and `read_only`. This intentionally changes the previous Linux default: host
+files outside the documented runtime grants and workspace need an explicit path
+grant. `read_mode: host` opts into broader host reads and does not provide
+confidentiality for arbitrary host files. Fixed credential locations and other
+sessions remain protected in either mode; `.env`, `*.pem`, and `*.key` filename
+filtering is not automatic. `profile: disabled` bypasses these restrictions.
+See [File System Policy](../codeexecutor/sandbox/docs/FILE_SYSTEM_POLICY.md) for
+the runtime grants, protection limits, and Go path-grant APIs. The `shell_env`
+setting controls environment inheritance independently.
 
 Run:
 

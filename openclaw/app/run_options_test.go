@@ -1272,6 +1272,7 @@ memory:
 		sandboxNetworkRestricted,
 		opts.CodeExecutor.Sandbox.Network,
 	)
+	require.Equal(t, sandboxReadModeGranted, opts.CodeExecutor.Sandbox.ReadMode)
 	require.Equal(t, 45*time.Second, opts.CodeExecutor.Sandbox.DefaultTimeout)
 	require.Equal(t, 2048, opts.CodeExecutor.Sandbox.OutputMaxBytes)
 	require.Equal(
@@ -1394,6 +1395,39 @@ tools:
 		opts.CodeExecutor.Sandbox.ShellEnv.Inherit,
 	)
 	require.True(t, opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+}
+
+func TestParseRunOptions_CodeExecutorSandboxReadMode(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "empty", mode: "", want: sandboxReadModeGranted},
+		{name: "granted", mode: "granted", want: sandboxReadModeGranted},
+		{name: "host", mode: " HOST ", want: sandboxReadModeHost},
+		{name: "invalid", mode: "everything"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+tools:
+  code_executor:
+    type: "sandbox"
+    sandbox:
+      read_mode: %q
+`, tc.mode))
+			opts, err := parseRunOptions([]string{"-config", cfgPath})
+			if tc.want == "" {
+				require.ErrorContains(t, err, "sandbox.read_mode")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, opts.CodeExecutor.Sandbox.ReadMode)
+		})
+	}
 }
 
 func TestParseRunOptions_DeferToolSurfacePolicyConfig(t *testing.T) {
@@ -1803,6 +1837,7 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 		Backend:        " MACOS-SANDBOX-EXEC ",
 		Profile:        " READ_ONLY ",
 		Network:        " ENABLED ",
+		ReadMode:       " HOST ",
 		DefaultTimeout: "2s",
 		OutputMaxBytes: &maxBytes,
 	})
@@ -1811,6 +1846,7 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 	require.Equal(t, sandboxBackendMacOSSandbox, got.Backend)
 	require.Equal(t, sandboxProfileReadOnly, got.Profile)
 	require.Equal(t, sandboxNetworkEnabled, got.Network)
+	require.Equal(t, sandboxReadModeHost, got.ReadMode)
 	require.Equal(t, 2*time.Second, got.DefaultTimeout)
 	require.Equal(t, maxBytes, got.OutputMaxBytes)
 
@@ -1839,6 +1875,11 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 			name: "network",
 			cfg:  sandboxCodeExecutorConfig{Network: "egress-only"},
 			want: "sandbox.network",
+		},
+		{
+			name: "read mode",
+			cfg:  sandboxCodeExecutorConfig{ReadMode: "everything"},
+			want: "sandbox.read_mode",
 		},
 		{
 			name: "timeout parse",
