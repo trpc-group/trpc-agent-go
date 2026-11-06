@@ -275,11 +275,20 @@ func decodeDocumentBody(body io.Reader, links map[string]string) (string, error)
 
 		switch token := token.(type) {
 		case xml.StartElement:
-			if err := extractor.handleStart(decoder, token); err != nil {
+			// Namespace declarations are tracked per element so mc:Choice
+			// requirements can be resolved to URIs instead of prefix spellings.
+			extractor.pushNamespaces(token.Attr)
+			consumed, err := extractor.handleStart(decoder, token)
+			if err != nil {
 				return "", fmt.Errorf("failed to decode document.xml: %w", err)
+			}
+			if consumed {
+				// decoder.Skip consumed the matching end element.
+				extractor.popNamespaces()
 			}
 		case xml.EndElement:
 			extractor.handleEnd(token)
+			extractor.popNamespaces()
 		}
 	}
 	// Keep the extracted text even when the document ends inside a paragraph.
@@ -304,14 +313,21 @@ type textExtractor struct {
 	anchors []*hyperlinkAnchor
 	// alternates tracks the open mc:AlternateContent elements.
 	alternates []*alternateContent
-	// producedBytes counts extracted non-space text so mc:Choice branches can
-	// be classified as readable or not.
+	// namespaces holds the in-scope xmlns prefix bindings, outermost first.
+	// Go's XML decoder reports namespace declarations as attributes but does
+	// not keep a binding stack, so they are tracked here.
+	namespaces []map[string]string
+	// producedBytes counts extracted non-space text and emitted hyperlink URLs
+	// so mc:Choice branches can be classified as readable or not.
 	producedBytes int
 }
 
 // textParagraph is one open w:p element.
 type textParagraph struct {
 	text strings.Builder
+	// boundary reports that a run following this point must be separated from
+	// the text already collected (a nested paragraph was merged into it).
+	boundary bool
 }
 
 // hyperlinkAnchor is one open w:hyperlink element.
@@ -328,33 +344,45 @@ type alternateContent struct {
 	choiceStart  int  // producedBytes when the current mc:Choice started
 }
 
-// supportedChoicePrefixes lists the markup-compatibility prefixes whose content
-// this extractor can read: WordprocessingML and drawing extension namespaces.
+// supportedChoiceNamespaces lists the namespaces whose content this extractor
+// can read: WordprocessingML and the drawing/extension namespaces that wrap
+// WordprocessingML text runs.
 //
-// Go's XML decoder resolves namespaces to URIs but does not expose the prefix
-// bindings, so mc:Choice selection uses this fixed list. Choices that require
-// namespaces with no readable text (for example math, "m") are skipped, and
-// their mc:Fallback content is used instead.
-var supportedChoicePrefixes = map[string]bool{
-	"w": true, "wp": true, "wp14": true, "wps": true,
-	"w14": true, "w15": true, "w16": true, "w16cex": true, "w16cid": true,
-	"w16du": true, "w16sdtdh": true, "w16sdtfl": true, "w16se": true,
+// mc:Choice requirements are prefix spellings, so they are resolved against the
+// in-scope xmlns declarations and compared as URIs; this keeps aliases stable
+// and detects prefixes rebound to unreadable namespaces.
+var supportedChoiceNamespaces = map[string]bool{
+	"http://schemas.openxmlformats.org/wordprocessingml/2006/main":           true,
+	"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing": true,
+	"http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing":    true,
+	"http://schemas.microsoft.com/office/word/2010/wordprocessingShape":      true,
+	"http://schemas.microsoft.com/office/word/2010/wordml":                   true,
+	"http://schemas.microsoft.com/office/word/2012/wordml":                   true,
+	"http://schemas.microsoft.com/office/word/2015/wordml/symex":             true,
+	"http://schemas.microsoft.com/office/word/2016/wordml/cid":               true,
+	"http://schemas.microsoft.com/office/word/2018/wordml":                   true,
+	"http://schemas.microsoft.com/office/word/2018/wordml/cex":               true,
+	"http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash":       true,
+	"http://schemas.microsoft.com/office/word/2023/wordml/word16du":          true,
+	"http://schemas.microsoft.com/office/word/2024/wordml/sdtformatlock":     true,
 }
 
-// handleStart handles a start element and may consume the whole subtree.
-func (e *textExtractor) handleStart(decoder *xml.Decoder, token xml.StartElement) error {
+// handleStart handles a start element. It reports whether the element subtree
+// was consumed with decoder.Skip, in which case the caller must pop the
+// namespace scope pushed for the element.
+func (e *textExtractor) handleStart(decoder *xml.Decoder, token xml.StartElement) (bool, error) {
 	if token.Name.Space == namespaceMarkupCompat {
 		return e.handleMarkupCompatStart(decoder, token)
 	}
 	if token.Name.Space != namespaceWordMain {
 		// Other namespaces (drawings, comments, ...) carry no body text.
-		return nil
+		return false, nil
 	}
 
 	switch token.Name.Local {
 	case "del", "moveFrom":
 		// Text deleted or moved away by a tracked change must not be indexed.
-		return decoder.Skip()
+		return true, decoder.Skip()
 	case "p":
 		e.paras = append(e.paras, &textParagraph{})
 	case "hyperlink":
@@ -362,15 +390,17 @@ func (e *textExtractor) handleStart(decoder *xml.Decoder, token xml.StartElement
 	case "t":
 		var runText string
 		if err := decoder.DecodeElement(&runText, &token); err != nil {
-			return err
+			return false, err
 		}
 		e.writeText(runText)
+		// DecodeElement consumed the matching end element.
+		return true, nil
 	case "tab":
 		e.writeText("\t")
 	case "br", "cr":
 		e.writeText("\n")
 	}
-	return nil
+	return false, nil
 }
 
 // handleEnd handles an end element.
@@ -391,29 +421,29 @@ func (e *textExtractor) handleEnd(token xml.EndElement) {
 }
 
 // handleMarkupCompatStart selects which mc:Choice branch may be read.
-func (e *textExtractor) handleMarkupCompatStart(decoder *xml.Decoder, token xml.StartElement) error {
+func (e *textExtractor) handleMarkupCompatStart(decoder *xml.Decoder, token xml.StartElement) (bool, error) {
 	switch token.Name.Local {
 	case "AlternateContent":
 		e.alternates = append(e.alternates, &alternateContent{})
 	case "Choice":
 		frame := e.currentAlternate()
 		if frame == nil {
-			return nil
+			return false, nil
 		}
-		if frame.supported || !choiceSupported(choiceRequires(token.Attr)) {
-			return decoder.Skip()
+		if frame.supported || !e.choiceSupported(choiceRequires(token.Attr)) {
+			return true, decoder.Skip()
 		}
 		frame.choiceActive = true
 		frame.choiceStart = e.producedBytes
 	case "Fallback":
 		// The fallback is a duplicate of a readable choice, unless no choice
-		// produced text: some choices only carry markup this extractor cannot
+		// produced output: some choices only carry markup this extractor cannot
 		// read (for example math), and then the fallback is the only text.
 		if frame := e.currentAlternate(); frame != nil && frame.supported {
-			return decoder.Skip()
+			return true, decoder.Skip()
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // handleMarkupCompatEnd closes mc:Choice / mc:AlternateContent state.
@@ -449,7 +479,12 @@ func (e *textExtractor) writeText(text string) {
 	if text == "" {
 		return
 	}
-	e.currentParagraph().text.WriteString(text)
+	paragraph := e.currentParagraph()
+	if paragraph.boundary {
+		paragraph.text.WriteString("\n")
+		paragraph.boundary = false
+	}
+	paragraph.text.WriteString(text)
 	for _, anchor := range e.anchors {
 		anchor.anchor.WriteString(text)
 	}
@@ -481,10 +516,15 @@ func (e *textExtractor) endParagraph() {
 	}
 	if len(e.paras) > 0 {
 		parent := e.paras[len(e.paras)-1]
+		parent.boundary = false
 		if parent.text.Len() > 0 {
 			parent.text.WriteString("\n")
 		}
 		parent.text.WriteString(paragraphText)
+		// Separate any run that continues in the parent after the nested
+		// paragraph, so following text cannot be glued onto this content (or
+		// onto a URL appended by an enclosing hyperlink).
+		parent.boundary = true
 		return
 	}
 	if e.text.Len() > 0 {
@@ -501,12 +541,19 @@ func (e *textExtractor) endHyperlink() {
 	}
 	anchor := e.anchors[len(e.anchors)-1]
 	e.anchors = e.anchors[:len(e.anchors)-1]
+	paragraph := e.currentParagraph()
+	before := paragraph.text.Len()
 	appendHyperlink(
-		&e.currentParagraph().text,
+		&paragraph.text,
 		strings.TrimSpace(anchor.anchor.String()),
 		anchor.relID,
 		e.links,
 	)
+	// A hyperlink target is extracted output too: a choice whose only content
+	// is a hyperlink must still count as readable.
+	if emitted := paragraph.text.Len() - before; emitted > 0 {
+		e.producedBytes += emitted
+	}
 }
 
 // flushOpenParagraphs writes the remaining paragraphs when the input ends while
@@ -517,14 +564,46 @@ func (e *textExtractor) flushOpenParagraphs() {
 	}
 }
 
+// pushNamespaces records the xmlns declarations of a start element.
+func (e *textExtractor) pushNamespaces(attrs []xml.Attr) {
+	scope := make(map[string]string)
+	for _, attr := range attrs {
+		switch {
+		case attr.Name.Space == "xmlns":
+			scope[attr.Name.Local] = attr.Value
+		case attr.Name.Space == "" && attr.Name.Local == "xmlns":
+			scope[""] = attr.Value
+		}
+	}
+	e.namespaces = append(e.namespaces, scope)
+}
+
+// popNamespaces drops the innermost xmlns scope.
+func (e *textExtractor) popNamespaces() {
+	if n := len(e.namespaces); n > 0 {
+		e.namespaces = e.namespaces[:n-1]
+	}
+}
+
+// lookupNamespace resolves an XML prefix using the in-scope declarations.
+func (e *textExtractor) lookupNamespace(prefix string) (string, bool) {
+	for i := len(e.namespaces) - 1; i >= 0; i-- {
+		if uri, ok := e.namespaces[i][prefix]; ok {
+			return uri, true
+		}
+	}
+	return "", false
+}
+
 // choiceSupported reports whether every namespace required by an mc:Choice can
 // be read by this extractor.
-func choiceSupported(requires string) bool {
+func (e *textExtractor) choiceSupported(requires string) bool {
 	if strings.TrimSpace(requires) == "" {
 		return true
 	}
 	for _, prefix := range strings.Fields(requires) {
-		if !supportedChoicePrefixes[prefix] {
+		uri, ok := e.lookupNamespace(prefix)
+		if !ok || !supportedChoiceNamespaces[uri] {
 			return false
 		}
 	}

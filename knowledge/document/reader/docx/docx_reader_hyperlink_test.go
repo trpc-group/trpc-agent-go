@@ -149,6 +149,7 @@ func TestDOCXReader_ExtractionEdgeCases(t *testing.T) {
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
     xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
   <w:body>
     <w:p><w:r><w:t>tab</w:t><w:tab/><w:t>end</w:t></w:r></w:p>
@@ -320,7 +321,8 @@ func TestDOCXReader_ReadFromFileCases(t *testing.T) {
 
 // TestDOCXReader_NestedTextboxHyperlink guards the nested-paragraph case: a
 // text box (with its own w:p) inside an external hyperlink must neither corrupt
-// the enclosing paragraph state nor lose the destination URL.
+// the enclosing paragraph state nor glue the following text onto the content or
+// the destination URL.
 func TestDOCXReader_NestedTextboxHyperlink(t *testing.T) {
 	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -331,8 +333,15 @@ func TestDOCXReader_NestedTextboxHyperlink(t *testing.T) {
       <w:hyperlink r:id="rId2">
         <w:r><w:t>anchor</w:t></w:r>
         <w:r><w:drawing><w:txbxContent><w:p><w:r><w:t>boxed</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r>
-        <w:r><w:t> tail</w:t></w:r>
+        <w:r><w:t>tail</w:t></w:r>
       </w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:r><w:t>before</w:t></w:r>
+      <w:hyperlink r:id="rId3">
+        <w:r><w:drawing><w:txbxContent><w:p><w:r><w:t>https://example.com/docs</w:t></w:r></w:p></w:txbxContent></w:drawing></w:r>
+      </w:hyperlink>
+      <w:r><w:t>after</w:t></w:r>
     </w:p>
   </w:body>
 </w:document>`
@@ -341,6 +350,8 @@ func TestDOCXReader_NestedTextboxHyperlink(t *testing.T) {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
       Target="https://example.com/nested" TargetMode="External"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+      Target="https://example.com/docs" TargetMode="External"/>
 </Relationships>`
 
 	data := buildDOCXPackage(t, map[string]string{
@@ -348,18 +359,97 @@ func TestDOCXReader_NestedTextboxHyperlink(t *testing.T) {
 		"word/_rels/document.xml.rels": relsXML,
 	})
 
-	// Baseline code panicked here with a slice-bounds error; the fix must both
-	// survive extraction and keep the anchor text and the destination URL.
+	// Baseline code panicked here with a slice-bounds error. The complete output
+	// is asserted so a missing boundary around the nested paragraph (which would
+	// produce "...docsafter") cannot pass unnoticed.
 	docs, err := New(reader.WithChunk(false)).ReadFromReader("nested", bytes.NewReader(data))
 	require.NoError(t, err)
 	require.Len(t, docs, 1)
 
+	const expected = "prefix anchor\nboxed\ntail (https://example.com/nested)\n" +
+		"before\nhttps://example.com/docs\nafter"
+	require.Equal(t, expected, docs[0].Content)
+}
+
+// TestDOCXReader_ChoiceRequiresNamespaceURIs guards mc:Choice selection: the
+// Requires prefixes are resolved through the in-scope xmlns declarations and
+// compared as URIs, so aliases work and rebound prefixes are not trusted.
+func TestDOCXReader_ChoiceRequiresNamespaceURIs(t *testing.T) {
+	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <w:body>
+    <w:p>
+      <mc:AlternateContent>
+        <mc:Choice Requires="shape" xmlns:shape="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+          <w:r><w:t>alias choice</w:t></w:r>
+        </mc:Choice>
+        <mc:Fallback><w:r><w:t>fallback alias</w:t></w:r></mc:Fallback>
+      </mc:AlternateContent>
+    </w:p>
+    <w:p>
+      <mc:AlternateContent>
+        <mc:Choice Requires="wps" xmlns:wps="http://example.com/not-readable">
+          <w:r><w:t>rebound choice</w:t></w:r>
+        </mc:Choice>
+        <mc:Fallback><w:r><w:t>fallback rebound</w:t></w:r></mc:Fallback>
+      </mc:AlternateContent>
+    </w:p>
+  </w:body>
+</w:document>`
+
+	data := buildDOCXPackage(t, map[string]string{
+		"word/document.xml": documentXML,
+	})
+
+	docs, err := New(reader.WithChunk(false)).ReadFromReader("namespaces", bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+
 	content := docs[0].Content
-	require.Contains(t, content, "prefix")
-	require.Contains(t, content, "anchor")
-	require.Contains(t, content, "boxed")
-	require.Contains(t, content, "tail")
-	require.Contains(t, content, "https://example.com/nested")
+	// The same namespace under a different prefix must still be readable.
+	require.Contains(t, content, "alias choice")
+	require.NotContains(t, content, "fallback alias")
+	// A prefix rebound to an unreadable namespace must not select the choice.
+	require.NotContains(t, content, "rebound choice")
+	require.Contains(t, content, "fallback rebound")
+}
+
+// TestDOCXReader_ChoiceHyperlinkOnly guards the readability decision for a
+// choice whose only extracted output is its hyperlink target.
+func TestDOCXReader_ChoiceHyperlinkOnly(t *testing.T) {
+	documentXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <w:body>
+    <w:p>
+      <mc:AlternateContent>
+        <mc:Choice Requires="w"><w:hyperlink r:id="rId9"/></mc:Choice>
+        <mc:Fallback><w:r><w:t>fallback text</w:t></w:r></mc:Fallback>
+      </mc:AlternateContent>
+    </w:p>
+  </w:body>
+</w:document>`
+
+	relsXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+      Target="https://example.com/docs" TargetMode="External"/>
+</Relationships>`
+
+	data := buildDOCXPackage(t, map[string]string{
+		"word/document.xml":            documentXML,
+		"word/_rels/document.xml.rels": relsXML,
+	})
+
+	docs, err := New(reader.WithChunk(false)).ReadFromReader("hyperlink-only", bytes.NewReader(data))
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	// The URL is the only output of the choice; the fallback must not be merged
+	// into it, so the choice counts as readable.
+	require.Equal(t, "https://example.com/docs", docs[0].Content)
 }
 
 // TestDOCXReader_HyperlinkDestinationMatchesExactly guards the duplicate-URL
