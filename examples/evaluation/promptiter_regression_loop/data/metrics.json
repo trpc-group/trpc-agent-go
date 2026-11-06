@@ -1,0 +1,8 @@
+{
+  "metrics": [
+    {"name": "required_keywords", "threshold": 1.0, "kind": "deterministic"},
+    {"name": "hard_failure", "threshold": 1.0, "kind": "red_line"},
+    {"name": "pass_power_k", "k": 3, "kind": "stability"},
+    {"name": "paired_bootstrap", "confidence": 0.90, "kind": "regression"}
+  ]
+}
