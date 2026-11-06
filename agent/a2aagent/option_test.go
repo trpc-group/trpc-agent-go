@@ -71,6 +71,22 @@ func TestWithA2ADataPartMapper(t *testing.T) {
 	}
 }
 
+func TestWithInputSchema(t *testing.T) {
+	inputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"request": map[string]any{"type": "string"},
+		},
+	}
+	agent := &A2AAgent{}
+
+	WithInputSchema(inputSchema)(agent)
+
+	if agent.inputSchema["type"] != "object" {
+		t.Fatalf("input schema not set: %#v", agent.inputSchema)
+	}
+}
+
 func TestA2ADataPartMappingResult_AccessorsAndMutators(t *testing.T) {
 	var nilResult *A2ADataPartMappingResult
 	if nilResult.GetTextContent() != "" {
