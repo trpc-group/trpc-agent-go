@@ -322,3 +322,59 @@ func TestInterruptPersistenceSurvivesClear(t *testing.T) {
 	require.Same(t, ctx, WithPersistence(ctx, nil))
 	require.Same(t, ctx, WithPersistence(ctx, agent.NewInvocation()))
 }
+
+func TestInterruptDisabledCoordinationDoesNotChangeQueueLifecycle(t *testing.T) {
+	for _, attached := range []bool{false, true} {
+		t.Run(fmt.Sprint(attached), func(t *testing.T) {
+			inv := agent.NewInvocation()
+			q := NewQueue()
+			if attached {
+				Attach(inv, q)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cycle, ready := BeginModel(inv, cancel)
+			require.True(t, ready)
+			require.Nil(t, cycle)
+			require.True(t, cycle.Accept())
+			require.False(t, cycle.Interrupted())
+			cycle.End()
+			require.True(t, q.Enqueue(model.NewUserMessage("Q2")))
+			require.NoError(t, ctx.Err())
+			require.True(t, TryFinish(inv))
+			require.True(t, q.Enqueue(model.NewUserMessage("Q3")), "disabled coordination does not own closing the queue")
+			require.NoError(t, Err(inv))
+			calls := 0
+			for i := 0; i < 2; i++ {
+				require.NoError(t, AppendOnce(ctx, inv, "event", func() error { calls++; return nil }))
+			}
+			require.Equal(t, 2, calls)
+			Acknowledge(inv, "unregistered", nil)
+		})
+	}
+}
+
+func TestInterruptAdmissionRejectsPendingOrClosedQueue(t *testing.T) {
+	inv, q := interruptQueue()
+	q.Enqueue(model.NewUserMessage("Q2"))
+	cycle, ready := BeginModel(inv, func() { t.Error("unregistered cancellation must not be called") })
+	require.False(t, ready)
+	require.Nil(t, cycle)
+	require.False(t, TryFinish(inv))
+	require.Len(t, q.Drain(), 1)
+	require.True(t, TryFinish(inv))
+	cycle, ready = BeginModel(inv, func() { t.Error("closed queue cannot start a request") })
+	require.False(t, ready)
+	require.Nil(t, cycle)
+}
+
+func TestInterruptReceiptDeliveryFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	inv, _ := interruptQueue()
+	evt := event.New(inv.InvocationID, "agent")
+	err := EmitAndWait(ctx, inv, make(chan *event.Event), evt, time.Second)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, Err(inv), context.Canceled)
+	require.ErrorContains(t, EmitAndWait(context.Background(), agent.NewInvocation(), nil, evt, time.Second), "queue is not attached")
+}

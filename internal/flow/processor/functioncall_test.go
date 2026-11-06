@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -12303,4 +12304,79 @@ func TestFunctionCallResponseProcessor_ToolConcurrencyScopeLimitsCalls(
 		}
 	}
 	require.Equal(t, int64(2), blocking.max.Load())
+}
+
+func TestSteeredToolResultRequiresPersistenceReceipt(t *testing.T) {
+	for _, outcome := range []string{"success", "receipt_failure", "deadline", "deadline_append_failure"} {
+		outcome := outcome
+		t.Run(outcome, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			inv := agent.NewInvocation()
+			steer.Attach(inv, steer.NewQueue())
+			steer.EnableInterrupt(inv)
+			evt := event.NewResponseEvent(inv.InvocationID, "agent", &model.Response{
+				Object:  model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{Message: model.Message{Role: model.RoleTool, ToolID: "call", Content: "result"}}},
+			})
+			failure := errors.New("persistence failed")
+			if strings.HasPrefix(outcome, "deadline") {
+				expired, expire := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer expire()
+				appends := 0
+				appender.Attach(inv, func(persistCtx context.Context, persisted *event.Event) error {
+					appends++
+					require.NoError(t, persistCtx.Err(), "deadline fallback must have an independent lifetime")
+					_, bounded := persistCtx.Deadline()
+					require.True(t, bounded)
+					require.Equal(t, evt.ID, persisted.ID)
+					require.Equal(t, "call", persisted.Choices[0].Message.ToolID)
+					if outcome == "deadline_append_failure" {
+						return failure
+					}
+					return nil
+				})
+				response, err := emitFunctionResponseEventAndWait(expired, inv, make(chan *event.Event), evt)
+				require.Nil(t, response)
+				require.ErrorIs(t, err, context.DeadlineExceeded, "fallback must not turn a deadline into success")
+				require.Equal(t, 1, appends)
+				return
+			}
+			out := make(chan *event.Event)
+			type result struct {
+				evt *event.Event
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				response, err := emitFunctionResponseEventAndWait(ctx, inv, out, evt)
+				done <- result{response, err}
+			}()
+			select {
+			case sent := <-out:
+				require.Same(t, evt, sent)
+				require.True(t, sent.RequiresCompletion)
+				var receiptErr error
+				if outcome == "receipt_failure" {
+					receiptErr = failure
+				}
+				steer.Acknowledge(inv, sent.ID, receiptErr)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case got := <-done:
+				if outcome == "receipt_failure" {
+					require.Nil(t, got.evt)
+					require.ErrorIs(t, got.err, failure)
+					require.ErrorIs(t, steer.Err(inv), failure)
+				} else {
+					require.Same(t, evt, got.evt)
+					require.NoError(t, got.err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		})
+	}
 }
