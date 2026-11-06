@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -3415,8 +3416,8 @@ func (e *Executor) evaluateRetryDecision(
 
 	// Evaluate retry policy.
 	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
-	if !matched {
-		// No retry policy matched -> emit error and exit.
+	if !matched || toolretry.IsReplayUnsafe(retryCtx.err) {
+		// No policy matched, or replay is unsafe: emit the original error and exit.
 		nodeCtx.metricRecorder.recordError(ctx, retryCtx.err)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, retryCtx.err)
 		if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {

@@ -43,7 +43,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/storage/chroma v0.0.0-20260918030357-77622b3d26d9 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.9.0
-	trpc.group/trpc-go/trpc-mcp-go v0.0.10
+	trpc.group/trpc-go/trpc-mcp-go v0.0.20
 )
 
 require github.com/google/uuid v1.6.0 // indirect

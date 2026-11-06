@@ -11,6 +11,7 @@ package toolretry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -128,6 +129,143 @@ func TestExecute_DoesNotRetryTerminalErrors(t *testing.T) {
 	})
 	require.ErrorIs(t, result.Error, stopErr)
 	require.Equal(t, 1, attempts)
+}
+
+type replaySafetyError struct {
+	safe  bool
+	cause error
+}
+
+func (e *replaySafetyError) Error() string { return "interrupted tool call" }
+
+// Unwrap supplies a retryable cause so tests must stop through replay safety,
+// rather than because the default policy declines to retry the error.
+func (e *replaySafetyError) Unwrap() error {
+	if e.cause != nil {
+		return e.cause
+	}
+	return io.ErrUnexpectedEOF
+}
+func (e *replaySafetyError) ToolCallReplaySafe() bool { return e.safe }
+
+type replaySafetyAlias struct {
+	marker interface{ ToolCallReplaySafe() bool }
+}
+
+func (*replaySafetyAlias) Error() string { return "aliased replay safety" }
+
+// As exposes a marker without an Unwrap chain, protecting custom error aliases.
+func (e *replaySafetyAlias) As(target any) bool {
+	if marker, ok := target.(*interface{ ToolCallReplaySafe() bool }); ok {
+		*marker = e.marker
+		return true
+	}
+	return false
+}
+
+// TestExecute_ReplaySafetyErrorTree ensures safe wrappers and siblings cannot
+// hide an unsafe marker from either default or custom retry policies.
+func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
+	unsafe := &replaySafetyError{}
+	safe := &replaySafetyError{safe: true}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"safe before unsafe", errors.Join(safe, unsafe)},
+		{"unsafe before safe", errors.Join(unsafe, safe)},
+		{"wrapped join", fmt.Errorf("wrapped: %w", errors.Join(safe, unsafe))},
+		{"safe wrapper", &replaySafetyError{safe: true, cause: unsafe}},
+		{"nested join", errors.Join(safe, errors.Join(nil, unsafe))},
+		{"custom As", &replaySafetyAlias{marker: unsafe}},
+		{"custom As after safe", errors.Join(safe, &replaySafetyAlias{marker: unsafe})},
+	} {
+		for _, custom := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/custom=%t", tc.name, custom), func(t *testing.T) {
+				calls, policyCalls := 0, 0
+				policy := &tool.RetryPolicy{MaxAttempts: 2}
+				if custom {
+					policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) {
+						policyCalls++
+						return true, nil
+					}
+				}
+				outcome := Execute(context.Background(), ExecuteInput{
+					Policy: policy,
+					Call: func(context.Context, []byte) (any, error) {
+						calls++
+						return "partial", tc.err
+					},
+				})
+				require.Equal(t, 1, calls)
+				require.Zero(t, policyCalls)
+				require.Same(t, tc.err, outcome.Error)
+				require.Equal(t, "partial", outcome.Result)
+			})
+		}
+	}
+}
+
+// TestExecute_RespectsToolCallReplaySafety preserves the original failure and
+// partial result when replay is unsafe, while allowing replay-safe retries.
+func TestExecute_RespectsToolCallReplaySafety(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		safe    bool
+		joined  bool
+		custom  bool
+		aliased bool
+	}{
+		{name: "unsafe wrapped"},
+		{name: "unsafe joined", joined: true},
+		{name: "unsafe custom policy", custom: true},
+		{name: "unsafe joined custom policy", joined: true, custom: true},
+		{name: "safe wrapped", safe: true},
+		{name: "safe custom policy", safe: true, custom: true},
+		{name: "safe custom As", safe: true, custom: true, aliased: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callErr := fmt.Errorf("wrapped: %w", &replaySafetyError{safe: tc.safe})
+			if tc.aliased {
+				callErr = &replaySafetyAlias{marker: &replaySafetyError{safe: tc.safe}}
+			}
+			if tc.joined {
+				callErr = errors.Join(errors.New("connection interrupted"), callErr)
+			}
+			attempts, policyCalls := 0, 0
+			policy := &tool.RetryPolicy{MaxAttempts: 2}
+			if tc.custom {
+				policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) {
+					policyCalls++
+					return true, nil
+				}
+			}
+			result := Execute(context.Background(), ExecuteInput{
+				Policy: policy,
+				Call: func(context.Context, []byte) (any, error) {
+					attempts++
+					if attempts == 1 {
+						return "partial", callErr
+					}
+					return "finished", nil
+				},
+			})
+			if tc.safe {
+				require.NoError(t, result.Error)
+				require.Equal(t, "finished", result.Result)
+				require.Equal(t, 2, attempts)
+				if tc.custom {
+					require.Equal(t, 1, policyCalls)
+				}
+				return
+			}
+			require.Same(t, callErr, result.Error, "preserve the original error chain")
+			require.ErrorIs(t, result.Error, io.ErrUnexpectedEOF)
+			require.Equal(t, "partial", result.Result)
+			require.Equal(t, 1, attempts)
+			require.Zero(t, policyCalls, "retry policies cannot override replay safety")
+		})
+	}
 }
 
 func TestExecute_RequiresCallFunction(t *testing.T) {

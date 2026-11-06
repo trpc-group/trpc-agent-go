@@ -50,6 +50,8 @@ type RetryPolicy struct {
 	// Jitter enables additive random jitter on the computed delay.
 	Jitter bool
 	// RetryOn decides whether the framework should retry the current attempt.
+	// Any wrapped or joined error reporting ToolCallReplaySafe() == false prevents retry,
+	// including when RetryOn would otherwise allow another attempt.
 	RetryOn func(context.Context, *RetryInfo) (bool, error)
 }
 

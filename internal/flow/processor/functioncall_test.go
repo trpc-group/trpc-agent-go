@@ -12009,6 +12009,46 @@ func TestExecuteCallableTool_DoesNotRetryStopError(t *testing.T) {
 	require.Equal(t, 1, toolCalls)
 }
 
+type replayUnsafeCallError struct{ cause error }
+
+func (*replayUnsafeCallError) Error() string            { return "tool task interrupted" }
+func (e *replayUnsafeCallError) Unwrap() error          { return e.cause }
+func (*replayUnsafeCallError) ToolCallReplaySafe() bool { return false }
+
+// TestExecuteCallableTool_PreservesReplaySafety checks the LLMAgent processor
+// retains an unsafe tool error without replaying it or stopping the entire agent.
+func TestExecuteCallableTool_PreservesReplaySafety(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		t.Run(fmt.Sprintf("custom=%t", custom), func(t *testing.T) {
+			original := &replayUnsafeCallError{cause: io.ErrUnexpectedEOF}
+			calls := 0
+			policy := &tool.RetryPolicy{MaxAttempts: 2}
+			if custom {
+				policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) { return true, nil }
+			}
+			p := NewFunctionCallResponseProcessor(false, nil, WithToolCallRetryPolicy(policy))
+			tl := &mockCallableTool{declaration: &tool.Declaration{Name: "charge"},
+				callFn: func(context.Context, []byte) (any, error) {
+					calls++
+					return nil, fmt.Errorf("wrapped: %w", original)
+				}}
+			call := model.ToolCall{ID: "one-logical-call", Function: model.FunctionDefinitionParam{
+				Name: "charge", Arguments: []byte(`{}`),
+			}}
+			_, result, err := p.executeCallableTool(context.Background(), call, tl)
+			require.Equal(t, 1, calls)
+			require.Nil(t, result)
+			require.ErrorIs(t, err, original)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			var marker *replayUnsafeCallError
+			require.ErrorAs(t, err, &marker)
+			require.Same(t, original, marker)
+			_, stopped := agent.AsStopError(err)
+			require.False(t, stopped)
+		})
+	}
+}
+
 // =============================================================================
 // Regression tests for marshalJSONNoHTMLEscape and its callers.
 // These verify that <, >, & in tool results are NOT HTML-escaped,

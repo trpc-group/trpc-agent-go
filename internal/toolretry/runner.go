@@ -119,6 +119,8 @@ func isSuccessfulAttempt(outcome attemptOutcome) bool {
 	return outcome.RawError == nil && !outcome.ResultError
 }
 
+// shouldReturnAttempt applies replay-safety and terminal-error constraints before
+// a retry policy can request another execution of the tool call.
 func shouldReturnAttempt(
 	policy *tool.RetryPolicy,
 	attempt int,
@@ -127,6 +129,11 @@ func shouldReturnAttempt(
 	outcome attemptOutcome,
 ) bool {
 	if policy == nil || attempt == maxAttempts {
+		return true
+	}
+	// A new attempt would submit the original tool call again, even when a
+	// transport has already stopped retrying an uncertain submission or task.
+	if IsReplayUnsafe(outcome.RawError) {
 		return true
 	}
 	if isTerminalError != nil && outcome.RawError != nil && isTerminalError(outcome.RawError) {
