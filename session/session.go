@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -461,7 +462,8 @@ func (sess *Session) EnsureEventStartWithUser() {
 
 	// Keep events starting from the first user event
 	if startIndex > 0 {
-		sess.Events = sess.Events[startIndex:]
+		// A subslice would retain discarded payloads in the backing array.
+		sess.Events = slices.Clone(sess.Events[startIndex:])
 	}
 }
 
@@ -518,6 +520,11 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 	for i := 0; i < len(sess.Events); i++ {
 		if sess.Events[i].IsUserMessage() {
 			sess.Events = sess.Events[i:]
+			if len(sess.Events) < len(originalEvents) {
+				// Copy once after all filters, without clearing other readers'
+				// references to the original history or cloning kept payloads.
+				sess.Events = slices.Clone(sess.Events)
+			}
 			return
 		}
 	}
