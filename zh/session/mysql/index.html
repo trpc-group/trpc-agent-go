@@ -1805,7 +1805,7 @@
         <li class="md-nav__item">
   <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
-      配合摘要使用
+      裁剪最近几轮对话
     </span>
   </a>
   
@@ -1813,6 +1813,15 @@
       
         <li class="md-nav__item">
   <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      配合摘要使用
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
     <span class="md-ellipsis">
       存储结构
     </span>
@@ -1881,7 +1890,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_14" class="md-nav__link">
+  <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       版本升级
     </span>
@@ -1891,7 +1900,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_15" class="md-nav__link">
+  <a href="#_16" class="md-nav__link">
     <span class="md-ellipsis">
       旧版本数据迁移
     </span>
@@ -1905,7 +1914,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_16" class="md-nav__link">
+  <a href="#_17" class="md-nav__link">
     <span class="md-ellipsis">
       使用场景
     </span>
@@ -1914,7 +1923,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_17" class="md-nav__link">
+  <a href="#_18" class="md-nav__link">
     <span class="md-ellipsis">
       注意事项
     </span>
@@ -3924,7 +3933,7 @@
         <li class="md-nav__item">
   <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
-      配合摘要使用
+      裁剪最近几轮对话
     </span>
   </a>
   
@@ -3932,6 +3941,15 @@
       
         <li class="md-nav__item">
   <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      配合摘要使用
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
     <span class="md-ellipsis">
       存储结构
     </span>
@@ -4000,7 +4018,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_14" class="md-nav__link">
+  <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       版本升级
     </span>
@@ -4010,7 +4028,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_15" class="md-nav__link">
+  <a href="#_16" class="md-nav__link">
     <span class="md-ellipsis">
       旧版本数据迁移
     </span>
@@ -4024,7 +4042,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_16" class="md-nav__link">
+  <a href="#_17" class="md-nav__link">
     <span class="md-ellipsis">
       使用场景
     </span>
@@ -4033,7 +4051,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_17" class="md-nav__link">
+  <a href="#_18" class="md-nav__link">
     <span class="md-ellipsis">
       注意事项
     </span>
@@ -4470,31 +4488,45 @@
 </span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="c1">// - softDelete=false：过期数据物理删除</span>
 </span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="c1">// - 查询始终包含 `WHERE deleted_at IS NULL`</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_12">配合摘要使用</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-5-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">"user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local"</span><span class="p">),</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="c1">// 摘要配置</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="p">)</span>
+<h2 id="_12">裁剪最近几轮对话</h2>
+<p><code>mysql.Service.TrimConversations</code> 用于删除最近几轮已落库的对话事件。同一个非空
+<code>RequestID</code> 的全部事件组成一轮，可能包含用户消息、模型回复和工具事件。
+<code>RequestID</code> 为空的事件会保留。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">deleted</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">TrimConversations</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithCount</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="p">}</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="c1">// deleted 包含所选两轮请求的全部已持久化事件。</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_13">存储结构</h2>
-<p>MySQL 使用以下表结构（使用 <code>{{PREFIX}}</code> 表示表前缀）：</p>
-<h3 id="session_states">session_states</h3>
-<div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<p>从 Redis 切换时，将 <code>redis.WithCount(n)</code> 替换为 <code>mysql.WithCount(n)</code>。
+该方法由具体的 MySQL 服务提供，<code>session.Service</code> 接口保持不变。
+TDSQL 分布式实例沿用 <code>mysql.WithTDSQLSharding(true)</code> 配置；裁剪 SQL 显式包含
+<code>user_id</code> 以支持分片路由，不需要新增表或索引。</p>
+<ul>
+<li>默认删除 1 轮；传入 0 或负数也按 1 轮处理；多次传入 <code>WithCount</code> 时最后一个生效。
+  数量超过可用轮数时，删除所有非空 <code>RequestID</code> 对应的轮次。</li>
+<li>按事件 <code>Timestamp</code> 判断先后，时间相同时依次按事件 <code>ID</code>、数据库行 ID 排序。
+  选中请求的事件即使交错排列或跨越多个删除批次，也会完整删除。返回事件按相同规则
+  从旧到新排列。</li>
+<li>沿用 <code>WithSoftDelete</code>：默认软删除，关闭后物理删除。会话不存在、已删除、已过期
+  或没有可裁剪事件时，返回 <code>nil, nil</code>。</li>
+<li>只修改事件历史，不回退状态、摘要、Track 数据，不修改会话时间戳、TTL 或已经加载
+  的内存 <code>Session</code>。需要重新获取会话才能看到剩余事件；这不是完整状态回滚，也不会
+  撤销工具的外部业务操作。裁剪不刷新 TTL，与 Redis HashIdx 路径一致；旧 Redis ZSet
+  路径的续期行为有所不同。</li>
+<li>会读取当前会话生命周期内的全部有效事件，不受 <code>WithSessionEventLimit</code>、摘要恢复
+  窗口或读写 Hook 影响。内存占用和扫描成本随会话历史增长。所有删除批次处于同一个
+  事务，通过会话行锁与事件写入协调。</li>
+<li>不等待异步持久化队列，也不取消正在执行的请求。需要完整裁剪时，应确保目标请求
+  已结束且事件已落库；后续写入仍可能增加事件。重复调用会继续删除剩余历史，提交
+  结果不确定时不要盲目重试。</li>
+</ul>
+<h2 id="_13">配合摘要使用</h2>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
@@ -4503,26 +4535,20 @@
 <span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-6-10">10</a></span>
-<span class="normal"><a href="#__codelineno-6-11">11</a></span>
-<span class="normal"><a href="#__codelineno-6-12">12</a></span>
-<span class="normal"><a href="#__codelineno-6-13">13</a></span>
-<span class="normal"><a href="#__codelineno-6-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_states</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="o">`</span><span class="k">state</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_states_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_states_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithMySQLClientDSN</span><span class="p">(</span><span class="s">"user:password@tcp(localhost:3306)/db?charset=utf8mb4&amp;parseTime=True&amp;loc=Local"</span><span class="p">),</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="c1">// 摘要配置</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="nx">mysql</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="session_events">session_events</h3>
+<h2 id="_14">存储结构</h2>
+<p>MySQL 使用以下表结构（使用 <code>{{PREFIX}}</code> 表示表前缀）：</p>
+<h3 id="session_states">session_states</h3>
 <div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
@@ -4536,22 +4562,22 @@
 <span class="normal"><a href="#__codelineno-7-11">11</a></span>
 <span class="normal"><a href="#__codelineno-7-12">12</a></span>
 <span class="normal"><a href="#__codelineno-7-13">13</a></span>
-<span class="normal"><a href="#__codelineno-7-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_events</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-7-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_states</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="o">`</span><span class="n">event</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="o">`</span><span class="k">state</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
 </span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
 </span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_events_lookup</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_events_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_states_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_states_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
 </span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="session_track_events">session_track_events</h3>
+<h3 id="session_events">session_events</h3>
 <div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
@@ -4565,24 +4591,22 @@
 <span class="normal"><a href="#__codelineno-8-11">11</a></span>
 <span class="normal"><a href="#__codelineno-8-12">12</a></span>
 <span class="normal"><a href="#__codelineno-8-13">13</a></span>
-<span class="normal"><a href="#__codelineno-8-14">14</a></span>
-<span class="normal"><a href="#__codelineno-8-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_track_events</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_events</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="o">`</span><span class="n">track</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="o">`</span><span class="n">event</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_track_events_lookup</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_track_events_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
-</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="o">`</span><span class="n">event</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_events_lookup</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_events_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="session_summaries">session_summaries</h3>
+<h3 id="session_track_events">session_track_events</h3>
 <div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
@@ -4596,23 +4620,24 @@
 <span class="normal"><a href="#__codelineno-9-11">11</a></span>
 <span class="normal"><a href="#__codelineno-9-12">12</a></span>
 <span class="normal"><a href="#__codelineno-9-13">13</a></span>
-<span class="normal"><a href="#__codelineno-9-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_summaries</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_track_events</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="o">`</span><span class="n">filter_key</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">''</span><span class="p">,</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="o">`</span><span class="n">summary</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_summaries_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="o">`</span><span class="n">filter_key</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">)),</span>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_summaries_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="o">`</span><span class="n">track</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="o">`</span><span class="n">event</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_track_events_lookup</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_track_events_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="app_states">app_states</h3>
-<p>存储应用级状态。</p>
+<h3 id="session_summaries">session_summaries</h3>
 <div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
@@ -4625,22 +4650,24 @@
 <span class="normal"><a href="#__codelineno-10-10">10</a></span>
 <span class="normal"><a href="#__codelineno-10-11">11</a></span>
 <span class="normal"><a href="#__codelineno-10-12">12</a></span>
-<span class="normal"><a href="#__codelineno-10-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">app_states</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_summaries</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="o">`</span><span class="n">value</span><span class="o">`</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">app_states_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">app_states_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="o">`</span><span class="n">filter_key</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">''</span><span class="p">,</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">    </span><span class="o">`</span><span class="n">summary</span><span class="o">`</span><span class="w"> </span><span class="n">JSON</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_summaries_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="o">`</span><span class="n">session_id</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="o">`</span><span class="n">filter_key</span><span class="o">`</span><span class="p">(</span><span class="mi">191</span><span class="p">)),</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">session_summaries_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="user_states">user_states</h3>
-<p>存储用户级状态。</p>
+<h3 id="app_states">app_states</h3>
+<p>存储应用级状态。</p>
 <div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
@@ -4653,25 +4680,53 @@
 <span class="normal"><a href="#__codelineno-11-10">10</a></span>
 <span class="normal"><a href="#__codelineno-11-11">11</a></span>
 <span class="normal"><a href="#__codelineno-11-12">12</a></span>
-<span class="normal"><a href="#__codelineno-11-13">13</a></span>
-<span class="normal"><a href="#__codelineno-11-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">user_states</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-11-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">app_states</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="o">`</span><span class="n">value</span><span class="o">`</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">user_states_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="p">),</span>
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">user_states_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
-</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="o">`</span><span class="n">value</span><span class="o">`</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">app_states_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">app_states_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="user_states">user_states</h3>
+<p>存储用户级状态。</p>
+<div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-12-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-12-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-12-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-12-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-12-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-12-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-12-10">10</a></span>
+<span class="normal"><a href="#__codelineno-12-11">11</a></span>
+<span class="normal"><a href="#__codelineno-12-12">12</a></span>
+<span class="normal"><a href="#__codelineno-12-13">13</a></span>
+<span class="normal"><a href="#__codelineno-12-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">user_states</span><span class="o">`</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="w"> </span><span class="nb">BIGINT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="n">AUTO_INCREMENT</span><span class="p">,</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="o">`</span><span class="n">value</span><span class="o">`</span><span class="w"> </span><span class="nb">TEXT</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">    </span><span class="o">`</span><span class="n">created_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">    </span><span class="o">`</span><span class="n">updated_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="k">CURRENT_TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="k">PRIMARY</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">id</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">user_states_unique_active</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">app_name</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">user_id</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="k">key</span><span class="o">`</span><span class="p">,</span><span class="o">`</span><span class="n">deleted_at</span><span class="o">`</span><span class="p">),</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="w">    </span><span class="k">KEY</span><span class="w"> </span><span class="o">`</span><span class="n">idx_</span><span class="err">{{</span><span class="k">PREFIX</span><span class="err">}}</span><span class="n">user_states_expires</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="o">`</span><span class="n">expires_at</span><span class="o">`</span><span class="p">)</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="p">)</span><span class="w"> </span><span class="n">ENGINE</span><span class="o">=</span><span class="n">InnoDB</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="n">CHARSET</span><span class="o">=</span><span class="n">utf8mb4</span><span class="w"> </span><span class="k">COLLATE</span><span class="o">=</span><span class="n">utf8mb4_unicode_ci</span><span class="p">;</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整的表定义请参考 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql">session/mysql/schema.sql</a></p>
-<h2 id="_14">版本升级</h2>
-<h3 id="_15">旧版本数据迁移</h3>
+<h2 id="_15">版本升级</h2>
+<h3 id="_16">旧版本数据迁移</h3>
 <p>如果您的数据库是使用旧版本创建的，需要执行以下迁移步骤。</p>
 <p><strong>影响版本</strong>：v1.2.0 之前的版本<br />
 <strong>修复版本</strong>：v1.2.0 及之后</p>
@@ -4688,103 +4743,103 @@
 </ul>
 <p><strong>新版索引</strong>：<code>idx_*_session_summaries_unique_active(app_name(191), user_id(191), session_id(191), filter_key(191))</code> — 唯一索引，不包含 deleted_at（使用前缀索引以避免 Error 1071）</p>
 <p><strong>迁移步骤</strong>：</p>
-<div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-12-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-12-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-12-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-12-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-12-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-12-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-12-10">10</a></span>
-<span class="normal"><a href="#__codelineno-12-11">11</a></span>
-<span class="normal"><a href="#__codelineno-12-12">12</a></span>
-<span class="normal"><a href="#__codelineno-12-13">13</a></span>
-<span class="normal"><a href="#__codelineno-12-14">14</a></span>
-<span class="normal"><a href="#__codelineno-12-15">15</a></span>
-<span class="normal"><a href="#__codelineno-12-16">16</a></span>
-<span class="normal"><a href="#__codelineno-12-17">17</a></span>
-<span class="normal"><a href="#__codelineno-12-18">18</a></span>
-<span class="normal"><a href="#__codelineno-12-19">19</a></span>
-<span class="normal"><a href="#__codelineno-12-20">20</a></span>
-<span class="normal"><a href="#__codelineno-12-21">21</a></span>
-<span class="normal"><a href="#__codelineno-12-22">22</a></span>
-<span class="normal"><a href="#__codelineno-12-23">23</a></span>
-<span class="normal"><a href="#__codelineno-12-24">24</a></span>
-<span class="normal"><a href="#__codelineno-12-25">25</a></span>
-<span class="normal"><a href="#__codelineno-12-26">26</a></span>
-<span class="normal"><a href="#__codelineno-12-27">27</a></span>
-<span class="normal"><a href="#__codelineno-12-28">28</a></span>
-<span class="normal"><a href="#__codelineno-12-29">29</a></span>
-<span class="normal"><a href="#__codelineno-12-30">30</a></span>
-<span class="normal"><a href="#__codelineno-12-31">31</a></span>
-<span class="normal"><a href="#__codelineno-12-32">32</a></span>
-<span class="normal"><a href="#__codelineno-12-33">33</a></span>
-<span class="normal"><a href="#__codelineno-12-34">34</a></span>
-<span class="normal"><a href="#__codelineno-12-35">35</a></span>
-<span class="normal"><a href="#__codelineno-12-36">36</a></span>
-<span class="normal"><a href="#__codelineno-12-37">37</a></span>
-<span class="normal"><a href="#__codelineno-12-38">38</a></span>
-<span class="normal"><a href="#__codelineno-12-39">39</a></span>
-<span class="normal"><a href="#__codelineno-12-40">40</a></span>
-<span class="normal"><a href="#__codelineno-12-41">41</a></span>
-<span class="normal"><a href="#__codelineno-12-42">42</a></span>
-<span class="normal"><a href="#__codelineno-12-43">43</a></span>
-<span class="normal"><a href="#__codelineno-12-44">44</a></span>
-<span class="normal"><a href="#__codelineno-12-45">45</a></span>
-<span class="normal"><a href="#__codelineno-12-46">46</a></span>
-<span class="normal"><a href="#__codelineno-12-47">47</a></span>
-<span class="normal"><a href="#__codelineno-12-48">48</a></span>
-<span class="normal"><a href="#__codelineno-12-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="c1">-- ============================================================================</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="c1">-- 迁移脚本：修复 session_summaries 唯一索引问题</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="c1">-- 执行前请备份数据！</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="c1">-- ============================================================================</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="c1">-- Step 1: 查看当前索引，确认旧索引名称</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="k">SHOW</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">;</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="c1">-- Step 2: 清理重复数据（保留最新记录）</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="c1">-- 如果存在多条 deleted_at = NULL 的重复记录，保留 id 最大的那条。</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="k">DELETE</span><span class="w"> </span><span class="n">t1</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="n">t1</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="n">t2</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">app_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">app_name</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">user_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">user_id</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">session_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">session_id</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">filter_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">filter_key</span>
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span>
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span>
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">id</span><span class="p">;</span>
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a>
-</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="c1">-- Step 3: 硬删除软删除记录（summary 数据可再生，无需保留）</span>
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="c1">-- 如果需要保留软删除记录，可跳过此步骤，但需要在 Step 5 之前手动处理冲突。</span>
-</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23"></a><span class="k">DELETE</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24"></a>
-</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25"></a><span class="c1">-- Step 4: 删除旧索引（根据 Step 1 的结果选择正确的索引名）</span>
-</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26"></a><span class="c1">-- 注意：索引名称可能带有表前缀，请根据实际情况调整。</span>
-</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27"></a><span class="c1">-- 如果是 lookup 索引：</span>
-</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28"></a><span class="k">DROP</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_session_summaries_lookup</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">;</span>
-</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29"></a><span class="c1">-- 如果是旧的 unique_active 索引（包含 deleted_at）：</span>
-</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30"></a><span class="c1">-- DROP INDEX idx_session_summaries_unique_active ON session_summaries;</span>
-</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31"></a>
-</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32"></a><span class="c1">-- Step 5: 创建新的唯一索引（不包含 deleted_at）</span>
-</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33"></a><span class="c1">-- 注意：索引名称可能带有表前缀，请根据实际情况调整。</span>
-</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_session_summaries_unique_active</span><span class="w"> </span>
-</span><span id="__span-12-35"><a id="__codelineno-12-35" name="__codelineno-12-35"></a><span class="k">ON</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">(</span><span class="n">app_name</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">user_id</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">session_id</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">filter_key</span><span class="p">(</span><span class="mi">191</span><span class="p">));</span>
-</span><span id="__span-12-36"><a id="__codelineno-12-36" name="__codelineno-12-36"></a>
-</span><span id="__span-12-37"><a id="__codelineno-12-37" name="__codelineno-12-37"></a><span class="c1">-- Step 6: 验证迁移结果</span>
-</span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">duplicate_count</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39"></a><span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">app_name</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span><span class="w"> </span><span class="n">session_id</span><span class="p">,</span><span class="w"> </span><span class="n">filter_key</span><span class="p">,</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">cnt</span>
-</span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40"></a><span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span>
-</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41"></a><span class="w">    </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span>
-</span><span id="__span-12-42"><a id="__codelineno-12-42" name="__codelineno-12-42"></a><span class="w">    </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">app_name</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span><span class="w"> </span><span class="n">session_id</span><span class="p">,</span><span class="w"> </span><span class="n">filter_key</span>
-</span><span id="__span-12-43"><a id="__codelineno-12-43" name="__codelineno-12-43"></a><span class="w">    </span><span class="k">HAVING</span><span class="w"> </span><span class="n">cnt</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span>
-</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44"></a><span class="p">)</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
-</span><span id="__span-12-45"><a id="__codelineno-12-45" name="__codelineno-12-45"></a><span class="c1">-- 期望结果：duplicate_count = 0</span>
-</span><span id="__span-12-46"><a id="__codelineno-12-46" name="__codelineno-12-46"></a>
-</span><span id="__span-12-47"><a id="__codelineno-12-47" name="__codelineno-12-47"></a><span class="c1">-- Step 7: 验证索引是否创建成功</span>
-</span><span id="__span-12-48"><a id="__codelineno-12-48" name="__codelineno-12-48"></a><span class="k">SHOW</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">Key_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'idx_session_summaries_unique_active'</span><span class="p">;</span>
-</span><span id="__span-12-49"><a id="__codelineno-12-49" name="__codelineno-12-49"></a><span class="c1">-- 期望结果：显示新创建的唯一索引，且不包含 deleted_at 列</span>
+<div class="language-sql highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-13-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-13-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-13-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-13-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-13-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-13-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-13-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-13-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-13-10">10</a></span>
+<span class="normal"><a href="#__codelineno-13-11">11</a></span>
+<span class="normal"><a href="#__codelineno-13-12">12</a></span>
+<span class="normal"><a href="#__codelineno-13-13">13</a></span>
+<span class="normal"><a href="#__codelineno-13-14">14</a></span>
+<span class="normal"><a href="#__codelineno-13-15">15</a></span>
+<span class="normal"><a href="#__codelineno-13-16">16</a></span>
+<span class="normal"><a href="#__codelineno-13-17">17</a></span>
+<span class="normal"><a href="#__codelineno-13-18">18</a></span>
+<span class="normal"><a href="#__codelineno-13-19">19</a></span>
+<span class="normal"><a href="#__codelineno-13-20">20</a></span>
+<span class="normal"><a href="#__codelineno-13-21">21</a></span>
+<span class="normal"><a href="#__codelineno-13-22">22</a></span>
+<span class="normal"><a href="#__codelineno-13-23">23</a></span>
+<span class="normal"><a href="#__codelineno-13-24">24</a></span>
+<span class="normal"><a href="#__codelineno-13-25">25</a></span>
+<span class="normal"><a href="#__codelineno-13-26">26</a></span>
+<span class="normal"><a href="#__codelineno-13-27">27</a></span>
+<span class="normal"><a href="#__codelineno-13-28">28</a></span>
+<span class="normal"><a href="#__codelineno-13-29">29</a></span>
+<span class="normal"><a href="#__codelineno-13-30">30</a></span>
+<span class="normal"><a href="#__codelineno-13-31">31</a></span>
+<span class="normal"><a href="#__codelineno-13-32">32</a></span>
+<span class="normal"><a href="#__codelineno-13-33">33</a></span>
+<span class="normal"><a href="#__codelineno-13-34">34</a></span>
+<span class="normal"><a href="#__codelineno-13-35">35</a></span>
+<span class="normal"><a href="#__codelineno-13-36">36</a></span>
+<span class="normal"><a href="#__codelineno-13-37">37</a></span>
+<span class="normal"><a href="#__codelineno-13-38">38</a></span>
+<span class="normal"><a href="#__codelineno-13-39">39</a></span>
+<span class="normal"><a href="#__codelineno-13-40">40</a></span>
+<span class="normal"><a href="#__codelineno-13-41">41</a></span>
+<span class="normal"><a href="#__codelineno-13-42">42</a></span>
+<span class="normal"><a href="#__codelineno-13-43">43</a></span>
+<span class="normal"><a href="#__codelineno-13-44">44</a></span>
+<span class="normal"><a href="#__codelineno-13-45">45</a></span>
+<span class="normal"><a href="#__codelineno-13-46">46</a></span>
+<span class="normal"><a href="#__codelineno-13-47">47</a></span>
+<span class="normal"><a href="#__codelineno-13-48">48</a></span>
+<span class="normal"><a href="#__codelineno-13-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="c1">-- ============================================================================</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="c1">-- 迁移脚本：修复 session_summaries 唯一索引问题</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="c1">-- 执行前请备份数据！</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="c1">-- ============================================================================</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="c1">-- Step 1: 查看当前索引，确认旧索引名称</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="k">SHOW</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">;</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="c1">-- Step 2: 清理重复数据（保留最新记录）</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a><span class="c1">-- 如果存在多条 deleted_at = NULL 的重复记录，保留 id 最大的那条。</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11"></a><span class="k">DELETE</span><span class="w"> </span><span class="n">t1</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="n">t1</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12"></a><span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="n">t2</span>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">app_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">app_name</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">user_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">user_id</span>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">session_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">session_id</span>
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">filter_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">filter_key</span>
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span>
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span>
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">t1</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">t2</span><span class="p">.</span><span class="n">id</span><span class="p">;</span>
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20"></a>
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21"></a><span class="c1">-- Step 3: 硬删除软删除记录（summary 数据可再生，无需保留）</span>
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22"></a><span class="c1">-- 如果需要保留软删除记录，可跳过此步骤，但需要在 Step 5 之前手动处理冲突。</span>
+</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23"></a><span class="k">DELETE</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24"></a>
+</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25"></a><span class="c1">-- Step 4: 删除旧索引（根据 Step 1 的结果选择正确的索引名）</span>
+</span><span id="__span-13-26"><a id="__codelineno-13-26" name="__codelineno-13-26"></a><span class="c1">-- 注意：索引名称可能带有表前缀，请根据实际情况调整。</span>
+</span><span id="__span-13-27"><a id="__codelineno-13-27" name="__codelineno-13-27"></a><span class="c1">-- 如果是 lookup 索引：</span>
+</span><span id="__span-13-28"><a id="__codelineno-13-28" name="__codelineno-13-28"></a><span class="k">DROP</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_session_summaries_lookup</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">;</span>
+</span><span id="__span-13-29"><a id="__codelineno-13-29" name="__codelineno-13-29"></a><span class="c1">-- 如果是旧的 unique_active 索引（包含 deleted_at）：</span>
+</span><span id="__span-13-30"><a id="__codelineno-13-30" name="__codelineno-13-30"></a><span class="c1">-- DROP INDEX idx_session_summaries_unique_active ON session_summaries;</span>
+</span><span id="__span-13-31"><a id="__codelineno-13-31" name="__codelineno-13-31"></a>
+</span><span id="__span-13-32"><a id="__codelineno-13-32" name="__codelineno-13-32"></a><span class="c1">-- Step 5: 创建新的唯一索引（不包含 deleted_at）</span>
+</span><span id="__span-13-33"><a id="__codelineno-13-33" name="__codelineno-13-33"></a><span class="c1">-- 注意：索引名称可能带有表前缀，请根据实际情况调整。</span>
+</span><span id="__span-13-34"><a id="__codelineno-13-34" name="__codelineno-13-34"></a><span class="k">CREATE</span><span class="w"> </span><span class="k">UNIQUE</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="n">idx_session_summaries_unique_active</span><span class="w"> </span>
+</span><span id="__span-13-35"><a id="__codelineno-13-35" name="__codelineno-13-35"></a><span class="k">ON</span><span class="w"> </span><span class="n">session_summaries</span><span class="p">(</span><span class="n">app_name</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">user_id</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">session_id</span><span class="p">(</span><span class="mi">191</span><span class="p">),</span><span class="w"> </span><span class="n">filter_key</span><span class="p">(</span><span class="mi">191</span><span class="p">));</span>
+</span><span id="__span-13-36"><a id="__codelineno-13-36" name="__codelineno-13-36"></a>
+</span><span id="__span-13-37"><a id="__codelineno-13-37" name="__codelineno-13-37"></a><span class="c1">-- Step 6: 验证迁移结果</span>
+</span><span id="__span-13-38"><a id="__codelineno-13-38" name="__codelineno-13-38"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">duplicate_count</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-13-39"><a id="__codelineno-13-39" name="__codelineno-13-39"></a><span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">app_name</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span><span class="w"> </span><span class="n">session_id</span><span class="p">,</span><span class="w"> </span><span class="n">filter_key</span><span class="p">,</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">cnt</span>
+</span><span id="__span-13-40"><a id="__codelineno-13-40" name="__codelineno-13-40"></a><span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span>
+</span><span id="__span-13-41"><a id="__codelineno-13-41" name="__codelineno-13-41"></a><span class="w">    </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleted_at</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span>
+</span><span id="__span-13-42"><a id="__codelineno-13-42" name="__codelineno-13-42"></a><span class="w">    </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">app_name</span><span class="p">,</span><span class="w"> </span><span class="n">user_id</span><span class="p">,</span><span class="w"> </span><span class="n">session_id</span><span class="p">,</span><span class="w"> </span><span class="n">filter_key</span>
+</span><span id="__span-13-43"><a id="__codelineno-13-43" name="__codelineno-13-43"></a><span class="w">    </span><span class="k">HAVING</span><span class="w"> </span><span class="n">cnt</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span>
+</span><span id="__span-13-44"><a id="__codelineno-13-44" name="__codelineno-13-44"></a><span class="p">)</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+</span><span id="__span-13-45"><a id="__codelineno-13-45" name="__codelineno-13-45"></a><span class="c1">-- 期望结果：duplicate_count = 0</span>
+</span><span id="__span-13-46"><a id="__codelineno-13-46" name="__codelineno-13-46"></a>
+</span><span id="__span-13-47"><a id="__codelineno-13-47" name="__codelineno-13-47"></a><span class="c1">-- Step 7: 验证索引是否创建成功</span>
+</span><span id="__span-13-48"><a id="__codelineno-13-48" name="__codelineno-13-48"></a><span class="k">SHOW</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">session_summaries</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">Key_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'idx_session_summaries_unique_active'</span><span class="p">;</span>
+</span><span id="__span-13-49"><a id="__codelineno-13-49" name="__codelineno-13-49"></a><span class="c1">-- 期望结果：显示新创建的唯一索引，且不包含 deleted_at 列</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>注意事项</strong>：</p>
 <ol>
@@ -4801,7 +4856,7 @@
 <p>新索引不包含 <code>deleted_at</code> 列，这意味着软删除的 summary 记录会阻止相同业务键的新记录插入。由于 summary 数据可再生，迁移时建议硬删除软删除记录（Step 3）。如果跳过此步骤，需手动处理冲突。</p>
 </li>
 </ol>
-<h2 id="_16">使用场景</h2>
+<h2 id="_17">使用场景</h2>
 <table>
 <thead>
 <tr>
@@ -4828,7 +4883,7 @@
 </tr>
 </tbody>
 </table>
-<h2 id="_17">注意事项</h2>
+<h2 id="_18">注意事项</h2>
 <ol>
 <li><strong>连接配置</strong>：确保 MySQL 服务可访问，建议使用连接池</li>
 <li><strong>字符集</strong>：使用 utf8mb4 支持完整 Unicode（包括 emoji）</li>
@@ -4859,7 +4914,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月29日 08:07:20 UTC">2026-07-29 08:07:20</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月6日 08:35:10 UTC">2026-11-06 08:35:10</span>
   </span>
 
     
