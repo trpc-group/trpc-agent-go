@@ -215,16 +215,7 @@ func recallRank(
 		return nil
 	}
 
-	// Keyword ranking.
-	var keyword []scoredCandidate
-	if len(userTokens) != 0 {
-		keyword = make([]scoredCandidate, len(candidates))
-		copy(keyword, candidates)
-		for i := range keyword {
-			keyword[i].score = lexicalScore(userTokens, keyword[i].name, keyword[i].description)
-		}
-		sortScored(keyword)
-	}
+	keyword := keywordRank(userTokens, candidates)
 
 	// Embedding ranking, when available.
 	var userVec []float64
@@ -312,6 +303,19 @@ dispatch:
 	}
 	sortScored(out)
 	return out
+}
+
+func keywordRank(tokens map[string]struct{}, candidates []scoredCandidate) []scoredCandidate {
+	if len(tokens) == 0 {
+		return nil
+	}
+	ranked := make([]scoredCandidate, len(candidates))
+	copy(ranked, candidates)
+	for i := range ranked {
+		ranked[i].score = lexicalScore(tokens, ranked[i].name, ranked[i].description)
+	}
+	sortScored(ranked)
+	return ranked
 }
 
 func candidateText(name, description string) string {
