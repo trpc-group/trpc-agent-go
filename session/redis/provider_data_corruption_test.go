@@ -96,7 +96,7 @@ func TestRedisSessionGetSessionSkipsMalformedNativeProviderDataRecords(t *testin
 				fixture := newProviderDataCorruptionFixture(t, storage)
 				fixture.addMalformedLegacyJSON(t)
 				fixture.mutatePersistedProviderData(t, eventID, func(_ *testing.T, record map[string]json.RawMessage) {
-					record["version"] = json.RawMessage(`99`)
+					record["payload"] = json.RawMessage(`null`)
 				})
 
 				got, err := fixture.service.GetSession(fixture.ctx, fixture.key)

@@ -117,10 +117,9 @@ history.
 
 ### Editing native output
 
-`ProviderData.Protocol`, `Model`, and `Payload` are public fields. Applications
-can decode `Payload` using their chosen SDK, edit it, then assign the encoded
-JSON back. The framework does not define another set of SDK item types or
-field-specific editing functions.
+The adapter sets `Protocol` to `openai.responses` and `Model` to the configured
+model name. Keep both fields when editing native output. Decode `Payload` using
+your SDK, edit the items, and assign the encoded JSON back to `Payload`.
 
 The following `AfterModel` callback uses the official SDK to edit calculator
 arguments. Unedited items keep their original JSON. Use
@@ -153,7 +152,8 @@ func rewriteCalculator(_ context.Context, args *model.AfterModelArgs) (*model.Af
     output := make([]json.RawMessage, len(items))
     for i, item := range items {
         output[i] = json.RawMessage(item.RawJSON())
-        if item.Type != "function_call" || item.Name != "calculator" {
+        fn, ok := item.AsAny().(sdkresponses.ResponseFunctionToolCall)
+        if !ok || fn.Name != "calculator" {
             continue
         }
         var call sdkresponses.ResponseFunctionToolCallParam
@@ -175,7 +175,7 @@ func rewriteCalculator(_ context.Context, args *model.AfterModelArgs) (*model.Af
     return nil, nil
 }
 
-// Register on the Responses agent using llmagent.WithModelCallbacks(callbacks).
+// Register on the Responses agent using llmagent.WithModelCallbacks(calculatorCallbacks()).
 func calculatorCallbacks() *model.Callbacks {
     return model.NewCallbacks().RegisterAfterModel(rewriteCalculator)
 }
@@ -189,14 +189,14 @@ both the payload and its projections, the payload takes precedence. Unchanged
 native records keep callbacks' projection-only edits. Ordinary Chat Completions
 responses retain their existing callback behavior.
 
-The framework stores the record under `provider_data` and checks its protocol
-and configured model before continuation. Models implement the optional
+The framework stores the record under `provider_data` with `provider`, `model`,
+and `payload` keys. It checks the protocol and configured model before
+continuation. Models implement the optional
 `model.ProviderDataProjector` capability to project edited native records;
 wrappers must forward it to support such edits. Built-in failover and hedge
 wrappers do so. `BeforeModel` edits affect only the current request's detached
 history, while `BeforeTool` edits affect only the current tool execution.
 
-The current ProviderData format version is 1; other versions are rejected.
 Redis retains its existing skip-on-decode-error history policy, including
 events with invalid ProviderData. Each history read logs at most one warning
 when skipping malformed events. A successful read does not guarantee that no

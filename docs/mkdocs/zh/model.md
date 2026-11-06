@@ -2263,10 +2263,10 @@ go run ./tools -streaming=false
 
 ### 回调与模型历史
 
-`Message.ProviderData` 的 `Protocol`、`Model`、`Payload` 字段可以直接读取和修改。
-需要编辑原生输出时，业务使用所选 SDK 的类型解析 `Payload`，修改后将序列化的 JSON
-赋回该字段。使用官方 SDK 编辑消息时，选择保留消息 ID、status 和 phase 的
-`ResponseOutputMessageParam`；未编辑的 Item 可以保留原始 JSON。
+适配器填写 `Message.ProviderData` 的 `Protocol` 和 `Model`，分别记录原生协议和配置的模型名。
+编辑原生输出时，保留这两个字段，用所选 SDK 解析、修改并写回 `Payload`。
+用官方 SDK 编辑消息时，`ResponseOutputMessageParam` 可保留消息 ID、status 和 phase。
+未编辑的 Item 可以保留原始 JSON。
 
 完整的 `AfterModel` 回调链结束后，若原生 Payload 有变化，框架会在发布事件、保存响应和
 执行工具前重新生成正文、reasoning、`ToolCalls` 等字段。只改原生工具参数即可同时影响
@@ -2282,7 +2282,7 @@ go run ./tools -streaming=false
 
 - 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
 - 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
-- 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，payload 字节对框架保持不透明。当前格式版本为 1，其他版本会被拒绝。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效或版本不支持的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
+- 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。

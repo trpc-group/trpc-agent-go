@@ -2308,11 +2308,11 @@ Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Ca
 
 ### Callbacks and model history
 
-`Message.ProviderData` exposes `Protocol`, `Model`, and `Payload`. To edit native
-output, decode `Payload` into types from the application's chosen SDK, make the
-changes, and assign the encoded JSON back. For message edits with the official
-SDK, use `ResponseOutputMessageParam` to retain the ID, status, and phase;
-unedited items can keep their original JSON.
+The adapter fills `Message.ProviderData.Protocol` and `Model` with the native
+protocol and the configured model name. To edit native output, preserve these
+fields and decode, edit, and write back `Payload` using the SDK. For message
+edits with the official SDK, use `ResponseOutputMessageParam` to retain the ID,
+status, and phase. Unedited items can keep their original JSON.
 
 After the complete `AfterModel` callback chain, an edited payload rebuilds the
 display fields, reasoning, and `ToolCalls` before event publication, persistence,
@@ -2332,7 +2332,7 @@ for a complete SDK-based callback and model wrapper requirements.
 
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
 - Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
-- Message JSON stores `Message.ProviderData` under `provider_data`; the payload bytes are opaque to the framework. The current format version is 1; other versions are rejected. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and malformed or unsupported ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
+- Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).

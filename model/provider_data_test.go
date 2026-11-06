@@ -77,7 +77,6 @@ func TestProviderDataSurvivesMessageJSON(t *testing.T) {
 	require.Contains(t, stored, "provider_data")
 	var storedProviderData map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(stored["provider_data"], &storedProviderData))
-	require.JSONEq(t, `1`, string(storedProviderData["version"]))
 	require.JSONEq(t, string(payload), string(storedProviderData["payload"]))
 	var restored Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
@@ -89,7 +88,7 @@ func TestProviderDataSurvivesMessageJSON(t *testing.T) {
 }
 
 func TestProviderDataReadsCurrentSchemaFixture(t *testing.T) {
-	stored, err := os.ReadFile("testdata/provider_data_v1.json")
+	stored, err := os.ReadFile("testdata/provider_data.json")
 	require.NoError(t, err)
 	var restored Message
 	require.NoError(t, json.Unmarshal(stored, &restored))
@@ -146,7 +145,7 @@ func TestProviderDataAllowsProjectionEdits(t *testing.T) {
 	}
 }
 
-func TestProviderDataJSONRoundTripUsesV1Schema(t *testing.T) {
+func TestProviderDataJSONRoundTrip(t *testing.T) {
 	msg := providerDataTestMessage()
 	msg.ProviderData = &ProviderData{
 		Protocol: providerDataTestProtocol,
@@ -156,7 +155,7 @@ func TestProviderDataJSONRoundTripUsesV1Schema(t *testing.T) {
 	encoded, err := json.Marshal(msg.ProviderData)
 	require.NoError(t, err)
 	require.JSONEq(t,
-		`{"version":1,"provider":"test.responses","model":"reasoning-model","payload":`+string(providerDataTestPayload())+`}`,
+		`{"provider":"test.responses","model":"reasoning-model","payload":`+string(providerDataTestPayload())+`}`,
 		string(encoded),
 	)
 	var restored ProviderData
@@ -184,28 +183,6 @@ func TestProviderDataOnlyMessageHasValidContent(t *testing.T) {
 	require.NotNil(t, restored.Choices[0].Message.ProviderData)
 }
 
-func TestProviderDataRejectsVersion2(t *testing.T) {
-	msg := providerDataTestMessage()
-	msg.ProviderData = &ProviderData{
-		Protocol: providerDataTestProtocol,
-		Model:    providerDataTestModel,
-		Payload:  providerDataTestPayload(),
-	}
-	encoded, err := json.Marshal(msg)
-	require.NoError(t, err)
-	var stored map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(encoded, &stored))
-	var record map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(stored["provider_data"], &record))
-	record["version"] = json.RawMessage(`2`)
-	stored["provider_data"], err = json.Marshal(record)
-	require.NoError(t, err)
-	encoded, err = json.Marshal(stored)
-	require.NoError(t, err)
-	var restored Message
-	require.ErrorContains(t, json.Unmarshal(encoded, &restored), "unsupported provider data version")
-}
-
 func TestLegacyMessageDoesNotAcquireProviderData(t *testing.T) {
 	msg := NewAssistantMessage("legacy")
 	require.Nil(t, msg.ProviderData)
@@ -222,9 +199,9 @@ func TestProviderDataRejectsCorruptRecords(t *testing.T) {
 
 	for name, record := range map[string]string{
 		"not an object":        `"record"`,
-		"missing identity":     `{"version":1,"provider":"","model":"m","payload":[]}`,
-		"scalar payload":       `{"version":1,"provider":"p","model":"m","payload":"text"}`,
-		"invalid json payload": `{"version":1,"provider":"p","model":"m","payload":{broken}}`,
+		"missing identity":     `{"provider":"","model":"m","payload":[]}`,
+		"scalar payload":       `{"provider":"p","model":"m","payload":"text"}`,
+		"invalid json payload": `{"provider":"p","model":"m","payload":{broken}}`,
 	} {
 		var restored ProviderData
 		require.Error(t, json.Unmarshal([]byte(record), &restored), name)

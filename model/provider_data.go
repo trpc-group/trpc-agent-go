@@ -16,8 +16,6 @@ import (
 	"strings"
 )
 
-const providerDataVersion = 1
-
 // ProviderData stores a provider-native completion with the identity of its
 // producer. The provider owns the payload schema. The payload determines the
 // next model request. Editing the payload in AfterModel rebuilds display fields
@@ -26,53 +24,38 @@ const providerDataVersion = 1
 // fields and ToolCalls independently. A message carrying ProviderData must
 // remain an assistant message.
 //
-// Callbacks may edit the record on their message. A nil Message.ProviderData
-// means the message carries no native provider data.
+// Callbacks may edit Payload on their message while preserving the producer's
+// Protocol and Model. A nil Message.ProviderData means the message carries no
+// native provider data.
 type ProviderData struct {
 	// Protocol identifies the adapter's wire protocol.
-	Protocol string
+	Protocol string `json:"provider"`
 	// Model is the configured model name that produced the record.
-	Model string
+	Model string `json:"model"`
 	// Payload holds an object or array in the adapter's native JSON format.
-	Payload json.RawMessage
+	Payload json.RawMessage `json:"payload"`
 }
 
-type providerDataJSON struct {
-	Version  int             `json:"version"`
-	Protocol string          `json:"provider"`
-	Model    string          `json:"model"`
-	Payload  json.RawMessage `json:"payload"`
-}
+// providerDataJSON has the same fields and tags without the custom JSON methods.
+type providerDataJSON ProviderData
 
-// MarshalJSON writes the current version of the provider data record. Invalid
-// or zero-valued records return an error instead of persisting unusable state.
+// MarshalJSON validates the provider data record before encoding it. Invalid
+// or zero-valued records return an error.
 func (r ProviderData) MarshalJSON() ([]byte, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(providerDataJSON{
-		Version:  providerDataVersion,
-		Protocol: r.Protocol,
-		Model:    r.Model,
-		Payload:  r.Payload,
-	})
+	return json.Marshal(providerDataJSON(r))
 }
 
-// UnmarshalJSON restores a versioned provider data record. Unsupported versions
-// and invalid records fail rather than degrading silently to text-only history.
+// UnmarshalJSON restores a valid provider data record. On error, the receiver
+// is unchanged.
 func (r *ProviderData) UnmarshalJSON(data []byte) error {
 	var stored providerDataJSON
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return fmt.Errorf("decode provider data: %w", err)
 	}
-	if stored.Version != providerDataVersion {
-		return fmt.Errorf("unsupported provider data version %d", stored.Version)
-	}
-	decoded := ProviderData{
-		Protocol: stored.Protocol,
-		Model:    stored.Model,
-		Payload:  stored.Payload,
-	}
+	decoded := ProviderData(stored)
 	if err := decoded.validate(); err != nil {
 		return err
 	}

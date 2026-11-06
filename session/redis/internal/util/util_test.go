@@ -139,7 +139,7 @@ func TestProcessEventCmd_SkipsMalformedJSON(t *testing.T) {
 	rdb.ZAdd(ctx, "events:test",
 		redis.Z{Score: 1, Member: string(b)},
 		redis.Z{Score: 2, Member: "not-valid-json"},
-		redis.Z{Score: 3, Member: `{"choices":[{"message":{"provider_data":{"version":99}}}]}`},
+		redis.Z{Score: 3, Member: `{"choices":[{"message":{"provider_data":{}}}]}`},
 		redis.Z{Score: 4, Member: `{"choices":[{"message":{"provider_data":"invalid"}}]}`},
 	)
 

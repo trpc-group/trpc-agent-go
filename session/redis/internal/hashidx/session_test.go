@@ -77,7 +77,7 @@ func TestClient_LoadRecentEventsSkipsMalformedEventsAndWarnsOnceAcrossBatches(t 
 	index := make([]redis.Z, 0, eventLoadBatchSize+2)
 	for i := 0; i <= eventLoadBatchSize; i++ {
 		id := fmt.Sprintf("bad-%d", i)
-		rows[id] = `{"choices":[{"message":{"provider_data":{"version":99}}}]}`
+		rows[id] = `{"choices":[{"message":{"provider_data":{}}}]}`
 		index = append(index, redis.Z{Score: float64(i), Member: id})
 	}
 	valid, err := json.Marshal(makeTestEvent("valid", time.Now()))

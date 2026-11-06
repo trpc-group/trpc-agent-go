@@ -13,7 +13,6 @@
   ],
   "reasoning_content": "Need the current value.",
   "provider_data": {
-    "version": 1,
     "provider": "test.responses",
     "model": "reasoning-model",
     "payload": [
