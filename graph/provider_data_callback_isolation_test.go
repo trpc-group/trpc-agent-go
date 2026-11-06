@@ -65,9 +65,10 @@ func (m *callbackProviderDataModelStub) GenerateContent(_ context.Context, req *
 			},
 		}}}
 		if m.native {
-			if err := msg.SetProviderData(callbackProviderDataProtocol, callbackProviderDataModel,
-				json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`)); err != nil {
-				return nil, err
+			msg.ProviderData = &model.ProviderData{
+				Protocol: callbackProviderDataProtocol,
+				Model:    callbackProviderDataModel,
+				Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`),
 			}
 		}
 	}
@@ -253,8 +254,9 @@ func assertCallbackProviderDataBinding(t *testing.T, msg model.Message, wantArgu
 	require.Len(t, msg.ToolCalls, 1)
 	require.Equal(t, "call_1", msg.ToolCalls[0].ID)
 	require.Equal(t, []byte(wantArguments), msg.ToolCalls[0].Function.Arguments)
-	_, err := msg.ProviderDataFor(callbackProviderDataProtocol, callbackProviderDataModel)
-	require.NoError(t, err, "the native replay record must still match its framework projection")
+	require.NotNil(t, msg.ProviderData)
+	require.Equal(t, callbackProviderDataProtocol, msg.ProviderData.Protocol)
+	require.Equal(t, callbackProviderDataModel, msg.ProviderData.Model)
 }
 
 func TestGraphBeforeToolCallbacksDoNotRewriteNativeProviderDataHistory(t *testing.T) {
@@ -329,8 +331,11 @@ func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 		Type: "function", ID: "call_1",
 		Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 	}}}
-	require.NoError(t, nativeCall.SetProviderData(callbackProviderDataProtocol, callbackProviderDataModel,
-		json.RawMessage(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`)))
+	nativeCall.ProviderData = &model.ProviderData{
+		Protocol: callbackProviderDataProtocol,
+		Model:    callbackProviderDataModel,
+		Payload:  json.RawMessage(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`),
+	}
 	initial := gr.State{gr.StateKeyMessages: []model.Message{model.NewUserMessage("continue"), nativeCall}}
 	inv := agent.NewInvocation(agent.WithInvocationID("before-model-replay"))
 	events, err := executor.Execute(ctx, initial, inv)
@@ -354,8 +359,8 @@ func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 		}
 		sawEditedProviderData = true
 		require.Equal(t, []byte(`{"a":9}`), message.ToolCalls[0].Function.Arguments)
-		payload, err := message.ProviderDataFor(callbackProviderDataProtocol, callbackProviderDataModel)
-		require.NoError(t, err)
+		require.NotNil(t, message.ProviderData)
+		payload := message.ProviderData.Payload
 		require.JSONEq(t,
 			`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calculator","arguments":"{\"a\":1}"}]`,
 			string(payload),
@@ -368,6 +373,5 @@ func TestGraphBeforeModelCallbackEditsIsolatedNativeProjection(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []byte(`{"a":1}`), originalMessages[1].ToolCalls[0].Function.Arguments,
 		"a BeforeModel edit must not mutate the caller-owned graph input state")
-	_, replayErr := originalMessages[1].ProviderDataFor(callbackProviderDataProtocol, callbackProviderDataModel)
-	require.NoError(t, replayErr)
+	require.NotNil(t, originalMessages[1].ProviderData)
 }

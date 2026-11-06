@@ -416,9 +416,9 @@ agent := llmagent.New(
 The framework treats `ProviderData` payload bytes as opaque. For messages with
 native ProviderData, these modes only change the projected reasoning fields;
 they do not remove reasoning or encrypted state from ProviderData, which a
-matching native adapter can still send on the next request. To change that
-input, explicitly edit the native payload and bind it with
-`Message.SetProviderData`. Removing ProviderData from an unfinished native tool round may prevent recovery.
+matching native adapter can still send on the next request. Edit
+`Message.ProviderData.Payload` to change that input. Keep ProviderData for
+unfinished tool rounds that need to be resumed.
 
 ### Tool Transcript History Mode
 

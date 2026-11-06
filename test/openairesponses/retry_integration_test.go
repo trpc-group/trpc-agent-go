@@ -153,8 +153,8 @@ func TestSDKDefaultRetryPreservesNativeHistoryAcrossSQLiteReopen(t *testing.T) {
 							continue
 						}
 						nativeCalls++
-						raw, err := msg.ProviderDataFor(m.Info().ProviderDataProtocol, m.Info().Name)
-						require.NoError(t, err)
+						require.NotNil(t, msg.ProviderData)
+						raw := msg.ProviderData.Payload
 						require.JSONEq(t, nativeToolOutput, string(raw))
 					}
 				}

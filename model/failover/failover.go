@@ -59,6 +59,11 @@ func (m *failoverModel) Info() model.Info {
 	return m.candidates[0].Info()
 }
 
+// ProjectProviderData forwards native message projection to a candidate model.
+func (m *failoverModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
+	return providerdata.ProjectFromCandidates(m.candidates, data)
+}
+
 // InputTokenBudget returns the smallest advertised candidate budget so a
 // request remains eligible for every failover target.
 func (m *failoverModel) InputTokenBudget(

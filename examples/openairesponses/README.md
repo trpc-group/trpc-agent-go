@@ -154,11 +154,11 @@ function in `tools/main.go`.
 - Assistant messages carry native `ProviderData` for the next request. Its
   opaque payload is stored under `provider_data` in `Message` JSON. `Content`
   and `ReasoningContent` are editable display fields; `ToolCalls` controls
-  current local execution. These fields are not automatically synchronized.
-  Redacting `Content` alone leaves the original
-  text in ProviderData and persisted history. Use the existing `ProviderDataFor` and
-  `SetProviderData` methods when changing native state; the adapter README has a
-  direct example. Before-tool edits affect execution arguments without
+  current local execution. AfterModel payload edits regenerate these fields before tools execute;
+  projection-only edits leave the native record unchanged.
+  Redacting `Content` alone leaves the original text in ProviderData and
+  persisted history. The adapter README shows how to read SDK items and edit
+  a native function call. Before-tool edits affect execution arguments without
   rewriting ProviderData. Removing ProviderData from an unfinished native tool round does
   not carry a recovery guarantee. Summary replacement, compaction, and
   behavior for other agents are specified in the adapter contract.

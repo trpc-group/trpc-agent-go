@@ -47,11 +47,11 @@ func TestNativeProviderDataSurvivesSQLiteCheckpointResume(t *testing.T) {
 			},
 		}},
 	}
-	require.NoError(t, native.SetProviderData(provider, modelName, json.RawMessage(payload)))
+	native.ProviderData = &model.ProviderData{Protocol: provider, Model: modelName, Payload: json.RawMessage(payload)}
 	requireNative := func(t *testing.T, msg model.Message) {
 		t.Helper()
-		got, err := msg.ProviderDataFor(provider, modelName)
-		require.NoError(t, err)
+		require.NotNil(t, msg.ProviderData)
+		got := msg.ProviderData.Payload
 		require.JSONEq(t, payload, string(got))
 	}
 

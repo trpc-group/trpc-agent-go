@@ -125,11 +125,7 @@ func NewSimpleTokenCounter(opts ...SimpleTokenCounterOption) *SimpleTokenCounter
 func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (int, error) {
 	total := 0
 	if message.ProviderData != nil {
-		payload, err := message.ProviderDataFor(message.ProviderData.provider, message.ProviderData.model)
-		if err != nil {
-			return 0, err
-		}
-		return max(c.estimateRunes(utf8.RuneCount(payload)), 1), nil
+		return max(c.estimateRunes(utf8.RuneCount(message.ProviderData.Payload)), 1), nil
 	}
 
 	// Count main content.

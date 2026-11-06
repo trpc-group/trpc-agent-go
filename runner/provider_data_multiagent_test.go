@@ -59,12 +59,10 @@ func (m *replayTestModel) GenerateContent(
 		msg.ToolCalls = []model.ToolCall{*m.toolCall}
 	}
 	if m.info.ProviderDataProtocol != "" {
-		if err := msg.SetProviderData(
-			m.info.ProviderDataProtocol,
-			m.info.Name,
-			json.RawMessage(replayTestPayload),
-		); err != nil {
-			return nil, err
+		msg.ProviderData = &model.ProviderData{
+			Protocol: m.info.ProviderDataProtocol,
+			Model:    m.info.Name,
+			Payload:  json.RawMessage(replayTestPayload),
 		}
 	}
 	ch := make(chan *model.Response, 1)
@@ -141,8 +139,7 @@ func TestRunner_NativeAgentFeedsLegacyAgent(t *testing.T) {
 	var continued bool
 	for _, msg := range nativeRequests[1].Messages {
 		if msg.ProviderData != nil {
-			_, err := msg.ProviderDataFor("test.native", "native-model")
-			require.NoError(t, err)
+			require.NotNil(t, msg.ProviderData)
 			continued = true
 		}
 	}
@@ -206,7 +203,11 @@ func TestRunner_AfterModelCallbacksMayEditNativeProjections(t *testing.T) {
 			name: "foreign model binding remains invalid",
 			callback: func(t *testing.T, _ *model.Response) (*model.Response, error) {
 				msg := model.NewAssistantMessage("")
-				require.NoError(t, msg.SetProviderData("test.native", "other-model", json.RawMessage(`[]`)))
+				msg.ProviderData = &model.ProviderData{
+					Protocol: "test.native",
+					Model:    "other-model",
+					Payload:  json.RawMessage(`[]`),
+				}
 				return &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}, nil
 			},
 			wantErr: "invalid model response",
@@ -345,8 +346,8 @@ func TestRunner_NativeAgentProjectorEditsDisplayProjection(t *testing.T) {
 			continue
 		}
 		sawEditedProviderData = true
-		payload, err := message.ProviderDataFor("test.native", "native-model")
-		require.NoError(t, err)
+		require.NotNil(t, message.ProviderData)
+		payload := message.ProviderData.Payload
 		require.JSONEq(t, replayTestPayload, string(payload))
 	}
 	require.True(t, sawEditedProviderData, "the projector's display edit reaches the next request")

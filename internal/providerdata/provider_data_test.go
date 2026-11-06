@@ -36,11 +36,11 @@ var nativeInfo = model.Info{Name: "native-model", ProviderDataProtocol: "test.na
 func nativeMessage(t *testing.T) model.Message {
 	t.Helper()
 	msg := model.NewAssistantMessage("answer")
-	require.NoError(t, msg.SetProviderData(
-		nativeInfo.ProviderDataProtocol,
-		nativeInfo.Name,
-		json.RawMessage(`[{"type":"reasoning","id":"rs_1"}]`),
-	))
+	msg.ProviderData = &model.ProviderData{
+		Protocol: nativeInfo.ProviderDataProtocol,
+		Model:    nativeInfo.Name,
+		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_1"}]`),
+	}
 	return msg
 }
 
@@ -93,6 +93,11 @@ func TestValidateMessages(t *testing.T) {
 
 	native[2].Content = "edited"
 	require.NoError(t, ValidateMessages(native, nativeInfo))
+	native[2].Role = model.RoleUser
+	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "assistant message")
+	native[2].Role = model.RoleAssistant
+	native[2].ProviderData.Payload = json.RawMessage(`{`)
+	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "valid JSON object or array")
 }
 
 func TestValidateResponse(t *testing.T) {

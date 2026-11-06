@@ -386,8 +386,8 @@ agent := llmagent.New(
 
 框架将 `ProviderData` payload 字节视为不透明数据。对于带有原生 ProviderData 的消息，
 这些模式只修改投影出的 reasoning 字段，不会删除 ProviderData 中的 reasoning 或加密状态，
-匹配的原生适配器仍可能在下一轮发送它们。若要改变这部分输入，需显式编辑原生 payload，
-再通过 `Message.SetProviderData` 绑定。删除未完成原生工具轮的 ProviderData 可能导致无法恢复。
+匹配的原生适配器仍可能在下一轮发送它们。要改变这部分输入，可以编辑
+`Message.ProviderData.Payload`。需要恢复未完成的工具轮时，保留该轮的 ProviderData。
 
 ### 工具调用记录历史模式
 

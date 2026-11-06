@@ -19,6 +19,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -62,6 +63,34 @@ func New(name string, opts ...Option) *Model {
 // Info implements model.Model.
 func (m *Model) Info() model.Info {
 	return model.Info{Name: m.name, ProviderDataProtocol: responseProvider}
+}
+
+// ProjectProviderData rebuilds display fields and tool calls from a completed
+// native output array. It implements model.ProviderDataProjector without
+// modifying the payload or making an API request.
+func (m *Model) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
+	message := model.Message{Role: model.RoleAssistant, ProviderData: data}
+	if data == nil {
+		return message, errors.New("openai/responses: provider data is nil")
+	}
+	if err := providerdata.ValidateMessage(message, m.Info()); err != nil {
+		return model.Message{}, err
+	}
+	var items []responses.ResponseOutputItemUnion
+	if err := json.Unmarshal(data.Payload, &items); err != nil {
+		return model.Message{}, fmt.Errorf("openai/responses: decode provider data output: %w", err)
+	}
+	if items == nil {
+		return model.Message{}, errors.New("openai/responses: provider data payload must be an item array")
+	}
+	projected, _, err := projectOutput(items)
+	if err != nil {
+		return model.Message{}, err
+	}
+	message.Content = projected.text
+	message.ReasoningContent = projected.reasoning
+	message.ToolCalls = projected.toolCalls
+	return message, nil
 }
 
 // GenerateContent implements model.Model.

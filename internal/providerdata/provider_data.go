@@ -12,7 +12,10 @@
 package providerdata
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -63,15 +66,36 @@ func ResponseHasData(response *model.Response) bool {
 	return false
 }
 
+// ValidateMessage checks a native record before the selected model consumes it.
+// Ordinary messages carry no record and pass through unchanged.
+func ValidateMessage(message model.Message, info model.Info) error {
+	data := message.ProviderData
+	if data == nil {
+		return nil
+	}
+	if message.Role != model.RoleAssistant {
+		return fmt.Errorf("provider data is only valid on assistant messages")
+	}
+	if strings.TrimSpace(data.Protocol) == "" || strings.TrimSpace(data.Model) == "" {
+		return fmt.Errorf("provider data requires a protocol and model identity")
+	}
+	if data.Protocol != info.ProviderDataProtocol || data.Model != info.Name {
+		return fmt.Errorf("provider data belongs to protocol %q and model %q, not %q and %q",
+			data.Protocol, data.Model, info.ProviderDataProtocol, info.Name)
+	}
+	payload := bytes.TrimSpace(data.Payload)
+	if len(payload) == 0 || (payload[0] != '{' && payload[0] != '[') || !json.Valid(payload) {
+		return fmt.Errorf("provider payload must be a valid JSON object or array")
+	}
+	return nil
+}
+
 // ValidateMessages checks every native record in messages against the
 // producer or consumer identity in info. Messages without ProviderData are ignored,
 // so legacy histories never fail this check.
 func ValidateMessages(messages []model.Message, info model.Info) error {
 	for index, message := range messages {
-		if message.ProviderData == nil {
-			continue
-		}
-		if _, err := message.ProviderDataFor(info.ProviderDataProtocol, info.Name); err != nil {
+		if err := ValidateMessage(message, info); err != nil {
 			return fmt.Errorf("provider data message %d: %w", index, err)
 		}
 	}

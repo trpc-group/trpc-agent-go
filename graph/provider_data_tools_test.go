@@ -48,10 +48,12 @@ func (m *nativeToolModel) GenerateContent(context.Context, *model.Request) (<-ch
 			},
 		}}}
 	}
-	if err := msg.SetProviderData("test.native", "native-model", json.RawMessage(
-		`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"}]`,
-	)); err != nil {
-		return nil, err
+	msg.ProviderData = &model.ProviderData{
+		Protocol: "test.native",
+		Model:    "native-model",
+		Payload: json.RawMessage(
+			`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"}]`,
+		),
 	}
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: msg}}}

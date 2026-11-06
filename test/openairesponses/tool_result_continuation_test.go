@@ -141,8 +141,8 @@ func assertToolResultNativeProviderData(t *testing.T, sess *session.Session, exp
 			}
 			found = true
 			require.Equal(t, expected, string(msg.ToolCalls[0].Function.Arguments))
-			raw, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-			require.NoError(t, err)
+			require.NotNil(t, msg.ProviderData)
+			raw := msg.ProviderData.Payload
 			require.JSONEq(t, nativeToolOutput, string(raw), "opaque native response items must survive persistence")
 		}
 	}
@@ -168,8 +168,8 @@ func assertToolResultNativeMultiProviderData(t *testing.T, sess *session.Session
 			require.Equal(t, `{"a":1}`, string(msg.ToolCalls[0].Function.Arguments))
 			require.Equal(t, "call_b", msg.ToolCalls[1].ID)
 			require.Equal(t, `{"a":2}`, string(msg.ToolCalls[1].Function.Arguments))
-			raw, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-			require.NoError(t, err)
+			require.NotNil(t, msg.ProviderData)
+			raw := msg.ProviderData.Payload
 			require.JSONEq(t, toolResultNativeMultiOutput, string(raw), "opaque native response items must survive persistence")
 		}
 	}

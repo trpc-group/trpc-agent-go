@@ -157,8 +157,11 @@ func TestGraphNativeHistoryValidatesPairingAndUsesProviderDataAfterToolCallEdit(
 				Type: "function", ID: "call_native",
 				Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 			}}}
-			require.NoError(t, msg.SetProviderData(m.Info().ProviderDataProtocol, m.Info().Name,
-				json.RawMessage(`[{"type":"function_call","id":"fc_native","call_id":"call_native","name":"calculator","arguments":"{\"a\":1}"}]`)))
+			msg.ProviderData = &model.ProviderData{
+				Protocol: m.Info().ProviderDataProtocol,
+				Model:    m.Info().Name,
+				Payload:  json.RawMessage(`[{"type":"function_call","id":"fc_native","call_id":"call_native","name":"calculator","arguments":"{\"a\":1}"}]`),
+			}
 			history := []model.Message{model.NewUserMessage("add one"), msg}
 			if tc.edit {
 				history[1].ToolCalls[0].Function.Arguments = []byte(`{"a":2}`)

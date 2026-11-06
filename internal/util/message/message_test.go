@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -71,10 +70,10 @@ func TestIsEmptyAssistantMessage(t *testing.T) {
 		},
 	}))
 	replayOnly := model.NewAssistantMessage("")
-	require.NoError(t, replayOnly.SetProviderData(
-		"openai.responses",
-		"test-model",
-		json.RawMessage(`[]`),
-	))
+	replayOnly.ProviderData = &model.ProviderData{
+		Protocol: "openai.responses",
+		Model:    "test-model",
+		Payload:  json.RawMessage(`[]`),
+	}
 	assert.False(t, IsEmptyAssistantMessage(replayOnly))
 }

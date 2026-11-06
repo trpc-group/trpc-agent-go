@@ -138,30 +138,27 @@ func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.
 	require.ErrorContains(t, err, "unsupported native item type")
 }
 
-func TestProviderDataCanBeReboundAndStillValidatesItsProducerAndShape(t *testing.T) {
+func TestConvertMessagesValidatesProviderData(t *testing.T) {
 	msg := model.NewAssistantMessage("display projection")
-	payload := json.RawMessage(`[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"native payload"}]}]`)
-	require.NoError(t, msg.SetProviderData(responseProvider, "gpt-5", payload))
-	got, err := msg.ProviderDataFor(responseProvider, "gpt-5")
+	msg.ProviderData = &model.ProviderData{
+		Protocol: responseProvider,
+		Model:    "gpt-5",
+		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"state"}]`),
+	}
+	_, err := convertMessages([]model.Message{msg}, "gpt-5")
 	require.NoError(t, err)
-	require.JSONEq(t, string(payload), string(got))
-
-	_, err = msg.ProviderDataFor("another.protocol", "gpt-5")
+	_, err = convertMessages([]model.Message{msg}, "another-model")
 	require.ErrorContains(t, err, "belongs to protocol")
-	_, err = msg.ProviderDataFor(responseProvider, "another-model")
+	msg.ProviderData.Protocol = "another.protocol"
+	_, err = convertMessages([]model.Message{msg}, "gpt-5")
 	require.ErrorContains(t, err, "belongs to protocol")
-
-	_, err = convertMessages([]model.Message{func() model.Message {
-		bad := model.NewAssistantMessage("bad native schema")
-		require.NoError(t, bad.SetProviderData(responseProvider, "gpt-5", json.RawMessage(`[{"type":"tool_search_call"}]`)))
-		return bad
-	}()}, "gpt-5")
+	msg.ProviderData.Protocol = responseProvider
+	msg.ProviderData.Payload = json.RawMessage(`[{"type":"tool_search_call"}]`)
+	_, err = convertMessages([]model.Message{msg}, "gpt-5")
 	require.ErrorContains(t, err, "unsupported native item type")
-
-	require.Error(t, msg.SetProviderData(responseProvider, "gpt-5", json.RawMessage(`[{`)))
-	got, err = msg.ProviderDataFor(responseProvider, "gpt-5")
-	require.NoError(t, err, "a failed rebind must leave the existing replay record intact")
-	require.JSONEq(t, string(payload), string(got))
+	msg.ProviderData.Payload = json.RawMessage(`[{`)
+	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	require.ErrorContains(t, err, "provider payload must be a valid JSON object or array")
 }
 
 func TestOpaqueReasoningAndRefusalAreRetained(t *testing.T) {
@@ -170,8 +167,8 @@ func TestOpaqueReasoningAndRefusalAreRetained(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "no", projected.Choices[0].Message.Content)
 	require.Empty(t, projected.Choices[0].Message.ReasoningContent)
-	raw, err := projected.Choices[0].Message.ProviderDataFor(responseProvider, "gpt-5")
-	require.NoError(t, err)
+	require.NotNil(t, projected.Choices[0].Message.ProviderData)
+	raw := projected.Choices[0].Message.ProviderData.Payload
 	require.Contains(t, string(raw), `"id":"rs_opaque"`)
 	require.Contains(t, string(raw), `"encrypted_content":"secret"`)
 }
@@ -363,7 +360,11 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 	nativeMessage := func(t *testing.T, payload string) model.Message {
 		t.Helper()
 		msg := model.NewAssistantMessage("")
-		require.NoError(t, msg.SetProviderData(responseProvider, "gpt-5", json.RawMessage(payload)))
+		msg.ProviderData = &model.ProviderData{
+			Protocol: responseProvider,
+			Model:    "gpt-5",
+			Payload:  json.RawMessage(payload),
+		}
 		return msg
 	}
 	item := `{"type":"function_call","call_id":" call_1 ","name":"f","arguments":"{}","future":true}`
@@ -526,8 +527,8 @@ func TestCompletedResponseAcceptsOptionalItemFields(t *testing.T) {
 	projected, err := projectResponse(response, "gpt-5")
 	require.NoError(t, err)
 	require.NotNil(t, projected.Choices[0].Message.ProviderData)
-	payload, err := projected.Choices[0].Message.ProviderDataFor(responseProvider, "gpt-5")
-	require.NoError(t, err)
+	require.NotNil(t, projected.Choices[0].Message.ProviderData)
+	payload := projected.Choices[0].Message.ProviderData.Payload
 	var native []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(payload, &native))
 	require.NotContains(t, native[1], "id", "replay must not fabricate an optional function-call item ID")
@@ -631,8 +632,11 @@ func TestProviderDataModelBindingUsesConfiguredName(t *testing.T) {
 	resp := decodeResponse(t, `{"id":"r","status":"completed","model":"resolved-name","output":[{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`)
 	projected, err := projectResponse(resp, "configured-name")
 	require.NoError(t, err)
-	_, err = projected.Choices[0].Message.ProviderDataFor(responseProvider, "configured-name")
+	message := projected.Choices[0].Message
+	require.NotNil(t, message.ProviderData)
+	require.Equal(t, "configured-name", message.ProviderData.Model)
+	_, err = convertMessages([]model.Message{message}, "configured-name")
 	require.NoError(t, err)
-	_, err = projected.Choices[0].Message.ProviderDataFor(responseProvider, "resolved-name")
-	require.Error(t, err)
+	_, err = convertMessages([]model.Message{message}, "resolved-name")
+	require.ErrorContains(t, err, "belongs to protocol")
 }

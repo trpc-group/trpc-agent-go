@@ -1648,8 +1648,8 @@ func cloneEventForContentSnapshot(evt event.Event) event.Event {
 		cloned.Response = evt.Response.Clone()
 		for i := range cloned.Response.Choices {
 			choice := &cloned.Response.Choices[i]
-			choice.Message = providerdata.CloneMessage(choice.Message)
-			choice.Delta = providerdata.CloneMessage(choice.Delta)
+			choice.Message = providerdata.CloneMessageProjections(choice.Message)
+			choice.Delta = providerdata.CloneMessageProjections(choice.Delta)
 		}
 	}
 	if evt.LongRunningToolIDs != nil {

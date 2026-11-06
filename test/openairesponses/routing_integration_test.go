@@ -238,8 +238,8 @@ func assertNativeRoutingSessionContainsOnlyCall(t *testing.T, sess *session.Sess
 				require.Equal(t, callID, msg.ToolID)
 			}
 			if msg.ProviderData != nil {
-				payload, replayErr := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-				require.NoError(t, replayErr)
+				require.NotNil(t, msg.ProviderData)
+				payload := msg.ProviderData.Payload
 				require.NotContains(t, string(payload), "fc_loser")
 				if bytes.Contains(payload, []byte(itemID)) {
 					replayCount++

@@ -908,6 +908,7 @@ type streamingResponseProcessor struct {
 	observabilityInvocation *agent.Invocation
 	currentInvocation       *agent.Invocation
 	producerInfo            model.Info
+	producer                model.Model
 	llmRequest              *model.Request
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
@@ -965,6 +966,7 @@ func newStreamingResponseProcessor(
 	}
 	if producer != nil && producer.Model != nil {
 		processor.producerInfo = producer.Model.Info()
+		processor.producer = producer.Model
 	}
 	if metricsInvocation != nil {
 		processor.timingInfo = responseUsageTimingInfo(currentInvocation)
@@ -1014,6 +1016,11 @@ func (p *streamingResponseProcessor) process(
 		&p.partialUsageState,
 	)
 	eventInvocation := p.eventInvocation()
+	var nativeSnapshot providerdata.ResponseSnapshot
+	hasAfterCallbacks := p.flow.hasAfterModelCallbacks(p.currentInvocation)
+	if hasAfterCallbacks {
+		nativeSnapshot = providerdata.SnapshotResponse(response)
+	}
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
 		p.ctx,
 		eventInvocation,
@@ -1035,6 +1042,13 @@ func (p *streamingResponseProcessor) process(
 	)
 	p.updateMetricsState()
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
+	if hasAfterCallbacks {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, response, p.producer); err != nil {
+			*p.err = err
+			responseErr = err
+			return false
+		}
+	}
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
@@ -1295,6 +1309,17 @@ func (p *streamingResponseProcessor) traceChat(
 		EventID:          llmResponseEvent.ID,
 		TimeToFirstToken: ttfb,
 	})
+}
+
+func (f *Flow) hasAfterModelCallbacks(invocation *agent.Invocation) bool {
+	if f.modelCallbacks != nil && len(f.modelCallbacks.AfterModel) > 0 {
+		return true
+	}
+	if invocation == nil || invocation.Plugins == nil {
+		return false
+	}
+	callbacks := invocation.Plugins.ModelCallbacks()
+	return callbacks != nil && len(callbacks.AfterModel) > 0
 }
 
 // handleAfterModelCallbacks processes after model callbacks.

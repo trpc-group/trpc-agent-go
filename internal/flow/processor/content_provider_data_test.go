@@ -33,11 +33,11 @@ const (
 
 func bindTestProviderData(t *testing.T, msg *model.Message) {
 	t.Helper()
-	require.NoError(t, msg.SetProviderData(
-		testProviderDataProvider,
-		testProviderDataModel,
-		json.RawMessage(`[{"type":"reasoning","id":"r1","encrypted_content":"opaque"}]`),
-	))
+	msg.ProviderData = &model.ProviderData{
+		Protocol: testProviderDataProvider,
+		Model:    testProviderDataModel,
+		Payload:  json.RawMessage(`[{"type":"reasoning","id":"r1","encrypted_content":"opaque"}]`),
+	}
 }
 
 func testToolCalls(ids ...string) []model.ToolCall {
@@ -114,8 +114,8 @@ func testInvocation(
 func requireTestProviderData(t *testing.T, msg model.Message) {
 	t.Helper()
 	require.NotNil(t, msg.ProviderData)
-	payload, err := msg.ProviderDataFor(testProviderDataProvider, testProviderDataModel)
-	require.NoError(t, err)
+	require.NotNil(t, msg.ProviderData)
+	payload := msg.ProviderData.Payload
 	require.NotEmpty(t, payload)
 }
 
@@ -196,8 +196,8 @@ func TestContentRequestProcessor_NativeRecordProjectionIsEditable(t *testing.T) 
 		}),
 	)
 	rebound := rebindingProjector.projectEventMessage(nil, event.Event{}, textMessage)
-	reboundPayload, err := rebound.ProviderDataFor(testProviderDataProvider, testProviderDataModel)
-	require.NoError(t, err)
+	require.NotNil(t, rebound.ProviderData)
+	reboundPayload := rebound.ProviderData.Payload
 	require.JSONEq(t, `[{"type":"message","content":"replacement"}]`, string(reboundPayload))
 	requireTestProviderData(t, textMessage)
 

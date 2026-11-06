@@ -86,11 +86,10 @@ type Message struct {
 	// conversation, include the text and its signature unmodified.
 	// Currently used by AWS Bedrock (Claude) models.
 	ReasoningSignature string `json:"reasoning_signature,omitempty"`
-	// ProviderData preserves a provider-native completion as an indivisible history unit.
-	// It determines the next native request independently of editable display
-	// fields and ToolCalls, which determine current local tool execution. These
-	// representations are not automatically synchronized. Providers must check
-	// the record's protocol and model with ProviderDataFor before replaying it.
+	// ProviderData holds the native output of one model call for use in later
+	// requests. The consuming adapter checks the protocol and model. Display
+	// fields and ToolCalls are rebuilt when AfterModel edits this record's payload.
+	// Edits to those projections alone do not rewrite the native record.
 	// Clearing ProviderData from an unfinished native tool round may prevent recovery.
 	ProviderData *ProviderData `json:"provider_data,omitempty"`
 }

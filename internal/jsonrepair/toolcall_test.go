@@ -213,7 +213,11 @@ func TestRepairResponseToolCallArgumentsInPlaceSkipsNativeProviderData(t *testin
 			},
 		}},
 	}
-	require.NoError(t, native.SetProviderData("test.native", "native-model", json.RawMessage(`[]`)))
+	native.ProviderData = &model.ProviderData{
+		Protocol: "test.native",
+		Model:    "native-model",
+		Payload:  json.RawMessage(`[]`),
+	}
 	response := &model.Response{Choices: []model.Choice{
 		{Message: native},
 		{Message: model.Message{ToolCalls: []model.ToolCall{{

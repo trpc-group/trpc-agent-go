@@ -2306,63 +2306,27 @@ go run ./tools -streaming=false
 
 Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Calculate 123 * 456.` and then `Add 789 to that result.` The session retains the first result for the second turn and is discarded when the process exits. The example README shows an illustrative transcript.
 
-### Editing display fields and native replay
+### Callbacks and model history
 
-`Message.Content` and `ReasoningContent` are editable display fields.
-`Message.ToolCalls` supplies the arguments for current local tool execution.
-`Message.ProviderData` supplies the native payload for the next model request. The
-framework does not synchronize these fields. Editing `Content` to redact text
-does not redact the native payload persisted alongside it, so the original
-text remains in session history. A
-before-tool callback can change current execution arguments without rewriting
-ProviderData. Removing ProviderData from an unfinished native tool round does not carry a
-recovery guarantee.
+`Message.ProviderData` exposes `Protocol`, `Model`, and `Payload`. To edit native
+output, decode `Payload` into types from the application's chosen SDK, make the
+changes, and assign the encoded JSON back. For message edits with the official
+SDK, use `ResponseOutputMessageParam` to retain the ID, status, and phase;
+unedited items can keep their original JSON.
 
-Use the existing `ProviderDataFor` and `SetProviderData` methods when intentionally
-editing native state. Assuming `msg`, `modelName`, `callID`, and the
-`encoding/json` import are in scope, this fragment updates only the function call
-whose `call_id` matches `callID`, preserving other calls and native item fields. The current `ToolCalls` arguments remain
-unchanged; update them too if the current execution should match.
+After the complete `AfterModel` callback chain, an edited payload rebuilds the
+display fields, reasoning, and `ToolCalls` before event publication, persistence,
+and tool execution. Editing native function arguments therefore updates both
+current execution and subsequent model history. If the payload is unchanged,
+projection-only callback edits retain their existing behavior. When both are
+edited, the payload takes precedence. Ordinary Chat Completions callbacks are
+unchanged.
 
-```go
-payload, err := msg.ProviderDataFor("openai.responses", modelName)
-if err != nil {
-    return err
-}
-var items []map[string]json.RawMessage
-if err := json.Unmarshal(payload, &items); err != nil {
-    return err
-}
-arguments, err := json.Marshal(`{"a":2}`)
-if err != nil {
-    return err
-}
-for _, item := range items {
-    var itemType string
-    if err := json.Unmarshal(item["type"], &itemType); err != nil {
-        return err
-    }
-    if itemType != "function_call" {
-        continue
-    }
-    var itemCallID string
-    if err := json.Unmarshal(item["call_id"], &itemCallID); err != nil {
-        return err
-    }
-    if itemCallID != callID {
-        continue
-    }
-    item["arguments"] = arguments
-    break
-}
-payload, err = json.Marshal(items)
-if err != nil {
-    return err
-}
-if err := msg.SetProviderData("openai.responses", modelName, payload); err != nil {
-    return err
-}
-```
+`BeforeModel` edits the current request's history copy; `BeforeTool` edits only
+current execution and does not rewrite native history. Redacting display fields
+alone leaves the original text in ProviderData. Keep the record when resuming an
+unfinished tool round. See the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)
+for a complete SDK-based callback and model wrapper requirements.
 
 ### Notes
 

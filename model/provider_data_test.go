@@ -69,7 +69,7 @@ func providerDataTestPayload() json.RawMessage {
 func TestProviderDataSurvivesMessageJSON(t *testing.T) {
 	msg := providerDataTestMessage()
 	payload := providerDataTestPayload()
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, payload))
+	msg.ProviderData = &ProviderData{Protocol: providerDataTestProtocol, Model: providerDataTestModel, Payload: payload}
 	encoded, err := json.Marshal(msg)
 	require.NoError(t, err)
 	var stored map[string]json.RawMessage
@@ -81,8 +81,8 @@ func TestProviderDataSurvivesMessageJSON(t *testing.T) {
 	require.JSONEq(t, string(payload), string(storedProviderData["payload"]))
 	var restored Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
-	got, err := restored.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
+	require.NotNil(t, restored.ProviderData)
+	got := restored.ProviderData.Payload
 	require.JSONEq(t, string(payload), string(got))
 	require.Equal(t, msg.Content, restored.Content)
 	require.Equal(t, msg.ToolCalls, restored.ToolCalls)
@@ -93,8 +93,8 @@ func TestProviderDataReadsCurrentSchemaFixture(t *testing.T) {
 	require.NoError(t, err)
 	var restored Message
 	require.NoError(t, json.Unmarshal(stored, &restored))
-	payload, err := restored.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
+	require.NotNil(t, restored.ProviderData)
+	payload := restored.ProviderData.Payload
 	require.JSONEq(t, string(providerDataTestPayload()), string(payload))
 	projection := restored
 	projection.ProviderData = nil
@@ -104,8 +104,8 @@ func TestProviderDataReadsCurrentSchemaFixture(t *testing.T) {
 	require.JSONEq(t, string(stored), string(encoded))
 	var roundTrip Message
 	require.NoError(t, json.Unmarshal(encoded, &roundTrip))
-	got, err := roundTrip.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
+	require.NotNil(t, roundTrip.ProviderData)
+	got := roundTrip.ProviderData.Payload
 	require.JSONEq(t, string(providerDataTestPayload()), string(got))
 }
 
@@ -126,33 +126,33 @@ func TestProviderDataAllowsProjectionEdits(t *testing.T) {
 	for name, edit := range tests {
 		t.Run(name, func(t *testing.T) {
 			msg := providerDataTestMessage()
-			require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
+			msg.ProviderData = &ProviderData{
+				Protocol: providerDataTestProtocol,
+				Model:    providerDataTestModel,
+				Payload:  providerDataTestPayload(),
+			}
 			edit(&msg)
-			payload, err := msg.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-			require.NoError(t, err)
+			require.NotNil(t, msg.ProviderData)
+			payload := msg.ProviderData.Payload
 			require.JSONEq(t, string(providerDataTestPayload()), string(payload))
 			encoded, err := json.Marshal(msg)
 			require.NoError(t, err)
 			var restored Message
 			require.NoError(t, json.Unmarshal(encoded, &restored))
-			payload, err = restored.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-			require.NoError(t, err)
+			require.NotNil(t, restored.ProviderData)
+			payload = restored.ProviderData.Payload
 			require.JSONEq(t, string(providerDataTestPayload()), string(payload))
 		})
 	}
 }
 
-func TestProviderDataRejectsNonAssistantRole(t *testing.T) {
-	msg := providerDataTestMessage()
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
-	msg.Role = RoleUser
-	_, err := msg.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.ErrorContains(t, err, "provider data requires an assistant message")
-}
-
 func TestProviderDataJSONRoundTripUsesV1Schema(t *testing.T) {
 	msg := providerDataTestMessage()
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
+	msg.ProviderData = &ProviderData{
+		Protocol: providerDataTestProtocol,
+		Model:    providerDataTestModel,
+		Payload:  providerDataTestPayload(),
+	}
 	encoded, err := json.Marshal(msg.ProviderData)
 	require.NoError(t, err)
 	require.JSONEq(t,
@@ -166,38 +166,13 @@ func TestProviderDataJSONRoundTripUsesV1Schema(t *testing.T) {
 	require.JSONEq(t, string(encoded), string(roundTrip))
 }
 
-func TestProviderDataRejectsAnotherProducer(t *testing.T) {
-	msg := providerDataTestMessage()
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
-	for _, producer := range [][2]string{
-		{"another.protocol", providerDataTestModel},
-		{providerDataTestProtocol, "another-model"},
-	} {
-		payload, err := msg.ProviderDataFor(producer[0], producer[1])
-		require.Nil(t, payload)
-		require.ErrorContains(t, err, "belongs to protocol")
-	}
-}
-
-func TestProviderDataCopiesPayloadAtBothBoundaries(t *testing.T) {
-	msg := providerDataTestMessage()
-	payload := providerDataTestPayload()
-	want := string(payload)
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, payload))
-	payload[0] = '!'
-	got, err := msg.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
-	require.Equal(t, want, string(got))
-	got[0] = '!'
-	got, err = msg.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
-	require.Equal(t, want, string(got))
-}
-
 func TestProviderDataOnlyMessageHasValidContent(t *testing.T) {
 	msg := NewAssistantMessage("")
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel,
-		json.RawMessage(`[{"type":"reasoning","summary":[],"encrypted_content":"state"}]`)))
+	msg.ProviderData = &ProviderData{
+		Protocol: providerDataTestProtocol,
+		Model:    providerDataTestModel,
+		Payload:  json.RawMessage(`[{"type":"reasoning","summary":[],"encrypted_content":"state"}]`),
+	}
 	require.True(t, HasPayload(msg))
 	rsp := &Response{Choices: []Choice{{Message: msg}}}
 	require.True(t, rsp.IsValidContent())
@@ -206,30 +181,16 @@ func TestProviderDataOnlyMessageHasValidContent(t *testing.T) {
 	var restored Response
 	require.NoError(t, json.Unmarshal(encoded, &restored))
 	require.True(t, restored.IsValidContent())
-	_, err = restored.Choices[0].Message.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
-}
-
-func TestProviderDataInvalidBindingDoesNotReplaceExistingState(t *testing.T) {
-	msg := providerDataTestMessage()
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
-	original := msg.ProviderData
-	for _, payload := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(`"text"`), json.RawMessage(`{`)} {
-		require.Error(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, payload))
-		require.Same(t, original, msg.ProviderData)
-	}
-	require.Error(t, msg.SetProviderData("", providerDataTestModel, providerDataTestPayload()))
-	require.Error(t, msg.SetProviderData(providerDataTestProtocol, "", providerDataTestPayload()))
-	require.Same(t, original, msg.ProviderData)
-	user := NewUserMessage("hello")
-	require.Error(t, user.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
-	var absent *Message
-	require.Error(t, absent.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
+	require.NotNil(t, restored.Choices[0].Message.ProviderData)
 }
 
 func TestProviderDataRejectsVersion2(t *testing.T) {
 	msg := providerDataTestMessage()
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
+	msg.ProviderData = &ProviderData{
+		Protocol: providerDataTestProtocol,
+		Model:    providerDataTestModel,
+		Payload:  providerDataTestPayload(),
+	}
 	encoded, err := json.Marshal(msg)
 	require.NoError(t, err)
 	var stored map[string]json.RawMessage
@@ -247,9 +208,7 @@ func TestProviderDataRejectsVersion2(t *testing.T) {
 
 func TestLegacyMessageDoesNotAcquireProviderData(t *testing.T) {
 	msg := NewAssistantMessage("legacy")
-	payload, err := msg.ProviderDataFor("any.protocol", "any-model")
-	require.NoError(t, err)
-	require.Nil(t, payload)
+	require.Nil(t, msg.ProviderData)
 	encoded, err := json.Marshal(msg)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"role":"assistant","content":"legacy"}`, string(encoded))
@@ -258,18 +217,8 @@ func TestLegacyMessageDoesNotAcquireProviderData(t *testing.T) {
 func TestProviderDataRejectsCorruptRecords(t *testing.T) {
 	zero := NewAssistantMessage("answer")
 	zero.ProviderData = &ProviderData{}
-	_, err := zero.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
+	_, err := json.Marshal(zero)
 	require.ErrorContains(t, err, "requires a protocol and model identity")
-	_, err = json.Marshal(zero)
-	require.Error(t, err, "a zero record must not be persisted")
-
-	unencodable := providerDataTestMessage()
-	unencodable.ToolCalls[0].ExtraFields = map[string]any{"bad": func() {}}
-	require.NoError(t,
-		unencodable.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()),
-		"editable projections do not participate in provider data encoding")
-	_, err = unencodable.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-	require.NoError(t, err)
 
 	for name, record := range map[string]string{
 		"not an object":        `"record"`,
@@ -286,7 +235,11 @@ func TestProviderDataRejectsCorruptRecords(t *testing.T) {
 
 func TestSimpleTokenCounterAccountsForProviderData(t *testing.T) {
 	msg := NewAssistantMessage("")
-	require.NoError(t, msg.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
+	msg.ProviderData = &ProviderData{
+		Protocol: providerDataTestProtocol,
+		Model:    providerDataTestModel,
+		Payload:  providerDataTestPayload(),
+	}
 	counter := NewSimpleTokenCounter()
 	tokens, err := counter.CountTokens(context.Background(), msg)
 	require.NoError(t, err)
@@ -329,7 +282,11 @@ func TestTokenTailoringPreservesNativeRecordsWithoutText(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			native := tc.message
-			require.NoError(t, native.SetProviderData(providerDataTestProtocol, providerDataTestModel, tc.payload))
+			native.ProviderData = &ProviderData{
+				Protocol: providerDataTestProtocol,
+				Model:    providerDataTestModel,
+				Payload:  tc.payload,
+			}
 			messages := []Message{NewUserMessage("first"), native}
 			messages = append(messages, tc.results...)
 			messages = append(messages, NewUserMessage("next"))
@@ -348,8 +305,8 @@ func TestTokenTailoringPreservesNativeRecordsWithoutText(t *testing.T) {
 					tailored, err := strategy.impl.TailorMessages(context.Background(), messages, budget+1)
 					require.NoError(t, err)
 					require.Equal(t, messages, tailored, "history within budget must preserve native records and projections")
-					payload, err := tailored[1].ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-					require.NoError(t, err)
+					require.NotNil(t, tailored[1].ProviderData)
+					payload := tailored[1].ProviderData.Payload
 					require.JSONEq(t, string(tc.payload), string(payload))
 				})
 			}
@@ -357,22 +314,30 @@ func TestTokenTailoringPreservesNativeRecordsWithoutText(t *testing.T) {
 	}
 }
 
-func TestResponseCloneIsolatesProviderDataDecode(t *testing.T) {
+func TestResponseCloneIsolatesProviderDataEdits(t *testing.T) {
 	original := providerDataTestMessage()
-	require.NoError(t, original.SetProviderData(providerDataTestProtocol, providerDataTestModel, providerDataTestPayload()))
+	original.ProviderData = &ProviderData{
+		Protocol: providerDataTestProtocol,
+		Model:    providerDataTestModel,
+		Payload:  providerDataTestPayload(),
+	}
 	replacement := NewAssistantMessage("replacement")
-	require.NoError(t, replacement.SetProviderData(providerDataTestProtocol, providerDataTestModel, json.RawMessage(`[]`)))
+	replacement.ProviderData = &ProviderData{
+		Protocol: providerDataTestProtocol,
+		Model:    providerDataTestModel,
+		Payload:  json.RawMessage(`[]`),
+	}
 	encoded, err := json.Marshal(replacement.ProviderData)
 	require.NoError(t, err)
 	response := &Response{Choices: []Choice{{Message: original, Delta: original}}}
 	cloned := response.Clone()
 	for _, msg := range []*Message{&cloned.Choices[0].Message, &cloned.Choices[0].Delta} {
 		require.NotSame(t, original.ProviderData, msg.ProviderData)
+		msg.ProviderData.Payload[0] = '!'
 		require.NoError(t, json.Unmarshal(encoded, msg.ProviderData))
 	}
 	for _, msg := range []Message{response.Choices[0].Message, response.Choices[0].Delta} {
-		payload, err := msg.ProviderDataFor(providerDataTestProtocol, providerDataTestModel)
-		require.NoError(t, err, "decoding a cloned record must not alter the source response")
-		require.JSONEq(t, string(providerDataTestPayload()), string(payload))
+		require.JSONEq(t, string(providerDataTestPayload()), string(msg.ProviderData.Payload),
+			"editing a cloned record must not alter the source response")
 	}
 }

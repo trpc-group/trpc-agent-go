@@ -25,12 +25,10 @@ func TestPrintEventsStreamingDoesNotRepeatFinalText(t *testing.T) {
 		Content:          "visible",
 		ReasoningContent: "hidden-reasoning",
 	}
-	if err := msg.SetProviderData(
-		"openai.responses",
-		"gpt-5",
-		json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
-	); err != nil {
-		t.Fatal(err)
+	msg.ProviderData = &model.ProviderData{
+		Protocol: "openai.responses",
+		Model:    "gpt-5",
+		Payload:  json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
 	}
 	got := collectPrint(t, true,
 		&event.Event{Response: &model.Response{
@@ -94,12 +92,10 @@ func TestPrintEventsShowsCommittedToolCallAndResult(t *testing.T) {
 			},
 		}},
 	}
-	if err := call.SetProviderData(
-		"openai.responses",
-		"gpt-5",
-		json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
-	); err != nil {
-		t.Fatal(err)
+	call.ProviderData = &model.ProviderData{
+		Protocol: "openai.responses",
+		Model:    "gpt-5",
+		Payload:  json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
 	}
 	got := collectPrint(t, true,
 		&event.Event{Response: &model.Response{

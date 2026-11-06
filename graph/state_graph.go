@@ -2127,6 +2127,11 @@ func shouldEmitModelResponseEvent(
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	currentInvocation := invocationFromContextOrDefault(ctx, config.Invocation)
+	var nativeSnapshot providerdata.ResponseSnapshot
+	hasAfterCallbacks := hasAfterModelCallbacks(currentInvocation, config.ModelCallbacks)
+	if hasAfterCallbacks {
+		nativeSnapshot = providerdata.SnapshotResponse(config.Response)
+	}
 	timingInfo := responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
@@ -2175,6 +2180,11 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 	}
 	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
+	if hasAfterCallbacks {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel); err != nil {
+			return ctx, nil, err
+		}
+	}
 	timingInfo = responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
@@ -4975,6 +4985,9 @@ func mergeToolCallsIntoFinalResponse(
 	if resp == nil || len(resp.Choices) == 0 {
 		return
 	}
+	if providerdata.ResponseHasData(resp) {
+		return
+	}
 	if len(resp.Choices[0].Message.ToolCalls) >= len(toolCalls) {
 		return
 	}
@@ -5382,6 +5395,7 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	}
 	p.tap.WriteDelta(response)
 	trackModelResponseTelemetry(response, p.tracker)
+	nativeResponse := providerdata.ResponseHasData(response)
 	p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
 	p.finalResponse = response
 	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
@@ -5426,6 +5440,10 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	// Trace the same processed response used by metrics, including callback replacements.
 	if p.lastEvent != nil {
 		response = p.lastEvent.Response
+		if response != nil && !response.IsPartial &&
+			(nativeResponse || providerdata.ResponseHasData(response)) {
+			p.finalResponse = response
+		}
 	}
 	traceProcessedModelResponse(
 		p.config.Span,

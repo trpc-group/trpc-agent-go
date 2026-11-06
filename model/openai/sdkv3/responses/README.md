@@ -105,92 +105,102 @@ requests encrypted reasoning so stateless continuation can retain provider
 state. Additional include names are unioned with that required item and cannot
 replace it.
 
-`ProviderData` is the authoritative native payload for the next model request.
-`Content` and `ReasoningContent` are editable display fields; changing them
-does not change ProviderData. `ToolCalls` is the framework's instruction for local
-tool execution. Changing its arguments affects the current execution, but does
-not rewrite the native function-call item sent on the next request. The tool
-result is still paired by call ID. If the display, native payload, and tool
-arguments should agree, update the fields and payload explicitly; the
-framework does not synchronize them.
+`Message.ToolCalls` supplies the arguments for local tool execution. To override
+them for an execution, return `tool.BeforeToolResult.ModifiedArguments` from a
+`BeforeTool` callback. The next model request uses the native call from
+`ProviderData` and pairs it with the tool result by call ID.
 
-For example, redacting only the displayed text leaves the original native
-payload unchanged in ProviderData and session storage:
+`Content` and `ReasoningContent` are editable display fields. The session also
+persists `ProviderData`, which supplies the native items for the next model
+request. Redacting display fields alone leaves the original text in native
+history.
+
+### Editing native output
+
+`ProviderData.Protocol`, `Model`, and `Payload` are public fields. Applications
+can decode `Payload` using their chosen SDK, edit it, then assign the encoded
+JSON back. The framework does not define another set of SDK item types or
+field-specific editing functions.
+
+The following `AfterModel` callback uses the official SDK to edit calculator
+arguments. Unedited items keep their original JSON. Use
+`ResponseOutputMessageParam` when editing a message so its ID, status, and phase
+remain present. SDK serialization of an edited item may omit fields unknown to
+that SDK version; it is not a general lossless JSON editor.
 
 ```go
-message.Content = "[redacted]"
-message.ReasoningContent = ""
+import (
+    "context"
+    "encoding/json"
+
+    sdkresponses "github.com/openai/openai-go/v3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+func rewriteCalculator(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+    if args.Error != nil || args.Response == nil || args.Response.IsPartial ||
+        len(args.Response.Choices) == 0 {
+        return nil, nil
+    }
+    msg := &args.Response.Choices[0].Message
+    if msg.ProviderData == nil {
+        return nil, nil
+    }
+    var items []sdkresponses.ResponseOutputItemUnion
+    if err := json.Unmarshal(msg.ProviderData.Payload, &items); err != nil {
+        return nil, err
+    }
+    output := make([]json.RawMessage, len(items))
+    for i, item := range items {
+        output[i] = json.RawMessage(item.RawJSON())
+        if item.Type != "function_call" || item.Name != "calculator" {
+            continue
+        }
+        var call sdkresponses.ResponseFunctionToolCallParam
+        if err := json.Unmarshal(output[i], &call); err != nil {
+            return nil, err
+        }
+        call.Arguments = `{"a":9}`
+        encoded, err := json.Marshal(call)
+        if err != nil {
+            return nil, err
+        }
+        output[i] = encoded
+    }
+    encoded, err := json.Marshal(output)
+    if err != nil {
+        return nil, err
+    }
+    msg.ProviderData.Payload = encoded
+    return nil, nil
+}
+
+// Register on the Responses agent using llmagent.WithModelCallbacks(callbacks).
+func calculatorCallbacks() *model.Callbacks {
+    return model.NewCallbacks().RegisterAfterModel(rewriteCalculator)
+}
 ```
 
-To change native state, read it, edit the supported JSON item while retaining
-opaque fields, then bind the new payload with the existing API. This example
-updates only the function call whose `call_id` matches `callID`. Assume
-`message`, `modelName`, `callID`, and the `encoding/json` import are in scope:
+After the completed `AfterModel` callback chain finishes, an edited native
+record is projected again before the response is emitted, persisted, or used
+for local tool execution. The new payload updates `Content`, `ContentParts`,
+reasoning fields, `ToolCalls`, and the choice finish reason. If a callback edits
+both the payload and its projections, the payload takes precedence. Unchanged
+native records keep callbacks' projection-only edits. Ordinary Chat Completions
+responses retain their existing callback behavior.
 
-```go
-payload, err := message.ProviderDataFor("openai.responses", modelName)
-if err != nil {
-    return err
-}
-var items []map[string]json.RawMessage
-if err := json.Unmarshal(payload, &items); err != nil {
-    return err
-}
-arguments, err := json.Marshal(`{"a":2}`)
-if err != nil {
-    return err
-}
-for _, item := range items {
-    var itemType string
-    if err := json.Unmarshal(item["type"], &itemType); err != nil {
-        return err
-    }
-    if itemType != "function_call" {
-        continue
-    }
-    var itemCallID string
-    if err := json.Unmarshal(item["call_id"], &itemCallID); err != nil {
-        return err
-    }
-    if itemCallID != callID {
-        continue
-    }
-    item["arguments"] = arguments
-    break
-}
-payload, err = json.Marshal(items)
-if err != nil {
-    return err
-}
-if err := message.SetProviderData("openai.responses", modelName, payload); err != nil {
-    return err
-}
-```
-
-That example changes the next request's native arguments; it does not change
-the current `ToolCalls` execution arguments. Edit `ToolCalls` separately when
-the current local execution should use the same arguments. Before-tool
-callbacks receive detached execution arguments, so changing them affects the
-tool call but does not rewrite ProviderData. Treat ProviderData as sensitive conversation
-state: redacting `Content` alone does not redact the native payload or remove
-the original text from persisted history.
-
-The Go API uses `Message.ProviderData`, `SetProviderData`, `ProviderDataFor`, and
-`Info.ProviderDataProtocol`. Message JSON stores ProviderData under
-`provider_data`. The `Info` JSON key `ProviderDataProtocol` is omitted when
-empty. The payload bytes are opaque to the framework. The adapter validates
-that the protocol and configured model match the record, and rejects
-mismatches.
+The framework stores the record under `provider_data` and checks its protocol
+and configured model before continuation. Models implement the optional
+`model.ProviderDataProjector` capability to project edited native records;
+wrappers must forward it to support such edits. Built-in failover and hedge
+wrappers do so. `BeforeModel` edits affect only the current request's detached
+history, while `BeforeTool` edits affect only the current tool execution.
 
 The current ProviderData format version is 1; other versions are rejected.
-Invalid ProviderData metadata or an unsupported format version is not silently
-dropped. Redis readers return decoding errors when they can identify an event
-with ProviderData. If the entire event JSON is malformed, that identification
-can fail and the event may be skipped under the existing Redis history policy.
-A successful history read therefore does not guarantee that no malformed
-records were skipped. `ProviderDataFor` returns the native payload despite
-edits to display or tool projections, provided the record is structurally valid
-and belongs to the requested protocol and configured model.
+Redis retains its existing skip-on-decode-error history policy, including
+events with invalid ProviderData. Each history read logs at most one warning
+when skipping malformed events. A successful read does not guarantee that no
+malformed records were skipped.
 
 History processing treats each native record as one output unit: empty
 records, item order, reasoning, call order, and call IDs are preserved, native
@@ -232,12 +242,11 @@ after ProviderData is removed from a pending round.
 LLM flows and Graph LLM nodes validate `model.Info.ProviderDataProtocol` and the
 configured model name before handing native history to an adapter. Another
 model or a legacy adapter is rejected; wrappers must forward `Info` correctly.
-Both allow callbacks to replace or edit a valid response, including rebinding
-its provider data with `SetProviderData`. The resulting `ToolCalls` determine
-current local execution and ProviderData determines subsequent wire input. Native
-item structure and call/result pairing remain validated. Before-model
-callbacks receive detached history copies: edits to their `ToolCalls` or
-display fields do not rewrite ProviderData or stored session records. Before-tool
+Both allow callbacks to edit ProviderData on a completed response before it is
+stored. When a callback edits the native payload, its regenerated `ToolCalls` determine
+current execution and the same payload supplies subsequent wire input. Native item structure and
+call/result pairing remain validated. Before-model callbacks edit a detached
+copy of native history for the current model request. Before-tool
 callbacks receive separate execution arguments, so in-place edits and
 `ModifiedArguments` affect the current tool call without rewriting ProviderData. The
 next model request sends ProviderData and pairs the result with the same call ID.

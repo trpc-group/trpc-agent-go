@@ -56,8 +56,8 @@ func TestStreamProviderDataUsesDoneReasoningCiphertext(t *testing.T) {
 	require.NoError(t, err)
 	var restored model.Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
-	payload, err := restored.ProviderDataFor(m.Info().ProviderDataProtocol, m.Info().Name)
-	require.NoError(t, err)
+	require.NotNil(t, restored.ProviderData)
+	payload := restored.ProviderData.Payload
 	require.JSONEq(t, `[`+doneReasoning+`,`+message+`]`, string(payload))
 	ch, err = m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("start"), restored, model.NewUserMessage("continue")}})
 	require.NoError(t, err)

@@ -11,7 +11,6 @@
 package util
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -101,56 +100,19 @@ func ProcessEventCmd(
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
 	events := make([]event.Event, 0, len(eventsBytes))
+	decodeErrorLogged := false
 	for _, eventBytes := range eventsBytes {
 		evt := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), evt); err != nil {
-			if EventHasProviderData([]byte(eventBytes)) {
-				return nil, fmt.Errorf("decode event with provider data: %w", err)
+			if !decodeErrorLogged {
+				log.WarnfContext(ctx, "skip malformed events in redis history; first error: %v", err)
+				decodeErrorLogged = true
 			}
-			log.WarnfContext(
-				ctx,
-				"skip malformed event in redis history: %v",
-				err,
-			)
 			continue
 		}
 		events = append(events, *evt)
 	}
 	return events, nil
-}
-
-// EventHasProviderData identifies non-null native records without decoding their
-// payload. It lets history readers reject native decoding errors while retaining
-// their existing policy for malformed legacy events.
-func EventHasProviderData(data []byte) bool {
-	var envelope struct {
-		Choices []json.RawMessage `json:"choices"`
-	}
-	if json.Unmarshal(data, &envelope) != nil {
-		return false
-	}
-	for _, rawChoice := range envelope.Choices {
-		var choice struct {
-			Message json.RawMessage `json:"message"`
-			Delta   json.RawMessage `json:"delta"`
-		}
-		if json.Unmarshal(rawChoice, &choice) != nil {
-			continue
-		}
-		for _, rawMessage := range []json.RawMessage{choice.Message, choice.Delta} {
-			var message struct {
-				ProviderData json.RawMessage `json:"provider_data"`
-			}
-			if json.Unmarshal(rawMessage, &message) != nil {
-				continue
-			}
-			record := bytes.TrimSpace(message.ProviderData)
-			if len(record) > 0 && !bytes.Equal(record, []byte("null")) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // MergeState merges app and user state into the session.

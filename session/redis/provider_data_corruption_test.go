@@ -89,39 +89,28 @@ func TestRedisSessionNativeProviderDataSurvivesStorageAndSkipsMalformedLegacyJSO
 	}
 }
 
-func TestRedisSessionGetSessionRejectsMalformedNativeProviderDataRecords(t *testing.T) {
-	tests := []struct {
-		name       string
-		mutate     func(*testing.T, map[string]json.RawMessage)
-		wantErrMsg string
-	}{
-		{
-			name: "unknown version",
-			mutate: func(_ *testing.T, record map[string]json.RawMessage) {
-				record["version"] = json.RawMessage(`99`)
-			},
-			wantErrMsg: "unsupported provider data version 99",
-		},
-	}
-
+func TestRedisSessionGetSessionSkipsMalformedNativeProviderDataRecords(t *testing.T) {
 	for _, storage := range replayCorruptionStorages {
-		for _, tt := range tests {
-			for _, eventID := range []string{replayOnlyEventID, nativeToolCallEventID} {
-				t.Run(storage.name+"/"+eventID+"/"+tt.name, func(t *testing.T) {
-					fixture := newProviderDataCorruptionFixture(t, storage)
-					fixture.addMalformedLegacyJSON(t)
-					fixture.mutatePersistedProviderData(t, eventID, tt.mutate)
-
-					got, err := fixture.service.GetSession(fixture.ctx, fixture.key)
-					if err == nil {
-						ids := replayCorruptionEventIDs(got)
-						t.Errorf("GetSession silently skipped the malformed native record event; loaded events: %v", ids)
-						return
-					}
-					require.ErrorContains(t, err, tt.wantErrMsg)
-					require.Nil(t, got, "a failed native decode must not expose a partial session")
+		for _, eventID := range []string{replayOnlyEventID, nativeToolCallEventID} {
+			t.Run(storage.name+"/"+eventID, func(t *testing.T) {
+				fixture := newProviderDataCorruptionFixture(t, storage)
+				fixture.addMalformedLegacyJSON(t)
+				fixture.mutatePersistedProviderData(t, eventID, func(_ *testing.T, record map[string]json.RawMessage) {
+					record["version"] = json.RawMessage(`99`)
 				})
-			}
+
+				got, err := fixture.service.GetSession(fixture.ctx, fixture.key)
+				require.NoError(t, err)
+				require.NotNil(t, got)
+				require.Len(t, got.Events, len(fixture.events)-1)
+				byID := indexProviderDataCorruptionEvents(t, got.Events)
+				require.NotContains(t, byID, eventID)
+				for _, original := range fixture.events {
+					if original.ID != eventID {
+						require.Contains(t, byID, original.ID, "valid history remains readable")
+					}
+				}
+			})
 		}
 	}
 }
@@ -157,11 +146,11 @@ func newProviderDataCorruptionFixture(
 		{"type":"reasoning","id":"rs_only","summary":[],"encrypted_content":"opaque-reasoning-only"}
 	]`)
 	reasoningOnly := model.Message{Role: model.RoleAssistant}
-	require.NoError(t, reasoningOnly.SetProviderData(
-		replayCorruptionProvider,
-		replayCorruptionModel,
-		reasoningPayload,
-	))
+	reasoningOnly.ProviderData = &model.ProviderData{
+		Protocol: replayCorruptionProvider,
+		Model:    replayCorruptionModel,
+		Payload:  reasoningPayload,
+	}
 
 	nativeToolPayload := json.RawMessage(`[
 		{"type":"reasoning","id":"rs_tool","summary":[],"encrypted_content":"opaque-tool-state"},
@@ -180,11 +169,11 @@ func newProviderDataCorruptionFixture(
 			},
 		}},
 	}
-	require.NoError(t, nativeToolCall.SetProviderData(
-		replayCorruptionProvider,
-		replayCorruptionModel,
-		nativeToolPayload,
-	))
+	nativeToolCall.ProviderData = &model.ProviderData{
+		Protocol: replayCorruptionProvider,
+		Model:    replayCorruptionModel,
+		Payload:  nativeToolPayload,
+	}
 
 	legacyToolCall := model.Message{
 		Role: model.RoleAssistant,
@@ -360,18 +349,7 @@ func replayCorruptionMessage(t *testing.T, evt event.Event) model.Message {
 
 func assertProviderDataCorruptionPayload(t *testing.T, message model.Message, expected json.RawMessage) {
 	t.Helper()
-	actual, err := message.ProviderDataFor(replayCorruptionProvider, replayCorruptionModel)
-	require.NoError(t, err)
+	require.NotNil(t, message.ProviderData)
+	actual := message.ProviderData.Payload
 	require.JSONEq(t, string(expected), string(actual))
-}
-
-func replayCorruptionEventIDs(sess *session.Session) []string {
-	if sess == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(sess.Events))
-	for _, evt := range sess.Events {
-		ids = append(ids, evt.ID)
-	}
-	return ids
 }

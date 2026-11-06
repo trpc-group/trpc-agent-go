@@ -2261,60 +2261,22 @@ go run ./tools -streaming=false
 
 输入 `/exit` 结束对话。在 `tools` 中，于同一进程里分两轮提问，例如先说 `Calculate 123 * 456.`，再说 `Add 789 to that result.`。同一会话会保留第一轮结果供第二轮使用，进程退出后即丢弃。示例 README 给出了示意交互。
 
-### 编辑展示字段与原生重放数据
+### 回调与模型历史
 
-`Message.Content` 和 `ReasoningContent` 是可修改的展示字段。当前本地工具
-执行使用 `Message.ToolCalls` 中的参数；下一次模型请求使用 `Message.ProviderData`
-中的原生 payload。框架不会自动同步这些字段。只把 `Content` 改成脱敏文本，
-不会同步修改持久化的 `ProviderData`，原文仍会保留在会话历史中。BeforeTool 回调可以
-修改当前执行参数，但不会重写 ProviderData。删除未完成原生工具轮的 ProviderData 后，框架
-不承诺能够恢复。
+`Message.ProviderData` 的 `Protocol`、`Model`、`Payload` 字段可以直接读取和修改。
+需要编辑原生输出时，业务使用所选 SDK 的类型解析 `Payload`，修改后将序列化的 JSON
+赋回该字段。使用官方 SDK 编辑消息时，选择保留消息 ID、status 和 phase 的
+`ResponseOutputMessageParam`；未编辑的 Item 可以保留原始 JSON。
 
-需要有意修改原生状态时，可以直接使用现有的 `ProviderDataFor` 和
-`SetProviderData`。下面的代码片段只更新 ProviderData 中 `call_id` 与 `callID` 匹配的
-函数调用，保留其他调用和原生 item 字段。当前 `ToolCalls` 参数保持原样；若当前工具
-执行也应使用新参数，需单独修改它。示例假设 `msg`、`modelName`、`callID` 已在作用域内，并已导入
-`encoding/json`。
+完整的 `AfterModel` 回调链结束后，若原生 Payload 有变化，框架会在发布事件、保存响应和
+执行工具前重新生成正文、reasoning、`ToolCalls` 等字段。只改原生工具参数即可同时影响
+本次工具执行与下一轮模型历史。Payload 未改变时，现有的展示字段和工具投影改写继续有效。
+同时改写两者时，以新 Payload 为准。普通 Chat Completions 的回调行为保持不变。
 
-```go
-payload, err := msg.ProviderDataFor("openai.responses", modelName)
-if err != nil {
-    return err
-}
-var items []map[string]json.RawMessage
-if err := json.Unmarshal(payload, &items); err != nil {
-    return err
-}
-arguments, err := json.Marshal(`{"a":2}`)
-if err != nil {
-    return err
-}
-for _, item := range items {
-    var itemType string
-    if err := json.Unmarshal(item["type"], &itemType); err != nil {
-        return err
-    }
-    if itemType != "function_call" {
-        continue
-    }
-    var itemCallID string
-    if err := json.Unmarshal(item["call_id"], &itemCallID); err != nil {
-        return err
-    }
-    if itemCallID != callID {
-        continue
-    }
-    item["arguments"] = arguments
-    break
-}
-payload, err = json.Marshal(items)
-if err != nil {
-    return err
-}
-if err := msg.SetProviderData("openai.responses", modelName, payload); err != nil {
-    return err
-}
-```
+`BeforeModel` 改写的是本次请求的历史副本；`BeforeTool` 的 `ModifiedArguments` 只影响
+本次工具执行，不反写原生历史。只脱敏展示字段时，原文仍可能保存在 ProviderData 中。
+需要恢复未完成的工具轮时，保留该轮的 ProviderData。完整示例和模型包装器要求见
+[适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)。
 
 ### 说明
 

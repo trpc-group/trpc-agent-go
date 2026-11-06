@@ -40,7 +40,11 @@ func TestNativeProviderDataSurvivesSQLiteReopen(t *testing.T) {
 		{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque-state"},
 		{"type":"message","id":"msg_1","role":"assistant","phase":"commentary","content":[]}
 	]`)
-	require.NoError(t, assistant.Choices[0].Message.SetProviderData("openai.responses", "test-model", payload))
+	assistant.Choices[0].Message.ProviderData = &model.ProviderData{
+		Protocol: "openai.responses",
+		Model:    "test-model",
+		Payload:  payload,
+	}
 	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("continue")))
 	require.NoError(t, svc.AppendEvent(ctx, sess, assistant))
 	require.NoError(t, svc.Close())
@@ -59,11 +63,11 @@ func TestNativeProviderDataSurvivesSQLiteReopen(t *testing.T) {
 	require.Empty(t, message.Content)
 	require.Empty(t, message.ReasoningContent)
 	require.True(t, model.HasPayload(message))
-	replayed, err := message.ProviderDataFor("openai.responses", "test-model")
-	require.NoError(t, err)
+	require.NotNil(t, message.ProviderData)
+	replayed := message.ProviderData.Payload
 	require.JSONEq(t, string(payload), string(replayed))
 	message.Content = "edited after loading"
-	replayed, err = message.ProviderDataFor("openai.responses", "test-model")
-	require.NoError(t, err)
+	require.NotNil(t, message.ProviderData)
+	replayed = message.ProviderData.Payload
 	require.JSONEq(t, string(payload), string(replayed))
 }

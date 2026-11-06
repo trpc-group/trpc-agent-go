@@ -36,12 +36,16 @@ func TestCloneMessagePreservesNativeHistoryOwnership(t *testing.T) {
 		}},
 	}
 	const payload = `[{"type":"native","state":"opaque"}]`
-	require.NoError(t, message.SetProviderData("test.native", "test-model", json.RawMessage(payload)))
+	message.ProviderData = &model.ProviderData{
+		Protocol: "test.native",
+		Model:    "test-model",
+		Payload:  json.RawMessage(payload),
+	}
 	before, err := json.Marshal(message)
 	require.NoError(t, err)
 	cloned := CloneMessage(message)
-	raw, err := cloned.ProviderDataFor("test.native", "test-model")
-	require.NoError(t, err)
+	require.NotNil(t, cloned.ProviderData)
+	raw := cloned.ProviderData.Payload
 	require.JSONEq(t, payload, string(raw))
 
 	*cloned.ContentParts[0].Text = "edited"
@@ -60,8 +64,8 @@ func TestCloneMessagePreservesNativeHistoryOwnership(t *testing.T) {
 	after, err := json.Marshal(message)
 	require.NoError(t, err)
 	require.Equal(t, string(before), string(after), "request edits must not rewrite the stored native record")
-	raw, err = message.ProviderDataFor("test.native", "test-model")
-	require.NoError(t, err)
+	require.NotNil(t, message.ProviderData)
+	raw = message.ProviderData.Payload
 	require.JSONEq(t, payload, string(raw))
 }
 
@@ -69,11 +73,14 @@ func TestToolCallsForExecutionPreservesNativeArguments(t *testing.T) {
 	message := model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
 		ID: "call", Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 	}}}
-	require.NoError(t, message.SetProviderData("test.native", "test-model", json.RawMessage(`[]`)))
+	message.ProviderData = &model.ProviderData{
+		Protocol: "test.native",
+		Model:    "test-model",
+		Payload:  json.RawMessage(`[]`),
+	}
 	execution := ToolCallsForExecution(message)
 	execution[0].Function.Arguments[5] = '9'
 	require.Equal(t, `{"a":9}`, string(execution[0].Function.Arguments))
 	require.Equal(t, `{"a":1}`, string(message.ToolCalls[0].Function.Arguments))
-	_, err := message.ProviderDataFor("test.native", "test-model")
-	require.NoError(t, err)
+	require.NotNil(t, message.ProviderData)
 }

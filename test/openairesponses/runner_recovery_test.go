@@ -500,11 +500,7 @@ func TestRunnerCrossProcessRecovery(t *testing.T) {
 							callRecords++
 							if protocol == "responses" {
 								for _, choice := range evt.Choices {
-									payload, err := choice.Message.ProviderDataFor("openai.responses", recoveryModelName)
-									if err != nil {
-										t.Fatal(err)
-									}
-									if len(payload) == 0 {
+									if choice.Message.ProviderData == nil || len(choice.Message.ProviderData.Payload) == 0 {
 										t.Fatal("native replay missing at cutpoint")
 									}
 								}

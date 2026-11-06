@@ -16,16 +16,26 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// CloneMessage isolates the mutable projection of a native history record.
-// The opaque payload remains shared read-only; decoding into the copied ProviderData
-// replaces only its own record. Messages without ProviderData keep their ownership.
+// CloneMessage isolates a native history record and its mutable projections.
+// Messages without ProviderData keep their existing ownership.
 func CloneMessage(message model.Message) model.Message {
 	if message.ProviderData == nil {
 		return message
 	}
-	cloned := message
+	cloned := CloneMessageProjections(message)
 	record := *message.ProviderData
+	record.Payload = bytes.Clone(record.Payload)
 	cloned.ProviderData = &record
+	return cloned
+}
+
+// CloneMessageProjections copies the mutable projections of a native message
+// whose ProviderData was already detached by Response.Clone.
+func CloneMessageProjections(message model.Message) model.Message {
+	if message.ProviderData == nil {
+		return message
+	}
+	cloned := message
 	cloned.ToolCalls = cloneToolCalls(message.ToolCalls)
 	if message.ContentParts != nil {
 		cloned.ContentParts = make([]model.ContentPart, len(message.ContentParts))

@@ -378,7 +378,11 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 	}
 	native := func(t *testing.T, modelName, payload string) model.Message {
 		msg := model.NewAssistantMessage("")
-		require.NoError(t, msg.SetProviderData(responseProvider, modelName, json.RawMessage(payload)))
+		msg.ProviderData = &model.ProviderData{
+			Protocol: responseProvider,
+			Model:    modelName,
+			Payload:  json.RawMessage(payload),
+		}
 		return msg
 	}
 	nativeCall := `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"}]`

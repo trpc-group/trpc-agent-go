@@ -58,8 +58,8 @@ func TestUnknownNativeFieldsSurviveMessageJSONAndNextInput(t *testing.T) {
 	require.NoError(t, err)
 	var restored model.Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
-	payload, err := restored.ProviderDataFor(responseProvider, "gpt-5")
-	require.NoError(t, err)
+	require.NotNil(t, restored.ProviderData)
+	payload := restored.ProviderData.Payload
 	require.Equal(t, nativeOutput, string(payload), "Message JSON must retain opaque fields in the provider payload")
 
 	continued, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{

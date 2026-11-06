@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"time"
@@ -27,19 +28,14 @@ var (
 	modelMessagesType     = reflect.TypeOf([]model.Message(nil))
 	modelContentPartsType = reflect.TypeOf([]model.ContentPart(nil))
 	modelToolCallsType    = reflect.TypeOf([]model.ToolCall(nil))
-	modelProviderDataType = reflect.TypeOf(model.ProviderData{})
-	modelProviderDataPtr  = reflect.TypeOf((*model.ProviderData)(nil))
 )
 
-// copyProviderData gives a copy its own native record. model.ProviderData keeps
-// its state in unexported fields, which a field-wise copy would drop, and its
-// UnmarshalJSON overwrites a record in place, which would otherwise change
-// every state sharing it. The payload bytes are never mutated and stay shared.
 func copyProviderData(record *model.ProviderData) *model.ProviderData {
 	if record == nil {
 		return nil
 	}
 	copied := *record
+	copied.Payload = bytes.Clone(record.Payload)
 	return &copied
 }
 
@@ -755,9 +751,6 @@ func copyPointer(rv reflect.Value, visited visitedMap) any {
 	if rv.IsNil() {
 		return nil
 	}
-	if rv.Type() == modelProviderDataPtr {
-		return copyProviderData(rv.Interface().(*model.ProviderData))
-	}
 	key := pointerVisitKey(rv.Pointer(), rv.Type())
 	if cached, ok := visited[key]; ok {
 		return cached
@@ -828,10 +821,6 @@ func copyStruct(rv reflect.Value, visited visitedMap) any {
 	}
 	if isTimeType(rv.Type()) {
 		return copyTime(rv)
-	}
-	if rv.Type() == modelProviderDataType {
-		// Boxing copies the whole record, including its unexported state.
-		return rv.Interface()
 	}
 	newStruct := reflect.New(rv.Type()).Elem()
 	for i := 0; i < rv.NumField(); i++ {
@@ -1085,9 +1074,6 @@ func jsonSafeCopyPointer(
 ) any {
 	if rv.IsNil() {
 		return nil
-	}
-	if rv.Type() == modelProviderDataPtr {
-		return copyProviderData(rv.Interface().(*model.ProviderData))
 	}
 	key := pointerVisitKey(rv.Pointer(), rv.Type())
 	if cached, ok := visited[key]; ok {

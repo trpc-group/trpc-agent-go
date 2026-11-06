@@ -19,17 +19,22 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/openai/openai-go/v3/option"
+	sdkresponses "github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/failover"
+	"trpc.group/trpc-go/trpc-agent-go/model/hedge"
+	legacyopenai "trpc.group/trpc-go/trpc-agent-go/model/openai"
 	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -44,6 +49,7 @@ type callbackIsolationPlugin struct {
 	name        string
 	beforeTool  tool.BeforeToolCallbackStructured
 	beforeModel model.BeforeModelCallbackStructured
+	afterModel  model.AfterModelCallbackStructured
 }
 
 const callbackIsolationMultiToolOutput = `[
@@ -57,6 +63,7 @@ func (p *callbackIsolationPlugin) Name() string { return p.name }
 func (p *callbackIsolationPlugin) Register(r *plugin.Registry) {
 	r.BeforeTool(p.beforeTool)
 	r.BeforeModel(p.beforeModel)
+	r.AfterModel(p.afterModel)
 }
 
 type callbackIsolationTransport struct {
@@ -89,6 +96,18 @@ func (rt *callbackIsolationTransport) RoundTrip(req *http.Request) (*http.Respon
 	responseBody := `{"id":"callback_tool","status":"completed","output":` + rt.firstOutput + `}`
 	if call > 1 {
 		responseBody = `{"id":"callback_answer","status":"completed","output":[{"type":"message","id":"msg_callback_answer","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}]}`
+	}
+	if string(body["stream"]) == "true" {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, []byte(responseBody)); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":" + compact.String() + "}\n\n")),
+			Request:    req,
+		}, nil
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -224,8 +243,8 @@ func assertCallbackIsolationSession(t *testing.T, sess *session.Session) {
 			found = true
 			require.Equal(t, "call_tool", msg.ToolCalls[0].ID)
 			require.Equal(t, `{"a":1}`, string(msg.ToolCalls[0].Function.Arguments))
-			replay, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-			require.NoError(t, err)
+			require.NotNil(t, msg.ProviderData)
+			replay := msg.ProviderData.Payload
 			require.JSONEq(t, nativeToolOutput, string(replay))
 		}
 	}
@@ -284,8 +303,8 @@ func assertCallbackIsolationMultiSession(t *testing.T, sess *session.Session) {
 			for _, call := range msg.ToolCalls {
 				require.Equal(t, `{"a":1}`, string(call.Function.Arguments))
 			}
-			replay, err := msg.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-			require.NoError(t, err)
+			require.NotNil(t, msg.ProviderData)
+			replay := msg.ProviderData.Payload
 			require.JSONEq(t, callbackIsolationMultiToolOutput, string(replay))
 		}
 	}
@@ -313,6 +332,13 @@ func callbackIsolationBeforeModelMutation(mode string) model.BeforeModelCallback
 				call := msg.ToolCalls[0]
 				call.Function.Arguments = []byte(`{"a":9}`)
 				msg.ToolCalls[0] = call
+			case "mutate_native_arguments":
+				const original = `\"a\":1`
+				index := bytes.Index(msg.ProviderData.Payload, []byte(original))
+				if index < 0 {
+					return nil, errors.New("missing native tool arguments")
+				}
+				msg.ProviderData.Payload[index+len(original)-1] = '9'
 			default:
 				return nil, fmt.Errorf("unknown mutation mode %q", mode)
 			}
@@ -323,42 +349,34 @@ func callbackIsolationBeforeModelMutation(mode string) model.BeforeModelCallback
 	}
 }
 
-func setCallbackProviderDataArguments(message *model.Message, arguments string) error {
-	if message == nil {
-		return errors.New("assistant message is nil")
-	}
-	payload, err := message.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-	if err != nil {
+func editNativeFunctionArguments(message *model.Message, callID, arguments string) error {
+	var items []sdkresponses.ResponseOutputItemUnion
+	if err := json.Unmarshal(message.ProviderData.Payload, &items); err != nil {
 		return err
 	}
-	var items []map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &items); err != nil {
-		return err
-	}
-	encodedArguments, err := json.Marshal(arguments)
-	if err != nil {
-		return err
-	}
-	var found bool
-	for _, item := range items {
-		var itemType string
-		if err := json.Unmarshal(item["type"], &itemType); err != nil {
-			return err
-		}
-		if itemType != "function_call" {
+	output := make([]json.RawMessage, len(items))
+	for i, item := range items {
+		output[i] = json.RawMessage(item.RawJSON())
+		if item.Type != "function_call" || item.CallID != callID {
 			continue
 		}
-		item["arguments"] = encodedArguments
-		found = true
+		var call sdkresponses.ResponseFunctionToolCallParam
+		if err := json.Unmarshal(output[i], &call); err != nil {
+			return err
+		}
+		call.Arguments = arguments
+		encoded, err := json.Marshal(call)
+		if err != nil {
+			return err
+		}
+		output[i] = encoded
 	}
-	if !found {
-		return errors.New("native payload has no function call")
-	}
-	updated, err := json.Marshal(items)
+	encoded, err := json.Marshal(output)
 	if err != nil {
 		return err
 	}
-	return message.SetProviderData(responsesProviderProtocol, "gpt-5", updated)
+	message.ProviderData.Payload = encoded
+	return nil
 }
 
 func editableProviderDataAfterModel(mode string) model.AfterModelCallbackStructured {
@@ -369,13 +387,11 @@ func editableProviderDataAfterModel(mode string) model.AfterModelCallbackStructu
 		}
 		response := args.Response
 		if mode == "replace_response_and_rebind" {
-			copy := *args.Response
-			copy.Choices = append([]model.Choice(nil), args.Response.Choices...)
-			response = &copy
+			response = args.Response.Clone()
 			message := response.Choices[0].Message
 			message.ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
 			message.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":9}`)
-			if err := setCallbackProviderDataArguments(&message, `{"a":9}`); err != nil {
+			if err := editNativeFunctionArguments(&message, message.ToolCalls[0].ID, `{"a":9}`); err != nil {
 				return nil, err
 			}
 			response.Choices[0].Message = message
@@ -390,9 +406,14 @@ func editableProviderDataAfterModel(mode string) model.AfterModelCallbackStructu
 		case "tool_calls_only":
 			message.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":9}`)
 		case "replay_only":
-			if err := setCallbackProviderDataArguments(message, `{"a":9}`); err != nil {
-				return nil, err
+			return nil, editNativeFunctionArguments(message, message.ToolCalls[0].ID, `{"a":9}`)
+		case "in_place_native_edit":
+			const original = `\"a\":1`
+			index := bytes.Index(message.ProviderData.Payload, []byte(original))
+			if index < 0 {
+				return nil, errors.New("native arguments not found")
 			}
+			message.ProviderData.Payload[index+len(original)-1] = '9'
 		default:
 			return nil, fmt.Errorf("unknown after-model edit mode %q", mode)
 		}
@@ -449,7 +470,7 @@ func findEditableProviderDataMessage(t *testing.T, sess *session.Session) model.
 	return model.Message{}
 }
 
-func TestAfterModelEditsKeepProviderDataAndToolExecutionIndependentAcrossSQLiteReopen(t *testing.T) {
+func TestAfterModelNativeEditsUpdateExecutionAndSurviveSQLiteReopen(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
 		callbackMode         string
@@ -458,21 +479,52 @@ func TestAfterModelEditsKeepProviderDataAndToolExecutionIndependentAcrossSQLiteR
 		wantToolOutput       string
 		wantContent          string
 		wantReasoning        string
+		stream               bool
+		wrapper              string
 	}{
 		{name: "display fields only", callbackMode: "display_only", wantToolArguments: `{"a":1}`, wantProviderDataArgs: `{"a":1}`, wantToolOutput: "1", wantContent: "edited display text", wantReasoning: "edited display reasoning"},
 		{name: "tool calls only", callbackMode: "tool_calls_only", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":1}`, wantToolOutput: "9", wantContent: "calculating"},
-		{name: "replay only", callbackMode: "replay_only", wantToolArguments: `{"a":1}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "1", wantContent: "calculating"},
+		{name: "native edit updates execution", callbackMode: "replay_only", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "in-place payload edit", callbackMode: "in_place_native_edit", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "streamed native edit", callbackMode: "replay_only", stream: true, wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "failover forwards projection", callbackMode: "replay_only", wrapper: "failover", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "hedge forwards projection", callbackMode: "replay_only", wrapper: "hedge", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "selector uses selected model projector", callbackMode: "replay_only", wrapper: "selector", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
+		{name: "native edit wins after callback chain", callbackMode: "replay_only", wrapper: "callbacks", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
 		{name: "replacement response rebinds both", callbackMode: "replace_response_and_rebind", wantToolArguments: `{"a":9}`, wantProviderDataArgs: `{"a":9}`, wantToolOutput: "9", wantContent: "calculating"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := newCallbackIsolationTransport()
-			m := callbackIsolationModel(rt)
+			var m model.Model = callbackIsolationModel(rt)
+			if tc.wrapper == "failover" {
+				wrapped, err := failover.New(failover.WithCandidates(m))
+				require.NoError(t, err)
+				m = wrapped
+			}
+			if tc.wrapper == "hedge" {
+				wrapped, err := hedge.New(hedge.WithCandidates(m))
+				require.NoError(t, err)
+				m = wrapped
+			}
 			var toolCalls atomic.Int32
 			seen := make(chan int, 2)
 			calculator := callbackIsolationCalculator(&toolCalls, seen, false)
 			callbacks := model.NewCallbacks().RegisterAfterModel(editableProviderDataAfterModel(tc.callbackMode))
-			a := llmagent.New("native", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{calculator}),
-				llmagent.WithModelCallbacks(callbacks))
+			if tc.wrapper == "callbacks" {
+				callbacks.RegisterAfterModel(func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+					if args.Response != nil && len(args.Response.Choices) > 0 && len(args.Response.Choices[0].Message.ToolCalls) > 0 {
+						args.Response.Choices[0].Message.ToolCalls[0].Function.Arguments = json.RawMessage(`{"a":5}`)
+					}
+					return nil, nil
+				})
+			}
+			opts := []llmagent.Option{llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{calculator}),
+				llmagent.WithModelCallbacks(callbacks), llmagent.WithGenerationConfig(model.GenerationConfig{Stream: tc.stream})}
+			if tc.wrapper == "selector" {
+				opts = append(opts, llmagent.WithModel(legacyopenai.New("unused-chat")),
+					llmagent.WithModelSelector(func(context.Context, *agent.Invocation) (model.Model, error) { return m, nil }))
+			}
+			a := llmagent.New("native", opts...)
 			path := filepath.Join(t.TempDir(), "editable-replay.db")
 			svc := openCallbackIsolationSQLite(t, path)
 			r := runner.NewRunner("native", a, runner.WithSessionService(svc))
@@ -509,8 +561,8 @@ func TestAfterModelEditsKeepProviderDataAndToolExecutionIndependentAcrossSQLiteR
 			require.Equal(t, tc.wantContent, stored.Content)
 			require.Equal(t, tc.wantReasoning, stored.ReasoningContent)
 			require.Equal(t, tc.wantToolArguments, string(stored.ToolCalls[0].Function.Arguments))
-			storedProviderData, err := stored.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-			require.NoError(t, err)
+			require.NotNil(t, stored.ProviderData)
+			storedProviderData := stored.ProviderData.Payload
 			var items []struct {
 				Type      string `json:"type"`
 				Arguments string `json:"arguments"`
@@ -529,8 +581,8 @@ func TestAfterModelEditsKeepProviderDataAndToolExecutionIndependentAcrossSQLiteR
 			loaded, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
 			stored = findEditableProviderDataMessage(t, loaded)
-			storedProviderData, err = stored.ProviderDataFor(responsesProviderProtocol, "gpt-5")
-			require.NoError(t, err)
+			require.NotNil(t, stored.ProviderData)
+			storedProviderData = stored.ProviderData.Payload
 			var loadedItems []struct {
 				Type      string `json:"type"`
 				Arguments string `json:"arguments"`
@@ -692,14 +744,16 @@ func TestRunnerBeforeToolInPlaceMutationPerCallEventsPreservesMultiCallProviderD
 	assertCallbackIsolationMultiContinuation(t, <-rt.requests)
 }
 
-func TestRunnerBeforeModelToolCallEditsDoNotRewriteNativeProviderData(t *testing.T) {
+func TestRunnerBeforeModelEditsAreScopedToTheRequest(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		mode   string
-		plugin bool
+		name              string
+		mode              string
+		plugin            bool
+		wantWireArguments string
 	}{
-		{name: "local_callback_mutates_arguments", mode: "mutate_arguments"},
-		{name: "runner_plugin_replaces_tool_call", mode: "replace_tool_call", plugin: true},
+		{name: "local_callback_mutates_arguments", mode: "mutate_arguments", wantWireArguments: `{"a":1}`},
+		{name: "runner_plugin_replaces_tool_call", mode: "replace_tool_call", plugin: true, wantWireArguments: `{"a":1}`},
+		{name: "local_callback_edits_payload_bytes", mode: "mutate_native_arguments", wantWireArguments: `{"a":9}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := newCallbackIsolationTransport()
@@ -728,12 +782,12 @@ func TestRunnerBeforeModelToolCallEditsDoNotRewriteNativeProviderData(t *testing
 			require.Empty(t, callbackIsolationErrors(first))
 			require.EqualValues(t, 1, toolCalls.Load())
 			require.Equal(t, 1, <-seen)
-			require.EqualValues(t, 2, rt.calls.Load(), "the model request must use native ProviderData after a detached projection edit")
+			require.EqualValues(t, 2, rt.calls.Load())
 			sess, err := svc.GetSession(context.Background(), session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
 			assertCallbackIsolationSession(t, sess)
 			<-rt.requests // initial request
-			assertCallbackIsolationContinuation(t, <-rt.requests, "1")
+			assertEditableProviderDataContinuation(t, <-rt.requests, tc.wantWireArguments, "1")
 
 			continued := runCallbackIsolation(t, r, "continue")
 			require.Empty(t, callbackIsolationErrors(continued))

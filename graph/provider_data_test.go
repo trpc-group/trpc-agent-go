@@ -35,18 +35,18 @@ var nativeTestInfo = model.Info{Name: nativeTestModel, ProviderDataProtocol: nat
 func newNativeTestMessage(t *testing.T) model.Message {
 	t.Helper()
 	msg := legacyCacheKeyMessage()
-	require.NoError(t, msg.SetProviderData(
-		nativeTestProvider,
-		nativeTestModel,
-		json.RawMessage(nativeTestPayload),
-	))
+	msg.ProviderData = &model.ProviderData{
+		Protocol: nativeTestProvider,
+		Model:    nativeTestModel,
+		Payload:  json.RawMessage(nativeTestPayload),
+	}
 	return msg
 }
 
 func requireNativeTestMessage(t *testing.T, msg model.Message) {
 	t.Helper()
-	payload, err := msg.ProviderDataFor(nativeTestProvider, nativeTestModel)
-	require.NoError(t, err)
+	require.NotNil(t, msg.ProviderData)
+	payload := msg.ProviderData.Payload
 	require.JSONEq(t, nativeTestPayload, string(payload))
 }
 
@@ -95,9 +95,11 @@ func TestStateCopiesPreserveNativeProviderData(t *testing.T) {
 		}
 	}
 	other := legacyCacheKeyMessage()
-	require.NoError(t, other.SetProviderData(
-		nativeTestProvider, nativeTestModel, json.RawMessage(`[{"type":"reasoning","id":"rs_other"}]`),
-	))
+	other.ProviderData = &model.ProviderData{
+		Protocol: nativeTestProvider,
+		Model:    nativeTestModel,
+		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_other"}]`),
+	}
 	otherRecord, err := json.Marshal(other.ProviderData)
 	require.NoError(t, err)
 	check := func(t *testing.T, copied State) {
@@ -111,9 +113,10 @@ func TestStateCopiesPreserveNativeProviderData(t *testing.T) {
 	checkIsolated := func(t *testing.T, copied State) {
 		t.Helper()
 		check(t, copied)
-		// Decoding into a copied record, as restoring a checkpoint does, must
-		// not reach the source state or any other copy.
+		// Neither an in-place byte edit nor a checkpoint restore may change
+		// the source state's record.
 		for _, record := range records(t, copied) {
+			record.Payload[0] = '!'
 			require.NoError(t, json.Unmarshal(otherRecord, record))
 		}
 		requireNativeTestMessage(t, native)
@@ -167,11 +170,11 @@ func TestDefaultCachePolicy_NativeProviderDataKeys(t *testing.T) {
 		"provider data is part of the cached input")
 
 	other := legacyCacheKeyMessage()
-	require.NoError(t, other.SetProviderData(
-		nativeTestProvider,
-		nativeTestModel,
-		json.RawMessage(`[{"type":"reasoning","id":"rs_2"}]`),
-	))
+	other.ProviderData = &model.ProviderData{
+		Protocol: nativeTestProvider,
+		Model:    nativeTestModel,
+		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_2"}]`),
+	}
 	require.NotEqual(t, key(input(native)), key(input(other)))
 }
 
@@ -334,9 +337,11 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 	}
 	native := newNativeTestMessage(t)
 	native.ToolCalls = nil
-	require.NoError(t, native.SetProviderData(
-		nativeTestProvider, nativeTestModel, json.RawMessage(nativeTestPayload),
-	))
+	native.ProviderData = &model.ProviderData{
+		Protocol: nativeTestProvider,
+		Model:    nativeTestModel,
+		Payload:  json.RawMessage(nativeTestPayload),
+	}
 	history := []model.Message{model.NewUserMessage("hi"), native, model.NewUserMessage("next")}
 
 	llm, err := run(nativeTestInfo, history)

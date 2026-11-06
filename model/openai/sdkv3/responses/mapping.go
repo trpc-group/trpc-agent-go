@@ -21,6 +21,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -353,13 +354,11 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 
 func convertProviderDataMessage(msg model.Message, modelName string, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
-	if msg.Role != model.RoleAssistant {
-		return nil, fmt.Errorf("openai/responses: provider data is only valid on assistant messages (message %d)", messageIndex)
-	}
-	raw, err := msg.ProviderDataFor(responseProvider, modelName)
-	if err != nil {
+	info := model.Info{Name: modelName, ProviderDataProtocol: responseProvider}
+	if err := providerdata.ValidateMessage(msg, info); err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data at message %d: %w", messageIndex, err)
 	}
+	raw := msg.ProviderData.Payload
 	native, err := parseNativeItems(raw, true)
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data items at message %d: %w", messageIndex, err)
@@ -763,8 +762,10 @@ func projectResponse(resp *responses.Response, modelName string) (*model.Respons
 		ToolCalls:        projected.toolCalls,
 	}
 	if len(resp.Output) > 0 {
-		if err := message.SetProviderData(responseProvider, modelName, payload); err != nil {
-			return nil, fmt.Errorf("openai/responses: store native output provider data: %w", err)
+		message.ProviderData = &model.ProviderData{
+			Protocol: responseProvider,
+			Model:    modelName,
+			Payload:  payload,
 		}
 	}
 	finish := finishReasonStop
