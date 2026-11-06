@@ -46,6 +46,11 @@ const (
 	ObjectTypeTransfer = "agent.transfer"
 	// ObjectTypeRunnerCompletion is the object type for runner completion events.
 	ObjectTypeRunnerCompletion = "runner.completion"
+	// ObjectTypeModelInterrupted marks a model generation interrupted by new
+	// user input. The event is non-final, has no choices or error, and its
+	// response ID identifies the interrupted response when available. No more
+	// deltas for that response follow it; the enclosing run may continue.
+	ObjectTypeModelInterrupted = "model.interrupted"
 	// ObjectTypeStateUpdate is the object type for state update events.
 	ObjectTypeStateUpdate = "state.update"
 

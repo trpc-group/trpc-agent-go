@@ -46,6 +46,11 @@ type Queue struct {
 	mu       sync.Mutex
 	messages []model.Message
 	closed   bool
+	enabled  bool
+	cycle    *Cycle
+	err      error
+	receipts map[string]chan error
+	appends  map[string]*appendRecord
 }
 
 // NewQueue creates an empty queue.
@@ -60,11 +65,20 @@ func (q *Queue) Enqueue(message model.Message) bool {
 	}
 
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if q.closed {
+		q.mu.Unlock()
 		return false
 	}
 	q.messages = append(q.messages, message)
+	var cancel func()
+	if q.enabled && q.cycle != nil && !q.cycle.accepted && !q.cycle.interrupted {
+		q.cycle.interrupted = true
+		cancel = q.cycle.cancel
+	}
+	q.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	return true
 }
 

@@ -437,7 +437,7 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
-#### 在同一轮 run 中排队插入新的用户消息
+#### 在同一轮 run 中排队插入新的用户消息（默认行为）
 
 有些场景下，你并不想启动第二轮 run，而是希望继续使用当前的
 `requestID`，把新的 `role=user` 消息排队，等当前这一轮 assistant 处理完后，
@@ -526,6 +526,45 @@ tool(result B)
 `runOneStep()` 开始之前。
 
 可运行示例：`examples/steer/`
+
+#### 用新输入打断模型生成
+
+对 Runner 直接运行的 LLMAgent 开启：
+
+```go
+ag := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInterruptOnUserMessage(true),
+)
+r := runner.NewRunner("app", ag)
+// r.Run 活跃期间，调用 runner.EnqueueUserMessage(r, requestID, message)。
+```
+
+该选项默认关闭。开启后，追加输入会取消当前模型请求，包括等待首个响应的阶段；
+清理完成后，在同一个 Run 中消费新消息并重新请求模型。Q1 保留，Q2 作为独立用户消息
+追加，request ID、根 invocation ID、session 和输出通道保持不变。
+
+新输入不会取消已接受的工具批次。即使只有 A 开始执行，B/C 尚未开始，也会按照原有
+规则完成全部调用。所有工具结果持久化后才消费 Q2。显式取消、deadline、预算限制和
+工具自身失败继续遵循既有规则。不增加工具提前返回通知，也不自动转为后台执行。
+
+`model.interrupted` 是非最终事件，没有 choices 或 error；响应 ID 在可用时关联旧响应，
+该事件之后不再输出旧响应增量。以 `runner.completion` 判断整个 Run 完成。模型实现及
+回调必须配合 context 取消，因此不承诺硬性抢占时延。
+
+入队返回 nil 只表示进入内存队列；用户消息消费事件才表示持久化成功。多条消息按 FIFO
+消费，不按内容去重。正常结束时，入队要么成功并让 Run 继续，要么返回
+`runner.ErrRunNotFound`。显式终止或致命错误可能留下未消费输入。
+`CancelQueuedUserMessages` 只撤回尚未被消费流程领取的输入，不能撤销已发出的模型
+取消信号，因此撤回后仍可能基于旧上下文重新生成一次。
+
+`runner.WithPersistInterruptedAssistant(true)` 或对应 Run 选项也适用于此能力，保存的
+文本会标记 `user_input` 中断原因；默认丢弃未完成文本。未完成的工具参数不会执行。
+必要历史持久化失败或插件处理失败会终止 Run，不使用缺失历史继续推理。追加输入不重置
+超时和预算。
+
+该能力限定单进程，不提供跨实例路由、持久化收件箱、重启恢复或子 Agent 定向追加。
+`examples/steer/` 提供六类可运行示例，`smoke.sh` 可加载本地 `glm.sh` 进行真实模型验证。
 
 #### 逐个接收工具结果事件
 
@@ -1172,7 +1211,7 @@ eventChan, err := r.Run(
 
 支持的模式（图相关事件需要图式工作流）：
 
-- `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `messages`：模型输出事件（例如 `chat.completion.chunk`）及 `model.interrupted` 生命周期标记
 - `latency_diagnostics`：携带可解析、非 null 的 `event.LatencyDiagnostic` 扩展的
   `preprocessing.status` 事件
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`

@@ -1624,3 +1624,12 @@ Each recorded step carries stable fields such as:
 - `Error`: the terminal step error, when the step fails
 
 For a complete example, see [examples/graph/execution_trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace).
+
+### Interrupt Generation on Queued User Input
+
+`llmagent.WithInterruptOnUserMessage(true)` lets a Runner-managed LLMAgent cancel
+its current model generation when `runner.EnqueueUserMessage` accepts new input.
+It defaults to false. The same Run continues with the new user message; accepted
+tool batches finish before the message is consumed. Explicit cancellation and
+budgets retain their existing behavior. See [Runner](runner.md#interrupt-model-generation-with-new-input)
+and `examples/steer/` for lifecycle, persistence and event contracts.

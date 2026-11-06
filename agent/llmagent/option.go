@@ -227,6 +227,7 @@ type Option func(*Options)
 
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
+	interruptOnUserMessage bool
 	// Name is the name of the agent.
 	Name string
 	// Model is the model to use for generating responses.
@@ -2208,4 +2209,15 @@ func cloneStringMap(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+// WithInterruptOnUserMessage enables interruption of model generation when
+// runner.EnqueueUserMessage accepts new input for this run. It is disabled by
+// default. Accepted tool batches finish before queued input is consumed. Model
+// implementations and callbacks must cooperate with context cancellation.
+// This option requires a Runner-managed invocation and does not cancel the run.
+// Required history must be persisted before inference continues; persistence
+// or event-processing failures terminate the run.
+func WithInterruptOnUserMessage(enabled bool) Option {
+	return func(opts *Options) { opts.interruptOnUserMessage = enabled }
 }

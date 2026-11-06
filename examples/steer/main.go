@@ -283,6 +283,9 @@ func defaultModelName() string {
 	if modelName := os.Getenv("OPENAI_MODEL"); modelName != "" {
 		return modelName
 	}
+	if modelName := os.Getenv("MODEL_NAME"); modelName != "" {
+		return modelName
+	}
 	return fallbackModelName
 }
 

@@ -948,3 +948,9 @@ func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
 		})
 	})
 }
+
+func TestWithInterruptOnUserMessageDefaultsAndOverrides(t *testing.T) {
+	require.False(t, New("default").option.interruptOnUserMessage)
+	require.True(t, New("enabled", WithInterruptOnUserMessage(true)).option.interruptOnUserMessage)
+	require.False(t, New("disabled", WithInterruptOnUserMessage(true), WithInterruptOnUserMessage(false)).option.interruptOnUserMessage)
+}
