@@ -91,7 +91,7 @@ func TestObserveChangesReportsMutatingStrategy(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewUserMessage("question"),
 	}}
-	finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+	finishObservation := ObserveChanges(ctx, "test.Model", req, 100, nil)
 	req.Messages[0].Content = "mutated in place"
 	finishObservation()
 
@@ -100,6 +100,7 @@ func TestObserveChangesReportsMutatingStrategy(t *testing.T) {
 		MaxInputTokens: 100,
 		BeforeMessages: 1,
 		AfterMessages:  1,
+		Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
 	}}, observer.Snapshot())
 }
 
@@ -111,7 +112,72 @@ func TestObserveChangesDoesNotReportUnchangedRequest(t *testing.T) {
 	messages := []model.Message{model.NewUserMessage("question")}
 	req := &model.Request{Messages: messages}
 
-	finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+	finishObservation := ObserveChanges(ctx, "test.Model", req, 100, nil)
 	finishObservation()
 	require.Empty(t, observer.Snapshot())
+}
+
+func TestObserveChangesClassifiesBuiltInNormalizationAsPreserved(t *testing.T) {
+	var changes []modelrequest.TokenTailoringChange
+	ctx, observer := modelrequest.ObserveTokenTailoring(
+		context.Background(),
+		func(change modelrequest.TokenTailoringChange) {
+			changes = append(changes, change)
+		},
+	)
+	before := model.Message{
+		Role: model.RoleUser,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+		}},
+	}
+	req := &model.Request{Messages: []model.Message{before}}
+	strategy := model.NewMiddleOutStrategy(nil)
+	finishObservation := ObserveChanges(
+		ctx,
+		"test.Model",
+		req,
+		100,
+		strategy,
+	)
+	req.Messages[0].Content = " "
+	finishObservation()
+
+	require.Equal(t, []modelrequest.TokenTailoringRecord{{
+		Provider:       "test.Model",
+		MaxInputTokens: 100,
+		BeforeMessages: 1,
+		AfterMessages:  1,
+		Provenance:     modelrequest.TokenTailoringProvenancePreserved,
+	}}, observer.Snapshot())
+	require.Len(t, changes, 1)
+	require.Equal(t, []model.Message{before}, changes[0].Before)
+	require.Equal(t, req.Messages, changes[0].After)
+}
+
+func TestObserveChangesClassifiesDroppedHistory(t *testing.T) {
+	ctx, observer := modelrequest.ObserveTokenTailoring(
+		context.Background(),
+		nil,
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("system"),
+		model.NewUserMessage("history"),
+		model.NewUserMessage("current"),
+	}}
+	finishObservation := ObserveChanges(
+		ctx,
+		"test.Model",
+		req,
+		100,
+		model.NewHeadOutStrategy(nil),
+	)
+	req.Messages = req.Messages[1:]
+	finishObservation()
+
+	require.Equal(
+		t,
+		modelrequest.TokenTailoringProvenanceDropped,
+		observer.Snapshot()[0].Provenance,
+	)
 }
