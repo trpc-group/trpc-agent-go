@@ -10,12 +10,15 @@
 package graphagent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/eventvisibility"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 )
 
 type terminalMessageFilter struct {
@@ -279,4 +282,20 @@ func matchesFilterPrefix(filterKey string, prefix string) bool {
 	}
 	prefixWithDelimiter := prefix + agent.EventFilterKeyDelimiter
 	return strings.HasPrefix(filterKey, prefixWithDelimiter)
+}
+
+// forwardTerminalMessage preserves the runner's processing path for completed
+// hidden messages needed by approval reviewers. Partial messages and standalone
+// runs retain their existing filtering behavior.
+func forwardTerminalMessage(
+	ctx context.Context,
+	inv *agent.Invocation,
+	filter *terminalMessageFilter,
+	evt *event.Event,
+) bool {
+	if filter.Allows(evt) {
+		return true
+	}
+	return barrier.ToolCallPersistenceRequired(inv) && evt != nil && evt.Response != nil &&
+		!evt.IsPartial && eventvisibility.Hide(ctx, evt.ID)
 }

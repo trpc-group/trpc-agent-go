@@ -31,3 +31,14 @@ func TestEnableNilInvocation(t *testing.T) {
 	Enable(nil)
 	require.False(t, Enabled(nil))
 }
+
+func TestToolCallPersistenceRequirement(t *testing.T) {
+	RequireToolCallPersistence(nil)
+	require.False(t, ToolCallPersistenceRequired(nil))
+	inv := agent.NewInvocation()
+	require.False(t, ToolCallPersistenceRequired(inv))
+	RequireToolCallPersistence(inv)
+	require.True(t, ToolCallPersistenceRequired(inv))
+	require.True(t, ToolCallPersistenceRequired(inv.Clone()))
+	require.False(t, Enabled(inv), "requesting synchronization must not advertise a completion consumer")
+}

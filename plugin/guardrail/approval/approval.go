@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -65,6 +67,14 @@ func (p *Plugin) Name() string {
 func (p *Plugin) Register(r *plugin.Registry) {
 	if p == nil || r == nil {
 		return
+	}
+	if p.reviewer != nil {
+		r.BeforeAgent(func(_ context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+			if args != nil {
+				barrier.RequireToolCallPersistence(args.Invocation)
+			}
+			return nil, nil
+		})
 	}
 	r.BeforeTool(p.beforeTool())
 }
