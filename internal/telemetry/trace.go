@@ -291,6 +291,8 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
 		attribute.String(semconvtrace.KeyGenAIToolName, declaration.Name),
+		attribute.String(semconvtrace.KeyTraceLoopSpanKind, "tool"),
+		attribute.String(semconvtrace.KeyTraceLoopEntityName, declaration.Name),
 		attribute.String(semconvtrace.KeyGenAIToolDescription, declaration.Description),
 	)
 	if rspEvent != nil {
