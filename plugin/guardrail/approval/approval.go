@@ -28,6 +28,7 @@ type Plugin struct {
 	defaultToolPolicy ToolPolicy
 	toolPolicies      map[string]ToolPolicy
 	tokenCounter      model.TokenCounter
+	contextProvider   func(context.Context, *review.Request) (review.Supplement, error)
 }
 
 // New creates a new approval plugin.
@@ -53,6 +54,7 @@ func New(options ...Option) (*Plugin, error) {
 		defaultToolPolicy: opts.defaultToolPolicy,
 		toolPolicies:      opts.toolPolicies,
 		tokenCounter:      model.NewSimpleTokenCounter(),
+		contextProvider:   opts.contextProvider,
 	}, nil
 }
 

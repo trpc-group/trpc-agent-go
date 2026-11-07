@@ -5962,3 +5962,19 @@ func TestTool_Call_DoesNotInheritParentMetadataFromParentInvocation(t *testing.T
 			"the AgentTool call is itself the new parent edge, and absent a toolCallId in ctx, "+
 			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }
+
+func TestFallbackRunnerPreservesPermissionPolicy(t *testing.T) {
+	at := NewTool(&mockAgent{name: "fallback"})
+	calls := 0
+	policy := tool.PermissionPolicyFunc(func(context.Context, *tool.PermissionRequest) (tool.PermissionDecision, error) {
+		calls++
+		return tool.DenyPermission("blocked"), nil
+	})
+	parent := agent.NewInvocation(agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithToolPermissionPolicy(policy))))
+	options := agent.NewRunOptions(at.fallbackRunnerRunOptions(agent.NewInvocationContext(context.Background(), parent))...)
+	require.NotNil(t, options.ToolPermissionPolicy)
+	decision, err := options.ToolPermissionPolicy.CheckToolPermission(context.Background(), &tool.PermissionRequest{})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, 1, calls)
+}
