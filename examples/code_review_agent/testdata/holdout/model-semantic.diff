@@ -1,0 +1,11 @@
+diff --git a/authz.go b/authz.go
+--- a/authz.go
++++ b/authz.go
+@@ -1,3 +1,7 @@
+ package sample
+ 
+ func Allow() bool { return true }
++
++// CR_AGENT_FAKE_MODEL_HIGH: owner bypass branch now allows non-admin users when ownerID is empty.
++var ownerID string
++var allowOwnerBypass = ownerID == ""
