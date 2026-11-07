@@ -14,11 +14,18 @@ This example shows how to wire the top-level `guardrail` plugin with the built-i
 - Observe approval logs for approved and denied review decisions
 
 With a reviewer configured, the approval plugin makes runner-managed LLMAgents
-wait for the completed assistant/tool-call event's persistence acknowledgement
+wait until the runner has processed the completed assistant/tool-call event
 before tool callbacks run. This includes serial and parallel tools and candidate
-attempts, so the reviewer can read the current assistant message and all tool
-calls in that response from the session. Existing transcript filters and size
-limits still apply. If synchronization fails, tool processing stops.
+attempts. When the session append succeeds, the reviewer can read the current
+assistant message and all tool calls in that response from the session. Append
+failures are logged and do not stop tool processing; a failed completion wait
+does stop tool processing. Existing transcript filters and size limits still
+apply.
+
+With `agent.WithGraphTerminalMessagesOnly(true)`, completed hidden graph messages
+remain available for session processing and approval review while staying out
+of the caller-visible stream. Event plugins may replace an event, including its
+ID, without discarding the original producer's completion notification.
 
 Partial responses remain streaming. Standalone agents without a completion
 consumer and runs without a configured reviewer retain their existing behavior.

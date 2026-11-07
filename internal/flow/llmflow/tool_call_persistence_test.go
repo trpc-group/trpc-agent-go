@@ -24,24 +24,20 @@ import (
 )
 
 type persistenceObserver struct {
-	called                atomic.Bool
-	acknowledged          *atomic.Bool
-	beforeAcknowledgement atomic.Bool
+	called atomic.Bool
 }
 
 func (p *persistenceObserver) ProcessResponse(context.Context, *agent.Invocation, *model.Request, *model.Response, chan<- *event.Event) {
 	p.called.Store(true)
-	p.beforeAcknowledgement.Store(!p.acknowledged.Load())
 }
 
 func TestToolCallPersistenceBeforeResponseProcessors(t *testing.T) {
 	for _, tc := range []struct {
-		name                                          string
-		required, consumer, partial, toolCall, cancel bool
-		wantWait                                      bool
+		name                                  string
+		required, consumer, partial, toolCall bool
+		wantWait                              bool
 	}{
 		{name: "acknowledged", required: true, consumer: true, toolCall: true, wantWait: true},
-		{name: "canceled before acknowledgement", required: true, consumer: true, toolCall: true, cancel: true, wantWait: true},
 		{name: "no requirement", consumer: true, toolCall: true},
 		{name: "standalone flow", required: true, toolCall: true},
 		{name: "partial tool call", required: true, consumer: true, partial: true, toolCall: true},
@@ -57,8 +53,7 @@ func TestToolCallPersistenceBeforeResponseProcessors(t *testing.T) {
 			if tc.consumer {
 				barrier.Enable(inv)
 			}
-			var acknowledged atomic.Bool
-			post := &persistenceObserver{acknowledged: &acknowledged}
+			post := &persistenceObserver{}
 			f := New(nil, []flow.ResponseProcessor{post}, Options{})
 			msg := model.NewAssistantMessage("Inspect the file.")
 			if tc.toolCall {
@@ -79,29 +74,76 @@ func TestToolCallPersistenceBeforeResponseProcessors(t *testing.T) {
 			}
 			require.Equal(t, tc.wantWait, evt.RequiresCompletion)
 			if tc.wantWait {
-				require.False(t, post.called.Load())
-				if tc.cancel {
-					cancel()
-				} else {
-					acknowledged.Store(true)
-					require.NoError(t, inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)))
-				}
+				require.NoError(t, inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)))
 			}
 			select {
 			case ok := <-done:
-				if tc.cancel {
-					require.False(t, ok)
-					require.ErrorIs(t, processErr, context.Canceled)
-					require.False(t, post.called.Load(), "review and tool processors must not run after synchronization fails")
-				} else {
-					require.True(t, ok)
-					require.NoError(t, processErr)
-					require.True(t, post.called.Load())
-					require.Equal(t, !tc.wantWait, post.beforeAcknowledgement.Load())
-				}
+				require.True(t, ok)
+				require.NoError(t, processErr)
+				require.True(t, post.called.Load())
 			case <-time.After(5 * time.Second):
 				t.Fatal("response processing did not finish")
 			}
 		})
 	}
+}
+
+// A buffered event channel lets emission finish without a consumer. No
+// acknowledgement is ever sent: processing must terminate with a wait error,
+// never reach the response processor. The deadline bounds the test, rather
+// than providing a scheduling window for a negative assertion. Removing the
+// wait therefore fails this test regardless of goroutine scheduling.
+func TestToolCallPersistenceWithoutAcknowledgement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	inv := agent.NewInvocation()
+	barrier.Enable(inv)
+	barrier.RequireToolCallPersistence(inv)
+	post := &persistenceObserver{}
+	f := New(nil, []flow.ResponseProcessor{post}, Options{})
+	msg := model.NewAssistantMessage("Inspect the file.")
+	msg.ToolCalls = []model.ToolCall{{ID: "call", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}}}
+	rsp := &model.Response{Choices: []model.Choice{{Message: msg}}}
+	out := make(chan *event.Event, 1)
+	var processErr error
+	p := newStreamingResponseProcessor(f, ctx, inv, nil, &model.Request{}, out,
+		oteltrace.SpanFromContext(ctx), false, &processErr)
+	require.False(t, p.process(rsp))
+	require.ErrorContains(t, processErr, "wait for tool-call event persistence")
+	require.False(t, post.called.Load(), "processors must not run without acknowledgement")
+	require.Len(t, out, 1, "the response must have been emitted before waiting")
+	require.True(t, (<-out).RequiresCompletion)
+}
+
+func TestToolCallPersistenceCanceledAfterEmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inv := agent.NewInvocation()
+	barrier.Enable(inv)
+	barrier.RequireToolCallPersistence(inv)
+	post := &persistenceObserver{}
+	f := New(nil, []flow.ResponseProcessor{post}, Options{})
+	msg := model.NewAssistantMessage("Inspect the file.")
+	msg.ToolCalls = []model.ToolCall{{ID: "call", Function: model.FunctionDefinitionParam{Name: "read", Arguments: []byte(`{}`)}}}
+	out := make(chan *event.Event, 1)
+	// Cancellation is triggered by emission; no acknowledgement can race with it.
+	canceled := make(chan struct{})
+	go func() {
+		defer close(canceled)
+		select {
+		case <-out:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	var processErr error
+	p := newStreamingResponseProcessor(f, ctx, inv, nil, &model.Request{}, out,
+		oteltrace.SpanFromContext(ctx), false, &processErr)
+	ok := p.process(&model.Response{Choices: []model.Choice{{Message: msg}}})
+	cancel()
+	<-canceled
+	require.False(t, ok)
+	require.ErrorIs(t, processErr, context.Canceled)
+	require.ErrorContains(t, processErr, "wait for tool-call event persistence")
+	require.False(t, post.called.Load())
 }

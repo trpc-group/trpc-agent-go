@@ -1213,6 +1213,8 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 	if waitForPersistence {
 		llmResponseEvent.RequiresCompletion = true
 	}
+	// Snapshot before emission transfers ownership to downstream event plugins.
+	completionID := agent.GetAppendEventNoticeKey(llmResponseEvent.ID)
 	emitCtx := p.ctx
 	var emitSpan oteltrace.Span
 	emitStarted := false
@@ -1232,7 +1234,7 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 	}
 	if err == nil {
 		err = eventInvocation.AddNoticeChannelAndWait(p.ctx,
-			agent.GetAppendEventNoticeKey(llmResponseEvent.ID), flowEventWaitTimeout(p.ctx))
+			completionID, flowEventWaitTimeout(p.ctx))
 	}
 	finishLatencySpan(emitSpan, emitStarted, err)
 	if err != nil {

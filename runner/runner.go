@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/eventvisibility"
 	"trpc.group/trpc-go/trpc-agent-go/internal/runoutcome"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -764,6 +765,7 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	execCtx = agent.NewInvocationContext(execCtx, invocation)
 	execCtx = graph.WithGraphCompletionCapture(execCtx)
+	execCtx = eventvisibility.WithCapture(execCtx)
 
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
@@ -1578,6 +1580,23 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 	}
 }
 
+// eventCompletion snapshots the producer's notification obligation before
+// plugins can mutate or replace the event envelope.
+type eventCompletion struct {
+	eventID  string
+	required bool
+}
+
+func (c eventCompletion) notify(ctx context.Context, inv *agent.Invocation, processed *event.Event) {
+	if c.required {
+		inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(c.eventID))
+	}
+	if processed != nil && processed.RequiresCompletion &&
+		(!c.required || processed.ID != c.eventID) {
+		inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(processed.ID))
+	}
+}
+
 // processSingleAgentEvent handles a single agent event.
 func (r *runner) processSingleAgentEvent(
 	ctx context.Context,
@@ -1613,6 +1632,10 @@ func (r *runner) processSingleAgentEvent(
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
+	// Completion belongs to the original producer, even when an event plugin
+	// replaces the event, clears its flag, or assigns it a different ID.
+	completion := eventCompletion{eventID: agentEvent.ID, required: agentEvent.RequiresCompletion}
+	hidden := eventvisibility.TakeHidden(ctx, completion.eventID)
 	hasToolResultRoundMarker := toolresultround.HasMarker(agentEvent)
 	toolResultRoundIncomplete := toolresultround.IsIncomplete(agentEvent)
 	if toolResultRoundIncomplete {
@@ -1634,6 +1657,7 @@ func (r *runner) processSingleAgentEvent(
 		traceDetails,
 	)
 	if agentEvent == nil {
+		completion.notify(ctx, loop.invocation, agentEvent)
 		return nil
 	}
 	restoreToolResultRoundMarker(agentEvent, hasToolResultRoundMarker, toolResultRoundIncomplete)
@@ -1646,7 +1670,7 @@ func (r *runner) processSingleAgentEvent(
 	)
 	if excludeRootCompletion {
 		r.captureRoutedCompletionError(loop, agentEvent)
-	} else {
+	} else if !hidden {
 		// Capture graph-level completion snapshot for final event.
 		if isGraphCompletionSnapshotEvent(agentEvent) {
 			loop.graphCompletionSeen = true
@@ -1656,16 +1680,14 @@ func (r *runner) processSingleAgentEvent(
 	}
 	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
+		completion.notify(ctx, loop.invocation, agentEvent)
 		return nil
 	}
 	if shouldSuppressGraphExecutorBarrierEvent(loop, agentEvent) {
-		if agentEvent.RequiresCompletion {
-			completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
-			loop.invocation.NotifyCompletion(ctx, completionID)
-		}
+		completion.notify(ctx, loop.invocation, agentEvent)
 		return nil
 	}
-	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
+	shouldForwardEvent := !hidden && loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
 	persisted := r.handleEventPersistenceOnce(
@@ -1690,11 +1712,8 @@ func (r *runner) processSingleAgentEvent(
 		persisted,
 	)
 
-	// Notify completion if required.
-	if agentEvent.RequiresCompletion {
-		completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
-		loop.invocation.NotifyCompletion(ctx, completionID)
-	}
+	// Notify the original producer before forwarding can block on the caller.
+	completion.notify(ctx, loop.invocation, agentEvent)
 
 	r.recordRunEvent(loop)
 	if !shouldForwardEvent {

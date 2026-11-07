@@ -39,6 +39,7 @@ func Enabled(inv *agent.Invocation) bool {
 // RequireToolCallPersistence requests that completed LLM tool-call events be
 // acknowledged before tool processing. The requirement is inherited by cloned
 // invocations and only takes effect when Enabled reports a completion consumer.
+// Completion acknowledges processing, not a successful session append.
 // A nil invocation is ignored.
 func RequireToolCallPersistence(inv *agent.Invocation) {
 	if inv != nil {
