@@ -113,6 +113,16 @@ func TestWrapStateInitializationInterfaceLeavesUnknownWrapper(t *testing.T) {
 	)
 }
 
+func TestWrapOptionalInterfacesOmitsUnavailableStateInitialization(t *testing.T) {
+	base := &Service{}
+	inner := &unavailableStateInitializationService{
+		Service: base,
+	}
+	wrapped := wrapOptionalInterfaces(base, inner)
+	_, ok := wrapped.(session.StateInitializationService)
+	require.False(t, ok)
+}
+
 type stateInitializationStub struct{}
 
 func (stateInitializationStub) LoadOrInitializeSessionState(
@@ -128,4 +138,23 @@ func (stateInitializationStub) LoadOrInitializeSessionState(
 
 type unknownOptionalService struct {
 	session.Service
+}
+
+type unavailableStateInitializationService struct {
+	session.Service
+}
+
+func (unavailableStateInitializationService) StateInitializationAvailable() bool {
+	return false
+}
+
+func (unavailableStateInitializationService) LoadOrInitializeSessionState(
+	context.Context,
+	session.Key,
+	string,
+	func([]byte) bool,
+	func(context.Context) ([]byte, error),
+	...session.StateInitializationProjection,
+) ([]byte, bool, error) {
+	return []byte("unexpected"), true, nil
 }
