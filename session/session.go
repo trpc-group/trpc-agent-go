@@ -114,6 +114,10 @@ func (sess *Session) Clone() *Session {
 			history := &TrackEvents{
 				Track: events.Track,
 			}
+			if events.Cursor != nil {
+				cursor := *events.Cursor
+				history.Cursor = &cursor
+			}
 			if len(events.Events) > 0 {
 				history.Events = make([]TrackEvent, len(events.Events))
 				copy(history.Events, events.Events)
@@ -429,6 +433,10 @@ func (sess *Session) GetTrackEvents(track Track) (*TrackEvents, error) {
 		return nil, fmt.Errorf("%w: %s", ErrTrackEventsNotFound, track)
 	}
 	copied := &TrackEvents{Track: trackEvents.Track}
+	if trackEvents.Cursor != nil {
+		cursor := *trackEvents.Cursor
+		copied.Cursor = &cursor
+	}
 	if len(trackEvents.Events) > 0 {
 		copied.Events = make([]TrackEvent, len(trackEvents.Events))
 		copy(copied.Events, trackEvents.Events)
@@ -775,6 +783,7 @@ func (s *Summary) Clone() *Summary {
 // Options contains shared session-service options.
 // Not every field applies to every service method.
 type Options struct {
+	TrackCursor         *string          `json:"-"` // TrackCursor requests a GetTrackEvents continuation; nil keeps legacy reads.
 	EventNum            int              // EventNum is the number of recent events (context-window mode).
 	EventTime           time.Time        // EventTime is the after time.
 	EventPage           *EventPage       // EventPage enables GetSession-only offset pagination when non-nil.
