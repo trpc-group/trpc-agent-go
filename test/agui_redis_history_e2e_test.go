@@ -10,6 +10,7 @@ package e2e
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"os"
 	"testing"
@@ -17,7 +18,6 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -36,7 +36,7 @@ func TestAGUIRedisHistoryCompletesWithTiedEvents(t *testing.T) {
 		redisservice.WithRedisClientURL(url),
 		redisservice.WithCompatMode(redisservice.CompatModeNone),
 		redisservice.WithEnableAsyncPersist(false),
-		redisservice.WithKeyPrefix("history-e2e-"+uuid.NewString()),
+		redisservice.WithKeyPrefix("history-e2e-"+rand.Text()),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
