@@ -27,8 +27,8 @@ After a task handle has been received, reconnect resumes polling the same handle
 If submission has an unknown outcome and no handle, it stops without replay.
 For clients reporting `TasksEnabled() == true`, the timeout bounds the whole tool
 invocation, including waiting to reconnect. If the context expires while a
-caller is waiting, that caller stops waiting. A task status returned by the
-server, such as `failed` or `input_required`, does not trigger reconnection.
+caller is waiting, that caller stops waiting. A task status such as `failed` or
+`input_required`, or a JSON-RPC error returned while polling, ends recovery.
 Clients with Tasks disabled retain their existing per-attempt timeout behavior.
 Keep the original endpoint and authorization identity when resuming a task.
 Legacy servers may additionally bind handles to their original session. The
@@ -44,10 +44,11 @@ There is no automatic cross-process handle persistence or human-input handler.
 
 Framework tool-call retries in LLMAgent and Graph, and Graph node-level retries,
 honor any error reporting `ToolCallReplaySafe() == false` in the wrapped or joined
-error tree, including custom retry policies. An interrupted task returns its
-original error and handle rather than submitting the tool again after the session
-reconnect budget is exhausted. This does not turn the task error into an Agent
-stop signal.
+error tree, including custom retry policies. An interrupted task retains its
+error and handle after reconnect attempts are exhausted or if the session closes
+before polling resumes. Graph preserves that error alongside an ordinary failure
+from a parallel tool or an after-tool callback. The agent treats it as a tool
+failure.
 
 The reconnect integration tests run in the normal package test suite using the
 released SDK, without build tags or local replacements. From the Agent repository:

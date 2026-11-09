@@ -31,15 +31,16 @@ type toolTaskFailure interface {
 }
 
 type toolCallAttempt struct {
-	taskID  string
-	blocked error
+	taskID    string
+	unsafeErr error
 }
 
 // call resumes a known task and blocks unsafe submissions without a handle.
 // Other attempts continue through Connector.CallTool.
 func (a *toolCallAttempt) call(ctx context.Context, client mcp.Connector, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if a.blocked != nil {
-		return nil, a.blocked
+	if a.taskID == "" && a.unsafeErr != nil {
+		// No handle: submission may have executed. Do not replay after reconnect.
+		return nil, a.unsafeErr
 	}
 	var result *mcp.CallToolResult
 	var err error
@@ -57,10 +58,7 @@ func (a *toolCallAttempt) call(ctx context.Context, client mcp.Connector, req *m
 		if a.taskID == "" {
 			a.taskID = taskErr.TaskID()
 		}
-		if a.taskID == "" {
-			// No handle: submission may have executed. Do not replay after reconnect.
-			a.blocked = err
-		}
+		a.unsafeErr = err
 	}
 	return result, err
 }

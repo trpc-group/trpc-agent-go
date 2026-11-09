@@ -29,16 +29,20 @@ import (
 // or polling a known task exhausts recovery, even with outer retries enabled.
 func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		taskID    string
-		wantPolls int32
-		wantInits int32
+		name                string
+		taskID              string
+		wantPolls           int32
+		wantInits           int32
+		closeAfterReconnect bool
 	}{
 		{name: "submission response lost", wantInits: 1},
 		{name: "task recovery exhausted", taskID: "charged-once", wantPolls: 2, wantInits: 2},
+		{name: "session closed before resume", taskID: "charged-once", wantPolls: 1, wantInits: 2, closeAfterReconnect: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls, polls, discoveries atomic.Int32
+			rediscovering := make(chan struct{})
+			finishDiscovery := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost {
 					w.WriteHeader(http.StatusMethodNotAllowed)
@@ -57,7 +61,14 @@ func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 				var result any
 				switch req.Method {
 				case "server/discover":
-					discoveries.Add(1)
+					if discoveries.Add(1) == 2 && tc.closeAfterReconnect {
+						close(rediscovering)
+						select {
+						case <-finishDiscovery:
+						case <-r.Context().Done():
+							return
+						}
+					}
 					result = map[string]any{
 						"resultType": "complete", "capabilities": map[string]any{},
 						"supportedVersions": []string{mcp.ProtocolVersion_2026_07_28},
@@ -116,18 +127,42 @@ func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 			require.Len(t, tools, 1)
 			callable, ok := tools[0].(tool.CallableTool)
 			require.True(t, ok)
+			policy := &tool.RetryPolicy{MaxAttempts: 2}
+			closed := make(chan error, 1)
+			if tc.closeAfterReconnect {
+				policy.RetryOn = func(context.Context, *tool.RetryInfo) (bool, error) { return true, nil }
+				go func() {
+					select {
+					case <-rediscovering:
+					case <-ctx.Done():
+						closed <- ctx.Err()
+						return
+					}
+					// Hold reconnect completion until Close clears the initialized client.
+					set.sessionManager.reconnectMu.Lock()
+					defer set.sessionManager.reconnectMu.Unlock()
+					close(finishDiscovery)
+					closed <- set.Close()
+				}()
+			}
 			// Exercise HTTP faults through the shared runner; caller-specific tests
 			// separately verify LLMAgent and Graph error propagation.
 			outcome := toolretry.Execute(ctx, toolretry.ExecuteInput{
 				ToolName: "charge", ToolCallID: "one-logical-call", Arguments: []byte(`{}`),
-				Policy: &tool.RetryPolicy{MaxAttempts: 2}, Call: callable.Call,
+				Policy: policy, Call: callable.Call,
 			})
+			if tc.closeAfterReconnect {
+				require.NoError(t, <-closed)
+			}
 			result, err := outcome.Result, outcome.Error
 			require.EqualValues(t, 1, calls.Load(), "the outer retry must not replay tools/call")
 			require.Equal(t, tc.wantPolls, polls.Load())
 			require.Equal(t, tc.wantInits, discoveries.Load())
 			require.Nil(t, result)
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			if tc.closeAfterReconnect {
+				require.ErrorContains(t, err, "transport is closed")
+			}
 			var taskErr *mcp.TaskError
 			require.ErrorAs(t, err, &taskErr)
 			require.Equal(t, tc.taskID, taskErr.TaskID())

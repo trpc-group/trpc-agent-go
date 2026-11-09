@@ -93,6 +93,88 @@ func TestNodeRetry_ReplayUnsafeToolRunsOnce(t *testing.T) {
 	}
 }
 
+func TestNodeRetry_PreservesReplayUnsafeToolFailure(t *testing.T) {
+	for _, mode := range []string{"parallel sibling", "node callback", "plugin callback"} {
+		t.Run(mode, func(t *testing.T) {
+			parallel := mode == "parallel sibling"
+			started := make(chan struct{})
+			var calls atomic.Int32
+			taskErr := &replaySafetyTestError{cause: io.ErrUnexpectedEOF}
+			tools := map[string]tool.Tool{"charge": &retryTool{
+				name: "charge", callFn: func(ctx context.Context, _ []byte) (any, error) {
+					if calls.Add(1) > 1 {
+						return "charged again", nil
+					}
+					if parallel {
+						close(started)
+						<-ctx.Done()
+						taskErr.cause = ctx.Err()
+					}
+					return nil, taskErr
+				},
+			}}
+			toolCalls := makeToolCalls("charge")
+			inv := agent.NewInvocation()
+			primaryErr := errors.New(mode + " failure")
+			var nodeErr error
+			opts := []Option{
+				WithRetryPolicy(RetryPolicy{MaxAttempts: 2, RetryOn: []RetryCondition{RetryOnErrors(primaryErr)}}),
+				WithNodeErrorCallback(func(_ context.Context, _ *NodeCallbackContext, _ State, err error) {
+					nodeErr = err
+				}),
+			}
+			if parallel {
+				tools["sibling"] = &retryTool{name: "sibling", callFn: func(ctx context.Context, _ []byte) (any, error) {
+					select {
+					case <-started:
+						return nil, primaryErr
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}}
+				toolCalls = makeToolCalls("charge", "sibling")
+				opts = append(opts, WithEnableParallelTools(true))
+			} else {
+				callbacks := tool.NewCallbacks().RegisterAfterTool(tool.AfterToolCallbackStructured(
+					func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+						if errors.Is(args.Error, taskErr) {
+							return nil, primaryErr
+						}
+						return nil, nil
+					},
+				))
+				if mode == "plugin callback" {
+					inv.Plugins = &toolCallbacksPluginManager{callbacks: callbacks}
+				} else {
+					opts = append(opts, WithToolCallbacks(callbacks))
+				}
+			}
+			sg := NewStateGraph(NewStateSchema())
+			sg.AddToolsNode("tools", tools, opts...)
+			g, err := sg.SetEntryPoint("tools").SetFinishPoint("tools").Compile()
+			require.NoError(t, err)
+			exec, err := NewExecutor(g)
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			events, err := exec.Execute(ctx, State{StateKeyMessages: []model.Message{{
+				Role: model.RoleAssistant, ToolCalls: toolCalls,
+			}}}, inv)
+			require.NoError(t, err)
+			for range events {
+			}
+			require.EqualValues(t, 1, calls.Load(), "charge submissions")
+			require.ErrorIs(t, nodeErr, primaryErr)
+			var gotTaskErr *replaySafetyTestError
+			require.ErrorAs(t, nodeErr, &gotTaskErr)
+			require.Same(t, taskErr, gotTaskErr)
+			if parallel {
+				require.ErrorIs(t, gotTaskErr, context.Canceled)
+			}
+		})
+	}
+}
+
 // Test that a node with retry policy succeeds after initial failures and downstream runs once.
 func TestNodeRetry_SucceedsAfterFailures(t *testing.T) {
 	t.Parallel()

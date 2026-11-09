@@ -32,16 +32,21 @@ func TestTasksHTTPReconnect(t *testing.T) {
 		if modern {
 			name = "stateless"
 		}
-		t.Run(name, func(t *testing.T) { testTasksHTTPReconnect(t, modern, false) })
+		t.Run(name, func(t *testing.T) { testTasksHTTPReconnect(t, modern, "", nil) })
 	}
 	t.Run("terminal failure containing EOF", func(t *testing.T) {
-		testTasksHTTPReconnect(t, true, true)
+		testTasksHTTPReconnect(t, true, "failed", &mcp.TaskRPCError{Code: -32603, Message: "worker input: unexpected EOF"})
+	})
+	t.Run("RPC error containing EOF", func(t *testing.T) {
+		testTasksHTTPReconnect(t, true, "", &mcp.TaskRPCError{
+			Code: -32602, Message: "task not found: EOF", Data: json.RawMessage(`{"reason":"missing"}`),
+		})
 	})
 }
 
-// testTasksHTTPReconnect distinguishes a lost poll from a terminal application
-// failure. A lost poll resumes the same handle through a replacement client.
-func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
+// testTasksHTTPReconnect distinguishes a lost poll from an application failure.
+// A lost poll resumes the same handle through a replacement client.
+func testTasksHTTPReconnect(t *testing.T, modern bool, status string, pollError *mcp.TaskRPCError) {
 	var calls, polls, initializations atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -63,6 +68,7 @@ func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 			require.Equal(t, req.Method, r.Header.Get("Mcp-Method"))
 			require.Empty(t, r.Header.Get("Mcp-Session-Id"))
 		}
+		response := map[string]any{"jsonrpc": "2.0", "id": req.ID}
 		var result any
 		switch req.Method {
 		case "server/discover":
@@ -86,10 +92,13 @@ func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 			require.Equal(t, "charged-once", req.Params["taskId"])
 			require.Equal(t, "charged-once", r.Header.Get("Mcp-Name"))
 			poll := polls.Add(1)
-			if terminalFailure {
-				result = map[string]any{
-					"resultType": "complete", "taskId": "charged-once", "status": "failed",
-					"error": map[string]any{"code": -32603, "message": "worker input: unexpected EOF"},
+			if pollError != nil {
+				if status == "" {
+					response["error"] = pollError
+				} else {
+					result = map[string]any{
+						"resultType": "complete", "taskId": "charged-once", "status": status, "error": pollError,
+					}
 				}
 				break
 			}
@@ -109,8 +118,11 @@ func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		if result != nil {
+			response["result"] = result
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 	options := []mcp.ClientOption{mcp.WithTasks(true), mcp.WithClientGetSSEEnabled(false)}
@@ -126,15 +138,18 @@ func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 	require.NoError(t, manager.connect(ctx))
 	defer manager.close()
 	result, err := manager.callTool(ctx, "charge", nil)
-	if terminalFailure {
+	if pollError != nil {
 		var taskErr *mcp.TaskError
 		require.ErrorAs(t, err, &taskErr)
-		require.Equal(t, "failed", taskErr.Status)
+		require.Equal(t, status, taskErr.Status)
 		require.Equal(t, "charged-once", taskErr.TaskID())
 		require.False(t, taskErr.ToolCallReplaySafe())
+		var rpcErr *mcp.TaskRPCError
+		require.ErrorAs(t, err, &rpcErr)
+		require.Equal(t, pollError, rpcErr)
 		require.EqualValues(t, 1, calls.Load())
-		require.EqualValues(t, 1, polls.Load())
-		require.EqualValues(t, 1, initializations.Load())
+		require.EqualValues(t, 1, polls.Load(), "the task rejection must not trigger another poll")
+		require.EqualValues(t, 1, initializations.Load(), "the task rejection must not trigger rediscovery")
 		return
 	}
 	require.NoError(t, err)
@@ -143,6 +158,112 @@ func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 	require.EqualValues(t, 1, calls.Load())
 	require.EqualValues(t, 2, polls.Load())
 	require.EqualValues(t, 2, initializations.Load())
+}
+
+// reconnectWaitContext signals when a follower starts waiting on the owner.
+type reconnectWaitContext struct {
+	context.Context
+	waiting chan<- struct{}
+}
+
+func (c reconnectWaitContext) Done() <-chan struct{} {
+	select {
+	case c.waiting <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
+func TestTasksHTTPReconnectAfterHookPanic(t *testing.T) {
+	const hookPanic = "replacement discovery hook panic"
+	var panicOnRequest atomic.Bool
+	var discoveries, submissions, polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		result := map[string]any{"resultType": "complete"}
+		switch req.Method {
+		case "server/discover":
+			discoveries.Add(1)
+			result["supportedVersions"] = []string{mcp.ProtocolVersion_2026_07_28}
+			result["capabilities"] = map[string]any{}
+		case "tools/list":
+			result["tools"] = []any{map[string]any{"name": "charge", "inputSchema": map[string]any{"type": "object"}}}
+		case "tools/call":
+			if submissions.Add(1) == 1 {
+				result = map[string]any{"resultType": "task", "taskId": "first", "status": "working", "pollIntervalMs": 0}
+			} else {
+				result["content"] = []any{map[string]any{"type": "text", "text": "next call succeeded"}}
+			}
+		case "tasks/get":
+			polls.Add(1)
+			panicOnRequest.Store(true)
+			writeTruncatedMCPTaskResponse(w)
+			return
+		default:
+			t.Errorf("unexpected method %q", req.Method)
+			http.Error(w, "unknown method", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	waiting, waiterResult := make(chan struct{}, 1), make(chan error, 1)
+	var set *ToolSet
+	set = NewMCPToolSet(ConnectionConfig{Transport: "streamable_http", ServerURL: server.URL},
+		WithMCPOptions(mcp.WithTasks(true), mcp.WithProtocolVersion(mcp.ProtocolVersion_2026_07_28),
+			mcp.WithClientGetSSEEnabled(false),
+			mcp.WithHTTPBeforeRequest(func(context.Context, *http.Request) error {
+				if !panicOnRequest.Swap(false) {
+					return nil
+				}
+				go func() {
+					waiterResult <- set.sessionManager.recreateSession(reconnectWaitContext{ctx, waiting})
+				}()
+				select {
+				case <-waiting:
+					panic(hookPanic)
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})),
+		WithSessionReconnect(1))
+	t.Cleanup(func() { require.NoError(t, set.Close()) })
+	require.NoError(t, set.Init(ctx))
+	tools := set.Tools(ctx)
+	require.Len(t, tools, 1)
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	require.PanicsWithValue(t, hookPanic, func() {
+		_, _ = callable.Call(ctx, []byte(`{}`))
+	})
+	select {
+	case err := <-waiterResult:
+		require.Error(t, err)
+		require.NotErrorIs(t, err, context.DeadlineExceeded)
+	case <-ctx.Done():
+		t.Fatal("the reconnect panic left the waiter blocked")
+	}
+	require.EqualValues(t, 1, submissions.Load())
+	require.EqualValues(t, 1, polls.Load())
+	require.EqualValues(t, 1, discoveries.Load())
+	_, err := callable.Call(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	require.EqualValues(t, 2, submissions.Load())
+	require.EqualValues(t, 2, discoveries.Load())
 }
 
 // TestTasksHTTPReconnectDeadline verifies that a lost poll can return its

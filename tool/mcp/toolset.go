@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -452,8 +453,11 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		return nil
 	})
 
-	// Ensure result is nil on error
+	// A session failure can replace the task error before the SDK resumes it.
 	if operationErr != nil {
+		if attempt.unsafeErr != nil && !toolretry.IsReplayUnsafe(operationErr) {
+			return nil, errors.Join(operationErr, attempt.unsafeErr)
+		}
 		return nil, operationErr
 	}
 	return result, nil
@@ -593,9 +597,10 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 	}
 
 	var sdkTaskErr *mcp.TaskError
-	if errors.As(err, &sdkTaskErr) && sdkTaskErr.Status != "" {
-		// A response with a task status was received. Its application error
-		// text is not evidence of a transport failure.
+	var rpcErr *mcp.TaskRPCError
+	if errors.As(err, &sdkTaskErr) && (sdkTaskErr.Status != "" || errors.As(sdkTaskErr, &rpcErr)) {
+		// Task status and JSON-RPC errors come from the server. Their message
+		// text does not indicate transport failure.
 		return false
 	}
 
@@ -641,15 +646,20 @@ func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	attempt := &sessionReconnect{done: make(chan struct{})}
+	attempt := &sessionReconnect{
+		done: make(chan struct{}),
+		err:  errors.New("mcp session recreation did not complete"),
+	}
 	m.reconnect = attempt
 	m.reconnectMu.Unlock()
 
+	defer func() {
+		m.reconnectMu.Lock()
+		m.reconnect = nil
+		close(attempt.done)
+		m.reconnectMu.Unlock()
+	}()
 	attempt.err = m.doRecreateSession(ctx)
-	m.reconnectMu.Lock()
-	m.reconnect = nil
-	close(attempt.done)
-	m.reconnectMu.Unlock()
 	return attempt.err
 }
 

@@ -4456,6 +4456,7 @@ func runToolWithEventContexts(
 	)
 	completeInvocation = invocationFromContextOrFallback(ctx, completeInvocation)
 	if err != nil {
+		err = preserveReplayUnsafeToolErrors(err, toolErr)
 		if customResult != nil {
 			return startCtx, startInvocation, ctx, completeInvocation, customResult, toolCall.Function.Arguments, err
 		}
@@ -4479,6 +4480,7 @@ func runToolWithEventContexts(
 	)
 	completeInvocation = invocationFromContextOrFallback(ctx, completeInvocation)
 	if err != nil {
+		err = preserveReplayUnsafeToolErrors(err, toolErr)
 		if customResult != nil {
 			return startCtx, startInvocation, ctx, completeInvocation, customResult, toolCall.Function.Arguments, err
 		}
@@ -5757,10 +5759,31 @@ func selectToolCallError(errs []error, causalError error) error {
 	}
 	// Context-only errors from sibling cancellation must not replace the tool
 	// failure that caused that cancellation.
-	if causalError != nil {
-		return causalError
+	if causalError == nil {
+		causalError = first
 	}
-	return first
+	return preserveReplayUnsafeToolErrors(causalError, errs...)
+}
+
+// preserveReplayUnsafeToolErrors keeps the selected failure first while
+// retaining errors from tool calls that cannot be retried with the node.
+// Only the selected error determines whether graph execution is interrupted.
+func preserveReplayUnsafeToolErrors(primary error, candidates ...error) error {
+	if primary == nil || IsInterruptError(primary) {
+		return primary
+	}
+	primaryUnsafe := toolretry.IsReplayUnsafe(primary)
+	failures := []error{primary}
+	for _, err := range candidates {
+		if toolretry.IsReplayUnsafe(err) && !IsInterruptError(err) &&
+			(!primaryUnsafe || !errors.Is(primary, err)) {
+			failures = append(failures, err)
+		}
+	}
+	if len(failures) == 1 {
+		return primary
+	}
+	return errors.Join(failures...)
 }
 
 func completedToolMessagesForNode(state State, nodeID string) map[string]model.Message {
