@@ -194,6 +194,10 @@ func isUserMessageTrackEvent(trackEvent session.TrackEvent) bool {
 	if err != nil {
 		return false
 	}
+	return isUserMessageEvent(evt)
+}
+
+func isUserMessageEvent(evt aguievents.Event) bool {
 	switch e := evt.(type) {
 	case *aguievents.CustomEvent:
 		return e.Name == multimodal.CustomEventNameUserMessage
@@ -312,19 +316,21 @@ func isEmptyTrackEventsError(err error) bool {
 }
 
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	if len(events) == 0 {
-		return false
+	// Activity can follow a terminal event. Stop at a newer run boundary
+	// before considering any terminal event from the preceding run.
+	for i := len(events) - 1; i >= 0; i-- {
+		evt, err := aguievents.EventFromJSON(events[i].Payload)
+		if err != nil {
+			continue
+		}
+		if _, started := evt.(*aguievents.RunStartedEvent); started || isUserMessageEvent(evt) {
+			return false
+		}
+		if terminal, _ := terminalRunSignal(evt); terminal {
+			return true
+		}
 	}
-	last := events[len(events)-1]
-	if len(last.Payload) == 0 {
-		return false
-	}
-	evt, err := aguievents.EventFromJSON(last.Payload)
-	if err != nil {
-		return false
-	}
-	terminal, _ := terminalRunSignal(evt)
-	return terminal
+	return false
 }
 
 func terminalRunSignal(evt aguievents.Event) (terminal bool, errMessage string) {
