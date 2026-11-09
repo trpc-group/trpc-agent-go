@@ -19,6 +19,9 @@ import (
 
 // SandboxOpts are options for creating or connecting to a Sandbox.
 type SandboxOpts struct {
+	// DisableClientIDHostSuffix omits the legacy client ID hostname suffix
+	// when the response domain is empty. The zero value preserves the suffix.
+	DisableClientIDHostSuffix bool
 	// APIKey to use. Falls back to the E2B_API_KEY env variable.
 	APIKey string
 	// AccessToken to use.
@@ -77,6 +80,9 @@ type SandboxInfo struct {
 // Sandbox is a running E2B sandbox with code-interpreter capabilities.
 type Sandbox struct {
 	sync.RWMutex
+
+	disableClientIDHostSuffix bool
+
 	id          string
 	clientID    string
 	template    string
@@ -102,7 +108,7 @@ func (s *Sandbox) cachedSandboxDomain() string {
 }
 
 func (s *Sandbox) hostID(sandboxDomain string) string {
-	if sandboxDomain == "" && s.clientID != "" {
+	if !s.disableClientIDHostSuffix && sandboxDomain == "" && s.clientID != "" {
 		return s.id + "-" + s.clientID
 	}
 	return s.id
@@ -191,6 +197,8 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 	}
 
 	return &Sandbox{
+		disableClientIDHostSuffix: opts.DisableClientIDHostSuffix,
+
 		id:            out.SandboxID,
 		clientID:      out.ClientID,
 		template:      out.TemplateID,
@@ -246,6 +254,8 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 	}
 
 	return &Sandbox{
+		disableClientIDHostSuffix: opts.DisableClientIDHostSuffix,
+
 		id:            info.SandboxID,
 		clientID:      info.ClientID,
 		template:      info.TemplateID,

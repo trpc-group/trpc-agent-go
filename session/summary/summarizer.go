@@ -1120,11 +1120,34 @@ func eventHasTextContent(e event.Event) bool {
 		return false
 	}
 	for _, choice := range e.Response.Choices {
-		if strings.TrimSpace(choice.Message.Content) != "" {
+		if summaryMessageText(choice.Message) != "" {
 			return true
 		}
 	}
 	return false
+}
+
+// summaryMessageText returns the summarizable text of a regular message:
+// Content followed by text content parts in their original order, matching
+// how model adapters send both. Non-text parts are not summarized.
+func summaryMessageText(msg model.Message) string {
+	content := strings.TrimSpace(msg.Content)
+	if len(msg.ContentParts) == 0 {
+		return content
+	}
+	texts := make([]string, 0, 1+len(msg.ContentParts))
+	if content != "" {
+		texts = append(texts, content)
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if text := strings.TrimSpace(*part.Text); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return strings.Join(texts, "\n")
 }
 
 func eventHasSummarizableContent(
@@ -1148,7 +1171,7 @@ func eventHasSummarizableContent(
 			}
 			continue
 		}
-		if strings.TrimSpace(msg.Content) != "" {
+		if summaryMessageText(msg) != "" {
 			return true
 		}
 	}
@@ -1304,8 +1327,8 @@ func extractConversationText(
 			}
 
 			// Handle regular message content.
-			if trimmed := strings.TrimSpace(msg.Content); trimmed != "" {
-				parts = append(parts, fmt.Sprintf("%s: %s", author, trimmed))
+			if text := summaryMessageText(msg); text != "" {
+				parts = append(parts, fmt.Sprintf("%s: %s", author, text))
 			}
 		}
 	}

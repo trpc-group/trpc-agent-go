@@ -10,6 +10,7 @@
 package message
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,4 +69,11 @@ func TestIsEmptyAssistantMessage(t *testing.T) {
 			{ID: "call_1"},
 		},
 	}))
+	replayOnly := model.NewAssistantMessage("")
+	replayOnly.ProviderData = &model.ProviderData{
+		Protocol: "openai.responses",
+		Model:    "test-model",
+		Payload:  json.RawMessage(`[]`),
+	}
+	assert.False(t, IsEmptyAssistantMessage(replayOnly))
 }

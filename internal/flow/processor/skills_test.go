@@ -2469,6 +2469,109 @@ func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
 	}
 }
 
+// Exercise lifecycle cleanup and tool-result materialization together. A
+// non-empty loaded set must not revive another skill through historical tools.
+func TestSkillsToolResultRequestProcessor_DoesNotReloadOffloadedSkills(t *testing.T) {
+	for _, mode := range []string{SkillLoadModeSession, SkillLoadModeTurn, SkillLoadModeOnce} {
+		for _, toolName := range []string{skillToolLoad, skillToolSelectDocs} {
+			t.Run(mode+"/"+toolName, func(t *testing.T) {
+				ctx := context.Background()
+				repo := &mockRepo{
+					sums: []skill.Summary{{Name: "a"}, {Name: "b"}},
+					full: map[string]*skill.Skill{
+						"a": {Summary: skill.Summary{Name: "a"}, Body: "A body",
+							Docs: []skill.Doc{{Path: "a.md", Content: "A documentation"}}},
+						"b": {Summary: skill.Summary{Name: "b"}, Body: "B body",
+							Docs: []skill.Doc{{Path: "b.md", Content: "B documentation"}}},
+					},
+				}
+				inv := &agent.Invocation{
+					InvocationID: "first", AgentName: "tester",
+					Session: &session.Session{State: session.StateMap{}},
+				}
+				opts := []SkillsRequestProcessorOption{
+					WithSkillLoadMode(mode), WithSkillsLoadedContentInToolResults(true),
+				}
+				if mode == SkillLoadModeSession {
+					opts = append(opts, WithMaxLoadedSkills(1))
+				}
+				lifecycle := NewSkillsRequestProcessor(repo, opts...)
+				materializer := NewSkillsToolResultRequestProcessor(
+					repo, WithSkillsToolResultLoadMode(mode),
+				)
+				var history []model.Message
+				request := func() *model.Request {
+					req := &model.Request{Messages: []model.Message{model.NewSystemMessage("base sys")}}
+					lifecycle.ProcessRequest(ctx, inv, req, nil)
+					// Replay the persisted messages after the lifecycle processor,
+					// as the content processor does before materialization.
+					req.Messages = append(req.Messages, history...)
+					materializer.ProcessRequest(ctx, inv, req, nil)
+					return req
+				}
+				load := func(name string) {
+					inv.Session.SetState(skill.LoadedKey("tester", name), []byte("1"))
+					inv.Session.SetState(skill.DocsKey("tester", name), []byte("*"))
+					raw, _ := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+					order := skill.TouchLoadedOrder(skill.ParseLoadedOrder(raw), name)
+					inv.Session.SetState(skill.LoadedOrderKey("tester"), skill.MarshalLoadedOrder(order))
+				}
+				appendTool := func(name, toolName, output string) {
+					id := name + "-" + toolName
+					args, err := json.Marshal(skillNameInput{Skill: name})
+					require.NoError(t, err)
+					history = append(history,
+						model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
+							ID: id, Type: "function",
+							Function: model.FunctionDefinitionParam{Name: toolName, Arguments: args},
+						}}},
+						model.Message{Role: model.RoleTool, ToolID: id, ToolName: toolName, Content: output},
+					)
+				}
+
+				request() // Initialize the first turn before skill_load runs.
+				load("a")
+				appendTool("a", skillToolLoad, "loaded: a")
+				if toolName == skillToolSelectDocs {
+					appendTool("a", toolName, `{"skill":"a","selected":["a.md"]}`)
+				}
+				first := request()
+				require.Contains(t, first.Messages[len(first.Messages)-1].Content, "A body")
+				require.Contains(t, first.Messages[len(first.Messages)-1].Content, "A documentation")
+				oldHistory := append([]model.Message(nil), history...)
+
+				if mode == SkillLoadModeTurn {
+					inv = &agent.Invocation{
+						InvocationID: "second", AgentName: "tester", Session: inv.Session,
+					}
+					request() // Clear the previous turn before loading B.
+				}
+				load("b")
+				appendTool("b", skillToolLoad, "loaded: b")
+				second := request()
+
+				// The stable system prefix and all old tool messages stay intact;
+				// only the still-loaded skill receives its body and selected docs.
+				require.Equal(t, first.Messages[0], second.Messages[0])
+				require.Equal(t, oldHistory, second.Messages[1:1+len(oldHistory)])
+				require.Equal(t, oldHistory, history[:len(oldHistory)])
+				require.Equal(t, "loaded: b", history[len(history)-1].Content)
+				last := second.Messages[len(second.Messages)-1].Content
+				require.Contains(t, last, "B body")
+				require.Contains(t, last, "B documentation")
+				for _, msg := range second.Messages {
+					require.NotContains(t, msg.Content, "A body")
+					require.NotContains(t, msg.Content, "A documentation")
+				}
+				for _, key := range []string{skill.LoadedKey("tester", "a"), skill.DocsKey("tester", "a")} {
+					value, _ := inv.Session.GetState(key)
+					require.Empty(t, value)
+				}
+			})
+		}
+	}
+}
+
 func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 	t *testing.T,
 ) {

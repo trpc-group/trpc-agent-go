@@ -1948,6 +1948,10 @@ func WithPreserveForeignMessages(preserve bool) Option {
 
 // WithEventMessageProjector rewrites one event-derived message before
 // it is appended to the model request.
+// For messages carrying ProviderData, editing display fields does not change
+// the native input sent to the model. The projector may explicitly replace or
+// clear ProviderData; its payload and producer identity are checked before use.
+// Clearing it from an unfinished native tool round may prevent continuation.
 func WithEventMessageProjector(
 	projector EventMessageProjector,
 ) Option {
@@ -2029,6 +2033,9 @@ func WithMessageBranchFilterMode(mode string) Option {
 // multi-turn conversations. This is particularly important for DeepSeek models
 // where ordinary previous-turn reasoning_content may be omitted, but tool-call
 // reasoning_content must be replayed in later turns.
+//
+// This option changes message reasoning fields, not a native ProviderData payload.
+// A native adapter may therefore still send reasoning retained in ProviderData.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from

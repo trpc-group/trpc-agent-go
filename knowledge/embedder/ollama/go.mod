@@ -6,7 +6,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
 require (
 	github.com/ollama/ollama v0.17.1
-	trpc.group/trpc-go/trpc-agent-go v0.4.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (
