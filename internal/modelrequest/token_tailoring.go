@@ -14,6 +14,22 @@ import (
 )
 
 type tokenTailoringObserverKey struct{}
+type tokenTailoringDisabledKey struct{}
+
+// WithTokenTailoringDisabled preserves the messages of one caller-approved
+// request when its token estimate is intentionally delegated to the provider.
+func WithTokenTailoringDisabled(ctx context.Context) context.Context {
+	return context.WithValue(ctx, tokenTailoringDisabledKey{}, true)
+}
+
+// TokenTailoringDisabled reports whether the caller approved the request input.
+func TokenTailoringDisabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	disabled, _ := ctx.Value(tokenTailoringDisabledKey{}).(bool)
+	return disabled
+}
 
 // TokenTailoringRecord describes one provider-side request transformation.
 type TokenTailoringRecord struct {

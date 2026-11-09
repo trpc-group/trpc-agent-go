@@ -37,6 +37,38 @@ type PreSummaryHookContext struct {
 // PreSummaryHook adjusts or enriches input text before summarization, e.g. add tool-call info, redact, or reorder events.
 type PreSummaryHook func(in *PreSummaryHookContext) error
 
+// InputOverflow describes the conversation text of a complete summary batch
+// that the framework estimates to exceed the summary model's input budget.
+// When the prompt uses {previous_summary}, Text excludes the previous summary.
+// Otherwise Text may include the previous summary merged into the conversation.
+type InputOverflow struct {
+	Text string
+}
+
+// OverflowDecision authorizes one summary model attempt with Text replacing the
+// batch's conversation text. Returning the original Text authorizes an unchanged
+// attempt. Text must contain non-whitespace content and represent the complete
+// batch, because a successful summary advances its original event boundary.
+type OverflowDecision struct {
+	Text string
+}
+
+// InputOverflowHook handles an estimated overflow after complete-prefix fallback
+// cannot select a batch within budget. A non-nil decision authorizes one
+// standalone model attempt without token-budget rejection or token tailoring by
+// the framework's model adapters. Model callbacks still run. Provider errors and
+// empty summaries are returned without an automatic summary retry.
+//
+// Returning nil, nil preserves the original overflow error. A non-nil error
+// rejects the batch even when a decision is also returned, independently of
+// WithSummaryHookAbortOnError. Cancellation also aborts the attempt.
+//
+// The hook may run concurrently for different sessions and may receive the same
+// batch again in a later summary task. Registering it preserves prefix fallback.
+// WithPreSummaryHook disables that fallback, so the overflow hook then receives
+// the entire conversation selected and rewritten by the pre-summary hook.
+type InputOverflowHook func(context.Context, InputOverflow) (*OverflowDecision, error)
+
 // PostSummaryHookContext post-processes model output, e.g. append tags, trim, or add checklists.
 type PostSummaryHookContext struct {
 	Ctx     context.Context

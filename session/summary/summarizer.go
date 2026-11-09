@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -280,9 +281,10 @@ type sessionSummarizer struct {
 	skipRecentFunc          SkipRecentFunc
 	skipRecentContextFunc   ContextSkipRecentFunc
 
-	preHook          PreSummaryHook
-	postHook         PostSummaryHook
-	hookAbortOnError bool
+	preHook           PreSummaryHook
+	inputOverflowHook InputOverflowHook
+	postHook          PostSummaryHook
+	hookAbortOnError  bool
 
 	// modelCallbacks configures before/after model callbacks for summarization.
 	modelCallbacks *model.Callbacks
@@ -1474,7 +1476,7 @@ func (s *sessionSummarizer) runSummaryAttempts(
 	if result.err == nil && result.summaryText != "" {
 		return result.ctx, result.summaryText, result.response, nil
 	}
-	if result.custom || !shouldRetrySummary(
+	if result.overflowHandled || result.custom || !shouldRetrySummary(
 		result.summaryText,
 		result.err,
 		result.response,
@@ -1508,6 +1510,17 @@ func (s *sessionSummarizer) runSummaryAttempts(
 		}
 	}
 	if buildErr != nil {
+		if isSummarySourceTooLarge(buildErr) {
+			result.err = fmt.Errorf("build summary retry request: %w", buildErr)
+			result.budget = retryBudget
+			result = s.runInputOverflowHook(
+				result, request, source, trackResponse, ensureTimingInfo,
+			)
+			if result.err == nil && result.summaryText != "" {
+				return result.ctx, result.summaryText, result.response, nil
+			}
+			return result.ctx, "", result.response, summaryAttemptError(result.err, source.input)
+		}
 		return result.ctx, "", result.response, fmt.Errorf(
 			"build summary retry request: %w",
 			buildErr,
@@ -1552,12 +1565,17 @@ func (s *sessionSummarizer) runSummaryAttemptWithPrefixFallback(
 			mode,
 			source.input,
 			budgetLimit,
+			false,
 			trackResponse,
 			ensureTimingInfo,
 		)
-		if result.err == nil || !source.allowPrefix ||
-			!isSummarySourceTooLarge(result.err) {
+		if result.err == nil || !isSummarySourceTooLarge(result.err) {
 			return result
+		}
+		if !source.allowPrefix {
+			return s.runInputOverflowHook(
+				result, request, source, trackResponse, ensureTimingInfo,
+			)
 		}
 
 		totalEvents := len(source.prefixEvents)
@@ -1571,7 +1589,9 @@ func (s *sessionSummarizer) runSummaryAttemptWithPrefixFallback(
 			return result
 		}
 		if !selected || len(source.prefixEvents) >= totalEvents {
-			return result
+			return s.runInputOverflowHook(
+				result, request, source, trackResponse, ensureTimingInfo,
+			)
 		}
 
 		log.DebugfContext(
@@ -1607,13 +1627,14 @@ func summaryAttemptError(err error, input summaryPromptInput) error {
 }
 
 type summaryAttemptResult struct {
-	ctx         context.Context
-	summaryText string
-	response    *model.Response
-	custom      bool
-	mode        string
-	budget      int
-	err         error
+	ctx             context.Context
+	summaryText     string
+	response        *model.Response
+	custom          bool
+	mode            string
+	budget          int
+	err             error
+	overflowHandled bool
 }
 
 func (s *sessionSummarizer) runSummaryAttempt(
@@ -1622,33 +1643,40 @@ func (s *sessionSummarizer) runSummaryAttempt(
 	mode string,
 	input summaryPromptInput,
 	budgetLimit int,
+	budgetApproved bool,
 	trackResponse func(*model.Response),
 	ensureTimingInfo func(*model.Response),
 ) summaryAttemptResult {
-	result := summaryAttemptResult{ctx: ctx, mode: mode}
+	result := summaryAttemptResult{ctx: ctx, mode: mode, overflowHandled: budgetApproved}
+	if err := ctx.Err(); err != nil {
+		result.err = err
+		return result
+	}
 	result.budget = s.summaryRequestInputBudget(ctx, request)
 	if budgetLimit > 0 && budgetLimit < result.budget {
 		result.budget = budgetLimit
 	}
-	prepared, preparedMode, err := s.prepareSummaryRequest(
-		ctx,
-		request,
-		mode,
-		input,
-		result.budget,
-	)
-	if err != nil {
-		result.err = fmt.Errorf("prepare summary request: %w", err)
-		return result
+	if !budgetApproved {
+		prepared, preparedMode, err := s.prepareSummaryRequest(
+			ctx, request, mode, input, result.budget,
+		)
+		if err != nil {
+			result.err = fmt.Errorf("prepare summary request: %w", err)
+			return result
+		}
+		if prepared != request {
+			*request = *prepared
+		}
+		result.mode = preparedMode
 	}
-	if prepared != request {
-		*request = *prepared
-	}
-	result.mode = preparedMode
 
 	ctx, responseChan, err := s.runBeforeModelCallbacks(ctx, request)
 	result.ctx = ctx
 	if err != nil {
+		result.err = err
+		return result
+	}
+	if err := ctx.Err(); err != nil {
 		result.err = err
 		return result
 	}
@@ -1659,20 +1687,19 @@ func (s *sessionSummarizer) runSummaryAttempt(
 		if budgetLimit > 0 && budgetLimit < result.budget {
 			result.budget = budgetLimit
 		}
-		if fitErr := s.ensureSummaryRequestFits(
-			ctx,
-			request,
-			false,
-			result.budget,
-		); fitErr != nil {
-			result.err = fmt.Errorf(
-				"summary request no longer fits after before-model callbacks: %w",
-				fitErr,
-			)
-			return result
+		modelCtx := ctx
+		if budgetApproved {
+			modelCtx = modelrequest.WithTokenTailoringDisabled(ctx)
+		} else {
+			if fitErr := s.ensureSummaryRequestFits(ctx, request, false, result.budget); fitErr != nil {
+				result.err = fmt.Errorf(
+					"summary request no longer fits after before-model callbacks: %w", fitErr,
+				)
+				return result
+			}
 		}
 		s.recordReportCall(ctx, request, result.mode)
-		responseChan, err = s.model.GenerateContent(ctx, request)
+		responseChan, err = s.model.GenerateContent(modelCtx, request)
 		if err != nil {
 			result.err = fmt.Errorf(
 				"failed to generate summary: %w",

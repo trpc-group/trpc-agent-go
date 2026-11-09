@@ -232,7 +232,7 @@ summarizer can process a complete older prefix and leave the remaining events
 uncovered for a later summary pass. A prefix must end at a stable event boundary
 and cannot split response chunks or an open tool call/result round. The summary
 boundary advances only through the selected prefix after model generation and
-post-summary processing are complete. If even the smallest complete prefix does
+post-summary processing are complete. By default, if even the smallest complete prefix does
 not fit, the request fails before calling the model and the existing boundary
 remains unchanged. Partial-prefix fallback is disabled when
 `WithPreSummaryHook(...)` is configured because hook-rewritten text cannot be
@@ -705,8 +705,9 @@ summary.WithChecksAny(
 | Option | Description |
 | --- | --- |
 | `WithPreSummaryHook(h PreSummaryHook)` | Pre-summary hook; can modify input text |
+| `WithInputOverflowHook(h InputOverflowHook)` | Decide whether an estimated-overflow batch is sent unchanged, replaced, or rejected |
 | `WithPostSummaryHook(h PostSummaryHook)` | Post-summary hook; can modify output summary |
-| `WithSummaryHookAbortOnError(abort bool)` | Whether to abort on hook error; default `false` (ignore errors) |
+| `WithSummaryHookAbortOnError(abort bool)` | Whether to abort on pre/post-summary hook errors; default `false` (ignore those errors). Overflow decision errors always abort. |
 
 ### Message Content
 
@@ -1034,6 +1035,67 @@ type PreSummaryHookContext struct {
 
 type PreSummaryHook func(in *PreSummaryHookContext) error
 ```
+
+### InputOverflowHook
+
+Use `WithInputOverflowHook` to delegate the final input decision when the earliest
+complete batch is still estimated to exceed the summary input budget. Ordinary
+summaries and complete prefixes that fit retain their existing behavior.
+
+```go
+type InputOverflow struct {
+    Text string
+}
+
+type OverflowDecision struct {
+    Text string
+}
+
+type InputOverflowHook func(
+    context.Context,
+    InputOverflow,
+) (*OverflowDecision, error)
+```
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithTokenThreshold(30_000),
+    summary.WithInputOverflowHook(
+        func(ctx context.Context, in summary.InputOverflow) (*summary.OverflowDecision, error) {
+            return &summary.OverflowDecision{Text: in.Text}, nil
+        },
+    ),
+)
+```
+
+- A non-nil result authorizes one model attempt using its `Text`. Return `in.Text`
+  to approve the original conversation or return a business-specific replacement.
+  The framework honors that decision even if the estimate still exceeds budget.
+- Returning `nil, nil` preserves the original overflow error.
+- Returning `nil, err` rejects the batch. An error takes precedence over a result,
+  independently of `WithSummaryHookAbortOnError`.
+- Whitespace-only text is invalid. Cancellation also terminates the attempt.
+
+`Text` fills `{conversation_text}` after tool formatting. With a
+`{previous_summary}` placeholder, the previous summary remains a separate input.
+Otherwise `Text` may include a merged previous summary. Replacement text represents
+the whole locked batch, whose original event boundary advances after success.
+
+An approved attempt uses a standalone summary request, retains the summary prompt
+and any separate previous summary, and bypasses token-budget rejection and token
+tailoring by the framework's model adapters for that call. Before/AfterModel
+callbacks still run. Provider rejection or an empty summary returns an error
+without advancing the boundary or automatically retrying with a halved budget.
+
+Registering this hook preserves complete-prefix fallback. Configuring
+`WithPreSummaryHook` still disables that fallback, so the overflow hook then
+receives the entire selected conversation after the pre-summary rewrite.
+Hooks may run concurrently for different sessions. Later tasks may submit the
+same failed batch again.
+
+An offline runnable example and integration notes are in
+`examples/summary/inputoverflow`.
 
 ### PostSummaryHook
 

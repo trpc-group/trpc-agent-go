@@ -115,21 +115,23 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 		high = mid - 1
 	}
 
-	source.input = bestInput
-	source.prefixEvents = source.prefixEvents[:bestEnd]
-	source.prefixTexts = source.prefixTexts[:bestEnd]
-	if source.prefixBoundaries != nil {
-		source.prefixBoundaries = source.prefixBoundaries[:bestEnd]
-		source.boundary = source.prefixBoundaries[bestEnd-1]
-		source.hasBoundary = true
-	} else {
-		source.boundaryEvents = source.prefixEvents
-		source.hasBoundary = false
-	}
+	source.selectPrefix(bestEnd, bestInput)
 	return bestRequest, true, nil
 }
 
 func safeSummaryPrefixEndsForSource(source *summarySource) ([]int, error) {
+	ends, err := completeSummaryPrefixEndsForSource(source)
+	if err != nil {
+		return nil, err
+	}
+	// A fallback must consume fewer events than the request that just failed.
+	for len(ends) > 0 && ends[len(ends)-1] >= len(source.prefixEvents) {
+		ends = ends[:len(ends)-1]
+	}
+	return ends, nil
+}
+
+func completeSummaryPrefixEndsForSource(source *summarySource) ([]int, error) {
 	if len(source.prefixTexts) != len(source.prefixEvents) {
 		return nil, errors.New("summary prefix text does not match events")
 	}
@@ -147,13 +149,21 @@ func safeSummaryPrefixEndsForSource(source *summarySource) ([]int, error) {
 		}
 		ends = mappedEnds
 	}
-	// A fallback must consume fewer events than the request that just failed.
-	// Exclude the full source even if it is itself a structurally safe boundary,
-	// so callers can treat selected=true as a strict progress guarantee.
-	for len(ends) > 0 && ends[len(ends)-1] >= len(source.prefixEvents) {
-		ends = ends[:len(ends)-1]
-	}
 	return summaryPrefixEndsWithNewText(ends, source.prefixTexts), nil
+}
+
+func (source *summarySource) selectPrefix(end int, input summaryPromptInput) {
+	source.input = input
+	source.prefixEvents = source.prefixEvents[:end]
+	source.prefixTexts = source.prefixTexts[:end]
+	if source.prefixBoundaries != nil {
+		source.prefixBoundaries = source.prefixBoundaries[:end]
+		source.boundary = source.prefixBoundaries[end-1]
+		source.hasBoundary = true
+		return
+	}
+	source.boundaryEvents = source.prefixEvents
+	source.hasBoundary = false
 }
 
 func summaryPrefixEndsWithNewText(ends []int, texts []string) []int {

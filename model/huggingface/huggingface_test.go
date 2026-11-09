@@ -737,6 +737,11 @@ func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
 		model.NewUserMessage("q"),
 	}}
 
+	original := append([]model.Message(nil), req.Messages...)
+	approvedCtx := imodelrequest.WithTokenTailoringDisabled(context.Background())
+	m.applyTokenTailoring(approvedCtx, req)
+	require.Equal(t, original, req.Messages, "caller-approved input must remain intact")
+
 	m.applyTokenTailoring(context.Background(), req)
 
 	require.Equal(t, tailored, req.Messages)
