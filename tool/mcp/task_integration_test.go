@@ -11,9 +11,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,6 +143,129 @@ func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 	require.EqualValues(t, 1, calls.Load())
 	require.EqualValues(t, 2, polls.Load())
 	require.EqualValues(t, 2, initializations.Load())
+}
+
+// TestTasksHTTPReconnectDeadline verifies that a lost poll can return its
+// deadline and task handle while a concurrent SDK poll still uses the client.
+func TestTasksHTTPReconnectDeadline(t *testing.T) {
+	heldPoll, releaseHeld := make(chan struct{}), make(chan struct{})
+	markHeld := sync.OnceFunc(func() { close(heldPoll) })
+	release := sync.OnceFunc(func() { close(releaseHeld) })
+	var discoveries, submissions, lostPolls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				TaskID    string            `json:"taskId"`
+				Arguments map[string]string `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		result := map[string]any{"resultType": "complete"}
+		switch req.Method {
+		case "server/discover":
+			discoveries.Add(1)
+			result["supportedVersions"] = []string{mcp.ProtocolVersion_2026_07_28}
+			result["capabilities"] = map[string]any{}
+		case "tools/list":
+			result["tools"] = []any{map[string]any{"name": "charge", "inputSchema": map[string]any{"type": "object"}}}
+		case "tools/call":
+			submissions.Add(1)
+			result = map[string]any{
+				"resultType": "task", "taskId": req.Params.Arguments["id"],
+				"status": "working", "pollIntervalMs": 0,
+			}
+		case "tasks/get":
+			switch req.Params.TaskID {
+			case "held":
+				markHeld()
+				select {
+				case <-releaseHeld:
+				case <-r.Context().Done():
+					return
+				}
+			case "lost":
+				lostPolls.Add(1)
+				writeTruncatedMCPTaskResponse(w)
+				return
+			case "next":
+			default:
+				t.Errorf("unexpected task ID %q", req.Params.TaskID)
+				http.Error(w, "unknown task", http.StatusBadRequest)
+				return
+			}
+			result["taskId"] = req.Params.TaskID
+			result["status"] = "completed"
+			result["result"] = map[string]any{"content": []any{}}
+		default:
+			t.Errorf("unexpected method %q", req.Method)
+			http.Error(w, "unknown method", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	set := NewMCPToolSet(ConnectionConfig{Transport: "streamable_http", ServerURL: server.URL},
+		WithMCPOptions(mcp.WithTasks(true), mcp.WithProtocolVersion(mcp.ProtocolVersion_2026_07_28)),
+		WithSessionReconnect(1))
+	t.Cleanup(func() { require.NoError(t, set.Close()) })
+	defer release()
+	require.NoError(t, set.Init(ctx))
+	tools := set.Tools(ctx)
+	require.Len(t, tools, 1)
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	call := func(ctx context.Context, args string) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			_, err := callable.Call(ctx, []byte(args))
+			done <- err
+		}()
+		return done
+	}
+
+	held := call(ctx, `{"id":"held"}`)
+	select {
+	case <-heldPoll:
+	case <-ctx.Done():
+		t.Fatal("the first task never started polling")
+	}
+	lostCtx, stopLost := context.WithTimeout(ctx, time.Second)
+	defer stopLost()
+	lost := call(lostCtx, `{"id":"lost"}`)
+	select {
+	case err := <-lost:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		var taskErr *mcp.TaskError
+		require.ErrorAs(t, err, &taskErr)
+		require.Equal(t, "lost", taskErr.TaskID())
+	case <-time.After(3 * time.Second):
+		t.Fatal("the lost poll did not return while the first task was still polling")
+	}
+	select {
+	case err := <-held:
+		t.Fatalf("the reconnect interrupted the first task: %v", err)
+	default:
+	}
+	release()
+	require.NoError(t, <-held)
+	_, err := callable.Call(ctx, []byte(`{"id":"next"}`))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, discoveries.Load(), "the next call should reuse the existing client")
+	require.EqualValues(t, 3, submissions.Load(), "each tool call must be submitted only once")
+	require.EqualValues(t, 1, lostPolls.Load(), "the lost task must not be polled after expiry")
 }
 
 // TestTasksMCPKitToolSet exercises the public ToolSet and CallableTool path
