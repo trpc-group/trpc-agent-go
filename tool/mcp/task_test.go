@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +97,57 @@ func TestToolTaskCancelledReconnectRetainsHandle(t *testing.T) {
 	var taskErr toolTaskFailure
 	require.ErrorAs(t, err, &taskErr)
 	require.Equal(t, "task-1", taskErr.TaskID())
+}
+
+// TestToolTaskReconnectWaitHonorsDeadline holds a read lock as a polling
+// call would. Both the reconnect owner and its waiter must be able to leave
+// without closing the client or waiting for the poll to finish.
+func TestToolTaskReconnectWaitHonorsDeadline(t *testing.T) {
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
+	var closes atomic.Int32
+	manager.client = &stubConnector{closeFn: func() error {
+		closes.Add(1)
+		return nil
+	}}
+
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+
+	ownerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owner := make(chan error, 1)
+	go func() { owner <- manager.recreateSession(ownerCtx) }()
+	// Observe the owner holding the reconnect slot before exercising a waiter.
+	require.Eventually(t, func() bool {
+		manager.reconnectMu.Lock()
+		defer manager.reconnectMu.Unlock()
+		return manager.reconnect != nil
+	}, time.Second, time.Millisecond)
+
+	waiterCtx, stopWaiter := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer stopWaiter()
+	waiter := make(chan error, 1)
+	go func() { waiter <- manager.recreateSession(waiterCtx) }()
+	select {
+	case err := <-waiter:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("reconnect waiter stayed blocked past its deadline")
+	}
+	select {
+	case err := <-owner:
+		t.Fatalf("the waiter's deadline ended the owner's reconnect: %v", err)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-owner:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled reconnect owner waited for the active poll")
+	}
+	require.Zero(t, closes.Load())
 }
 
 type finalReconnectHandler struct {
@@ -206,9 +258,10 @@ func TestToolTaskDeadlineAcrossReconnect(t *testing.T) {
 				Transport: "streamable_http", ServerURL: "http://localhost/unused", Timeout: time.Minute,
 			}, []mcp.ClientOption{mcp.WithHTTPReqHandler(handler), mcp.WithClientGetSSEEnabled(false)},
 				&SessionReconnectConfig{EnableAutoReconnect: true, MaxReconnectAttempts: 1})
-			manager.client = client
-			if mode != "legacy" {
-				manager.client = &taskConfiguredConnector{stubConnector: client, enabled: mode == "enabled"}
+			if mode == "legacy" {
+				manager.setClient(client)
+			} else {
+				manager.setClient(&taskConfiguredConnector{stubConnector: client, enabled: mode == "enabled"})
 			}
 			ctx := context.Background()
 			if mode == "caller-deadline" {

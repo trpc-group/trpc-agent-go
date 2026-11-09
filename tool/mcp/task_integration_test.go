@@ -30,13 +30,16 @@ func TestTasksHTTPReconnect(t *testing.T) {
 		if modern {
 			name = "stateless"
 		}
-		t.Run(name, func(t *testing.T) { testTasksHTTPReconnect(t, modern) })
+		t.Run(name, func(t *testing.T) { testTasksHTTPReconnect(t, modern, false) })
 	}
+	t.Run("terminal failure containing EOF", func(t *testing.T) {
+		testTasksHTTPReconnect(t, true, true)
+	})
 }
 
-// testTasksHTTPReconnect loses one transport exchange and verifies recovery
-// resumes the original handle through a replacement client with the same identity.
-func testTasksHTTPReconnect(t *testing.T, modern bool) {
+// testTasksHTTPReconnect distinguishes a lost poll from a terminal application
+// failure. A lost poll resumes the same handle through a replacement client.
+func testTasksHTTPReconnect(t *testing.T, modern, terminalFailure bool) {
 	var calls, polls, initializations atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -80,7 +83,15 @@ func testTasksHTTPReconnect(t *testing.T, modern bool) {
 		case "tasks/get":
 			require.Equal(t, "charged-once", req.Params["taskId"])
 			require.Equal(t, "charged-once", r.Header.Get("Mcp-Name"))
-			if polls.Add(1) == 1 {
+			poll := polls.Add(1)
+			if terminalFailure {
+				result = map[string]any{
+					"resultType": "complete", "taskId": "charged-once", "status": "failed",
+					"error": map[string]any{"code": -32603, "message": "worker input: unexpected EOF"},
+				}
+				break
+			}
+			if poll == 1 {
 				if modern {
 					conn, _, err := w.(http.Hijacker).Hijack()
 					require.NoError(t, err)
@@ -113,6 +124,17 @@ func testTasksHTTPReconnect(t *testing.T, modern bool) {
 	require.NoError(t, manager.connect(ctx))
 	defer manager.close()
 	result, err := manager.callTool(ctx, "charge", nil)
+	if terminalFailure {
+		var taskErr *mcp.TaskError
+		require.ErrorAs(t, err, &taskErr)
+		require.Equal(t, "failed", taskErr.Status)
+		require.Equal(t, "charged-once", taskErr.TaskID())
+		require.False(t, taskErr.ToolCallReplaySafe())
+		require.EqualValues(t, 1, calls.Load())
+		require.EqualValues(t, 1, polls.Load())
+		require.EqualValues(t, 1, initializations.Load())
+		return
+	}
 	require.NoError(t, err)
 	require.Equal(t, "kept", result.Meta["trace"])
 	require.NotEmpty(t, result.Content)

@@ -26,8 +26,10 @@ option only for a server explicitly supporting Tasks with the legacy protocol.
 After a task handle has been received, reconnect resumes polling the same handle.
 If submission has an unknown outcome and no handle, it stops without replay.
 For clients reporting `TasksEnabled() == true`, the timeout bounds the whole tool
-invocation, including reconnection. Legacy and disabled clients retain
-their existing per-attempt timeout behavior.
+invocation, including waiting to reconnect. If the context expires while a
+caller is waiting, that caller stops waiting. A task status returned by the
+server, such as `failed` or `input_required`, does not trigger reconnection.
+Clients with Tasks disabled retain their existing per-attempt timeout behavior.
 Keep the original endpoint and authorization identity when resuming a task.
 Legacy servers may additionally bind handles to their original session. The
 pinned mcpkit dual-mode example rejects cross-session recovery; this adapter
