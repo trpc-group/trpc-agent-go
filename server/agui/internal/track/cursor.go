@@ -27,6 +27,12 @@ func (t *tracker) GetEventsWithCursor(ctx context.Context, key session.Key, curs
 		if err != nil {
 			return nil, "", err
 		}
+		if events != nil && events.Cursor != nil {
+			// Session hooks may synthesize history without a storage boundary.
+			legacy := *events
+			legacy.Cursor = nil
+			events = &legacy
+		}
 		return events, "", ErrCursorUnsupported
 	}
 	events, err := t.GetEvents(ctx, key, session.WithTrackCursor(cursor))

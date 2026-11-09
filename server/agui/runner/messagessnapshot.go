@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -137,9 +138,12 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 // In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
-	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey)
+	trackEvents, err := r.readSnapshotTrackEvents(ctx, sessionKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
+	}
+	if trackEvents == nil {
+		trackEvents = &session.TrackEvents{}
 	}
 	eventsForReduce, safeForFollow := trimTrackEventsToHistoryStart(trackEvents.Events)
 	if !safeForFollow && len(trackEvents.Events) > 0 {
@@ -172,6 +176,22 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 		trackEvents = nil
 	}
 	return event, trackEvents, err
+}
+
+type cursorTrackReader interface {
+	GetEventsWithCursor(context.Context, session.Key, string) (*session.TrackEvents, string, error)
+}
+
+func (r *runner) readSnapshotTrackEvents(ctx context.Context, key session.Key) (*session.TrackEvents, error) {
+	reader, ok := r.tracker.(cursorTrackReader)
+	if !ok || !r.messagesSnapshotFollowEnabled {
+		return r.tracker.GetEvents(ctx, key)
+	}
+	events, _, err := reader.GetEventsWithCursor(ctx, key, "")
+	if errors.Is(err, track.ErrCursorUnsupported) {
+		return events, nil
+	}
+	return events, err
 }
 
 func trimTrackEventsToHistoryStart(events []session.TrackEvent) ([]session.TrackEvent, bool) {
@@ -214,7 +234,6 @@ func (r *runner) messagesSnapshotFollow(
 	events chan<- aguievents.Event,
 	initial *session.TrackEvents,
 ) {
-	cursorTime := lastTrackTimestamp(initial)
 	pollInterval := r.flushInterval
 	if pollInterval <= 0 {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow requires a positive flush interval",
@@ -225,28 +244,50 @@ func (r *runner) messagesSnapshotFollow(
 	if maxDuration <= 0 {
 		maxDuration = r.timeout
 	}
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	var timer *time.Timer
-	var timeout <-chan time.Time
+	followCtx := ctx
 	if maxDuration > 0 {
-		timer = time.NewTimer(maxDuration)
-		defer timer.Stop()
-		timeout = timer.C
+		var cancel context.CancelFunc
+		followCtx, cancel = context.WithTimeout(ctx, maxDuration)
+		defer cancel()
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timeout:
-			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow timeout",
+
+	var read func(context.Context) bool
+	if initial.Cursor == nil {
+		timestamp := lastTrackTimestamp(initial)
+		read = func(ctx context.Context) bool {
+			return r.handleMessagesSnapshotFollowTick(ctx, input, events, &timestamp)
+		}
+	} else {
+		reader, ok := r.tracker.(cursorTrackReader)
+		if !ok || *initial.Cursor == "" {
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("follow track cursor unavailable",
 				aguievents.WithRunID(input.runID)), input)
 			return
+		}
+		cursor := *initial.Cursor
+		read = func(ctx context.Context) bool {
+			return r.drainCursorPages(ctx, input, events, reader, &cursor)
+		}
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for followCtx.Err() == nil {
+		select {
+		case <-followCtx.Done():
 		case <-ticker.C:
-			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime) {
-				return
+			if followCtx.Err() == nil && !read(followCtx) {
+				// A terminal event or error was already emitted unless the
+				// follow context prevented delivery.
+				if followCtx.Err() == nil {
+					return
+				}
 			}
 		}
+	}
+	if !input.terminalEmitted && ctx.Err() == nil && errors.Is(followCtx.Err(), context.DeadlineExceeded) {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow timeout",
+			aguievents.WithRunID(input.runID)), input)
 	}
 }
 
@@ -270,6 +311,9 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 	cursorTime *time.Time,
 ) bool {
 	trackEvents, err := r.tracker.GetEvents(ctx, input.key, session.WithEventTime(*cursorTime))
+	if ctx.Err() != nil {
+		return false
+	}
 	if err != nil {
 		if isEmptyTrackEventsError(err) {
 			return true
@@ -281,11 +325,63 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 	if trackEvents == nil || len(trackEvents.Events) == 0 {
 		return true
 	}
-	for _, trackEvent := range trackEvents.Events {
-		if !trackEvent.Timestamp.After(*cursorTime) {
-			continue
+	return r.emitFollowTrackEvents(ctx, input, events, trackEvents.Events, cursorTime)
+}
+
+func (r *runner) drainCursorPages(
+	ctx context.Context,
+	input *runInput,
+	events chan<- aguievents.Event,
+	reader cursorTrackReader,
+	cursor *string,
+) bool {
+	for ctx.Err() == nil {
+		page, next, err := reader.GetEventsWithCursor(ctx, input.key, *cursor)
+		if ctx.Err() != nil {
+			return false
 		}
-		*cursorTime = trackEvent.Timestamp
+		if err == nil {
+			switch {
+			case page == nil || next == "":
+				err = errors.New("follow track cursor unavailable")
+			case len(page.Events) > 0 && next == *cursor:
+				err = errors.New("follow track cursor did not advance")
+			}
+		}
+		if err != nil {
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("follow track events: %v", err),
+				aguievents.WithRunID(input.runID)), input)
+			return false
+		}
+		if !r.emitFollowTrackEvents(ctx, input, events, page.Events, nil) {
+			return false
+		}
+		if next == *cursor {
+			return true
+		}
+		// Even an empty page can advance past filtered entries.
+		*cursor = next
+	}
+	return false
+}
+
+func (r *runner) emitFollowTrackEvents(
+	ctx context.Context,
+	input *runInput,
+	events chan<- aguievents.Event,
+	trackEvents []session.TrackEvent,
+	cursorTime *time.Time,
+) bool {
+	for _, trackEvent := range trackEvents {
+		if ctx.Err() != nil {
+			return false
+		}
+		if cursorTime != nil {
+			if !trackEvent.Timestamp.After(*cursorTime) {
+				continue
+			}
+			*cursorTime = trackEvent.Timestamp
+		}
 		if len(trackEvent.Payload) == 0 {
 			continue
 		}

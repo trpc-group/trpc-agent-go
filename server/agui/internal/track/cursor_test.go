@@ -87,7 +87,10 @@ func TestGetEventsWithCursorLegacySessionRead(t *testing.T) {
 				return nil, denied
 			}
 			s := session.NewSession(key.AppName, key.UserID, key.SessionID)
-			s.Tracks = map[session.Track]*session.TrackEvents{TrackAGUI: expected}
+			fakeCursor := "without-storage-boundary"
+			synthetic := *expected
+			synthetic.Cursor = &fakeCursor
+			s.Tracks = map[session.Track]*session.TrackEvents{TrackAGUI: &synthetic}
 			return s, nil
 		}
 		reader := &tracker{sessionService: svc}

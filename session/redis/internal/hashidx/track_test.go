@@ -505,3 +505,25 @@ func TestClient_TrackEventsBoundaryScoreOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestTrackCursorAppendBeyondFloatPrecision(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "large-sequence"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, c.keys.TrackDataKey(key, "track"), "_seq", "9007199254740991").Err())
+	snapshot, err := c.ReadTrackCursor(ctx, key, "track", "")
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{Track: "track", Timestamp: time.Unix(1700000000, 0), Payload: json.RawMessage(fmt.Sprint(i))}, nil))
+	}
+	require.NotNil(t, snapshot.Cursor)
+	page, err := c.ReadTrackCursor(ctx, key, "track", *snapshot.Cursor)
+	require.NoError(t, err)
+	require.Len(t, page.Events, 3)
+	for i, evt := range page.Events {
+		require.Equal(t, fmt.Sprint(i), string(evt.Payload))
+	}
+}

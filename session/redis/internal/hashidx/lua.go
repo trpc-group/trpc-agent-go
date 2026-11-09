@@ -530,7 +530,9 @@ if not metaJSON then
 end
 
 -- Generate auto-increment ID via reserved "_seq" field in the data Hash
-local id = redis.call('HINCRBY', dataKey, '_seq', 1)
+redis.call('HINCRBY', dataKey, '_seq', 1)
+-- Lua numbers cannot represent every integer Redis accepts for HINCRBY.
+local id = redis.call('HGET', dataKey, '_seq')
 
 -- Store event data and time index
 redis.call('HSET', dataKey, id, payload)
