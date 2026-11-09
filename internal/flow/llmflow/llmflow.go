@@ -907,18 +907,6 @@ func (f *Flow) processStreamingResponses(
 const truncatedToolCallErrorMessage = "model output was truncated by the length limit; " +
 	"the partially generated tool calls were not executed"
 
-// truncatedToolCallRejector returns the invocation when a completed response
-// stopped at the output token limit while carrying tool calls and the
-// configured policy rejects them.
-func (p *streamingResponseProcessor) truncatedToolCallRejector(
-	response *model.Response,
-) *agent.Invocation {
-	if response == nil || !response.IsTruncatedToolCallResponse() {
-		return nil
-	}
-	return p.rejectingInvocation()
-}
-
 // rejectingInvocation returns the invocation when the configured policy rejects
 // truncated tool calls, and nil when the response must be processed as before.
 func (p *streamingResponseProcessor) rejectingInvocation() *agent.Invocation {
@@ -1070,9 +1058,11 @@ func (p *streamingResponseProcessor) process(
 	)
 	eventInvocation := p.eventInvocation()
 	var nativeSnapshot providerdata.ResponseSnapshot
+	var truncatedSnapshot truncatedOutputSnapshot
 	hasAfterCallbacks := p.flow.hasAfterModelCallbacks(p.currentInvocation)
 	if hasAfterCallbacks {
 		nativeSnapshot = providerdata.SnapshotResponse(response)
+		truncatedSnapshot = snapshotTruncatedOutput(response)
 	}
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
 		p.ctx,
@@ -1103,26 +1093,8 @@ func (p *streamingResponseProcessor) process(
 		}
 	}
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
-	// Remember the output-limit signal of the selected choice before any
-	// repair: text repair rewrites the finish reason to "tool_calls" once it
-	// turns visible text into structured tool calls, and later choices must not
-	// reject a valid call in the first one.
-	truncatedOutput := response != nil && !response.IsPartial &&
-		len(response.Choices) > 0 &&
-		response.Choices[0].HasOutputLimitFinishReason()
-	if rejectInvocation := p.truncatedToolCallRejector(response); rejectInvocation != nil {
-		p.rejectTruncatedToolCall(eventInvocation, rejectInvocation, response)
+	if !p.prepareToolCalls(eventInvocation, response, truncatedSnapshot) {
 		return false
-	}
-	p.repairToolCallArguments(response)
-	p.repairToolCallTextAndStats(response)
-	// Text repair can create structured tool calls from a response that had
-	// none, so apply the same policy to the original truncation signal.
-	if truncatedOutput && response.IsToolCallResponse() {
-		if rejectInvocation := p.rejectingInvocation(); rejectInvocation != nil {
-			p.rejectTruncatedToolCall(eventInvocation, rejectInvocation, response)
-			return false
-		}
 	}
 	if err := providerdata.ValidateResponse(response, p.producerInfo); err != nil {
 		*p.err = err

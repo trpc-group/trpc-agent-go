@@ -187,6 +187,7 @@ func TestProcessStreamingResponses_KeepsValidToolCallWhenAnotherChoiceTruncated(
 	require.NotNil(t, lastEvent)
 	require.Nil(t, lastEvent.Response.Error)
 	require.True(t, lastEvent.Response.IsToolCallResponse())
+	require.Len(t, lastEvent.Response.Choices, 2)
 	require.False(t, inv.EndInvocation)
 }
 
@@ -257,13 +258,9 @@ func TestTruncatedToolCallRejector(t *testing.T) {
 			p := &streamingResponseProcessor{
 				ctx:               context.Background(),
 				currentInvocation: tt.invocation,
+				eventChan:         make(chan *event.Event, 1),
 			}
-			got := p.truncatedToolCallRejector(tt.response)
-			if tt.wantReject {
-				require.NotNil(t, got)
-				return
-			}
-			require.Nil(t, got)
+			require.Equal(t, !tt.wantReject, p.prepareToolCalls(tt.invocation, tt.response, truncatedOutputSnapshot{}))
 		})
 	}
 }

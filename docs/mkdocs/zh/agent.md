@@ -492,6 +492,8 @@ agent := llmagent.New(
 
 **行为变更：** 已完成响应如果同时带有输出上限停止原因（`length`、Anthropic 的 `max_tokens` 或 Gemini 的 `MAX_TOKENS`）和工具调用，过去会被修复并执行；现在会在工具执行前拒绝，并以 `flow_error` 结束。依赖旧行为的应用可以传入 `agent.TruncatedToolCallPolicyIgnore` 保持原状。
 
+工具执行以第一个 choice 为准。该策略也适用于从文本修复得到的工具调用。`AfterModel` 回调如果保留了截断调用，仅修改停止原因不会解除保护。包含截断工具调用的备选 choice 会在响应写入会话历史前被移除。
+
 **使用示例：**
 
 ```go

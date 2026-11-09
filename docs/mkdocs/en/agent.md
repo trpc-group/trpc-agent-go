@@ -547,6 +547,8 @@ To prevent Agents from entering infinite loops or consuming excessive resources,
 
 **Behavior change:** a completed response that reports an output-limit finish reason (`length`, Anthropic `max_tokens` or Gemini `MAX_TOKENS`) together with tool calls used to be repaired and executed. It is now rejected before tool execution and the run ends with a `flow_error`; pass `agent.TruncatedToolCallPolicyIgnore` to keep the old behavior for applications that rely on it.
 
+The first choice controls tool execution. The policy also applies to calls recovered from text. An `AfterModel` callback that retains an output-limited call cannot clear the protection by changing its finish reason. Truncated alternatives that contain tool calls are removed before the response is recorded in session history.
+
 **Usage Example:**
 
 ```go

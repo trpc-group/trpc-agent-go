@@ -63,10 +63,11 @@ type truncatedWireRequest struct {
 // truncatedToolCallServer serves a provider that always finishes with
 // finish_reason=length while emitting a tool call whose arguments are cut off.
 type truncatedToolCallServer struct {
-	mu            sync.Mutex
-	requests      []truncatedWireRequest
-	resuming      atomic.Bool
-	textToolCalls atomic.Bool
+	mu                   sync.Mutex
+	requests             []truncatedWireRequest
+	resuming             atomic.Bool
+	textToolCalls        atomic.Bool
+	laterTruncatedChoice bool
 }
 
 func (s *truncatedToolCallServer) count() int {
@@ -98,21 +99,40 @@ func (s *truncatedToolCallServer) ServeHTTP(w http.ResponseWriter, r *http.Reque
 			"arguments": repairableArguments,
 		},
 	}
+	finishReason := model.FinishReasonLength
+	if s.laterTruncatedChoice {
+		call["function"].(map[string]any)["arguments"] = `{"file_path":"/mock/example.txt","content":"complete"}`
+		finishReason = "tool_calls"
+	}
 	if request.Stream {
 		call["index"] = 0
 	}
 	response := func(object string, choice map[string]any) map[string]any {
+		choices := []any{choice}
+		if s.laterTruncatedChoice && n == 1 {
+			choices = append(choices, map[string]any{
+				"index": 1,
+				"message": map[string]any{
+					"role": "assistant",
+					"tool_calls": []any{map[string]any{
+						"id": "call-unselected", "type": "function",
+						"function": map[string]any{"name": "file_write", "arguments": `{"content":"unselected-probe`},
+					}},
+				},
+				"finish_reason": model.FinishReasonLength,
+			})
+		}
 		return map[string]any{
 			"id":      fmt.Sprintf("response_%d", n),
 			"object":  object,
 			"created": 1,
 			"model":   "mock-length",
-			"choices": []any{choice},
+			"choices": choices,
 		}
 	}
 	// After the rejected truncated call, the provider answers the resumed run
 	// with a plain stop response.
-	if s.resuming.Load() {
+	if s.resuming.Load() || (s.laterTruncatedChoice && n > 1) {
 		if request.Stream {
 			w.Header().Set("Content-Type", "text/event-stream")
 			for _, choice := range []map[string]any{
@@ -159,7 +179,7 @@ func (s *truncatedToolCallServer) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		}
 		for _, choice := range []map[string]any{
 			{"index": 0, "delta": delta, "finish_reason": nil},
-			{"index": 0, "delta": map[string]any{}, "finish_reason": model.FinishReasonLength},
+			{"index": 0, "delta": map[string]any{}, "finish_reason": finishReason},
 		} {
 			data, _ := json.Marshal(response("chat.completion.chunk", choice))
 			fmt.Fprintf(w, "data: %s\n\n", data)
@@ -175,18 +195,19 @@ func (s *truncatedToolCallServer) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	_ = json.NewEncoder(w).Encode(response("chat.completion", map[string]any{
 		"index":         0,
 		"message":       message,
-		"finish_reason": model.FinishReasonLength,
+		"finish_reason": finishReason,
 	}))
 }
 
 type truncatedRun struct {
-	requests        int
-	toolCalls       int32
-	errors          []string
-	errorTypes      []string
-	resumeRequests  int
-	resumeToolCalls int32
-	resumeErrors    []string
+	requests           int
+	toolCalls          int32
+	errors             []string
+	errorTypes         []string
+	resumeRequests     int
+	resumeToolCalls    int32
+	resumeErrors       []string
+	historyToolCallIDs []string
 }
 
 // runTruncatedScenario runs one agent against the truncated tool-call provider.
@@ -195,10 +216,23 @@ func runTruncatedScenario(
 	stream bool,
 	policy agent.TruncatedToolCallPolicy,
 	textToolCalls bool,
+	extraOptions ...llmagent.Option,
 ) truncatedRun {
 	t.Helper()
 	stub := &truncatedToolCallServer{}
 	stub.textToolCalls.Store(textToolCalls)
+	return runTruncatedServer(t, stream, policy, stub, policy != agent.TruncatedToolCallPolicyIgnore, extraOptions...)
+}
+
+func runTruncatedServer(
+	t *testing.T,
+	stream bool,
+	policy agent.TruncatedToolCallPolicy,
+	stub *truncatedToolCallServer,
+	checkRejected bool,
+	extraOptions ...llmagent.Option,
+) truncatedRun {
+	t.Helper()
 	server := httptest.NewServer(stub)
 	defer server.Close()
 
@@ -230,6 +264,7 @@ func runTruncatedScenario(
 	if policy != "" {
 		opts = append(opts, llmagent.WithTruncatedToolCallPolicy(policy))
 	}
+	opts = append(opts, extraOptions...)
 	a := llmagent.New("main", opts...)
 
 	svc := inmemory.NewSessionService()
@@ -243,7 +278,7 @@ func runTruncatedScenario(
 		agent.WithToolCallArgumentsJSONRepairEnabled(true),
 		agent.WithDisableTracing(true),
 	}
-	if textToolCalls {
+	if stub.textToolCalls.Load() {
 		runOpts = append(runOpts, agent.WithToolCallTextRepairEnabled(true))
 	}
 	events, err := r.Run(ctx, "user", "session", model.NewUserMessage("Write a file."), runOpts...)
@@ -266,22 +301,24 @@ func runTruncatedScenario(
 	result.requests = stub.count()
 	result.toolCalls = toolCalls.Load()
 
-	// A rejected truncated call must not be persisted as replayable history.
-	if policy != agent.TruncatedToolCallPolicyIgnore {
-		sess, err := svc.GetSession(ctx, session.Key{
-			AppName:   "truncated-policy",
-			UserID:    "user",
-			SessionID: "session",
-		})
-		if err != nil {
-			t.Fatalf("get session: %v", err)
-		}
-		for _, e := range sess.Events {
-			if e.Response != nil && !e.IsPartial && e.IsToolCallResponse() {
-				t.Fatalf("rejected tool call was persisted as completed history")
+	sess, err := svc.GetSession(ctx, session.Key{
+		AppName:   "truncated-policy",
+		UserID:    "user",
+		SessionID: "session",
+	})
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	for _, e := range sess.Events {
+		if e.Response != nil && !e.IsPartial {
+			result.historyToolCallIDs = append(result.historyToolCallIDs, e.Response.GetToolCallIDs()...)
+			if checkRejected && e.IsToolCallResponse() {
+				t.Fatalf("rejected tool call was persisted as completed history (tool executions: %d)", result.toolCalls)
 			}
 		}
+	}
 
+	if checkRejected {
 		// A resumed run must start a fresh model call instead of replaying the
 		// rejected truncated call.
 		stub.resuming.Store(true)
@@ -364,5 +401,83 @@ func TestTruncatedToolCallIgnorePolicy(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(result.errors, " | "), maxLLMExceededMessage) {
 		t.Errorf("terminal errors = %q; want %q", result.errors, maxLLMExceededMessage)
+	}
+}
+
+func TestTruncatedToolCallStillRejectedAfterCallback(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		stream, clone, text bool
+	}{
+		{name: "in-place", stream: true},
+		{name: "copied response", clone: true},
+		{name: "retained text", clone: true, text: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callbacks := model.NewCallbacks().RegisterAfterModel(
+				func(_ context.Context, _ *model.Request, rsp *model.Response, _ error) (*model.Response, error) {
+					if rsp == nil || rsp.IsPartial || len(rsp.Choices) == 0 || !rsp.Choices[0].HasOutputLimitFinishReason() {
+						return nil, nil
+					}
+					if tc.clone {
+						rsp = rsp.Clone()
+					}
+					rsp.Choices[0].FinishReason = nil
+					if tc.clone {
+						return rsp, nil
+					}
+					return nil, nil
+				},
+			)
+			result := runTruncatedScenario(t, tc.stream, "", tc.text, llmagent.WithModelCallbacks(callbacks))
+			if result.requests != 1 || result.toolCalls != 0 || !strings.Contains(strings.Join(result.errors, " | "), truncatedToolCallMessage) {
+				t.Fatalf("requests=%d tool calls=%d errors=%v; want one request and a truncation error", result.requests, result.toolCalls, result.errors)
+			}
+			if result.resumeRequests != 1 || result.resumeToolCalls != 0 || len(result.resumeErrors) != 0 {
+				t.Fatalf("unexpected resume after rejected callback response: %+v", result)
+			}
+		})
+	}
+}
+
+func TestTruncatedToolCallCallbackCanReplaceWithNewCall(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(_ context.Context, _ *model.Request, rsp *model.Response, _ error) (*model.Response, error) {
+			if rsp == nil || !rsp.IsTruncatedToolCallResponse() {
+				return nil, nil
+			}
+			replacement := rsp.Clone()
+			reason := "tool_calls"
+			replacement.Choices[0].FinishReason = &reason
+			call := &replacement.Choices[0].Message.ToolCalls[0]
+			call.ID = "replacement-" + call.ID
+			call.Function.Arguments = []byte(`{"file_path":"/mock/replacement.txt","content":"complete"}`)
+			return replacement, nil
+		},
+	)
+	result := runTruncatedServer(t, false, "", &truncatedToolCallServer{}, false, llmagent.WithModelCallbacks(callbacks))
+	if result.requests != 3 || result.toolCalls != 3 || !strings.Contains(strings.Join(result.errors, " | "), maxLLMExceededMessage) {
+		t.Fatalf("replacement calls did not execute: %+v", result)
+	}
+}
+
+func TestUnselectedTruncatedToolCallStaysOutOfHistory(t *testing.T) {
+	stub := &truncatedToolCallServer{laterTruncatedChoice: true}
+	result := runTruncatedServer(t, false, "", stub, false)
+	if result.requests != 2 || result.toolCalls != 1 || len(result.errors) != 0 {
+		t.Fatalf("first choice did not execute normally: %+v", result)
+	}
+	for _, id := range result.historyToolCallIDs {
+		if id == "call-unselected" {
+			t.Errorf("unselected truncated call persisted: %v", result.historyToolCallIDs)
+		}
+	}
+	for _, message := range stub.requests[1].Messages {
+		if strings.Contains(string(message.ToolCalls), "call-unselected") {
+			t.Error("next model request contained the unselected truncated call")
+		}
+		if strings.Contains(message.Content, "unselected-probe") {
+			t.Error("next model request contained the unselected truncated arguments as text")
+		}
 	}
 }
