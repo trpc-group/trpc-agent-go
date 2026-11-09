@@ -551,6 +551,18 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	traceChatWithState(span, attributes, nil)
 }
 
+// TraceRejectedChatResponse records token usage and the model's finish reason
+// without recording the rejected response payload.
+func TraceRejectedChatResponse(span trace.Span, usage *model.Usage, finishReason string) {
+	if !span.IsRecording() {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		attribute.StringSlice(semconvtrace.KeyGenAIResponseFinishReasons, []string{finishReason}),
+	}
+	span.SetAttributes(appendResponseUsageAttributes(attrs, usage)...)
+}
+
 func traceChatWithState(span trace.Span, attributes *TraceChatAttributes, state *ChatTraceState) {
 	if !span.IsRecording() {
 		return
@@ -674,29 +686,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		attrs = append(attrs, responseErrorAttributes(e, errorTypeFallback)...)
 	}
 
-	// Add usage attributes
-	if rsp.Usage != nil {
-		attrs = append(attrs,
-			attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
-			attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
-		)
-		if rsp.Usage.TotalTokens != 0 {
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, rsp.Usage.TotalTokens))
-		}
-		// Prompt cache tokens (if provided by the model provider)
-		if cached := rsp.Usage.PromptTokensDetails.CachedTokens; cached != 0 {
-			// OpenAI: cached_tokens
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, cached))
-		}
-		if cacheRead := rsp.Usage.PromptTokensDetails.CacheReadTokens; cacheRead != 0 {
-			// Anthropic: cache_read_tokens
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cacheRead))
-		}
-		if cacheCreation := rsp.Usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
-			// Anthropic: cache_creation_tokens
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
-		}
-	}
+	attrs = appendResponseUsageAttributes(attrs, rsp.Usage)
 
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {
@@ -724,6 +714,29 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		return json.Marshal(rsp)
 	})
 
+	return attrs
+}
+
+func appendResponseUsageAttributes(attrs []attribute.KeyValue, usage *model.Usage) []attribute.KeyValue {
+	if usage == nil {
+		return attrs
+	}
+	attrs = append(attrs,
+		attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, usage.PromptTokens),
+		attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, usage.CompletionTokens),
+	)
+	if usage.TotalTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, usage.TotalTokens))
+	}
+	if cached := usage.PromptTokensDetails.CachedTokens; cached != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, cached))
+	}
+	if cacheRead := usage.PromptTokensDetails.CacheReadTokens; cacheRead != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cacheRead))
+	}
+	if cacheCreation := usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
+	}
 	return attrs
 }
 

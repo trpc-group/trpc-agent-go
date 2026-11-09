@@ -16,18 +16,19 @@ import (
 )
 
 type truncatedOutputSnapshot struct {
-	calls []truncatedCall
-	texts []truncatedText
+	calls      []truncatedCall
+	texts      []truncatedText
+	traceUsage *model.Usage
 }
 
 type truncatedCall struct {
-	choiceIndex         int
-	id, name, arguments string
+	choiceIndex                       int
+	id, name, arguments, finishReason string
 }
 
 type truncatedText struct {
-	choiceIndex int
-	value       string
+	choiceIndex         int
+	value, finishReason string
 }
 
 // Snapshot only executable material from completed, output-limited choices.
@@ -42,13 +43,15 @@ func snapshotTruncatedOutput(response *model.Response) truncatedOutputSnapshot {
 		if !choice.HasOutputLimitFinishReason() {
 			continue
 		}
+		reason := *choice.FinishReason
 		for _, message := range [...]model.Message{choice.Message, choice.Delta} {
 			for _, call := range message.ToolCalls {
 				snapshot.calls = append(snapshot.calls, truncatedCall{
-					choiceIndex: choice.Index,
-					id:          call.ID,
-					name:        call.Function.Name,
-					arguments:   string(call.Function.Arguments),
+					choiceIndex:  choice.Index,
+					id:           call.ID,
+					name:         call.Function.Name,
+					arguments:    string(call.Function.Arguments),
+					finishReason: reason,
 				})
 			}
 		}
@@ -56,28 +59,28 @@ func snapshotTruncatedOutput(response *model.Response) truncatedOutputSnapshot {
 			continue
 		}
 		if text, ok := repairableMessageText(&choice.Message); ok && strings.Contains(text, textToolCallOpenTag) {
-			snapshot.texts = append(snapshot.texts, truncatedText{choiceIndex: choice.Index, value: text})
+			snapshot.texts = append(snapshot.texts, truncatedText{choiceIndex: choice.Index, value: text, finishReason: reason})
 		}
 	}
 	return snapshot
 }
 
-func (s truncatedOutputSnapshot) retainedIn(choice model.Choice) bool {
+func (s truncatedOutputSnapshot) retainedFinishReason(choice model.Choice) string {
 	if len(s.calls) == 0 && len(s.texts) == 0 {
-		return false
+		return ""
 	}
 	for _, message := range [...]model.Message{choice.Message, choice.Delta} {
 		for _, call := range message.ToolCalls {
 			for _, before := range s.calls {
 				if call.ID != "" && before.id != "" {
 					if call.ID == before.id {
-						return true
+						return before.finishReason
 					}
 					continue
 				}
 				if before.choiceIndex == choice.Index && before.name == call.Function.Name &&
 					before.arguments == string(call.Function.Arguments) {
-					return true
+					return before.finishReason
 				}
 			}
 		}
@@ -85,26 +88,32 @@ func (s truncatedOutputSnapshot) retainedIn(choice model.Choice) bool {
 	for _, before := range s.texts {
 		if before.choiceIndex == choice.Index {
 			if text, ok := repairableMessageText(&choice.Message); ok && text == before.value {
-				return true
+				return before.finishReason
 			}
 		}
 	}
-	return false
+	return ""
 }
 
-func (s truncatedOutputSnapshot) truncatedChoices(response *model.Response) []bool {
+func (s truncatedOutputSnapshot) truncatedChoiceReasons(response *model.Response) []string {
 	if response == nil || response.IsPartial {
 		return nil
 	}
-	var truncated []bool
+	var truncated []string
 	for i, choice := range response.Choices {
-		if !choice.HasOutputLimitFinishReason() && !s.retainedIn(choice) {
+		var reason string
+		if choice.HasOutputLimitFinishReason() {
+			reason = *choice.FinishReason
+		} else {
+			reason = s.retainedFinishReason(choice)
+		}
+		if reason == "" {
 			continue
 		}
 		if truncated == nil {
-			truncated = make([]bool, len(response.Choices))
+			truncated = make([]string, len(response.Choices))
 		}
-		truncated[i] = true
+		truncated[i] = reason
 	}
 	return truncated
 }
@@ -119,20 +128,20 @@ func (p *streamingResponseProcessor) prepareToolCalls(
 	snapshot truncatedOutputSnapshot,
 ) bool {
 	invocation := p.rejectingInvocation()
-	var truncated []bool
+	var truncated []string
 	if invocation != nil {
 		// Capture reasons before text repair changes them to "tool_calls".
-		truncated = snapshot.truncatedChoices(response)
+		truncated = snapshot.truncatedChoiceReasons(response)
 	}
-	rejectSelected := len(truncated) > 0 && truncated[0]
+	rejectSelected := len(truncated) > 0 && truncated[0] != ""
 	if rejectSelected && response.IsToolCallResponse() {
-		p.rejectTruncatedToolCall(eventInvocation, invocation, response)
+		p.rejectTruncatedToolCall(eventInvocation, invocation, response, truncated[0], snapshot.traceUsage)
 		return false
 	}
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
 	if rejectSelected && response.IsToolCallResponse() {
-		p.rejectTruncatedToolCall(eventInvocation, invocation, response)
+		p.rejectTruncatedToolCall(eventInvocation, invocation, response, truncated[0], snapshot.traceUsage)
 		return false
 	}
 	if len(truncated) > 1 {
@@ -141,7 +150,7 @@ func (p *streamingResponseProcessor) prepareToolCalls(
 		choices := response.Choices
 		kept := choices[:1]
 		for i := 1; i < len(choices); i++ {
-			if !truncated[i] || !choiceHasToolCalls(choices[i]) {
+			if truncated[i] == "" || !choiceHasToolCalls(choices[i]) {
 				kept = append(kept, choices[i])
 			}
 		}

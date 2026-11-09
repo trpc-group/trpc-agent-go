@@ -926,6 +926,8 @@ func (p *streamingResponseProcessor) rejectTruncatedToolCall(
 	eventInvocation *agent.Invocation,
 	invocation *agent.Invocation,
 	response *model.Response,
+	finishReason string,
+	traceUsage *model.Usage,
 ) {
 	errEvent := event.NewErrorEvent(
 		flowInvocationID(eventInvocation),
@@ -937,9 +939,20 @@ func (p *streamingResponseProcessor) rejectTruncatedToolCall(
 		usage := *response.Usage
 		errEvent.Response.Usage = &usage
 	}
+	if p.startedSpan && response != nil {
+		itelemetry.TraceRejectedChatResponse(p.span, traceUsage, finishReason)
+	}
 	agent.EmitEvent(p.ctx, eventInvocation, p.eventChan, errEvent)
 	invocation.EndInvocation = true
 	p.lastEvent = errEvent
+}
+
+func (p *streamingResponseProcessor) snapshotTraceUsage(response *model.Response) *model.Usage {
+	if !p.startedSpan || response == nil || response.Usage == nil {
+		return nil
+	}
+	usage := *response.Usage
+	return &usage
 }
 
 type streamingResponseProcessor struct {
@@ -1051,6 +1064,8 @@ func (p *streamingResponseProcessor) process(
 	)
 	p.updateMetricsState()
 	trackModelResponseTelemetry(response, p.tracker)
+	// Timing attachment can create a Usage even when the model did not report tokens.
+	traceUsage := p.snapshotTraceUsage(response)
 	callbackTimingAttachment := responseusage.AttachTimingForCallback(
 		response,
 		p.timingInfo,
@@ -1064,6 +1079,7 @@ func (p *streamingResponseProcessor) process(
 		nativeSnapshot = providerdata.SnapshotResponse(response)
 		truncatedSnapshot = snapshotTruncatedOutput(response)
 	}
+	truncatedSnapshot.traceUsage = traceUsage
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
 		p.ctx,
 		eventInvocation,
