@@ -45,12 +45,13 @@ func truncatedToolCallResponse(reason string) *model.Response {
 
 func processTruncatedResponse(
 	t *testing.T,
+	opts Options,
 	inv *agent.Invocation,
 	req *model.Request,
 	response *model.Response,
 ) (*event.Event, error, chan *event.Event) {
 	t.Helper()
-	f := New(nil, nil, Options{})
+	f := New(nil, nil, opts)
 	responseSeq := func(yield func(*model.Response) bool) {
 		yield(response)
 	}
@@ -75,6 +76,7 @@ func TestProcessStreamingResponses_RejectsTruncatedToolCall(t *testing.T) {
 	inv := agent.NewInvocation()
 	lastEvent, err, eventChan := processTruncatedResponse(
 		t,
+		Options{},
 		inv,
 		&model.Request{},
 		truncatedToolCallResponse(model.FinishReasonLength),
@@ -94,6 +96,7 @@ func TestProcessStreamingResponses_RejectsAnthropicOutputLimit(t *testing.T) {
 	inv := agent.NewInvocation()
 	lastEvent, err, _ := processTruncatedResponse(
 		t,
+		Options{},
 		inv,
 		&model.Request{},
 		truncatedToolCallResponse("max_tokens"),
@@ -125,7 +128,7 @@ func TestProcessStreamingResponses_RejectsTextRepairedTruncatedToolCall(t *testi
 			},
 		}},
 	}
-	lastEvent, err, _ := processTruncatedResponse(t, inv, req, response)
+	lastEvent, err, _ := processTruncatedResponse(t, Options{}, inv, req, response)
 	require.NoError(t, err)
 	require.NotNil(t, lastEvent)
 	require.NotNil(t, lastEvent.Response.Error)
@@ -137,6 +140,7 @@ func TestProcessStreamingResponses_IgnorePolicyKeepsTruncatedToolCall(t *testing
 	inv := ignoreTruncatedToolCallsInvocation()
 	lastEvent, err, eventChan := processTruncatedResponse(
 		t,
+		Options{},
 		inv,
 		&model.Request{},
 		truncatedToolCallResponse(model.FinishReasonLength),
@@ -147,6 +151,61 @@ func TestProcessStreamingResponses_IgnorePolicyKeepsTruncatedToolCall(t *testing
 	require.True(t, lastEvent.Response.IsToolCallResponse())
 	require.False(t, inv.EndInvocation)
 	require.Len(t, eventChan, 1)
+}
+
+func TestProcessStreamingResponses_TruncatedCallIdentityAfterCallback(t *testing.T) {
+	const originalArgs = `{"content":"before"}`
+	const changedArgs = `{"content":"edited"}`
+	tests := []struct {
+		name          string
+		originalID    string
+		callbackID    string
+		callbackArgs  string
+		wantRejection bool
+	}{
+		{"same ID with edited arguments", "call-1", "call-1", changedArgs, true},
+		{"new ID with identical arguments", "call-1", "call-2", originalArgs, false},
+		{"removed ID with identical arguments", "call-1", "", originalArgs, true},
+		{"ID-less replacement edits arguments in place", "", "", changedArgs, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := truncatedToolCallResponse(model.FinishReasonLength)
+			call := &response.Choices[0].Message.ToolCalls[0]
+			call.ID = tt.originalID
+			call.Function.Arguments = []byte(originalArgs)
+			opts := Options{ModelCallbacks: model.NewCallbacks().RegisterAfterModel(
+				func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+					choice := &args.Response.Choices[0]
+					choice.FinishReason = nil
+					call := &choice.Message.ToolCalls[0]
+					call.ID = tt.callbackID
+					// Mutate the original buffer to exercise the pre-callback snapshot.
+					copy(call.Function.Arguments, tt.callbackArgs)
+					return nil, nil
+				},
+			)}
+			inv := agent.NewInvocation()
+			lastEvent, err, events := processTruncatedResponse(t, opts, inv, &model.Request{}, response)
+			require.NoError(t, err)
+			require.NotNil(t, lastEvent)
+			require.Len(t, events, 1)
+			if tt.wantRejection {
+				require.NotNil(t, lastEvent.Response.Error)
+				require.Contains(t, lastEvent.Response.Error.Message, "truncated by the length limit")
+				require.False(t, lastEvent.Response.IsToolCallResponse())
+				require.True(t, inv.EndInvocation)
+				return
+			}
+			require.Nil(t, lastEvent.Response.Error)
+			require.False(t, inv.EndInvocation)
+			require.True(t, lastEvent.Response.IsToolCallResponse())
+			calls := lastEvent.Response.Choices[0].Message.ToolCalls
+			require.Len(t, calls, 1)
+			require.Equal(t, tt.callbackID, calls[0].ID)
+			require.JSONEq(t, tt.callbackArgs, string(calls[0].Function.Arguments))
+		})
+	}
 }
 
 // TestProcessStreamingResponses_KeepsValidToolCallWhenAnotherChoiceTruncated
@@ -182,7 +241,7 @@ func TestProcessStreamingResponses_KeepsValidToolCallWhenAnotherChoiceTruncated(
 		},
 	}
 	inv := agent.NewInvocation()
-	lastEvent, err, _ := processTruncatedResponse(t, inv, &model.Request{}, response)
+	lastEvent, err, _ := processTruncatedResponse(t, Options{}, inv, &model.Request{}, response)
 	require.NoError(t, err)
 	require.NotNil(t, lastEvent)
 	require.Nil(t, lastEvent.Response.Error)
