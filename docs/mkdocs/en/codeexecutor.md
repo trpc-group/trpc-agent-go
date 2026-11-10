@@ -259,9 +259,14 @@ terminal. The current call still returns an error without replaying the
 operation. After successful recreation, the next call uses the new instance.
 
 Files, processes, and interpreter state from the previous sandbox are lost.
-When the framework manages the workspace, it initializes it again on the
-replacement. Callers using `Sandbox()` directly need to fetch the instance
-again after recreation.
+The framework reinitializes managed workspaces on the replacement. If you
+manage workspaces directly, operations such as `RunProgram` return
+`codeexecutor.ErrWorkspaceStale` for an old handle. Call `CreateWorkspace`
+again and stage any required inputs.
+
+Calling `Sandbox()` or using the returned instance directly does not trigger
+recreation. After an executor operation triggers recreation, call
+`Sandbox()` again to get the new instance.
 
 ## Workspace Layout
 
