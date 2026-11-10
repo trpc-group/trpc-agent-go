@@ -605,6 +605,9 @@ func (r *workspaceRuntime) RunProgram(
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
 	}
+	if r.ce != nil && r.ce.maxProgramTimeout > 0 && timeout > r.ce.maxProgramTimeout {
+		timeout = r.ce.maxProgramTimeout
+	}
 
 	cwd := ws.Path
 	if spec.Cwd != "" {

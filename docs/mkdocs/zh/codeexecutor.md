@@ -179,6 +179,12 @@ Workspace 文件系统操作仍使用 `/execute`，本次迁移仅覆盖程序�
 
 - `RunProgramSpec.Timeout` 非正时默认 **30 秒**，覆盖目录准备和命令执行。
   `WithExecutionTimeout` 作用于代码单元，不控制 workspace 程序。
+- `WithMaxProgramTimeout` 可限制每次程序执行的最大超时，在解析默认值后生效。
+  直接调用、Engine 调用和 `workspace_exec` 均受约束；零值或负值不设上限。
+  例如，`e2b.WithMaxProgramTimeout(10*time.Second)` 会将模型的
+  `timeout_sec: 60` 限制为 10 秒，传入 5 秒则仍为 5 秒。工具未传超时时，
+  先使用原有的 5 分钟默认值，再应用上限。该选项不影响 `ExecuteCode`、
+  workspace 文件操作或 sandbox 寿命；代码单元仍单独配置 `WithExecutionTimeout`。
 - stdout/stderr 保留原始字节、末尾换行及与旧哨兵字符串相同的内容，不做截断。
 - 正常的非零退出通过 `RunResult.ExitCode` 返回，Go error 为 nil。
   调用方取消、HTTP/RPC 故障返回错误；只有进程自身的 deadline 设置 `TimedOut`，

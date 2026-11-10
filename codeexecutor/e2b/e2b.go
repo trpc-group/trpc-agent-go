@@ -103,6 +103,16 @@ func WithExecutionTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.executionTimeout = t }
 }
 
+// WithMaxProgramTimeout caps the timeout of each RunProgram invocation,
+// including calls through Engine and workspace_exec. The cap is applied after
+// resolving the invocation's default timeout; it does not replace that default.
+// A non-positive value leaves program timeouts uncapped (the default).
+// This option does not affect ExecuteCode, workspace file operations, or the
+// sandbox lifetime. WithExecutionTimeout separately controls ExecuteCode.
+func WithMaxProgramTimeout(t time.Duration) Option {
+	return func(c *CodeExecutor) { c.maxProgramTimeout = t }
+}
+
 // WithEnvVars sets environment variables injected into the sandbox at start.
 func WithEnvVars(vars map[string]string) Option {
 	return func(c *CodeExecutor) { c.envVars = vars }
@@ -185,8 +195,9 @@ type CodeExecutor struct {
 	sandboxID      string
 
 	// Execution-level options.
-	executionTimeout time.Duration
-	defaultLanguage  ci.RunCodeLanguage
+	executionTimeout  time.Duration
+	maxProgramTimeout time.Duration
+	defaultLanguage   ci.RunCodeLanguage
 
 	// Workspace integration (runs entirely inside the sandbox).
 	sandboxRunBase       string
