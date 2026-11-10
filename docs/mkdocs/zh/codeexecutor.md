@@ -226,9 +226,12 @@ executor, err := e2b.New(
 旧沙箱中的文件、进程和解释器状态不会恢复。框架会在新沙箱上重新初始化它管理的工作区。
 如果自行管理工作区，用旧句柄调用 `RunProgram` 等操作会收到 `codeexecutor.ErrWorkspaceStale`。
 请重新调用 `CreateWorkspace`，并准备所需的输入文件。
+触发恢复的操作可能已产生副作用，返回的错误可能同时匹配 `ErrWorkspaceStale` 和 `ErrWorkspaceRetryUnsafe`。
+只有 `codeexecutor.IsWorkspaceRetrySafe(err)` 返回 true 时，才可以自动重试原操作。
 
 调用 `Sandbox()` 或直接操作它返回的实例，都不会触发重建。
-执行器操作触发重建后，再调用 `Sandbox()` 获取新实例。
+重建失败时，`Sandbox()` 可能仍返回旧实例，后续执行器操作可以再次尝试创建。
+比较操作前后的 `SandboxID()`。如果 ID 变为不同的非空值，就可以用 `Sandbox()` 获取新实例。
 
 ## Workspace 中有哪些目录
 

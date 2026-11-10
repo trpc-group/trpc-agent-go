@@ -263,10 +263,15 @@ The framework reinitializes managed workspaces on the replacement. If you
 manage workspaces directly, operations such as `RunProgram` return
 `codeexecutor.ErrWorkspaceStale` for an old handle. Call `CreateWorkspace`
 again and stage any required inputs.
+An operation that triggers recovery can return both `ErrWorkspaceStale` and
+`ErrWorkspaceRetryUnsafe` because it may already have produced side effects.
+Retry automatically only if `codeexecutor.IsWorkspaceRetrySafe(err)` returns true.
 
 Calling `Sandbox()` or using the returned instance directly does not trigger
-recreation. After an executor operation triggers recreation, call
-`Sandbox()` again to get the new instance.
+recreation. If recreation fails, `Sandbox()` may still return the old
+instance, and a later executor operation can retry creation. Compare
+`SandboxID()` before and after the operation. A different, non-empty ID
+indicates a replacement that you can fetch with `Sandbox()`.
 
 ## Workspace Layout
 
