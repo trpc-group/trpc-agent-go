@@ -208,10 +208,9 @@ Basic 认证，例如在 HTTPS 上使用 `Authorization: Basic dXNlcjo=` 表示 
 账号。kernel 进程内临时修改的环境不会被原生进程继承；自定义模板迁移时仍需
 核对 HOME/PATH。
 
-### E2B sandbox 重建
+### E2B 沙箱自动重建
 
-`WithAutoRecreate` 默认关闭。执行器会一直使用 `New` 创建或连接的那个
-sandbox，实例过期后也是如此。只有执行器自己拥有的 sandbox 才应打开该选项：
+`WithAutoRecreate` 默认关闭。可为执行器自行创建的沙箱开启自动重建。
 
 ```go
 executor, err := e2b.New(
@@ -220,29 +219,11 @@ executor, err := e2b.New(
 )
 ```
 
-`WithAutoRecreate(true)` 不能和 `WithSandboxID` 一起使用。外部传入的 sandbox
-不属于这个执行器，构造时会直接返回错误，而不是忽略该选项。`Pause` 也会交出
-所有权，被暂停的 sandbox 不会被重建。
+开启时传入 `WithSandboxID` 会导致构造函数返回错误。通过 `Pause` 暂停的沙箱也不会自动重建。
 
-重建会用相同的模板、环境变量、元数据和连接配置创建一个新实例，不会恢复旧
-实例。文件、进程、解释器变量和临时数据都不会保留。逻辑 workspace ID 可以
-不变，但目录、暂存文件、bootstrap 和 workspace init hook 会通过现有的
-workspace registry 在新实例上重新执行。开启该选项后，新路径会带上进程内的
-代际编号，因此替换前拿到的句柄不会指向新实例。workspace 实例 ID 在同一进程的
-不同执行器之间互不相同，并在该执行器发布替换实例后改变。
+执行遇到可能由沙箱失效引起的错误时，执行器会查询管理 API。确认实例已不存在或处于终态后，才会用原配置创建新实例。当前调用仍返回错误，不会自动重跑。重建成功后，下一次调用使用新实例。
 
-执行器不会在后台轮询。只有管理 API 确认当前 sandbox 已不存在，或状态已进入
-终态（例如 killed、expired）时，才会替换它。到期时间、传输或执行超时、丢失
-的响应、HTTP 5xx，以及文件或进程的 404，都不能证明 sandbox 已被删除。代码
-解释器的 HTTP 502 或 504，以及被报告为 unimplemented 的 envd HTTP 404，只会
-触发一次管理 API 查询。返回 running 或 paused 时，当前实例保持不变。同一次
-失效的调用方共用一次创建。创建失败不会在内部循环重试，后续调用可以再试。
-已经发到 sandbox 的本次调用不会自动重放，`ExecuteCode` 也不会重跑已经执行过
-的代码块。输给 `Close` 或 `Pause` 的新实例会被删除。新实例发布后，被替换的
-那个仍由执行器拥有的 sandbox 也会被删除。
-
-`Sandbox()` 返回调用当时已发布的实例，持有该指针不会跟随之后的替换。
-`SandboxID()` 返回当前已发布实例的 ID；没有已发布实例时为空。
+旧沙箱中的文件、进程和解释器状态不会恢复。通过框架使用工作区时，框架会在新沙箱上重新初始化工作区。直接使用 `Sandbox()` 的调用方需要在重建后重新获取实例。
 
 ## Workspace 中有哪些目录
 
