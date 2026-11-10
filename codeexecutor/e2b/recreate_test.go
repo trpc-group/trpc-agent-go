@@ -191,6 +191,27 @@ func TestAutoRecreateTerminalStateAndCreationOptions(t *testing.T) {
 }
 
 func TestAutoRecreateDoesNotTreatOrdinaryFailuresAsDeletion(t *testing.T) {
+	t.Run("management API unavailable", func(t *testing.T) {
+		srv := newLifeServer(t)
+		executor := srv.executor(t)
+		first := executor.SandboxID()
+		srv.setInfo(first, http.StatusServiceUnavailable, "", "")
+		srv.setExecute(func(string, string) (int, string) {
+			return http.StatusNotFound, "sandbox endpoint unavailable"
+		})
+
+		_, err := executor.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{Code: "print('hello')"}},
+		})
+		var notFound *ci.NotFoundError
+		require.ErrorAs(t, err, &notFound)
+		require.NotErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		assert.Equal(t, first, executor.SandboxID())
+		counts := srv.counts()
+		assert.Equal(t, []string{first}, counts.infoCalls)
+		assert.Equal(t, 1, counts.attempts)
+	})
+
 	t.Run("file 404 and past end time", func(t *testing.T) {
 		srv := newLifeServer(t)
 		executor := srv.executor(t)
@@ -498,6 +519,34 @@ func TestAutoRecreateRunProgramRecovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok\n", result.Stdout)
 	assert.Contains(t, replacement.Path, "/inst/2/")
+}
+
+func TestAutoRecreateWhenCreatingWorkspace(t *testing.T) {
+	srv := newLifeServer(t)
+	executor := srv.executor(t)
+	first := executor.SandboxID()
+	srv.setInfo(first, http.StatusNotFound, "", "")
+	srv.setExecute(func(host, _ string) (int, string) {
+		if hostHasSandbox(host, first) {
+			return http.StatusNotFound, "sandbox deleted"
+		}
+		return http.StatusOK, ndjsonLines(stdoutMsg("ok\n"))
+	})
+
+	ctx := context.Background()
+	_, err := executor.CreateWorkspace(ctx, "session", codeexecutor.WorkspacePolicy{})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.False(t, codeexecutor.IsWorkspaceRetrySafe(err))
+	require.NotEqual(t, first, executor.SandboxID())
+	assert.Len(t, srv.counts().executeCodes, 1, "failed setup must not be replayed")
+
+	workspace, err := executor.CreateWorkspace(ctx, "session", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, "session", workspace.ID)
+	counts := srv.counts()
+	require.Len(t, counts.executeCodes, 2)
+	assert.Contains(t, counts.executeCodes[1], workspace.Path)
+	assert.Equal(t, 2, counts.attempts)
 }
 
 func TestAutoRecreateWorkspaceRebuildAndStaleHandles(t *testing.T) {
