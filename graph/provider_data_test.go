@@ -182,13 +182,15 @@ type nativeProviderDataTestModel struct {
 	info     model.Info
 	response *model.Response
 	requests int
+	last     *model.Request
 }
 
 func (m *nativeProviderDataTestModel) GenerateContent(
-	context.Context,
-	*model.Request,
+	_ context.Context,
+	request *model.Request,
 ) (<-chan *model.Response, error) {
 	m.requests++
+	m.last = request
 	ch := make(chan *model.Response, 1)
 	ch <- m.response
 	close(ch)
@@ -319,7 +321,7 @@ func TestProcessModelResponse_ValidatesFinalNativeRecordsBeforeDispatch(t *testi
 	}
 }
 
-func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
+func TestLLMRunnerExecuteModel_DegradesForeignNativeHistory(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("test")
 	ctx, span := tracer.Start(context.Background(), "test")
 	defer span.End()
@@ -347,10 +349,17 @@ func TestLLMRunnerExecuteModel_ValidatesNativeHistory(t *testing.T) {
 	llm, err := run(nativeTestInfo, history)
 	require.NoError(t, err)
 	require.Equal(t, 1, llm.requests)
+	requireNativeTestMessage(t, llm.last.Messages[1])
 
 	llm, err = run(model.Info{Name: "other-model", ProviderDataProtocol: nativeTestProvider}, history)
-	require.ErrorContains(t, err, "provider data message 1")
-	require.Zero(t, llm.requests, "a foreign native record must not reach the model")
+	require.NoError(t, err, "a foreign native record degrades instead of failing the node")
+	require.Equal(t, 1, llm.requests, "degraded history still reaches the model")
+	require.Nil(t, llm.last.Messages[1].ProviderData,
+		"the degraded record is replayed as ordinary history")
+	require.Equal(t, native.Content, llm.last.Messages[1].Content,
+		"the projected text survives degradation")
+	require.NotNil(t, history[1].ProviderData,
+		"graph state messages are never mutated")
 
 	legacy := withoutNativeProviderData(history)
 	llm, err = run(model.Info{Name: "legacy-model"}, legacy)

@@ -1669,11 +1669,20 @@ func (r *llmRunner) executeModel(
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
 	if callModel != nil && providerdata.MessagesHaveData(request.Messages) {
-		if err := providerdata.ValidateMessages(
-			request.Messages,
-			callModel.Info(),
-		); err != nil {
-			return nil, err
+		// Session histories persist native records across turns. A record the
+		// selected model cannot replay natively degrades to ordinary history
+		// instead of failing the whole node, so one native-capable turn never
+		// poisons the graph for every other model.
+		var degraded int
+		request.Messages, degraded = providerdata.DegradeMessagesFor(
+			request.Messages, callModel.Info(),
+		)
+		if degraded > 0 {
+			log.WarnfContext(
+				ctx,
+				"Degrading %d native provider record(s) from another model for node %s; replaying them as ordinary history",
+				degraded, nodeID,
+			)
 		}
 	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
@@ -2293,10 +2302,20 @@ func generateModelStream(
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
 	if request != nil && providerdata.MessagesHaveData(request.Messages) {
-		if err := providerdata.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return modelResponseStream{}, err
+		// Session histories persist native records across turns. A record the
+		// selected model cannot replay natively degrades to ordinary history
+		// instead of failing the whole stream, so one native-capable turn never
+		// poisons the graph for every other model.
+		var degraded int
+		request.Messages, degraded = providerdata.DegradeMessagesFor(
+			request.Messages, llmModel.Info(),
+		)
+		if degraded > 0 {
+			log.WarnfContext(
+				ctx,
+				"Degrading %d native provider record(s) from another model; replaying them as ordinary history",
+				degraded,
+			)
 		}
 	}
 	// Generate content.

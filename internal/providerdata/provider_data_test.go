@@ -100,6 +100,62 @@ func TestValidateMessages(t *testing.T) {
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "valid JSON object or array")
 }
 
+func TestDegradeMessagesFor(t *testing.T) {
+	legacy := []model.Message{model.NewUserMessage("q"), model.NewAssistantMessage("a")}
+	kept, degraded := DegradeMessagesFor(legacy, model.Info{Name: "legacy"})
+	require.Zero(t, degraded, "legacy histories never degrade")
+	require.Equal(t, legacy, kept)
+
+	matching := nativeMessage(t)
+	matching.ReasoningContent = "chain"
+	out, degraded := DegradeMessagesFor(
+		[]model.Message{model.NewUserMessage("q"), matching},
+		nativeInfo,
+	)
+	require.Zero(t, degraded, "matching records replay natively")
+	require.NotNil(t, out[1].ProviderData)
+	require.Equal(t, "chain", out[1].ReasoningContent)
+
+	foreign := nativeMessage(t)
+	foreign.Content = "summary"
+	foreign.ReasoningContent = "chain"
+	foreign.ReasoningSignature = "sig"
+	foreign.ToolCalls = []model.ToolCall{{ID: "call_1"}}
+	source := []model.Message{model.NewUserMessage("q"), foreign}
+	out, degraded = DegradeMessagesFor(source, model.Info{Name: "other-model"})
+	require.Equal(t, 1, degraded)
+	require.Nil(t, out[1].ProviderData, "foreign record degrades to ordinary history")
+	require.Empty(t, out[1].ReasoningContent)
+	require.Empty(t, out[1].ReasoningSignature)
+	require.Equal(t, "summary", out[1].Content, "projected text survives")
+	require.Len(t, out[1].ToolCalls, 1, "projected tool calls survive")
+	require.NotNil(t, source[1].ProviderData, "input slice is never mutated")
+	require.Equal(t, "chain", source[1].ReasoningContent)
+
+	corrupt := nativeMessage(t)
+	corrupt.ProviderData.Payload = json.RawMessage(`{`)
+	out, degraded = DegradeMessagesFor([]model.Message{corrupt}, nativeInfo)
+	require.Equal(t, 1, degraded, "corrupt records degrade instead of failing the call")
+	require.Nil(t, out[0].ProviderData)
+
+	misroled := model.NewUserMessage("q")
+	misroled.ProviderData = &model.ProviderData{
+		Protocol: nativeInfo.ProviderDataProtocol,
+		Model:    nativeInfo.Name,
+		Payload:  json.RawMessage(`[]`),
+	}
+	out, degraded = DegradeMessagesFor([]model.Message{misroled}, nativeInfo)
+	require.Equal(t, 1, degraded, "records off assistant messages degrade")
+	require.Nil(t, out[0].ProviderData)
+
+	shared := []model.Message{nativeMessage(t), nativeMessage(t)}
+	out, degraded = DegradeMessagesFor(shared, model.Info{Name: "other-model"})
+	require.Equal(t, 2, degraded)
+	require.Nil(t, out[0].ProviderData)
+	require.Nil(t, out[1].ProviderData)
+	require.NotNil(t, shared[0].ProviderData, "shared state stays intact")
+}
+
 func TestValidateResponse(t *testing.T) {
 	require.False(t, ResponseHasData(nil))
 	require.NoError(t, ValidateResponse(nil, nativeInfo))

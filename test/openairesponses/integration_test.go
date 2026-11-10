@@ -121,21 +121,22 @@ func TestRunnerNativeToolLoopSurvivesSQLiteReopen(t *testing.T) {
 	assertToolProviderDataInput(t, (<-requests)["input"])
 	require.EqualValues(t, 1, toolCalls.Load(), "reloading a completed history must not execute its tools again")
 
-	// A legacy adapter with the same configured name still cannot consume the
-	// native protocol. The flow must reject before calling that adapter.
+	// A legacy adapter with the same configured name cannot replay native
+	// records, but the session it shares with a native adapter must stay
+	// usable: the foreign records degrade to ordinary history instead of
+	// failing the run.
 	legacy := &legacyIntegrationModel{}
 	legacyAgent := llmagent.New("native", llmagent.WithModel(legacy))
 	legacyRunner := runner.NewRunner("native", legacyAgent, runner.WithSessionService(svc))
 	t.Cleanup(func() { _ = legacyRunner.Close() })
-	var replayError bool
 	for _, evt := range runIntegration(t, legacyRunner, ctx, "switch model") {
-		if evt.Error != nil {
-			require.Contains(t, evt.Error.Message, "belongs to protocol")
-			replayError = true
-		}
+		require.Nil(t, evt.Error)
 	}
-	require.True(t, replayError)
-	require.Zero(t, legacy.calls.Load())
+	require.EqualValues(t, 1, legacy.calls.Load(), "degraded history still reaches the adapter")
+	require.NotNil(t, legacy.last)
+	for _, msg := range legacy.last.Messages {
+		require.Nil(t, msg.ProviderData, "a legacy adapter only ever sees ordinary history")
+	}
 }
 
 func assertToolProviderDataInput(t *testing.T, raw json.RawMessage) {
@@ -167,12 +168,19 @@ func assertToolProviderDataInputWithOutput(t *testing.T, raw json.RawMessage, ex
 	require.Equal(t, `"fc_tool"`, string(input[outputIndex-1]["id"]), "native items must remain adjacent and ordered before the result")
 }
 
-type legacyIntegrationModel struct{ calls atomic.Int32 }
+type legacyIntegrationModel struct {
+	calls atomic.Int32
+	last  *model.Request
+}
 
 func (m *legacyIntegrationModel) Info() model.Info { return model.Info{Name: "gpt-5"} }
-func (m *legacyIntegrationModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
+func (m *legacyIntegrationModel) GenerateContent(_ context.Context, request *model.Request) (<-chan *model.Response, error) {
 	m.calls.Add(1)
-	return nil, fmt.Errorf("legacy model must not receive native history")
+	m.last = request
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.NewAssistantMessage("legacy answer")}}}
+	close(ch)
+	return ch, nil
 }
 
 func TestRunnerDoesNotExecuteOrPersistUncommittedStreamCalls(t *testing.T) {
