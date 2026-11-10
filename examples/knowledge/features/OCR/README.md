@@ -1,5 +1,9 @@
 # PDF OCR Knowledge Demo
 
+> Deprecated: this example uses the legacy `WithOCRExtractor(...)` path. New
+> code should prefer `WithExtractor(...)` with an OCR-capable content extractor,
+> such as `knowledge/extractor/docling`.
+
 Demonstrates PDF OCR capability with knowledge base integration.
 
 ## Features
