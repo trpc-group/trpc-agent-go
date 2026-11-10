@@ -2875,7 +2875,7 @@ func (e *Executor) initializeNodeContext(
 
 	stateCopy := e.buildTaskStateCopy(execCtx, t)
 	mergedCallbacks := e.getMergedCallbacks(stateCopy, t.NodeID)
-	inputSnapshot := traceSnapshotFromValue(stateCopy)
+	inputSnapshot := traceSnapshotIfEnabled(invocation, stateCopy)
 	traceStepID := agent.StartExecutionTraceStep(
 		invocation,
 		e.traceNodeIDForTask(invocation, t),
@@ -3000,7 +3000,7 @@ func (e *Executor) handleCachedResult(
 		step,
 		nodeCtx.metricRecorder,
 	); err != nil {
-		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), err)
+		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), err)
 		return err
 	} else if res != nil {
 		result = res
@@ -3033,12 +3033,12 @@ func (e *Executor) handleCachedResult(
 	// Process conditional edges after node execution.
 	if !routed {
 		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t, step); perr != nil {
-			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), perr)
+			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), perr)
 			nodeCtx.metricRecorder.recordError(ctx, perr)
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 		}
 	}
-	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), nil)
+	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), nil)
 	// Emit node completion event with cache-hit metadata.
 	nodeCtx.metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType,
@@ -3127,12 +3127,12 @@ func (e *Executor) executeTaskWithRetry(
 		if !shouldRetry {
 			if IsInterruptError(retryErr) {
 				nodeCtx.metricRecorder.recordError(ctx, retryErr)
-				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
+				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), retryErr)
 				return retryErr
 			}
 			if !errors.Is(retryErr, err) {
 				nodeCtx.metricRecorder.recordError(ctx, retryErr)
-				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
+				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), retryErr)
 				return retryErr
 			}
 			return e.finalizeFailedExecution(
@@ -3189,7 +3189,7 @@ func (e *Executor) finalizeSuccessfulExecution(
 		step,
 		nodeCtx.metricRecorder,
 	); aerr != nil {
-		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), aerr)
+		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), aerr)
 		return aerr
 	} else if res != nil {
 		result = res
@@ -3240,12 +3240,12 @@ func (e *Executor) finalizeSuccessfulExecution(
 	// Process conditional edges after node execution.
 	if !routed {
 		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t, step); perr != nil {
-			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), perr)
+			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), perr)
 			nodeCtx.metricRecorder.recordError(ctx, perr)
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 		}
 	}
-	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), nil)
+	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), nil)
 	// Emit node completion event for the overall node run (no cache hit).
 	nodeCtx.metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart, false)
@@ -3272,7 +3272,7 @@ func (e *Executor) finalizeFailedExecution(
 			traceStepID = nodeCtx.traceStepID
 			nodeCtx.metricRecorder.recordError(ctx, retryErr)
 		}
-		agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(result), retryErr)
+		agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotIfEnabled(invocation, result), retryErr)
 		return retryErr
 	}
 
@@ -3291,12 +3291,12 @@ func (e *Executor) finalizeFailedExecution(
 		nodeCtx.metricRecorder,
 	)
 	if aerr != nil {
-		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), aerr)
+		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), aerr)
 		nodeCtx.metricRecorder.recordError(ctx, aerr)
 		return aerr
 	}
 	if !overridden {
-		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
+		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), retryErr)
 		nodeCtx.metricRecorder.recordError(ctx, retryErr)
 		return retryErr
 	}
@@ -3345,7 +3345,7 @@ func (e *Executor) finalizeRecoveredExecution(
 			t,
 			step,
 		); err != nil {
-			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), err)
+			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), err)
 			nodeCtx.metricRecorder.recordError(ctx, err)
 			return fmt.Errorf(
 				"conditional edge processing failed for node %s: %w",
@@ -3354,7 +3354,7 @@ func (e *Executor) finalizeRecoveredExecution(
 			)
 		}
 	}
-	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), nil)
+	agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), nil)
 	nodeCtx.metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(
 		ctx,
@@ -3661,6 +3661,21 @@ func (e *Executor) traceNodeIDForTask(invocation *agent.Invocation, t *Task) str
 	return istructure.JoinNodeID(rootNodeID, t.NodeID)
 }
 
+// traceSnapshotIfEnabled builds a trace snapshot only when execution tracing is
+// enabled for the invocation. Snapshot building deep-copies and JSON-marshals the
+// value, so skipping it when tracing is off keeps node execution free of that cost.
+//
+// The branches that finish a step after handleNodeResult reports an error still
+// call traceSnapshotFromValue directly: handleCommandResult always returns nil,
+// so those branches cannot run today. They should switch to this helper if that
+// ever changes.
+func traceSnapshotIfEnabled(invocation *agent.Invocation, value any) *atrace.Snapshot {
+	if invocation == nil || !invocation.RunOptions.ExecutionTraceEnabled {
+		return nil
+	}
+	return traceSnapshotFromValue(value)
+}
+
 func traceSnapshotFromValue(value any) *atrace.Snapshot {
 	if value == nil {
 		return nil
@@ -3779,12 +3794,12 @@ func (e *Executor) runBeforeCallbacks(
 	// We need to skip intermediate nodes after routed.
 	if !routed {
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t, step); err != nil {
-			agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), err)
+			agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotIfEnabled(invocation, customResult), err)
 			metricRecorder.recordError(ctx, err)
 			return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
 		}
 	}
-	agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), nil)
+	agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotIfEnabled(invocation, customResult), nil)
 	metricRecorder.recordSuccess(ctx)
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, false)
 	if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
