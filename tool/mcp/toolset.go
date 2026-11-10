@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -200,12 +201,19 @@ type mcpSessionManager struct {
 	initialized            bool
 	tasksEnabled           atomic.Bool
 
-	reconnectMu sync.Mutex
-	reconnect   *sessionReconnect
+	reconnectMu      sync.Mutex
+	reconnect        *sessionReconnect
+	reconnectVersion uint64
+
+	taskMu       sync.Mutex
+	taskCalls    map[uint64]context.CancelFunc
+	nextTaskCall uint64
+	closingTasks int
 }
 
 // newMCPSessionManager creates a new MCP session manager.
 func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption, sessionReconnectConfig *SessionReconnectConfig) *mcpSessionManager {
+	config.Headers = maps.Clone(config.Headers)
 	manager := &mcpSessionManager{
 		config:                 config,
 		mcpOptions:             mcpOptions,
@@ -404,6 +412,8 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		var cancel context.CancelFunc
 		ctx, cancel = m.createTimeoutContext(ctx, "callTool")
 		defer cancel()
+		ctx, cancel = m.taskCallContext(ctx)
+		defer cancel()
 	}
 
 	// Execute with session reconnection support
@@ -463,8 +473,46 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 	return result, nil
 }
 
+// taskCallContext binds a logical call and its reconnect attempts to Close.
+func (m *mcpSessionManager) taskCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	m.taskMu.Lock()
+	if m.closingTasks != 0 {
+		m.taskMu.Unlock()
+		cancel()
+		return ctx, cancel
+	}
+	if m.taskCalls == nil {
+		m.taskCalls = make(map[uint64]context.CancelFunc)
+	}
+	m.nextTaskCall++
+	id := m.nextTaskCall
+	m.taskCalls[id] = cancel
+	m.taskMu.Unlock()
+	return ctx, func() {
+		cancel()
+		m.taskMu.Lock()
+		delete(m.taskCalls, id)
+		m.taskMu.Unlock()
+	}
+}
+
 // close closes the MCP session and client connection.
 func (m *mcpSessionManager) close() error {
+	// Polling holds a read lock until the SDK returns. Signal it before
+	// waiting for the write lock, including when no call deadline is set.
+	m.taskMu.Lock()
+	m.closingTasks++
+	for _, cancel := range m.taskCalls {
+		cancel()
+	}
+	m.taskMu.Unlock()
+	defer func() {
+		m.taskMu.Lock()
+		m.closingTasks--
+		m.taskMu.Unlock()
+	}()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -629,32 +677,57 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 }
 
 type sessionReconnect struct {
-	done chan struct{}
-	err  error
+	done          chan struct{}
+	err           error
+	ownerCanceled bool
 }
 
 // recreateSession shares an in-flight reconnect. Waiters can leave on their
 // own context without cancelling the caller that owns the reconnect.
 func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
 	m.reconnectMu.Lock()
-	if attempt := m.reconnect; attempt != nil {
+	version := m.reconnectVersion
+	m.reconnectMu.Unlock()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.reconnectMu.Lock()
+		if m.reconnectVersion != version {
+			m.reconnectMu.Unlock()
+			return nil
+		}
+		attempt := m.reconnect
+		if attempt == nil {
+			attempt = &sessionReconnect{
+				done: make(chan struct{}),
+				err:  errors.New("mcp session recreation did not complete"),
+			}
+			m.reconnect = attempt
+			m.reconnectMu.Unlock()
+			return m.runReconnect(ctx, attempt)
+		}
 		m.reconnectMu.Unlock()
 		select {
 		case <-attempt.done:
-			return attempt.err
+			if !attempt.ownerCanceled {
+				return attempt.err
+			}
+			// The owner ran out of time. A live waiter may take over
+			// without charging this aborted attempt to its budget.
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	attempt := &sessionReconnect{
-		done: make(chan struct{}),
-		err:  errors.New("mcp session recreation did not complete"),
-	}
-	m.reconnect = attempt
-	m.reconnectMu.Unlock()
+}
 
+func (m *mcpSessionManager) runReconnect(ctx context.Context, attempt *sessionReconnect) error {
 	defer func() {
+		attempt.ownerCanceled = attempt.err != nil && ctx.Err() != nil
 		m.reconnectMu.Lock()
+		if attempt.err == nil {
+			m.reconnectVersion++
+		}
 		m.reconnect = nil
 		close(attempt.done)
 		m.reconnectMu.Unlock()

@@ -27,10 +27,15 @@ After a task handle has been received, reconnect resumes polling the same handle
 If submission has an unknown outcome and no handle, it stops without replay.
 For clients reporting `TasksEnabled() == true`, the timeout bounds the whole tool
 invocation, including waiting to reconnect. If the context expires while a
-caller is waiting, that caller stops waiting. A task status such as `failed` or
+caller is waiting, that caller stops waiting. A live waiter can take over
+reconnection when its owner is cancelled. Closing the ToolSet cancels active
+task calls before closing the client. It stops local polling, while remote
+execution follows the server's task lifecycle. A task status such as `failed` or
 `input_required`, or a JSON-RPC error returned while polling, ends recovery.
 Clients with Tasks disabled retain their existing per-attempt timeout behavior.
-Keep the original endpoint and authorization identity when resuming a task.
+The ToolSet snapshots `ConnectionConfig.Headers` at creation. Dynamic request hooks
+must keep the authorization identity stable for the entire task call, including
+its polls and reconnect attempts. Use the final endpoint URL.
 Legacy servers may additionally bind handles to their original session. The
 pinned mcpkit dual-mode example rejects cross-session recovery; this adapter
 returns that failure without invoking the tool again.
@@ -47,8 +52,9 @@ honor any error reporting `ToolCallReplaySafe() == false` in the wrapped or join
 error tree, including custom retry policies. An interrupted task retains its
 error and handle after reconnect attempts are exhausted or if the session closes
 before polling resumes. Graph preserves that error alongside an ordinary failure
-from a parallel tool or an after-tool callback. The agent treats it as a tool
-failure.
+from a parallel tool or an after-tool callback and passes the cause to parent
+nodes that propagate child errors. Graph stops with the task error when an
+interrupt would otherwise checkpoint the failed invocation for replay.
 
 The reconnect integration tests run in the normal package test suite using the
 released SDK, without build tags or local replacements. From the Agent repository:

@@ -161,7 +161,7 @@ func TestTasksFrameworkRetryDoesNotReplay(t *testing.T) {
 			require.Nil(t, result)
 			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 			if tc.closeAfterReconnect {
-				require.ErrorContains(t, err, "transport is closed")
+				require.ErrorIs(t, err, context.Canceled)
 			}
 			var taskErr *mcp.TaskError
 			require.ErrorAs(t, err, &taskErr)
