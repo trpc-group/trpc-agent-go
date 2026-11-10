@@ -155,20 +155,16 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 	return server, nil
 }
 
-// Connection is an active ACP connection.
-type Connection struct {
-	connection *acpsdk.AgentSideConnection
-	agent      *protocolAgent
+type connection struct {
+	conn  *acpsdk.AgentSideConnection
+	agent *protocolAgent
 }
 
-// Done is closed when the ACP peer disconnects.
-func (c *Connection) Done() <-chan struct{} {
-	return c.connection.Done()
+func (c *connection) done() <-chan struct{} {
+	return c.conn.Done()
 }
 
-// Connect starts serving one ACP connection over line-delimited JSON-RPC.
-// Input is read from the ACP client and output is written back to it.
-func (s *Server) Connect(input io.Reader, output io.Writer) (*Connection, error) {
+func (s *Server) connect(input io.Reader, output io.Writer) (*connection, error) {
 	if input == nil {
 		return nil, errors.New("acp: input is required")
 	}
@@ -176,27 +172,23 @@ func (s *Server) Connect(input io.Reader, output io.Writer) (*Connection, error)
 		return nil, errors.New("acp: output is required")
 	}
 	protocolAgent := newProtocolAgent(s)
-	connection := acpsdk.NewAgentSideConnection(protocolAgent, output, input)
-	protocolAgent.connection = connection
-	go func() {
-		<-connection.Done()
-		protocolAgent.cancelAll()
-	}()
-	return &Connection{connection: connection, agent: protocolAgent}, nil
+	sdkConnection := acpsdk.NewAgentSideConnection(protocolAgent, output, input)
+	protocolAgent.connection = sdkConnection
+	return &connection{conn: sdkConnection, agent: protocolAgent}, nil
 }
 
 // Serve connects an ACP client and blocks until the peer disconnects or ctx is
 // canceled. Callers remain responsible for closing their transport.
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
-	connection, err := s.Connect(input, output)
+	connection, err := s.connect(input, output)
 	if err != nil {
 		return err
 	}
+	defer connection.agent.cancelAll()
 	select {
-	case <-connection.Done():
+	case <-connection.done():
 		return nil
 	case <-ctx.Done():
-		connection.agent.cancelAll()
 		return ctx.Err()
 	}
 }

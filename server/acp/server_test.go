@@ -202,6 +202,108 @@ func TestServerCancellation(t *testing.T) {
 	}
 }
 
+func TestServeCleansUpOnExit(t *testing.T) {
+	tests := []struct {
+		name       string
+		disconnect bool
+		wantErr    error
+	}{
+		{name: "context canceled", wantErr: context.Canceled},
+		{name: "peer disconnected", disconnect: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{})
+			cancelObserved := make(chan struct{})
+			fakeRunner := &testRunner{
+				run: func(ctx context.Context) <-chan *event.Event {
+					events := make(chan *event.Event)
+					close(started)
+					go func() {
+						<-ctx.Done()
+						close(cancelObserved)
+						close(events)
+					}()
+					return events
+				},
+			}
+			server, err := New(
+				fakeRunner,
+				WithSessionIDGenerator(func() string { return "session-serve-exit" }),
+			)
+			require.NoError(t, err)
+
+			serverTransport, clientTransport := net.Pipe()
+			defer serverTransport.Close()
+			defer clientTransport.Close()
+			serveCtx, cancelServe := context.WithCancel(context.Background())
+			defer cancelServe()
+			serveErr := make(chan error, 1)
+			go func() {
+				serveErr <- server.Serve(serveCtx, serverTransport, serverTransport)
+			}()
+
+			clientConnection := acpsdk.NewClientSideConnection(
+				&testClient{},
+				clientTransport,
+				clientTransport,
+			)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			session, err := clientConnection.NewSession(ctx, acpsdk.NewSessionRequest{
+				Cwd:        "/workspace",
+				McpServers: []acpsdk.McpServer{},
+			})
+			require.NoError(t, err)
+
+			type promptResult struct {
+				response acpsdk.PromptResponse
+				err      error
+			}
+			promptDone := make(chan promptResult, 1)
+			go func() {
+				response, promptErr := clientConnection.Prompt(ctx, acpsdk.PromptRequest{
+					SessionId: session.SessionId,
+					Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("wait")},
+				})
+				promptDone <- promptResult{response: response, err: promptErr}
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("runner did not start")
+			}
+
+			if test.disconnect {
+				require.NoError(t, clientTransport.Close())
+			} else {
+				cancelServe()
+			}
+
+			select {
+			case <-cancelObserved:
+			case <-ctx.Done():
+				t.Fatal("runner context was not canceled")
+			}
+			select {
+			case err := <-serveErr:
+				if test.wantErr == nil {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, test.wantErr)
+				}
+			case <-ctx.Done():
+				t.Fatal("Serve did not return")
+			}
+			select {
+			case <-promptDone:
+			case <-ctx.Done():
+				t.Fatal("prompt did not return")
+			}
+		})
+	}
+}
+
 func TestProtocolAgentRejectsConcurrentPromptUntilRunFinishes(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -329,9 +431,9 @@ func TestServerValidation(t *testing.T) {
 
 	server, err := New(&testRunner{})
 	require.NoError(t, err)
-	_, err = server.Connect(nil, nil)
+	_, err = server.connect(nil, nil)
 	assert.ErrorContains(t, err, "input is required")
-	_, err = server.Connect(&net.TCPConn{}, nil)
+	_, err = server.connect(&net.TCPConn{}, nil)
 	assert.ErrorContains(t, err, "output is required")
 
 	tests := []struct {
@@ -576,7 +678,7 @@ func connectTestClient(
 ) (*acpsdk.ClientSideConnection, func()) {
 	t.Helper()
 	serverTransport, clientTransport := net.Pipe()
-	serverConnection, err := server.Connect(serverTransport, serverTransport)
+	serverConnection, err := server.connect(serverTransport, serverTransport)
 	require.NoError(t, err)
 	clientConnection := acpsdk.NewClientSideConnection(
 		client,
@@ -585,8 +687,9 @@ func connectTestClient(
 	)
 	return clientConnection, func() {
 		require.NoError(t, clientTransport.Close())
+		serverConnection.agent.cancelAll()
 		select {
-		case <-serverConnection.Done():
+		case <-serverConnection.done():
 		case <-time.After(time.Second):
 			t.Error("server connection did not close")
 		}
