@@ -51,6 +51,13 @@ func (r *Runtime) osSandboxCommand(
 	spec codeexecutor.RunProgramSpec,
 	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
+	if profile.network.Mode == NetworkControlled {
+		return nil, string(BackendMacOSSandboxExec), nil, backendError(
+			ErrUnsupportedBackend,
+			string(BackendMacOSSandboxExec),
+			errors.New("controlled egress is not implemented on macOS"),
+		)
+	}
 	seatbelt, err := r.macosPreflightContext(ctx)
 	if err != nil {
 		return nil, string(BackendMacOSSandboxExec), nil, err

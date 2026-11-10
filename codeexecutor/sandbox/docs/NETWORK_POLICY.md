@@ -1,10 +1,10 @@
 # Sandbox Network Policy
 
 Sandbox profiles own network policy through `NetworkPolicy.Mode`, configured on
-a profile with `WithNetworkPolicy`. The policy is a binary switch:
-`NetworkRestricted` or `NetworkEnabled`. Managed profiles default to
-`NetworkRestricted`, so code runs without host network access unless the caller
-explicitly selects `NetworkEnabled`.
+a profile with `WithNetworkPolicy`. Managed profiles support
+`NetworkRestricted`, `NetworkEnabled`, and Linux-only `NetworkControlled`.
+Managed profiles default to `NetworkRestricted`, so code runs without host
+network access unless the caller explicitly selects another mode.
 
 ## Policy Model
 
@@ -14,6 +14,11 @@ explicitly selects `NetworkEnabled`.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation and without
   the AF_UNIX/AF_VSOCK seccomp filter described below.
+- `NetworkControlled` is Linux-only. It keeps the same isolation as
+  `NetworkRestricted` and allows HTTP/HTTPS egress only through a caller-owned
+  host proxy. Configure it with `PermissionProfile.WithControlledEgressProxy`,
+  not with extra fields on `NetworkPolicy`. `Describe().NetworkAllowed` stays
+  false.
 
 Profile enforcement is separate from network policy. `DangerFullAccessProfile()`
 intentionally runs without local sandbox enforcement and is normalized to
@@ -84,6 +89,45 @@ seccomp filter. The command then shares the host network namespace and may use
 visible host Unix sockets while still using the rest of the configured sandbox
 controls, such as user, PID, mount, environment, and filesystem policy.
 
+### controlled
+
+`NetworkControlled` is opt-in via `WithControlledEgressProxy`. It uses a
+two-stage process model: a trusted relay starts before seccomp, then the user
+workload runs in a nested PID namespace with the AF_UNIX filter applied:
+
+```text
+guest outer namespace (--unshare-net)
+  → HTTP_PROXY=http://127.0.0.1:<port>
+  → trusted egress-relay (loopback TCP → Unix socket)
+  → host HTTP proxy on AF_UNIX (L4/L7)
+  → internet
+
+guest workload (nested PID namespace + AF_UNIX seccomp)
+  → cannot see the relay or create arbitrary Unix sockets
+```
+
+- Only the trusted relay calls `socket(AF_UNIX)`. User code cannot see the
+  relay's outer PID namespace and cannot create AF_UNIX sockets. Host paths such
+  as `docker.sock` remain visible through `--ro-bind / /` but stay unusable.
+- The proxy `UnixPath` and `egress-relay` helper must be outside every
+  guest-writable mount.
+- Provide the helper with `WithControlledEgressRelayPath` or
+  `TRPC_AGENT_EGRESS_RELAY`.
+- Guest `HTTP(S)_PROXY` values are replaced; `ALL_PROXY` and `NO_PROXY` are
+  removed.
+- Start the caller-owned production proxy with `controlledegress.StartProxy`.
+- Keep that proxy alive for every run that references its Unix socket, then
+  call `Proxy.Close`. Custom resolvers, authorizers, and auditors must return
+  promptly when their context is canceled so shutdown can complete.
+- Relay setup errors include a host-generated authentication token. Workload
+  stderr cannot forge this internal setup-failure signal.
+- Wildcard policy entries such as `*.example.com` match subdomains only; add
+  `example.com` explicitly when the apex must also be allowed.
+- macOS `controlled` returns `ErrUnsupportedBackend`.
+
+Policy/proxy implementation lives in
+[`controlledegress`](../controlledegress/).
+
 ## macOS Enforcement
 
 The macOS backend keeps the same public binary model but projects it to
@@ -104,9 +148,7 @@ backend does not claim support for equivalent path-level Unix socket policy.
 
 ## Scope
 
-This design keeps the first Linux implementation intentionally binary:
-networking is either isolated or inherited from the host. It does not currently
-implement per-domain, per-IP, or per-port allow lists. If finer-grained egress
-control is needed later, it should be layered outside this backend or added as a
-new backend capability with explicit policy fields rather than overloading
-`NetworkRestricted`.
+Linux networking is `restricted`, `enabled`, or opt-in `controlled`. Per-domain
+and per-port allow lists belong in the caller-owned host proxy used by
+`controlled`, not in `NetworkRestricted`. Do not overload `NetworkRestricted`
+with proxy endpoints.

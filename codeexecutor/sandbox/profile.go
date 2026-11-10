@@ -40,10 +40,11 @@ const (
 // owns both filesystem and network policy so callers cannot request contradictory
 // combinations such as read-only + disabled enforcement.
 type PermissionProfile struct {
-	typ        permissionProfileType
-	fileSystem fileSystemPolicy
-	network    NetworkPolicy
-	macOS      macOSProfilePolicy
+	typ              permissionProfileType
+	fileSystem       fileSystemPolicy
+	network          NetworkPolicy
+	macOS            macOSProfilePolicy
+	controlledEgress ControlledEgressProxy
 }
 
 // macOSProfilePolicy describes macOS Seatbelt-specific controls. It is kept off
@@ -129,6 +130,20 @@ func (p PermissionProfile) WithNetworkPolicy(policy NetworkPolicy) PermissionPro
 		policy.Mode = NetworkRestricted
 	}
 	p.network = policy
+	if policy.Mode != NetworkControlled {
+		p.controlledEgress = ControlledEgressProxy{}
+	}
+	return p
+}
+
+// WithControlledEgressProxy enables NetworkControlled and sets the host proxy
+// Unix socket used for controlled egress. Linux starts a trusted loopback relay
+// before applying restricted seccomp to the user workload.
+func (p PermissionProfile) WithControlledEgressProxy(
+	endpoint ControlledEgressProxy,
+) PermissionProfile {
+	p.network.Mode = NetworkControlled
+	p.controlledEgress = endpoint
 	return p
 }
 
