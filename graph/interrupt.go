@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 )
 
 // InterruptError represents an interrupt in graph execution that can be resumed.
@@ -106,4 +108,14 @@ func GetInterruptError(err error) (*InterruptError, bool) {
 		return interrupt, true
 	}
 	return nil, false
+}
+
+// An interrupt can schedule a node to run again, so an unsafe tool failure
+// takes precedence even when the interrupt is also present in the error tree.
+func resumableInterrupt(err error) (*InterruptError, bool) {
+	interrupt, ok := GetInterruptError(err)
+	if !ok || toolretry.IsReplayUnsafe(err) {
+		return nil, false
+	}
+	return interrupt, true
 }

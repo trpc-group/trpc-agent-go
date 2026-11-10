@@ -17,6 +17,7 @@ import (
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 )
 
 type dagTaskResult struct {
@@ -415,6 +416,13 @@ func (l *dagLoop) handleContextDone() {
 }
 
 func (l *dagLoop) handleTaskError(res dagTaskResult) {
+	if toolretry.IsReplayUnsafe(res.err) {
+		l.draining = true
+		l.drainMaxStep = false
+		l.drainErr = errors.Join(l.drainErr, res.err)
+		l.pendingIntr = nil
+		return
+	}
 	if l.draining {
 		l.recordRerunNode(res)
 		return

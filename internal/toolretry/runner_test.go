@@ -163,6 +163,10 @@ func (e *replaySafetyAlias) As(target any) bool {
 	return false
 }
 
+type safeReplaySafetyAlias struct{ replaySafetyAlias }
+
+func (*safeReplaySafetyAlias) ToolCallReplaySafe() bool { return true }
+
 // TestExecute_ReplaySafetyErrorTree ensures safe wrappers and siblings cannot
 // hide an unsafe marker from either default or custom retry policies.
 func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
@@ -179,6 +183,8 @@ func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
 		{"nested join", errors.Join(safe, errors.Join(nil, unsafe))},
 		{"custom As", &replaySafetyAlias{marker: unsafe}},
 		{"custom As after safe", errors.Join(safe, &replaySafetyAlias{marker: unsafe})},
+		{"safe marker with unsafe alias", &safeReplaySafetyAlias{replaySafetyAlias{marker: unsafe}}},
+		{"unsafe cause of safe alias", &replaySafetyAlias{marker: &replaySafetyError{safe: true, cause: unsafe}}},
 	} {
 		for _, custom := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/custom=%t", tc.name, custom), func(t *testing.T) {
@@ -204,6 +210,22 @@ func TestExecute_ReplaySafetyErrorTree(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestExecute_TypedNilReplayMarker(t *testing.T) {
+	var marker *replaySafetyError
+	calls := 0
+	result := Execute(context.Background(), ExecuteInput{
+		Policy: &tool.RetryPolicy{MaxAttempts: 2, RetryOn: func(context.Context, *tool.RetryInfo) (bool, error) {
+			return true, nil
+		}},
+		Call: func(context.Context, []byte) (any, error) {
+			calls++
+			return nil, marker
+		},
+	})
+	require.Equal(t, 1, calls)
+	require.Error(t, result.Error)
 }
 
 // TestExecute_RespectsToolCallReplaySafety preserves the original failure and

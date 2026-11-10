@@ -37,6 +37,80 @@ func (*replaySafetyTestError) Error() string              { return "tool task in
 func (e *replaySafetyTestError) Unwrap() error            { return e.cause }
 func (e *replaySafetyTestError) ToolCallReplaySafe() bool { return e.safe }
 
+func TestReplayUnsafeToolDoesNotCreateInterruptCheckpoint(t *testing.T) {
+	for _, engine := range []ExecutionEngine{ExecutionEngineBSP, ExecutionEngineDAG} {
+		for _, mode := range []string{"parallel", "callback", "forced"} {
+			t.Run(fmt.Sprintf("%s/%s", engine, mode), func(t *testing.T) {
+				started := make(chan struct{})
+				original := &replaySafetyTestError{cause: context.Canceled}
+				var calls atomic.Int32
+				tools := map[string]tool.Tool{"charge": &retryTool{
+					name: "charge", callFn: func(ctx context.Context, _ []byte) (any, error) {
+						calls.Add(1)
+						close(started)
+						if mode != "callback" {
+							<-ctx.Done()
+						}
+						return nil, original
+					},
+				}}
+				names := []string{"charge"}
+				var observed error
+				opts := []Option{WithNodeErrorCallback(func(_ context.Context, _ *NodeCallbackContext, _ State, err error) {
+					observed = err
+				})}
+				if mode == "parallel" {
+					names = append(names, "pause")
+					opts = append(opts, WithEnableParallelTools(true))
+					tools["pause"] = &retryTool{name: "pause", callFn: func(ctx context.Context, _ []byte) (any, error) {
+						select {
+						case <-started:
+							return nil, NewInterruptError("approval")
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+					}}
+				}
+				if mode == "callback" {
+					callbacks := tool.NewCallbacks().RegisterAfterTool(tool.AfterToolCallbackStructured(
+						func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+							return nil, NewInterruptError("approval")
+						}))
+					opts = append(opts, WithToolCallbacks(callbacks))
+				}
+				sg := NewStateGraph(NewStateSchema())
+				sg.AddToolsNode("tools", tools, opts...)
+				g := sg.SetEntryPoint("tools").SetFinishPoint("tools").MustCompile()
+				saver := newMockSaver()
+				exec, err := NewExecutor(g, WithExecutionEngine(engine), WithCheckpointSaver(saver))
+				require.NoError(t, err)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				runCtx, pause := WithGraphInterrupt(ctx)
+				events, err := exec.Execute(runCtx, State{StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant, ToolCalls: makeToolCalls(names...),
+				}}}, agent.NewInvocation())
+				require.NoError(t, err)
+				if mode == "forced" {
+					select {
+					case <-started:
+						pause(WithGraphInterruptTimeout(0))
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+				}
+				for range events {
+				}
+				require.EqualValues(t, 1, calls.Load())
+				for _, tuple := range saver.byID {
+					require.Nil(t, tuple.Checkpoint.InterruptState, "the failed tool must not be checkpointed for replay")
+				}
+				require.ErrorIs(t, observed, original)
+			})
+		}
+	}
+}
+
 // TestNodeRetry_ReplayUnsafeToolRunsOnce exercises full graph execution: node
 // policies must report the task failure without repeating the tool's side effect.
 func TestNodeRetry_ReplayUnsafeToolRunsOnce(t *testing.T) {

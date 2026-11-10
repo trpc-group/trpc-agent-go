@@ -3591,7 +3591,10 @@ func updateAgentTerminalError(res *agentEventStreamResult, ev *event.Event) {
 		return
 	}
 	if ev.Error != nil {
-		res.terminalErr = errors.New(ev.Error.Message)
+		res.terminalErr = ev.ErrorCause
+		if res.terminalErr == nil {
+			res.terminalErr = errors.New(ev.Error.Message)
+		}
 		res.terminalErrMeta = agentTerminalErrorMeta{
 			InvocationID: ev.InvocationID,
 			FilterKey:    ev.FilterKey,
@@ -5607,7 +5610,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				Concurrency:   config.Concurrency,
 			})
 			if err != nil {
-				if IsInterruptError(err) {
+				if _, ok := resumableInterrupt(err); ok {
 					recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
 					setAgentToolInterruptStateFromError(config.State, err)
 				} else {
@@ -5717,7 +5720,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		errsByIndex,
 		causalError,
 	); err != nil {
-		if IsInterruptError(err) {
+		if _, ok := resumableInterrupt(err); ok {
 			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
 			setAgentToolInterruptStateFromError(config.State, err)
 		} else {
@@ -5742,7 +5745,8 @@ func selectToolCallError(errs []error, causalError error) error {
 		}
 		if _, ok := agenttoolgraph.InterruptMetadataFromError(err); ok {
 			if agentToolInterrupt != nil {
-				return fmt.Errorf("multiple agent tool graph interrupts in parallel tools node")
+				return preserveReplayUnsafeToolErrors(
+					fmt.Errorf("multiple agent tool graph interrupts in parallel tools node"), errs...)
 			}
 			agentToolInterrupt = err
 			continue
@@ -5752,10 +5756,10 @@ func selectToolCallError(errs []error, causalError error) error {
 		}
 	}
 	if agentToolInterrupt != nil {
-		return agentToolInterrupt
+		return preserveReplayUnsafeToolErrors(agentToolInterrupt, errs...)
 	}
 	if interrupt != nil {
-		return interrupt
+		return preserveReplayUnsafeToolErrors(interrupt, errs...)
 	}
 	// Context-only errors from sibling cancellation must not replace the tool
 	// failure that caused that cancellation.
@@ -5767,16 +5771,14 @@ func selectToolCallError(errs []error, causalError error) error {
 
 // preserveReplayUnsafeToolErrors keeps the selected failure first while
 // retaining errors from tool calls that cannot be retried with the node.
-// Only the selected error determines whether graph execution is interrupted.
 func preserveReplayUnsafeToolErrors(primary error, candidates ...error) error {
-	if primary == nil || IsInterruptError(primary) {
+	if primary == nil {
 		return primary
 	}
 	primaryUnsafe := toolretry.IsReplayUnsafe(primary)
 	failures := []error{primary}
 	for _, err := range candidates {
-		if toolretry.IsReplayUnsafe(err) && !IsInterruptError(err) &&
-			(!primaryUnsafe || !errors.Is(primary, err)) {
+		if toolretry.IsReplayUnsafe(err) && (!primaryUnsafe || !errors.Is(primary, err)) {
 			failures = append(failures, err)
 		}
 	}

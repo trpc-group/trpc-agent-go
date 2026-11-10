@@ -31,6 +31,48 @@ import (
 
 type rawTerminalRecoveryAgent struct{ name string }
 
+type nonReplayableChildError struct{}
+
+func (*nonReplayableChildError) Error() string            { return "child tool task interrupted" }
+func (*nonReplayableChildError) ToolCallReplaySafe() bool { return false }
+
+func TestAgentNodeDoesNotReplayInterruptedChildTool(t *testing.T) {
+	original := &nonReplayableChildError{}
+	calls := 0
+	child := graph.NewStateGraph(graph.NewStateSchema()).
+		AddNode("tool", func(context.Context, graph.State) (any, error) {
+			calls++
+			return nil, original
+		}).
+		SetEntryPoint("tool").SetFinishPoint("tool").MustCompile()
+	childAgent, err := graphagent.New("child", child)
+	require.NoError(t, err)
+	var observed error
+	parent := graph.NewStateGraph(graph.NewStateSchema()).
+		AddAgentNode("child",
+			graph.WithRetryPolicy(graph.RetryPolicy{MaxAttempts: 2, RetryOn: []graph.RetryCondition{
+				graph.RetryConditionFunc(func(error) bool { return true }),
+			}}),
+			graph.WithNodeErrorCallback(func(_ context.Context, _ *graph.NodeCallbackContext, _ graph.State, err error) {
+				observed = err
+			}),
+		).
+		SetEntryPoint("child").SetFinishPoint("child").MustCompile()
+	parentAgent, err := graphagent.New("parent", parent, graphagent.WithSubAgents([]agent.Agent{childAgent}))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events, err := parentAgent.Run(ctx, agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("run")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithPropagateChildAgentErrors(true))),
+	))
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Equal(t, 1, calls)
+	require.ErrorIs(t, observed, original)
+}
+
 func (a *rawTerminalRecoveryAgent) Run(
 	ctx context.Context,
 	invocation *agent.Invocation,

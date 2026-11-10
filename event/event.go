@@ -162,6 +162,9 @@ type Event struct {
 	// ExecutionTrace carries an in-memory execution trace artifact for this run.
 	// This is not serialized and is meant for immediate consumer access.
 	ExecutionTrace *trace.Trace `json:"-"`
+	// ErrorCause carries the original terminal error for in-process consumers.
+	// It is read-only and omitted from serialized events.
+	ErrorCause error `json:"-"`
 
 	// Actions carry flow-level hints that influence how this event is treated
 	// by the runner/flow (e.g., skip summarization after a tool response).
