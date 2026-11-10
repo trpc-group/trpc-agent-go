@@ -96,29 +96,25 @@ func (r *workspaceRuntime) CreateWorkspace(
 	defer span.End()
 	_ = pol
 
-	if r.ce == nil || r.ce.sbx == nil {
+	if r == nil || r.ce == nil {
 		return codeexecutor.Workspace{}, errors.New(
 			"e2b: sandbox not initialized",
 		)
 	}
-
-	if r.cfg.workspacePersistence == WorkspacePersistencePerSession && execID == "" {
-		return codeexecutor.Workspace{}, errors.New(
-			"e2b: execID must not be empty when using WorkspacePersistencePerSession",
-		)
+	snap, err := r.ce.useSandbox(ctx)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return codeexecutor.Workspace{}, err
 	}
-
-	safe := sanitize(execID)
-	var wsPath string
-	if r.cfg.workspacePersistence == WorkspacePersistencePerSession {
-		// Use a stable hash of the raw exec ID to avoid collisions from
-		// sanitize() (e.g. "a/b" and "a_b" both sanitize to "a_b").
-		h := stableWorkspaceHash(execID)
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
-	} else {
-		suf := time.Now().UnixNano()
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+	// Per-session hashes avoid sanitize() collisions ("a/b" and "a_b").
+	// Auto-recreate puts the process-local generation in the path so a handle
+	// from the previous instance cannot address the replacement.
+	wsPath, err := r.allocateWorkspacePath(execID, snap.generation)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return codeexecutor.Workspace{}, err
 	}
+	ctx = withSandboxSnap(ctx, snap)
 
 	var sb strings.Builder
 	sb.WriteString("set -e; mkdir -p ")
@@ -155,8 +151,13 @@ func (r *workspaceRuntime) Cleanup(
 	if ws.Path == "" {
 		return nil
 	}
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
 	script := "rm -rf " + shellQuote(ws.Path)
-	_, _, _, err := r.runBash(ctx, script, defaultRmTimeout)
+	_, _, _, err = r.runBash(ctx, script, defaultRmTimeout)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}
@@ -176,6 +177,11 @@ func (r *workspaceRuntime) PutFiles(
 	defer span.End()
 	if len(files) == 0 {
 		return nil
+	}
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
 	}
 
 	data, err := tarGzFromFiles(files)
@@ -220,6 +226,11 @@ func (r *workspaceRuntime) PutDirectory(
 	if to != "" {
 		dest = path.Join(ws.Path, filepath.ToSlash(to))
 	}
+	ctx, err = r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
 	if err := r.uploadTarGzAndExtract(ctx, dest, data); err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return err
@@ -236,6 +247,10 @@ func (r *workspaceRuntime) StageDirectory(
 	to string,
 	opt codeexecutor.StageOptions,
 ) error {
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		return err
+	}
 	if err := r.PutDirectory(ctx, ws, src, to); err != nil {
 		return err
 	}
@@ -267,6 +282,11 @@ func (r *workspaceRuntime) Collect(
 	patterns = codeexecutor.NormalizeGlobs(patterns)
 	if len(patterns) == 0 {
 		return nil, nil
+	}
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 	paths, err := r.listFilesByGlob(ctx, ws.Path, patterns)
 	if err != nil {
@@ -316,6 +336,10 @@ func (r *workspaceRuntime) StageInputs(
 		ctx,
 		ws.Path,
 		func(ctx context.Context) error {
+			ctx, err := r.bindContext(ctx, ws)
+			if err != nil {
+				return err
+			}
 			return r.stageInputsLocked(ctx, ws, specs)
 		},
 	)
@@ -326,7 +350,7 @@ func (r *workspaceRuntime) stageInputsLocked(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
-	if r.ce == nil || r.ce.sbx == nil {
+	if _, ok := sandboxSnapFrom(ctx); !ok {
 		return errors.New("e2b: sandbox not initialized")
 	}
 	md, err := r.loadWorkspaceMetadata(ctx, ws)
@@ -499,6 +523,10 @@ func (r *workspaceRuntime) CollectOutputs(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.OutputSpec,
 ) (codeexecutor.OutputManifest, error) {
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
 	globs := codeexecutor.NormalizeGlobs(spec.Globs)
 	paths, err := r.listFilesByGlob(ctx, ws.Path, globs)
 	if err != nil {
@@ -643,16 +671,17 @@ func (r *workspaceRuntime) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 
-	if r.ce == nil {
-		return codeexecutor.RunResult{}, errors.New("e2b: sandbox not initialized")
+	snap, err := r.bindWorkspace(ctx, ws)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
 	}
-	r.ce.mu.Lock()
-	sbx := r.ce.sbx
-	r.ce.mu.Unlock()
 	start := time.Now()
-	result, err := ci.RunProcess(ctx, sbx, envdprocess.Request{
+	result, err := ci.RunProcess(ctx, snap.sbx, envdprocess.Request{
 		Cmd: "/bin/bash", Args: args, Stdin: spec.Stdin, Timeout: timeout,
 	})
+	if err != nil {
+		err = r.ce.observeLoss(ctx, snap, err)
+	}
 	res = codeexecutor.RunResult{
 		Stdout:   result.Stdout,
 		Stderr:   result.Stderr,
@@ -780,13 +809,27 @@ func (r *workspaceRuntime) runBash(
 	return stdout, stderr, exit, err
 }
 
+func (r *workspaceRuntime) sandboxForBash(ctx context.Context) (sandboxSnap, error) {
+	if snap, ok := sandboxSnapFrom(ctx); ok {
+		return snap, nil
+	}
+	if r == nil || r.ce == nil {
+		return sandboxSnap{}, errors.New("e2b: sandbox not initialized")
+	}
+	if r.ce.autoRecreate {
+		return sandboxSnap{}, errors.New("e2b: sandbox generation is not bound")
+	}
+	return r.ce.useSandbox(ctx)
+}
+
 // runBashStreaming is the low-level primitive: it invokes Sandbox.RunCode
 // with LanguageBash and collects the combined stream outputs.
 func (r *workspaceRuntime) runBashStreaming(
 	ctx context.Context, script string, timeout time.Duration,
 ) (string, string, int, error) {
-	if r.ce == nil || r.ce.sbx == nil {
-		return "", "", 0, errors.New("e2b: sandbox not initialized")
+	snap, err := r.sandboxForBash(ctx)
+	if err != nil {
+		return "", "", 0, err
 	}
 	var stdoutB, stderrB strings.Builder
 	opts := &ci.RunCodeOpts{
@@ -795,8 +838,9 @@ func (r *workspaceRuntime) runBashStreaming(
 		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
 		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
 	}
-	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
+	exec, err := snap.sbx.RunCode(ctx, script, opts)
 	if err != nil {
+		err = r.ce.observeLoss(ctx, snap, err)
 		return stdoutB.String(), stderrB.String(), -1, err
 	}
 	if exec.Error != nil {

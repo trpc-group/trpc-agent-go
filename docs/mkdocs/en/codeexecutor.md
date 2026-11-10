@@ -237,6 +237,52 @@ account through `WithHeaders` using Basic authentication, for example
 the local server's account. Kernel-local environment changes are not inherited
 by native processes; check HOME/PATH when migrating custom templates.
 
+### E2B sandbox recreation
+
+`WithAutoRecreate` is off by default. The executor keeps using the sandbox it
+created or connected, including after that instance expires. Set it to true
+only for an executor-owned sandbox:
+
+```go
+executor, err := e2b.New(
+    e2b.WithTemplate("code-interpreter-v1"),
+    e2b.WithAutoRecreate(true),
+)
+```
+
+`WithAutoRecreate(true)` cannot be combined with `WithSandboxID`. A sandbox
+supplied by ID is owned outside the executor, and construction returns an
+error instead of ignoring the option. `Pause` also gives up ownership and does
+not recreate the paused sandbox.
+
+Recreation builds a new sandbox from the same template, environment, metadata,
+and connection settings. It does not resume the old one. Files, processes,
+interpreter variables, and temporary data are gone. A logical workspace ID can
+stay the same, but directories, staging, bootstrap, and workspace init hooks
+run again through the existing workspace registry. Paths created while the
+option is on include the process-local generation, so a handle from the
+previous instance does not name the replacement. The workspace instance ID
+is unique to each executor in the process and changes when that executor
+publishes a replacement.
+
+There is no background probe. The executor replaces a sandbox only after the
+management API reports that this sandbox is missing or in a terminal state
+such as killed or expired. An end time, a transport or execution timeout, a
+lost response, HTTP 5xx, and a file or process 404 are not proof of deletion.
+A code-interpreter HTTP 502 or 504, and an envd HTTP 404 reported as
+unimplemented, only cause one management check. A running or paused answer
+leaves the current instance in place.
+One creation is shared by callers of the same dead generation. A failed
+creation is not retried in a loop; a later call may try again. The call that
+already reached the sandbox is not replayed, and `ExecuteCode` does not run
+earlier blocks again. A replacement that loses to `Close` or `Pause` is
+killed. After a replacement is published, the owned sandbox it replaced is
+killed.
+
+`Sandbox()` returns the instance published at that call. Holding that pointer
+does not follow a later replacement. `SandboxID()` reports the published ID and
+is empty when none is published.
+
 ## Workspace Layout
 
 Programs run inside a workspace. Common directories are:
