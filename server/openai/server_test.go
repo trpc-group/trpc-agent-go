@@ -717,9 +717,7 @@ func TestServer_writeChunk(t *testing.T) {
 		},
 	}
 
-	result := s.writeChunk(w, flusher, chunk)
-
-	assert.True(t, result)
+	require.NoError(t, s.writeChunk(w, flusher, chunk))
 	assert.True(t, flusher.flushed)
 	body := w.Body.String()
 	assert.Contains(t, body, sseDataPrefix)
@@ -1335,7 +1333,7 @@ func TestServer_sendFinalChunk(t *testing.T) {
 		},
 	}
 
-	s.sendFinalChunk(w, flusher, evt, "test-response-id", time.Now().Unix())
+	require.NoError(t, s.sendFinalChunk(w, flusher, evt, "test-response-id", time.Now().Unix()))
 
 	assert.True(t, flusher.flushed)
 	body := w.Body.String()
@@ -1355,7 +1353,7 @@ func TestServer_sendFinalChunk_NoUsage(t *testing.T) {
 		},
 	}
 
-	s.sendFinalChunk(w, flusher, evt, "test-response-id", time.Now().Unix())
+	require.NoError(t, s.sendFinalChunk(w, flusher, evt, "test-response-id", time.Now().Unix()))
 
 	// Should return early without writing.
 	body := w.Body.String()
@@ -1383,8 +1381,9 @@ func TestServer_processStreamingChunk_ConvertError(t *testing.T) {
 		},
 	}
 
-	isFinal := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
+	isFinal, err := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
 
+	require.NoError(t, err)
 	assert.False(t, isFinal)
 }
 
@@ -1411,8 +1410,9 @@ func TestServer_processStreamingChunk_NilChunk(t *testing.T) {
 		},
 	}
 
-	isFinal := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
+	isFinal, err := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
 
+	require.NoError(t, err)
 	assert.True(t, isFinal)
 }
 
@@ -1438,9 +1438,7 @@ func TestServer_writeChunk_MarshalError(t *testing.T) {
 		},
 	}
 
-	result := s.writeChunk(w, flusher, chunk)
-
-	assert.False(t, result)
+	require.Error(t, s.writeChunk(w, flusher, chunk))
 }
 
 func TestServer_writeJSON_EncodeError(t *testing.T) {
@@ -1494,9 +1492,10 @@ func TestServer_processStreamingChunk_WriteChunkError(t *testing.T) {
 	w2 := &mockResponseWriterWithError{ResponseWriter: httptest.NewRecorder()}
 	flusher2 := &mockFlusher{ResponseWriter: w2}
 
-	isFinal := s.processStreamingChunk(context.Background(), w2, flusher2, evt, "test-id", time.Now().Unix())
+	isFinal, processErr := s.processStreamingChunk(context.Background(), w2, flusher2, evt, "test-id", time.Now().Unix())
 
-	// writeChunk will fail, so should return false.
+	// writeChunk will fail, so should return false and the write error.
+	require.Error(t, processErr)
 	assert.False(t, isFinal)
 }
 
@@ -1521,8 +1520,9 @@ func TestServer_processStreamingChunk_NotFinal(t *testing.T) {
 		},
 	}
 
-	isFinal := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
+	isFinal, err := s.processStreamingChunk(context.Background(), w, flusher, evt, "test-id", time.Now().Unix())
 
+	require.NoError(t, err)
 	assert.False(t, isFinal)
 }
 

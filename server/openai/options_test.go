@@ -12,6 +12,7 @@ package openai
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -84,6 +85,18 @@ func TestWithAppName(t *testing.T) {
 	opts := &options{}
 	WithAppName("my-app")(opts)
 	assert.Equal(t, "my-app", opts.appName)
+}
+
+func TestWithHeartbeatInterval(t *testing.T) {
+	opts := &options{}
+	WithHeartbeatInterval(5 * time.Second)(opts)
+	assert.Equal(t, 5*time.Second, opts.heartbeatInterval)
+}
+
+func TestNewDefaultHeartbeatInterval(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	assert.NoError(t, err)
+	assert.Equal(t, defaultHeartbeatInterval, s.heartbeatInterval)
 }
 
 func TestOptions_DefaultValues(t *testing.T) {
