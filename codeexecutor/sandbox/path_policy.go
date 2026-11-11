@@ -145,6 +145,19 @@ func (r *Runtime) decidePath(
 	}
 	d := pathDecision{rel: rel, abs: abs}
 	d.protected = isProtectedRel(rel, profile.fileSystem.ProtectedMetadata)
+	if !d.protected {
+		canonical := policyCanonicalPath(abs)
+		for _, protected := range profile.fileSystem.ProtectedMetadata {
+			protected = filepath.Clean(protected)
+			if protected == "." || protected == "" {
+				continue
+			}
+			if sameOrChild(policyCanonicalPath(filepath.Join(ws.Path, protected)), canonical) {
+				d.protected = true
+				break
+			}
+		}
+	}
 	access, matched, err := r.resolveAccess(profile, ws, rel, abs)
 	if err != nil {
 		return pathDecision{}, err
@@ -183,6 +196,9 @@ func (r *Runtime) resolveAccess(
 			bestRank = rank
 		}
 	}
+	if bestSpecificity < 0 && profile.exposesHostRoot() {
+		return accessRead, false, nil
+	}
 	return best, bestSpecificity >= 0, nil
 }
 
@@ -208,6 +224,9 @@ func accessCanWrite(access fileSystemAccess) bool {
 }
 
 func validateFileSystemRules(profile PermissionProfile) error {
+	if err := validateReadMode(profile); err != nil {
+		return err
+	}
 	for _, rule := range profile.fileSystem.Rules {
 		if !validFileSystemRuleShape(rule) {
 			return deniedf(
@@ -248,37 +267,25 @@ func ruleTarget(rule fileSystemRule) string {
 }
 
 func ruleSpecificity(ws codeexecutor.Workspace, rule fileSystemRule) (int, error) {
-	switch rule.Kind {
-	case ruleSpecial:
-		rel, ok := specialRel(rule.Special)
-		if !ok {
-			return 0, nil
-		}
-		return pathSpecificity(rel), nil
-	case ruleGlob:
-		return pathSpecificity(rule.Glob), nil
-	default:
-		target := strings.TrimSpace(rule.Path)
-		if target == "" {
-			return 0, nil
-		}
-		if filepath.IsAbs(target) {
-			rootAbs, err := filepath.Abs(ws.Path)
-			if err != nil {
-				return 0, err
-			}
-			targetAbs, err := filepath.Abs(target)
-			if err != nil {
-				return 0, err
-			}
-			if rel, err := filepath.Rel(rootAbs, targetAbs); err == nil &&
-				!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) &&
-				rel != ".." {
-				target = rel
-			}
-		}
-		return pathSpecificity(target), nil
+	if rule.Kind == ruleGlob {
+		return pathSpecificity(policyCanonicalPath(ws.Path)) + pathSpecificity(rule.Glob), nil
 	}
+	if rule.Kind == ruleSpecial {
+		target, ok, err := specialPathAbs(ws, rule.Special)
+		if err != nil || !ok {
+			return 0, err
+		}
+		return pathSpecificity(policyCanonicalPath(target)), nil
+	}
+	target := strings.TrimSpace(rule.Path)
+	if target == "" {
+		return 0, nil
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(ws.Path, target)
+	}
+	target, err := filepath.Abs(target)
+	return pathSpecificity(policyCanonicalPath(target)), err
 }
 
 func pathSpecificity(path string) int {
@@ -343,10 +350,29 @@ func (r *Runtime) matchRule(
 ) (bool, error) {
 	switch rule.Kind {
 	case ruleSpecial:
-		return matchSpecial(ws, abs, rule.Special)
+		target, ok, err := specialPathAbs(ws, rule.Special)
+		if err != nil || !ok {
+			return false, err
+		}
+		if rule.Access != accessNone && !sameOrChild(policyCanonicalPath(ws.Path), policyCanonicalPath(target)) {
+			return false, nil
+		}
+		return matchConcreteRule(target, abs, rule.Access), nil
 	case ruleGlob:
 		ok, err := ds.Match(filepath.ToSlash(rule.Glob), filepath.ToSlash(rel))
-		return ok, err
+		if ok || err != nil {
+			return ok, err
+		}
+		// A parent symlink must not hide a denied workspace resource.
+		root, canonical := policyCanonicalPath(ws.Path), policyCanonicalPath(abs)
+		if !sameOrChild(root, canonical) {
+			return false, nil
+		}
+		canonicalRel, err := filepath.Rel(root, canonical)
+		if err != nil {
+			return false, err
+		}
+		return ds.Match(filepath.ToSlash(rule.Glob), filepath.ToSlash(canonicalRel))
 	default:
 		target := strings.TrimSpace(rule.Path)
 		if target == "" {
@@ -357,11 +383,24 @@ func (r *Runtime) matchRule(
 			if err != nil {
 				return false, err
 			}
-			return sameOrChild(targetAbs, abs), nil
+			return matchConcreteRule(targetAbs, abs, rule.Access), nil
 		}
-		target = filepath.ToSlash(filepath.Clean(target))
-		return rel == target || strings.HasPrefix(rel, target+"/"), nil
+		target = filepath.Clean(target)
+		if target == ".." || strings.HasPrefix(target, ".."+string(os.PathSeparator)) {
+			return false, nil
+		}
+		return matchConcreteRule(filepath.Join(ws.Path, target), abs, rule.Access), nil
 	}
+}
+
+// Grants authorize the resolved resource rather than every resource reachable
+// through its lexical spelling. Denials also retain their lexical boundary, so
+// replacing an ancestor symlink cannot reopen a denied path.
+func matchConcreteRule(target, abs string, access fileSystemAccess) bool {
+	if sameOrChild(policyCanonicalPath(target), policyCanonicalPath(abs)) {
+		return true
+	}
+	return access == accessNone && sameOrChild(target, abs)
 }
 
 func matchSpecial(ws codeexecutor.Workspace, abs string, special specialPath) (bool, error) {
@@ -369,7 +408,7 @@ func matchSpecial(ws codeexecutor.Workspace, abs string, special specialPath) (b
 	if err != nil || !ok {
 		return false, err
 	}
-	return sameOrChild(target, abs), nil
+	return sameOrChild(target, abs) || sameOrChild(policyCanonicalPath(target), policyCanonicalPath(abs)), nil
 }
 
 func specialPathAbs(ws codeexecutor.Workspace, special specialPath) (string, bool, error) {
@@ -399,27 +438,6 @@ func specialPathAbs(ws codeexecutor.Workspace, special specialPath) (string, boo
 		return "", false, err
 	}
 	return targetAbs, true, nil
-}
-
-func specialRel(special specialPath) (string, bool) {
-	switch special {
-	case specialRoot, specialWorkspace:
-		return ".", true
-	case specialWork:
-		return codeexecutor.DirWork, true
-	case specialHome:
-		return "home", true
-	case specialTmp:
-		return "tmp", true
-	case specialRuns:
-		return codeexecutor.DirRuns, true
-	case specialOut:
-		return codeexecutor.DirOut, true
-	case specialSkills:
-		return codeexecutor.DirSkills, true
-	default:
-		return "", false
-	}
 }
 
 func isProtectedRel(rel string, protected []string) bool {

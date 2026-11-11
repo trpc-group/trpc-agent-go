@@ -63,10 +63,13 @@ type fileSystemRule struct {
 	Path    string
 	Special specialPath
 	Glob    string
+	// optional identifies built-in runtime grants that may be absent on a host.
+	optional bool
 }
 
 // fileSystemPolicy is the filesystem portion of a PermissionProfile.
 type fileSystemPolicy struct {
+	ReadMode          ReadMode
 	Rules             []fileSystemRule
 	ProtectedMetadata []string
 }

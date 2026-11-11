@@ -43,18 +43,3 @@ func releaseCmdExtraFiles(cmd *exec.Cmd) {
 		cmd.ExtraFiles[i] = nil
 	}
 }
-
-// backendCapabilitiesInfo reports backend support above the generic engine
-// capabilities exposed by codeexecutor.Engine.
-type backendCapabilitiesInfo struct {
-	OSSandbox          bool
-	PTY                bool
-	Stdin              bool
-	NetworkIsolation   bool
-	DenyReadGlob       bool
-	Snapshot           bool
-	Ports              bool
-	ExternalPathGrants bool
-	ProtectedPathMasks bool
-	PerCommandGrants   bool
-}

@@ -25,23 +25,6 @@ import (
 
 const macosSandboxExecPath = "/usr/bin/sandbox-exec"
 
-func backendCapabilities(backend BackendType, profile PermissionProfile) backendCapabilitiesInfo {
-	supported := backend == BackendAuto || backend == BackendMacOSSandboxExec
-	managed := supported && profile.enforcement() == enforcementManaged
-	return backendCapabilitiesInfo{
-		OSSandbox:          managed,
-		PTY:                false,
-		Stdin:              true,
-		NetworkIsolation:   managed,
-		DenyReadGlob:       managed,
-		Snapshot:           false,
-		Ports:              false,
-		ExternalPathGrants: managed,
-		ProtectedPathMasks: managed,
-		PerCommandGrants:   true,
-	}
-}
-
 func (r *Runtime) osSandboxCommand(
 	ctx context.Context,
 	profile PermissionProfile,
