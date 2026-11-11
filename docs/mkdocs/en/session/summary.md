@@ -1089,6 +1089,9 @@ succeeds. A model error, an empty summary, an error from this hook, or cancellat
 leaves the boundary unchanged. An approved attempt is not automatically retried
 with a smaller budget. A later summary task may process the same failed batch
 again.
+A finish reason of `model_context_window_exceeded`, `max_tokens`, or `length`
+explicitly reports truncated generation. Even with nonempty text, that approved
+attempt returns an error and keeps the original coverage boundary.
 
 #### Which history the replacement covers
 

@@ -111,3 +111,20 @@ func summaryCallbacksForRequest(
 	}
 	return cloned
 }
+
+// approvedSummaryCompletionError prevents a provider-truncated output from
+// covering the entire approved source. Approval bypasses input estimation, not
+// the requirement for a completed summary. Other summary paths keep their
+// existing finish-reason behavior.
+func approvedSummaryCompletionError(response *model.Response) error {
+	if response == nil || len(response.Choices) == 0 || response.Choices[0].FinishReason == nil {
+		return nil
+	}
+	reason := *response.Choices[0].FinishReason
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "model_context_window_exceeded", "max_tokens", "length":
+		return fmt.Errorf("approved summary generation was truncated: finish_reason=%s", reason)
+	default:
+		return nil
+	}
+}

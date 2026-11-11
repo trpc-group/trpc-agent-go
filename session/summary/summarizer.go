@@ -1718,6 +1718,12 @@ func (s *sessionSummarizer) runSummaryAttempt(
 		trackResponse,
 		ensureTimingInfo,
 	)
+	if budgetApproved && err == nil {
+		err = approvedSummaryCompletionError(finalResp)
+		if err != nil {
+			summaryText = ""
+		}
+	}
 	result.ctx = ctx
 	result.summaryText = summaryText
 	result.response = finalResp

@@ -46,10 +46,12 @@ func TestInputOverflowHook_SendsApprovedTextAndPersistsOnlyCoveredEvents(t *test
 		replace     bool
 		providerErr bool
 		decline     bool
+		truncated   bool
 	}{
 		{name: "original"},
 		{name: "replacement still over estimated budget", replace: true},
 		{name: "provider rejection", providerErr: true},
+		{name: "truncated summary", truncated: true},
 		{name: "default rejection", decline: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,6 +72,10 @@ func TestInputOverflowHook_SendsApprovedTextAndPersistsOnlyCoveredEvents(t *test
 				if test.providerErr {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, `{"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}`)
+					return
+				}
+				if test.truncated {
+					fmt.Fprint(w, `{"id":"summary-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"incomplete summary"},"finish_reason":"length"}]}`)
 					return
 				}
 				fmt.Fprint(w, `{"id":"summary-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"first batch summary"},"finish_reason":"stop"}]}`)
@@ -125,7 +131,7 @@ func TestInputOverflowHook_SendsApprovedTextAndPersistsOnlyCoveredEvents(t *test
 			stored, getErr := service.GetSession(ctx, key)
 			require.NoError(t, getErr)
 			require.Len(t, stored.Events, 4)
-			if test.providerErr || test.decline {
+			if test.providerErr || test.decline || test.truncated {
 				require.Error(t, err)
 				require.Empty(t, stored.Summaries)
 			} else {

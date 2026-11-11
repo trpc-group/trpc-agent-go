@@ -59,7 +59,9 @@ type OverflowDecision struct {
 // the framework's model adapters. Model callbacks still run; callbacks delegating
 // the approved request must pass their supplied context and request pointer.
 // Other requests sharing that context retain token tailoring. Provider errors
-// and empty summaries are returned without an automatic summary retry.
+// and empty or provider-truncated summaries are returned without an automatic
+// summary retry. Recognized truncation reasons are model_context_window_exceeded,
+// max_tokens, and length; they do not advance the source boundary.
 //
 // Returning nil, nil preserves the original overflow error. A non-nil error
 // rejects the batch even when a decision is also returned, independently of

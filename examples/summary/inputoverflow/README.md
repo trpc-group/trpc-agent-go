@@ -55,6 +55,8 @@ hook := func(ctx context.Context, in summary.InputOverflow) (*summary.OverflowDe
 只有本次摘要整体成功后，框架才会推进摘要覆盖边界。模型报错、返回空摘要、这个 Hook
 返回错误或任务取消时，边界不推进。业务放行后的这次摘要不会自动缩小预算重试。
 后续摘要任务仍可能再次处理这个失败批次。
+模型明确返回 `model_context_window_exceeded`、`max_tokens` 或 `length` 时，
+表示生成被截断；即使已有非空摘要，本次放行调用也会返回错误，保留原覆盖边界。
 
 ## 替换文本代表哪些历史
 

@@ -214,6 +214,99 @@ func TestInputOverflowHook_DoesNotRetryProviderFailureOrEmptySummary(t *testing.
 	}
 }
 
+func TestInputOverflowHook_TruncatedSummaryKeepsBoundary(t *testing.T) {
+	for _, reason := range []string{"model_context_window_exceeded", "max_tokens", "MAX_TOKENS", "length"} {
+		t.Run(reason, func(t *testing.T) {
+			capture := &retrySummaryModel{contextWindow: 100_000, inputBudget: 100,
+				responses: []*model.Response{{Done: true, Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("incomplete summary"), FinishReason: &reason,
+				}}}},
+			}
+			s := NewSummarizer(capture, WithInputOverflowHook(
+				func(_ context.Context, in InputOverflow) (*OverflowDecision, error) {
+					return &OverflowDecision{Text: in.Text}, nil
+				}),
+			)
+			sess := &session.Session{ID: "truncated-overflow", Events: newSummaryPrefixRounds(1, 128),
+				State: session.StateMap{lastIncludedEventIDKey: []byte("previous-boundary")},
+			}
+
+			text, err := s.Summarize(context.Background(), sess)
+
+			require.ErrorContains(t, err, reason)
+			require.Empty(t, text)
+			require.Len(t, capture.requests, 1)
+			require.Equal(t, "previous-boundary", string(sess.State[lastIncludedEventIDKey]))
+		})
+	}
+}
+
+func TestInputOverflowHook_UnusedHookPreservesFinishReasonBehavior(t *testing.T) {
+	reason := "length"
+	capture := &retrySummaryModel{contextWindow: 100_000, inputBudget: 100_000,
+		responses: []*model.Response{{Done: true, Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("existing summary behavior"), FinishReason: &reason,
+		}}}},
+	}
+	s := NewSummarizer(capture, WithInputOverflowHook(
+		func(context.Context, InputOverflow) (*OverflowDecision, error) {
+			t.Fatal("the request fits the ordinary budget")
+			return nil, nil
+		}),
+	)
+	sess := &session.Session{ID: "ordinary-summary", Events: newSummaryPrefixRounds(1, 8)}
+
+	text, err := s.Summarize(context.Background(), sess)
+
+	require.NoError(t, err)
+	require.Equal(t, "existing summary behavior", text)
+	require.Equal(t, "assistant-event-1", string(sess.State[lastIncludedEventIDKey]))
+}
+
+func TestInputOverflowHook_TruncatedStreamProcessesFinalResponse(t *testing.T) {
+	reason := "model_context_window_exceeded"
+	final := &model.Response{Done: true, Usage: &model.Usage{PromptTokens: 500, CompletionTokens: 8},
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("incomplete summary"), FinishReason: &reason}},
+	}
+	capture := &reportModel{responses: []*model.Response{
+		{IsPartial: true, Choices: []model.Choice{{FinishReason: &reason}}},
+		final,
+	}}
+	callbacksSeen := 0
+	var report Report
+	s := NewSummarizer(capture,
+		WithRequestInputTokenBudget(100),
+		WithReportHook(func(_ context.Context, r Report) { report = r }),
+		WithInputOverflowHook(func(_ context.Context, in InputOverflow) (*OverflowDecision, error) {
+			return &OverflowDecision{Text: in.Text}, nil
+		}),
+		WithModelCallbacks(model.NewCallbacks().RegisterBeforeModel(
+			func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+				args.Request.Stream = true
+				return nil, nil
+			},
+		).RegisterAfterModel(
+			func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+				callbacksSeen++
+				if args.Response.Done {
+					require.Same(t, final, args.Response)
+					require.Equal(t, 500, args.Response.Usage.PromptTokens)
+				}
+				return nil, nil
+			},
+		)),
+	)
+	sess := &session.Session{ID: "truncated-stream", Events: newSummaryPrefixRounds(1, 128)}
+
+	_, err := s.Summarize(context.Background(), sess)
+
+	require.ErrorContains(t, err, reason)
+	require.Equal(t, 2, callbacksSeen)
+	require.Equal(t, 500, report.Call.PromptTokens)
+	require.ErrorContains(t, report.Error, reason)
+	require.Empty(t, sess.State[lastIncludedEventIDKey])
+}
+
 func TestInputOverflowHook_AuthorizesOverflowAfterProviderRetry(t *testing.T) {
 	code := "context_length_exceeded"
 	capture := &retrySummaryModel{contextWindow: 100_000,
