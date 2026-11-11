@@ -1319,6 +1319,10 @@ func TestTrackEndsWithTerminalRunEvent(t *testing.T) {
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, textUser, nonTerminal}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{nonTerminal, finished}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{nonTerminal, runErr}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, finished, nonTerminal}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, runErr, nonTerminal}))
+	nextFinished := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "next-run"), base.Add(4*time.Millisecond))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, nextFinished, finished, nonTerminal}))
 }
 
 func TestMessagesSnapshotFollowSkipsWhenInitialAlreadyTerminal(t *testing.T) {

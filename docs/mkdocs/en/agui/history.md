@@ -249,6 +249,8 @@ After continuation is enabled, the server continues reading and forwarding subse
 
 A snapshot of an already completed run ends without polling even if activity was recorded after its terminal event. A newer user message or run start marks the next run. Redis Hashidx reads equal-score events in append order, including when a read is limited. Snapshot continuation still uses timestamps, so an event persisted after the snapshot with the same timestamp can be missed.
 
+If the latest run start after the most recent user-message boundary has a run ID, the terminal event must match that ID. If the run start is missing or has no ID, the snapshot uses terminal events after the most recent visible run or user-message boundary.
+
 Every tracked run with a positive flush interval makes a startup best-effort flush after recording the initial `RUN_STARTED` event and before publishing it to the real-time SSE stream. A successful startup flush establishes the session before the periodic writer, RunHooks, and the wrapped runner start. When continuation is enabled and the synchronous `TrackService` flush succeeds, another instance sharing the same `SessionService` can therefore observe a non-terminal event once `RUN_STARTED` has been emitted; later events continue to use periodic buffering. If the startup flush fails, the error is logged without stopping the run and its drained batch is not retried. To avoid racing first-session creation, periodic flushing then starts only after the wrapped runner completes synchronous initialization; events recorded in the meantime remain queued for a later periodic flush or final close. Asynchronous `TrackService` implementations may still delay cross-instance visibility after a flush call returns.
 
 Related configuration:

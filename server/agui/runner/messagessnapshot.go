@@ -316,21 +316,30 @@ func isEmptyTrackEventsError(err error) bool {
 }
 
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	// Activity can follow a terminal event. Stop at a newer run boundary
-	// before considering any terminal event from the preceding run.
+	// A terminal event can be followed by activity or belong to an older
+	// overlapping run. Collect terminal IDs until we find the latest start.
+	terminalRuns := make(map[string]bool)
 	for i := len(events) - 1; i >= 0; i-- {
 		evt, err := aguievents.EventFromJSON(events[i].Payload)
 		if err != nil {
 			continue
 		}
-		if _, started := evt.(*aguievents.RunStartedEvent); started || isUserMessageEvent(evt) {
-			return false
+		if started, ok := evt.(*aguievents.RunStartedEvent); ok {
+			if id := started.RunID(); id != "" {
+				return terminalRuns[id]
+			}
+			break
+		}
+		if isUserMessageEvent(evt) {
+			break
 		}
 		if terminal, _ := terminalRunSignal(evt); terminal {
-			return true
+			terminalRuns[evt.RunID()] = true
 		}
 	}
-	return false
+	// With no identifiable start in this window, retain the positional
+	// fallback for older or truncated history.
+	return len(terminalRuns) > 0
 }
 
 func terminalRunSignal(evt aguievents.Event) (terminal bool, errMessage string) {

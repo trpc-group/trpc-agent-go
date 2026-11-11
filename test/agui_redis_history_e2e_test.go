@@ -18,7 +18,9 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/alicebob/miniredis/v2"
+	r3sse "github.com/r3labs/sse/v2"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	redisservice "trpc.group/trpc-go/trpc-agent-go/session/redis"
@@ -85,4 +87,105 @@ func TestAGUIRedisHistoryCompletesWithTiedEvents(t *testing.T) {
 	finished, ok := events[2].(*aguievents.RunFinishedEvent)
 	require.True(t, ok, "expected RUN_FINISHED, got %T", events[2])
 	require.Equal(t, "snapshot", finished.RunID())
+}
+
+func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
+	url := os.Getenv("TRPC_TEST_REDIS_URL")
+	if url == "" {
+		url = "redis://" + miniredis.RunT(t).Addr()
+	}
+	prefix := "history-e2e-" + rand.Text()
+	newService := func() *redisservice.Service {
+		t.Helper()
+		svc, err := redisservice.NewService(
+			redisservice.WithRedisClientURL(url),
+			redisservice.WithCompatMode(redisservice.CompatModeNone),
+			redisservice.WithEnableAsyncPersist(false),
+			redisservice.WithKeyPrefix(prefix),
+		)
+		require.NoError(t, err)
+		return svc
+	}
+	oldModel := historyStreamModel{responses: make(chan *model.Response, 1)}
+	latestModel := historyStreamModel{responses: make(chan *model.Response, 1)}
+	oldServer := newAGUIHTTPServerWithOptions(t, oldModel, newService(),
+		agui.WithFlushInterval(5*time.Millisecond))
+	latestService := newService()
+	latestServer := newAGUIHTTPServerWithOptions(t, latestModel, latestService,
+		agui.WithFlushInterval(5*time.Millisecond),
+		agui.WithMessagesSnapshotFollowEnabled(true),
+		agui.WithMessagesSnapshotFollowMaxDuration(3*time.Second),
+	)
+	key := session.Key{AppName: testAppName, UserID: "user", SessionID: "thread"}
+	t.Cleanup(func() { require.NoError(t, latestService.DeleteSession(context.Background(), key)) })
+
+	oldRun := postJSON(t, oldServer.Client(), oldServer.URL+"/agui",
+		`{"threadId":"thread","runId":"old","messages":[{"id":"old-user","role":"user","content":"old"}],"forwardedProps":{"userId":"user"}}`,
+		10*time.Second)
+	latestRun := postJSON(t, latestServer.Client(), latestServer.URL+"/agui",
+		`{"threadId":"thread","runId":"latest","messages":[{"id":"latest-user","role":"user","content":"latest"}],"forwardedProps":{"userId":"user"}}`,
+		10*time.Second)
+
+	oldModel.responses <- &model.Response{
+		ID: "old-message", Object: model.ObjectTypeChatCompletion, Done: true,
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "old response"}}},
+	}
+	close(oldModel.responses)
+	oldEvents := readSSEEvents(t, oldRun.Body)
+	require.IsType(t, &aguievents.RunFinishedEvent{}, oldEvents[len(oldEvents)-1])
+
+	latestModel.responses <- historyDelta("before snapshot")
+	require.Eventually(t, func() bool {
+		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
+		if err != nil || len(history.Events) == 0 {
+			return false
+		}
+		last, err := aguievents.EventFromJSON(history.Events[len(history.Events)-1].Payload)
+		content, ok := last.(*aguievents.TextMessageContentEvent)
+		return err == nil && ok && content.Delta == "before snapshot"
+	}, 3*time.Second, 5*time.Millisecond)
+
+	snapshot := postJSON(t, latestServer.Client(), latestServer.URL+"/history",
+		`{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`,
+		10*time.Second)
+	reader := r3sse.NewEventStreamReader(snapshot.Body, 1024*1024)
+	next := func() aguievents.Event {
+		t.Helper()
+		raw, err := reader.ReadEvent()
+		require.NoError(t, err)
+		event, err := aguievents.EventFromJSON(sseData(raw))
+		require.NoError(t, err)
+		return event
+	}
+	require.IsType(t, &aguievents.RunStartedEvent{}, next())
+	require.IsType(t, &aguievents.MessagesSnapshotEvent{}, next())
+	latestModel.responses <- historyDelta("after snapshot")
+	close(latestModel.responses)
+
+	content, ok := next().(*aguievents.TextMessageContentEvent)
+	require.True(t, ok, "history ended before delivering the latest run's next content")
+	require.Equal(t, "after snapshot", content.Delta)
+	require.IsType(t, &aguievents.TextMessageEndEvent{}, next())
+	finished, ok := next().(*aguievents.RunFinishedEvent)
+	require.True(t, ok)
+	require.Equal(t, "snapshot", finished.RunID())
+	runEvents := readSSEEvents(t, latestRun.Body)
+	require.IsType(t, &aguievents.RunFinishedEvent{}, runEvents[len(runEvents)-1])
+}
+
+type historyStreamModel struct {
+	responses chan *model.Response
+}
+
+func (m historyStreamModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
+	return m.responses, nil
+}
+
+func (historyStreamModel) Info() model.Info { return model.Info{Name: "history-stream"} }
+
+func historyDelta(content string) *model.Response {
+	return &model.Response{
+		ID: "latest-message", Object: model.ObjectTypeChatCompletionChunk, IsPartial: true,
+		Choices: []model.Choice{{Delta: model.Message{Role: model.RoleAssistant, Content: content}}},
+	}
 }
