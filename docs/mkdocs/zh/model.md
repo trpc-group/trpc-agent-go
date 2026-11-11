@@ -12,6 +12,36 @@ Model 模块具有以下核心特性：
 - **完整错误处理**：提供双层错误处理机制，区分系统错误和 API 错误
 - **可扩展配置**：支持丰富的自定义配置项，满足不同场景需求
 
+### 在调用上限收尾时保留工具定义
+
+对于已验证支持 `tool_choice: "none"` 的 OpenAI 兼容端点，可以在收尾时保留工具定义，争取复用 prompt cache：
+
+```go
+m := openai.New(modelName,
+    openai.WithBaseURL(baseURL),
+    openai.WithAPIKey(apiKey),
+    openai.WithToolChoiceNoneWhenToolsDisabled(true),
+)
+a := llmagent.New("assistant",
+    llmagent.WithModel(m),
+    llmagent.WithTools(tools),
+    llmagent.WithMaxToolIterations(5),
+    llmagent.WithToolIterationLimitFinalization("请基于已有结果回答。"),
+)
+```
+
+此选项默认为 false，沿用移除工具定义的行为。它同时适用于 LLM 调用次数上限和工具迭代上限触发的收尾，普通调用不受影响。
+开启后，`BeforeModel` callback、输入 token 预算和 telemetry 都能看到保留的工具定义。
+callback 可以删除已有工具，或修改其声明（包括描述、参数和 `strict`）。删除的工具不会被恢复，新增或重命名的工具会被过滤。
+adapter 保留处理后的工具顺序，并在 provider callback、额外字段和 SDK options 之后强制设置 `tool_choice: "none"`。
+如果工具全部被删除，则同时省略 `tools` 和 `tool_choice`。
+包装 model 需要转发 `PreservesToolsWhenDisabled() bool` 才能保留该优化；未转发的包装 model 沿用移除工具定义的行为。
+
+请先验证具体端点和模型。一些兼容网关会拒绝或忽略 `"none"`。
+API 错误沿用既有错误路径；收尾阶段返回的工具调用会被拒绝且不会执行。
+框架不会为此额外发起降级请求，收尾调用仍计入 `MaxLLMCalls`。缓存收益取决于 provider，并非保证命中。
+
+
 ## 快速开始
 
 ### 在 Agent 中使用 Model

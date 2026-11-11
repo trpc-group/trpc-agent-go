@@ -433,9 +433,10 @@ type Model struct {
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 
-	accumulateChunkUsage AccumulateChunkUsage
-	optimizeForCache     bool // Optimize message structure for prompt caching
-	omitFileContentParts bool
+	accumulateChunkUsage       AccumulateChunkUsage
+	optimizeForCache           bool // Optimize message structure for prompt caching
+	omitFileContentParts       bool
+	toolChoiceNoneWhenDisabled bool
 }
 
 // New creates a new OpenAI-like model.
@@ -523,6 +524,7 @@ func New(name string, opts ...Option) *Model {
 		accumulateChunkUsage:       o.accumulateChunkUsage,
 		optimizeForCache:           o.OptimizeForCache,
 		omitFileContentParts:       o.OmitFileContentParts,
+		toolChoiceNoneWhenDisabled: o.toolChoiceNoneWhenDisabled,
 	}
 }
 
@@ -566,6 +568,14 @@ func baseURLMatchesHost(raw string, hosts ...string) bool {
 		}
 	}
 	return false
+}
+
+// PreservesToolsWhenDisabled reports whether the flow should retain tool
+// definitions when disabling tool calls. The definitions remain visible to
+// callbacks, token budgeting, and telemetry; GenerateContent enforces "none".
+// Model wrappers must forward this capability to retain this optimization.
+func (m *Model) PreservesToolsWhenDisabled() bool {
+	return m.toolChoiceNoneWhenDisabled
 }
 
 // Info implements the model.Model interface.
@@ -681,9 +691,13 @@ func (m *Model) GenerateContent(
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
+	var disabledTools []openai.ChatCompletionToolParam
+	if imodelrequest.ToolsDisabled(ctx) && m.toolChoiceNoneWhenDisabled {
+		disabledTools = m.convertTools(request.Tools)
+	}
 	m.runChatRequestCallback(ctx, chatRequest)
 	if imodelrequest.ToolsDisabled(ctx) {
-		disableChatRequestTools(chatRequest)
+		opts, err = m.enforceDisabledTools(chatRequest, opts, disabledTools)
 	}
 	m.runChatRequestJSONCallback(ctx, chatRequest)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
@@ -698,6 +712,13 @@ func (m *Model) GenerateContent(
 			case <-ctx.Done():
 				return false
 			}
+		}
+		if err != nil {
+			if request.Stream {
+				m.handleStreamCompleteCallback(ctx, *chatRequest, openai.ChatCompletionAccumulator{}, err)
+			}
+			emit(disabledToolsErrorResponse(err))
+			return
 		}
 		if request.Stream {
 			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
@@ -720,9 +741,15 @@ func (m *Model) GenerateContentIter(
 	return func(yield func(*model.Response) bool) {
 		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 		defer reporter.End()
+		var disabledTools []openai.ChatCompletionToolParam
+		if imodelrequest.ToolsDisabled(ctx) && m.toolChoiceNoneWhenDisabled {
+			disabledTools = m.convertTools(request.Tools)
+		}
 		m.runChatRequestCallback(ctx, chatRequest)
+		callOpts := opts
+		var controlErr error
 		if imodelrequest.ToolsDisabled(ctx) {
-			disableChatRequestTools(chatRequest)
+			callOpts, controlErr = m.enforceDisabledTools(chatRequest, opts, disabledTools)
 		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
@@ -732,11 +759,18 @@ func (m *Model) GenerateContentIter(
 			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
-		if request.Stream {
-			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
+		if controlErr != nil {
+			if request.Stream {
+				m.handleStreamCompleteCallback(ctx, *chatRequest, openai.ChatCompletionAccumulator{}, controlErr)
+			}
+			emit(disabledToolsErrorResponse(controlErr))
 			return
 		}
-		m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
+		if request.Stream {
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, callOpts...)
+			return
+		}
+		m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, callOpts...)
 	}, nil
 }
 
@@ -1054,6 +1088,85 @@ func appendToolControlDeleteOptions(
 		opts = append(opts, openaiopt.WithJSONDel(key))
 	}
 	return opts
+}
+
+func (m *Model) enforceDisabledTools(
+	request *openai.ChatCompletionNewParams,
+	opts []openaiopt.RequestOption,
+	tools []openai.ChatCompletionToolParam,
+) ([]openaiopt.RequestOption, error) {
+	if !m.toolChoiceNoneWhenDisabled || len(tools) == 0 {
+		disableChatRequestTools(request)
+		return opts, nil
+	}
+	retained, err := filterDisabledTools(request, tools)
+	if err != nil {
+		return nil, err
+	}
+	disableChatRequestTools(request)
+	if len(retained) == 0 {
+		return opts, nil
+	}
+	request.Tools = retained
+	request.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+		OfAuto: openai.String("none"),
+	}
+	// These options run after client options, ExtraFields, and callback metadata.
+	// Keep callback edits to existing schemas, never callback-added tools.
+	return append(opts,
+		openaiopt.WithJSONSet("tools", retained),
+		openaiopt.WithJSONSet("tool_choice", "none"),
+	), nil
+}
+
+func filterDisabledTools(
+	request *openai.ChatCompletionNewParams,
+	allowed []openai.ChatCompletionToolParam,
+) ([]openai.ChatCompletionToolParam, error) {
+	// Read the effective JSON so callback metadata, including whole-object
+	// overrides and explicit omissions, has the same precedence as in the SDK.
+	data, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	var fields struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	names := make(map[string]struct{}, len(allowed))
+	for _, t := range allowed {
+		names[t.Function.Name] = struct{}{}
+	}
+	var retained []openai.ChatCompletionToolParam
+	for _, raw := range fields.Tools {
+		var t openai.ChatCompletionToolParam
+		if err := json.Unmarshal(raw, &t); err != nil {
+			return nil, err
+		}
+		if _, ok := names[t.Function.Name]; !ok || t.Type != "function" {
+			continue
+		}
+		// Keep provider-specific schema fields and their encoding, while also
+		// exposing the standard typed fields to response callbacks.
+		preserved := param.Override[openai.ChatCompletionToolParam](raw)
+		preserved.Function = t.Function
+		preserved.Type = t.Type
+		retained = append(retained, preserved)
+	}
+	return retained, nil
+}
+
+func disabledToolsErrorResponse(err error) *model.Response {
+	return &model.Response{
+		Error: &model.ResponseError{
+			Type:    model.ErrorTypeAPIError,
+			Message: fmt.Sprintf("invalid tools-disabled request: %v", err),
+		},
+		Timestamp: time.Now(),
+		Done:      true,
+	}
 }
 
 func disableChatRequestTools(request *openai.ChatCompletionNewParams) {
