@@ -66,11 +66,162 @@ recovery contract.
   Malformed streams and EOF without a terminal response are errors. Cancelling
   the request context closes the stream without committing partial calls.
 
-Only `message`, `reasoning`, and `function_call` output item types are supported.
-Unknown output types fail explicitly, including hosted-tool calls. Audio/video
-input, hosted tools, tool search, background execution, approval interactions,
-`conversation`, `previous_response_id`, and provider compaction are outside this
-initial contract. Unsupported Chat-specific parameters fail validation.
+Only `message`, `reasoning`, `function_call`, `tool_search_call`, and
+`tool_search_output` output item types are supported; the tool search items
+are described in [Tool search](#tool-search). Unknown output types fail
+explicitly, including hosted-tool calls. Audio/video input, other hosted tools,
+background execution, approval interactions, `conversation`,
+`previous_response_id`, and provider compaction are outside this initial
+contract. Unsupported Chat-specific parameters fail validation.
+
+## Tool search
+
+[Tool search](https://developers.openai.com/api/docs/guides/tools-tool-search)
+lets the model load tool definitions when it needs them instead of receiving
+every definition up front. It is opt-in and requires a model that supports
+`tool_search`; the OpenAI guide lists `gpt-5.4` and later.
+
+- `WithHostedToolSearch()` declares deferred tools with `defer_loading: true`
+  and adds `{"type":"tool_search"}`. The API searches and loads tools inside
+  the same response, which stays `Done`.
+- `WithClientToolSearch(handler)` leaves deferred tools out of the request and
+  adds a client `tool_search` tool whose arguments have a `query` string. When
+  the model searches, `handler` selects tools from the request's deferred
+  tools, and the adapter records a `tool_search_output` with their
+  definitions. A nil handler makes `GenerateContent` fail.
+
+The two options are mutually exclusive; the later one wins. Which tools are
+deferred is decided by the agent, not by the adapter:
+`llmagent.WithDeferredTools` covers tools registered with `WithTools`,
+`llmagent.WithDeferredToolSet` covers all or some members of a named ToolSet,
+and other tools keep their own `tool.DeferredTool` preference. Deferred tools
+stay registered, filtered, and executed by the agent; only the request
+changes. Requests without deferred tools and without tool search history are
+unchanged, and adapters without tool search, such as Chat Completions, ignore
+deferral.
+
+Tools registered and allowed for the request remain executable even before a
+search loads their definitions. Use the existing tool filters and permission
+callbacks to enforce access restrictions; deferral controls schema exposure.
+
+```go
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, shippingETA}),
+    llmagent.WithToolSets([]tool.ToolSet{crm, billing}),
+    llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
+    // Defer one CRM member; the other CRM members stay callable up front.
+    llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
+    // Defer the whole billing ToolSet.
+    llmagent.WithDeferredToolSet("billing", nil),
+)
+```
+
+### Namespaces
+
+A ToolSet with at least one deferred member is sent as a `namespace` named
+after the ToolSet. Members keep their original names inside it, and eager
+members are sent without `defer_loading`. The namespace description comes from
+`tool.ToolSetDescriber`; an MCP ToolSet returns `ConnectionConfig.Description`.
+Without one, the description is `Tools from the <name> tool set.` ToolSets
+without deferred members, and standalone tools, keep their ordinary top-level
+function names.
+
+A function call returned with a namespace is mapped back to the tool that the
+agent registered for that member, for example `crm_lookup` for `lookup` in
+`crm`, so members with the same name in different namespaces never run each
+other. The native item keeps its namespace for the next request. An unknown
+namespaced call becomes a not-found tool call named `<namespace>.<name>` and
+never falls back to a tool with the bare name. A namespace name that equals a
+top-level function name fails the request. After an `AfterModel` payload edit,
+the flow uses `ProjectProviderDataWithRequest` to resolve namespaced calls
+against the request's tool bindings, including original-name ToolSets. Direct
+`ProjectProviderData` calls have no request, so they reject namespaced calls.
+
+### Client-executed search
+
+The handler receives a `ToolSearchRequest`:
+
+- `CallID` is the `tool_search_call` it answers.
+- `Arguments` holds the raw arguments, and `Query` holds their `query` string.
+- `Candidates` lists the deferred tools of the current request that earlier
+  searches in the history have not loaded, sorted by `ID`.
+
+Candidates come from the request tools, so agent and run tool filters apply.
+`ID` is the registered tool name and is unique even when members of different
+namespaces share a `Name`. `Namespace`, `NamespaceDescription`, `Name`, and
+`Declaration` describe what the model will see.
+
+`ToolSearchResult.ToolIDs` selects candidates; unknown or duplicate IDs are
+errors. A nil or empty result loads nothing, and the model sees a search that
+found no tools.
+
+A search response is not `Done`. LLMAgent completes it through
+`model.ProviderActionCompleter` before running ordinary tool calls in the same
+response. `CompleteProviderActions` runs the handler and returns one tool
+message per search:
+
+- `ToolID` is the call ID and `ToolName` is `ToolSearchToolName`.
+- `Content` is a display summary such as `{"loaded_tools":["billing_lookup"]}`.
+- `ProviderData` holds the complete `tool_search_output`, including the
+  loaded definitions.
+
+The flow publishes and persists that message, and model callbacks see the
+search response, before the next model step. Tool callbacks do not run for a
+search because it is not a tool call.
+
+Loaded definitions stay in history, and the top-level tools of later requests
+remain the eager tools plus `tool_search`. A loaded tool stays loaded while
+its `tool_search_output` remains in the request history. A history limit or
+summary that drops the output unloads the tool, and it becomes a candidate
+again.
+
+A handler error ends the run with an error event and records no output. The
+search call stays unanswered:
+
+- A run with `agent.WithResume(true)` retries unanswered searches. If only
+  some search results were persisted before interruption, saved results and
+  their loaded definitions are reused; their handlers do not run again.
+- Other requests that replay the session fail with
+  `client tool_search_call ... has no tool_search_output` until the call is
+  answered.
+
+To let the model continue without the tools, return an empty result instead
+of an error. Canceling the run context stops the search without an output or a
+search error. The handler may be called concurrently for different requests.
+
+### Tool search boundaries
+
+- Client search needs a flow that completes provider actions. LLMAgent and
+  Runner do. Graph LLM nodes report `model response requests provider
+  actions, which graph LLM nodes do not complete`. Graph LLM nodes do not read
+  LLMAgent options, so hosted search there applies only to tools that
+  implement `tool.DeferredTool` themselves.
+- Model wrappers that do not forward `model.ProviderActionCompleter`, including
+  the current failover and hedge wrappers, cannot complete client searches.
+  LLMAgent then stops with `model "..." does not complete provider actions`.
+- Resume is not exactly-once. A crash after the handler returns and before its
+  output is stored runs the handler again. Resume candidates exclude tools
+  already loaded by saved search results.
+- A response can contain both a client search and function calls. If only
+  some ordinary function results were stored, resume does not run the
+  remaining function calls, as described under
+  [Tool recovery boundaries](#tool-recovery-boundaries).
+- An `AfterModel` callback must keep `Done` false on a client search response.
+  Marking it `Done` skips the search, and the next request fails because the
+  call has no output.
+- Partial ToolSet deferral in client mode sends the eager members in a
+  top-level namespace and later loads deferred members into a namespace with
+  the same name. Top-level tool definitions stay unchanged across the search
+  and execution requests.
+- A run-scoped profile that overrides tool declarations, as in prompt
+  iteration, sends the overridden tools eagerly in that run. Declaration
+  overrides carry no optional tool capabilities, including deferral.
+- Do not combine native tool search with `plugin/toolsearch`. That plugin
+  selects tools before the request; native search exposes the agent's
+  deferral policy to the model.
 
 ## Unknown field, event, and item compatibility
 
@@ -193,9 +344,11 @@ The framework stores the record under `provider_data` with `provider`, `model`,
 and `payload` keys. It checks the protocol and configured model before
 continuation. Models implement the optional
 `model.ProviderDataProjector` capability to project edited native records;
-wrappers must forward it to support such edits. Built-in failover and hedge
-wrappers do so. `BeforeModel` edits affect only the current request's detached
-history, while `BeforeTool` edits affect only the current tool execution.
+`model.ProviderDataRequestProjector` also receives the request to resolve
+namespaced tool identities. Wrappers must forward these capabilities to support
+such edits. Built-in failover and hedge wrappers do so. `BeforeModel` edits
+affect only the current request's detached history, while `BeforeTool` edits
+affect only the current tool execution.
 
 Redis retains its existing skip-on-decode-error history policy, including
 events with invalid ProviderData. Each history read logs at most one warning
@@ -270,8 +423,9 @@ saved ProviderData payload. A different protocol or configured model name fails
 before tool execution. Legacy Chat recovery keeps its existing execution
 order.
 
-The existing resume mechanism only handles a final persisted assistant event
-containing tool calls. It does not scan earlier events for missing results.
+For ordinary function calls, the existing resume mechanism only handles a
+final persisted assistant event containing tool calls. It does not scan
+earlier events for missing function results.
 For example, if a response calls A and B and only A's result was persisted as
 a separate event before a crash, resume does not run B. The incomplete native
 round fails history validation; this adapter does not provide recovery for
@@ -311,7 +465,12 @@ binary may strip ProviderData, so resuming that history through the old binary
 cannot be promised.
 
 This adapter requires a root module version containing `Message.ProviderData` and
-`Info.ProviderDataProtocol`. Repository-relative `replace` directives support local
+`Info.ProviderDataProtocol`. Tool search additionally requires a root version
+containing `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`,
+`tool.ToolSetDescriber`, and the LLMAgent deferral options. The adapter also uses
+root internal packages, so
+its required root version must be the matching release rather than any later
+root version. Repository-relative `replace` directives support local
 development only; downstream consumers must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited. Publish
 the compatible root module first, update this module's required root version,

@@ -2300,12 +2300,59 @@ go run ./tools -streaming=false
 需要恢复未完成的工具轮时，保留该轮的 ProviderData。完整示例和模型包装器要求见
 [适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)。
 
+### 工具搜索
+
+工具搜索（tool search）让模型在需要时再加载工具定义。它需要在 Responses 模型上显式开启，
+并且模型必须支持 `tool_search`；OpenAI 文档列出的是 `gpt-5.4` 及更新的模型。哪些工具延迟
+加载由 Agent 决定。延迟加载的工具仍由 Agent 注册、过滤和执行，变化的只是模型一开始能看到的内容。
+
+```go
+// 托管搜索：由 API 在请求中声明的延迟工具里搜索。
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+
+// 客户端搜索：由 handler 从延迟工具中挑选。
+// llm := responses.New("gpt-5.4", responses.WithClientToolSearch(
+//     func(ctx context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+//         return &responses.ToolSearchResult{ToolIDs: pick(req.Query, req.Candidates)}, nil
+//     }))
+
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, shippingETA}),
+    llmagent.WithToolSets([]tool.ToolSet{crm, billing}),
+    llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
+    llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
+    llmagent.WithDeferredToolSet("billing", nil),
+)
+```
+
+- `WithDeferredTools` 作用于 `WithTools` 注册的工具，filter 为 nil 时全部延迟。
+- `WithDeferredToolSet` 作用于指定 ToolSet 的成员，按成员原始名称选择；filter 为 nil 时延迟
+  整个 ToolSet。该策略同样适用于可激活 ToolSet，以及从 MCP 刷新得到的成员。
+- 在各自的作用范围内，显式策略取代工具自身的 `tool.DeferredTool` 偏好；不在任何范围内的工具
+  保留自身偏好。Agent 和单次运行的工具过滤器仍然生效。
+- 含有延迟成员的 ToolSet 会以同名 namespace 发送，描述取自 `tool.ToolSetDescriber`，MCP ToolSet
+  使用 `ConnectionConfig.Description`。模型返回的调用会映射回已注册的工具，不同 ToolSet 中的同名
+  成员不会互相执行。
+- 客户端模式下，发起搜索的响应不是最终响应。`LLMAgent` 会调用 handler，并在下一次模型调用前把
+  `tool_search_output` 作为工具消息保存。已加载的工具定义保留在历史中。
+- handler 返回错误会结束本次运行，该搜索保持未应答状态，直到某次以 `agent.WithResume(true)`
+  运行时完成它。想让模型在没有这些工具的情况下继续，可以返回空结果。
+- Graph 的 LLM 节点遇到客户端搜索会报错。没有延迟工具的请求保持不变，Chat Completions 会忽略
+  延迟策略。
+
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
+中的 `go run ./toolsearch -mode server` 和 `go run ./toolsearch -mode client` 分别演示两种模式。
+完整契约和尚未验证的边界见
+[适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#tool-search)。
+
 ### 说明
 
 - 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
-- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
+- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本；使用工具搜索还需要包含 LLMAgent 延迟加载选项和 `model.ProviderActionCompleter` 的根模块版本，并且该版本要先于使用它们的适配器版本发布。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
 - 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
-- 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
+- 通过 `previous_response_id` 或 `conversation` 做服务端续接、工具搜索以外的托管工具、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。
 

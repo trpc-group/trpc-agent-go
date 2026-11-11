@@ -68,6 +68,54 @@ type ProviderDataProjector interface {
 	ProjectProviderData(data *ProviderData) (Message, error)
 }
 
+// ProviderDataRequestProjector extends ProviderDataProjector when native output
+// needs the originating request to resolve tool identities, such as namespace
+// members registered under different framework tool names. Flows prefer this
+// capability after AfterModel callbacks when the request is available.
+// Wrappers should forward it when their candidates implement it.
+type ProviderDataRequestProjector interface {
+	ProviderDataProjector
+
+	// ProjectProviderDataWithRequest rebuilds message fields using request's
+	// tool bindings. It must not mutate either argument or execute tools or
+	// model requests, and must support concurrent calls. A nil request has the
+	// same behavior as ProjectProviderData.
+	ProjectProviderDataWithRequest(request *Request, data *ProviderData) (Message, error)
+}
+
+// ProviderActionCompleter is an optional model capability for provider-native
+// actions that a model delegates to the caller and that are not tool calls,
+// such as a client-executed tool search. A model requests such actions by
+// returning a completed response that carries ProviderData, has Done set to
+// false, and has no Error.
+//
+// After the response is published, the LLM agent flow calls
+// CompleteProviderActions with the request and the final response of that
+// model call, before it executes the response's ordinary tool calls. Each
+// returned message must be a tool message whose ToolID names the answered
+// action and whose ProviderData belongs to the same protocol and model. The
+// flow publishes and persists the messages in order and then requests another
+// model step, so the next request carries them in history. A nil result
+// means the response has no remaining provider action to complete. On resume,
+// request.Messages includes saved native results so completed actions can be
+// reused rather than repeated.
+//
+// An error stops the invocation without recording a result, and the action
+// remains unanswered in history; a later run with agent.WithResume completes
+// it again. A model that requests provider actions without implementing this
+// interface, including a wrapper that does not forward it, stops the
+// invocation with an error. Flows that cannot complete provider actions, such
+// as Graph LLM nodes, report an error instead of treating the response as
+// final. Models that never request provider actions need not implement this
+// interface.
+type ProviderActionCompleter interface {
+	// CompleteProviderActions performs the actions requested by response and
+	// returns their native results. It must not mutate request or response and
+	// should stop when ctx is canceled. Like GenerateContent, it may be called
+	// concurrently for different invocations.
+	CompleteProviderActions(ctx context.Context, request *Request, response *Response) ([]Message, error)
+}
+
 // Seq is a callback-based sequence that yields values.
 type Seq[T any] func(yield func(T) bool)
 

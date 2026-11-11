@@ -59,7 +59,7 @@ func sameRecord(before, after *model.ProviderData) bool {
 // ReprojectResponse updates fields derived from native records edited by the
 // completed AfterModel callback chain. Unchanged records retain callback edits
 // to their display fields and ToolCalls. The update is atomic on failure.
-func ReprojectResponse(before ResponseSnapshot, response *model.Response, producer model.Model) error {
+func ReprojectResponse(before ResponseSnapshot, response *model.Response, producer model.Model, request *model.Request) error {
 	if response == nil || response.IsPartial || response.Error != nil {
 		return nil
 	}
@@ -96,7 +96,13 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 			if !ok {
 				return fmt.Errorf("edited provider data requires the selected model or its wrapper to implement model.ProviderDataProjector")
 			}
-			projected, err := projector.ProjectProviderData(data)
+			var projected model.Message
+			var err error
+			if contextual, ok := producer.(model.ProviderDataRequestProjector); ok && request != nil {
+				projected, err = contextual.ProjectProviderDataWithRequest(request, data)
+			} else {
+				projected, err = projector.ProjectProviderData(data)
+			}
 			if err != nil {
 				return fmt.Errorf("reproject provider data message %d: %w", i, err)
 			}
@@ -124,7 +130,16 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 // candidates already share a protocol and configured name; projection is local
 // and independent of which candidate handled the network request.
 func ProjectFromCandidates(candidates []model.Model, data *model.ProviderData) (model.Message, error) {
+	return ProjectFromCandidatesWithRequest(candidates, nil, data)
+}
+
+// ProjectFromCandidatesWithRequest forwards native projection with the request
+// tool bindings when the candidate supports request-aware projection.
+func ProjectFromCandidatesWithRequest(candidates []model.Model, request *model.Request, data *model.ProviderData) (model.Message, error) {
 	for _, candidate := range candidates {
+		if projector, ok := candidate.(model.ProviderDataRequestProjector); ok && request != nil {
+			return projector.ProjectProviderDataWithRequest(request, data)
+		}
 		if projector, ok := candidate.(model.ProviderDataProjector); ok {
 			return projector.ProjectProviderData(data)
 		}

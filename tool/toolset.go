@@ -23,3 +23,13 @@ type ToolSet interface {
 	// Name returns the name of the ToolSet for identification and conflict resolution.
 	Name() string
 }
+
+// ToolSetDescriber is an optional ToolSet capability that summarizes what the
+// ToolSet's tools are for. Hosts that present a ToolSet to a model as one
+// group, such as a provider-native tool namespace, use it as the group
+// description. An empty description means none is available. Wrappers around
+// a ToolSet that implements this capability should forward it.
+type ToolSetDescriber interface {
+	// Description returns the ToolSet summary.
+	Description() string
+}

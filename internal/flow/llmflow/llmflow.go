@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -479,8 +480,11 @@ func flowEventWaitTimeout(ctx context.Context) time.Duration {
 	return eventCompletionTimeout
 }
 
-// pendingToolCallResponse retains the existing last-event resume boundary.
-// Native calls are validated against the first selected model before execution.
+// pendingToolCallResponse retains the last-event boundary for ordinary tools.
+// Native calls and provider actions are validated against the first selected
+// model before execution. A provider action that failed stays unanswered
+// behind the error content Runner persisted for the failure, so that error
+// does not end the pending boundary.
 func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
 	if invocation == nil || !invocation.RunOptions.Resume || invocation.Session == nil {
 		return nil
@@ -492,11 +496,98 @@ func pendingToolCallResponse(invocation *agent.Invocation) *model.Response {
 		return nil
 	}
 	last := events[len(events)-1]
-	if last.Response != nil && !last.IsPartial &&
-		last.IsValidContent() && last.Response.IsToolCallResponse() {
+	if last.Response != nil && !last.IsPartial && last.IsValidContent() &&
+		last.Response.IsToolCallResponse() {
 		return last.Response
 	}
+	if isProviderActionResponse(last.Response) && nativeResumeEventMatches(invocation, &last) {
+		return last.Response
+	}
+	return pendingProviderActionBeforeNativeResults(invocation, events)
+}
+
+// pendingProviderActionBeforeNativeResults recovers an unanswered provider
+// action when a previous run persisted only a prefix of its tool-result events.
+// It walks only the contiguous suffix for this agent and native provider.
+func pendingProviderActionBeforeNativeResults(
+	invocation *agent.Invocation,
+	events []event.Event,
+) *model.Response {
+	if invocation == nil || invocation.AgentName == "" || len(events) == 0 {
+		return nil
+	}
+	index := len(events) - 1
+	last := &events[index]
+	if errorcontent.IsSynthetic(last) && nativeResumeEventMatches(invocation, last) {
+		index--
+	}
+
+	var protocol, modelName string
+	for ; index >= 0; index-- {
+		current := &events[index]
+		if !nativeResumeEventMatches(invocation, current) {
+			return nil
+		}
+		if current.Response == nil || current.IsPartial || !current.IsValidContent() {
+			return nil
+		}
+		if nativeRoleToolProviderData(current.Response, &protocol, &modelName) {
+			continue
+		}
+		if !isProviderActionResponse(current.Response) {
+			return nil
+		}
+		for _, choice := range current.Response.Choices {
+			data := choice.Message.ProviderData
+			if choice.Message.Role == model.RoleAssistant && data != nil &&
+				(protocol == "" || (data.Protocol == protocol && data.Model == modelName)) {
+				return current.Response
+			}
+		}
+		return nil
+	}
 	return nil
+}
+
+func isProviderActionResponse(response *model.Response) bool {
+	if !providerdata.ResponseRequestsActions(response) {
+		return false
+	}
+	for _, choice := range response.Choices {
+		if choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func nativeRoleToolProviderData(response *model.Response, protocol, modelName *string) bool {
+	if response == nil || len(response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range response.Choices {
+		message := choice.Message
+		if message.Role != model.RoleTool || strings.TrimSpace(message.ToolID) == "" || message.ProviderData == nil {
+			return false
+		}
+		if *protocol == "" {
+			*protocol = message.ProviderData.Protocol
+			*modelName = message.ProviderData.Model
+			continue
+		}
+		if *protocol != message.ProviderData.Protocol || *modelName != message.ProviderData.Model {
+			return false
+		}
+	}
+	return true
+}
+
+func nativeResumeEventMatches(invocation *agent.Invocation, evt *event.Event) bool {
+	if invocation == nil || evt == nil || invocation.AgentName == "" ||
+		evt.Author != invocation.AgentName {
+		return false
+	}
+	return evt.Filter(invocation.GetEventFilterKey())
 }
 
 func (f *Flow) resumePendingToolCalls(
@@ -526,13 +617,50 @@ func (f *Flow) resumePendingToolCalls(
 		Tools: make(map[string]tool.Tool),
 	}
 	f.populateRequestTools(ctx, invocation, req)
+	if isProviderActionResponse(lastResp) {
+		req.Messages = persistedProviderDataHistory(invocation)
+	}
 
 	for _, rp := range f.responseProcessors {
-		if toolRP, ok := rp.(*processor.FunctionCallResponseProcessor); ok {
-			toolRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
-			break
+		switch resumeRP := rp.(type) {
+		case *processor.ProviderActionResponseProcessor:
+			resumeRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
+			if invocation.EndInvocation {
+				return
+			}
+		case *processor.FunctionCallResponseProcessor:
+			resumeRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
+			return
 		}
 	}
+}
+
+// persistedProviderDataHistory supplies native records to a resumed provider
+// action completer without rebuilding or mutating the ordinary model context.
+func persistedProviderDataHistory(invocation *agent.Invocation) []model.Message {
+	if invocation == nil || invocation.Session == nil || invocation.AgentName == "" {
+		return nil
+	}
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+
+	var messages []model.Message
+	for i := range invocation.Session.Events {
+		evt := &invocation.Session.Events[i]
+		if evt.Response == nil || evt.IsPartial || !nativeResumeEventMatches(invocation, evt) {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			for _, message := range []model.Message{choice.Message, choice.Delta} {
+				if message.ProviderData == nil ||
+					(message.Role != model.RoleAssistant && message.Role != model.RoleTool) {
+					continue
+				}
+				messages = append(messages, message)
+			}
+		}
+	}
+	return messages
 }
 
 func (f *Flow) selectModelAndResumeTools(
@@ -1043,7 +1171,7 @@ func (p *streamingResponseProcessor) process(
 	p.updateMetricsState()
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	if hasAfterCallbacks {
-		if err := providerdata.ReprojectResponse(nativeSnapshot, response, p.producer); err != nil {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, response, p.producer, p.llmRequest); err != nil {
 			*p.err = err
 			responseErr = err
 			return false

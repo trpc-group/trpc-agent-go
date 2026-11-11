@@ -2676,11 +2676,14 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 		}
 	}
 
-	// Skip orphaned tool results whose corresponding call was truncated.
+	// Skip orphaned tool results whose corresponding call was truncated. A
+	// native tool result answers an action inside an earlier native record,
+	// so at the boundary its call is always truncated.
 	for startIdx < len(messages) &&
 		messages[startIdx].Role == model.RoleTool &&
 		messages[startIdx].ToolID != "" {
-		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+		_, orphaned := truncatedToolIDs[messages[startIdx].ToolID]
+		if orphaned || messages[startIdx].ProviderData != nil {
 			startIdx++
 			continue
 		}
@@ -2693,8 +2696,10 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 // pendingNativeToolRoundStart moves a history limit back to the latest native
 // tool-call record when every later message is a tool result. That record is
 // the active continuation: dropping it would discard opaque reasoning while
-// the model is answering its calls. Completed native rounds stay subject to the
-// ordinary limit, which removes a call together with its orphaned results.
+// the model is answering its calls. A native record followed by tool results
+// is such a record even when its calls are provider actions rather than
+// projected tool calls. Completed native rounds stay subject to the ordinary
+// limit, which removes a call together with its orphaned results.
 func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -2702,7 +2707,8 @@ func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
 			continue
 		}
 		if i < startIdx && msg.Role == model.RoleAssistant &&
-			msg.ProviderData != nil && len(msg.ToolCalls) > 0 {
+			msg.ProviderData != nil &&
+			(len(msg.ToolCalls) > 0 || i < len(messages)-1) {
 			return i
 		}
 		return startIdx
@@ -3961,6 +3967,12 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
 	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
+	matchedResponseEvents := make(map[int]struct{})
+	for _, matches := range responseMatchesByCallEvent {
+		for _, match := range matches {
+			matchedResponseEvents[match.eventIndex] = struct{}{}
+		}
+	}
 
 	var resultEvents []event.Event
 	for i, evt := range events {
@@ -3970,6 +3982,13 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		evt := evt
 
 		if evt.IsToolResultResponse() {
+			// A native result of a provider action answers a call inside an
+			// earlier native record rather than a projected tool call. It
+			// keeps its position so the adapter can pair it.
+			if _, matched := matchedResponseEvents[i]; !matched &&
+				eventHasProviderData(evt) {
+				resultEvents = append(resultEvents, evt)
+			}
 			// Function response should be handled with function call below.
 			continue
 		} else if evt.IsToolCallResponse() {

@@ -86,7 +86,8 @@ type Message struct {
 	// conversation, include the text and its signature unmodified.
 	// Currently used by AWS Bedrock (Claude) models.
 	ReasoningSignature string `json:"reasoning_signature,omitempty"`
-	// ProviderData holds the native output of one model call for use in later
+	// ProviderData holds the native output of one model call, or on a tool
+	// message the native result of one provider action, for use in later
 	// requests. The consuming adapter checks the protocol and model. Display
 	// fields and ToolCalls are rebuilt when AfterModel edits this record's payload.
 	// Edits to those projections alone do not rewrite the native record.

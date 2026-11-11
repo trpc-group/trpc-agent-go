@@ -15,6 +15,8 @@
 // output; those events stay previews and are not turned into native items or
 // tool calls. Additional include names are accepted through the existing
 // extra-field maps and are unioned with required encrypted reasoning.
-// Hosted tools, background execution, and server-managed continuation require
-// additional runtime capabilities and are outside this adapter's contract.
+// WithHostedToolSearch and WithClientToolSearch opt in to tool search for the
+// tools that the agent defers. Other hosted tools, background execution, and
+// server-managed continuation require additional runtime capabilities and are
+// outside this adapter's contract.
 package responses

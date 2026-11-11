@@ -413,7 +413,7 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 			msg := native(t, "gpt-5", nativeCall)
 			msg.Role = model.RoleUser
 			return []model.Message{msg}
-		}, want: "provider data is only valid on assistant messages"},
+		}, want: "provider data is only valid on assistant messages and tool messages"},
 		{name: "replay of another model", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-4.1", nativeCall)}
 		}, want: "invalid provider data at message 0"},

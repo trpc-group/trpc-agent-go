@@ -71,6 +71,9 @@ type ConnectionConfig struct {
 	// Description provides a capability summary of this MCP server.
 	// When set, mcpbroker exposes it in mcp_list_servers so the model can
 	// decide which server to explore without listing every tool first.
+	// ToolSet.Description also returns it, so hosts that present the
+	// ToolSet's tools as one group, such as a provider-native tool
+	// namespace, use it as the group description.
 	Description string `json:"description,omitempty"`
 
 	// Advanced configuration.
