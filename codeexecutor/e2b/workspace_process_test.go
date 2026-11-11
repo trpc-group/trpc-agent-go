@@ -256,6 +256,50 @@ func TestWorkspaceExecMaxProgramTimeout(t *testing.T) {
 	}
 }
 
+func TestMaxProgramTimeoutDoesNotLimitWorkspaceMetadata(t *testing.T) {
+	for _, exitCode := range []int32{0, 1} {
+		t.Run(fmt.Sprintf("commit_exit=%d", exitCode), func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			srv.process.exitCode = exitCode
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(10*time.Second))
+			ctx := context.Background()
+			ws := codeexecutor.Workspace{ID: "metadata", Path: "/tmp/ws"}
+			err := c.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+				From: "host://" + t.TempDir(), To: "work/inputs",
+			}})
+			metadataCalls := 1
+			if exitCode == 0 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "metadata commit failed")
+				metadataCalls++
+			}
+			_, err = c.Engine().Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+				Cmd: "true", Timeout: time.Minute,
+			})
+			require.NoError(t, err)
+
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, metadataCalls+1)
+			assert.Contains(t, strings.Join(srv.process.requests[0].Process.Args, " "), "mv -f")
+			if metadataCalls == 2 {
+				assert.Contains(t, strings.Join(srv.process.requests[1].Process.Args, " "), "rm -f")
+			}
+			for i, header := range srv.process.headers {
+				ms, err := strconv.Atoi(header.Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				want := 60 * time.Second
+				if i == metadataCalls {
+					want = 10 * time.Second
+				}
+				assert.InDelta(t, want.Milliseconds(), ms, 1000)
+			}
+		})
+	}
+}
+
 func TestMaxProgramTimeoutDoesNotLimitInterpreter(t *testing.T) {
 	srv := newMockE2BServer(t, func(string) string {
 		return ndjsonLines(stdoutMsg("interpreter output"))
