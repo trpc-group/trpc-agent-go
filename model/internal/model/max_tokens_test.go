@@ -53,6 +53,16 @@ func TestClampMaxTokensForModel(t *testing.T) {
 	require.Equal(t, 4096, *out2)
 	require.Same(t, &within, out2)
 
+	flashOver := 600000
+	flash := ClampMaxTokensForModel("MiniMax-M3.1-Flash", &flashOver)
+	require.NotNil(t, flash)
+	require.Equal(t, 524288, *flash)
+
+	m3Over := 50000
+	m3 := ClampMaxTokensForModel("MiniMax-M3", &m3Over)
+	require.NotNil(t, m3)
+	require.Equal(t, 32768, *m3)
+
 	unknown := 50000
 	out3 := ClampMaxTokensForModel("unknown-model-xyz", &unknown)
 	require.NotNil(t, out3)
