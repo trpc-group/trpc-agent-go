@@ -530,7 +530,9 @@ if not metaJSON then
 end
 
 -- Generate auto-increment ID via reserved "_seq" field in the data Hash
-local id = redis.call('HINCRBY', dataKey, '_seq', 1)
+redis.call('HINCRBY', dataKey, '_seq', 1)
+-- Lua numbers cannot represent every integer Redis accepts for HINCRBY.
+local id = redis.call('HGET', dataKey, '_seq')
 
 -- Store event data and time index
 redis.call('HSET', dataKey, id, payload)
@@ -574,19 +576,56 @@ local minScore = ARGV[1]
 local maxScore = ARGV[2]
 local limit = tonumber(ARGV[3])
 
--- Get event IDs in chronological order (ascending score)
-local eventIDs
-if limit > 0 then
-    -- Get the latest N by reversing, then we reverse the result
-    eventIDs = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, limit)
-    -- Reverse to chronological order
-    local reversed = {}
-    for i = #eventIDs, 1, -1 do
-        table.insert(reversed, eventIDs[i])
+-- Equal-score members are ordered lexically by Redis. Include all IDs at
+-- the cutoff score, then select the latest limit entries by numeric ID.
+local last = redis.call('ZCOUNT', idxKey, '-inf', maxScore) - 1
+local count = redis.call('ZCOUNT', idxKey, minScore, maxScore)
+local first = last - count + 1
+if limit > 0 and count > limit then
+    local cutoff = last - limit + 1
+    local boundary = redis.call('ZRANGE', idxKey, cutoff, cutoff, 'WITHSCORES')
+    first = redis.call('ZCOUNT', idxKey, '-inf', '(' .. boundary[2])
+end
+
+local function less(a, b)
+    if a.score ~= b.score then return a.score < b.score end
+    if #a.id ~= #b.id then return #a.id < #b.id end
+    return a.id < b.id
+end
+local ordered = {}
+local function retain(entry)
+    if limit <= 0 then table.insert(ordered, entry); return end
+    if #ordered < limit then
+        table.insert(ordered, entry)
+        local i = #ordered
+        while i > 1 do
+            local parent = math.floor(i / 2)
+            if not less(ordered[i], ordered[parent]) then break end
+            ordered[i], ordered[parent] = ordered[parent], ordered[i]
+            i = parent
+        end
+    elseif less(ordered[1], entry) then
+        ordered[1] = entry
+        local i = 1
+        while i * 2 <= #ordered do
+            local child = i * 2
+            if child < #ordered and less(ordered[child + 1], ordered[child]) then child = child + 1 end
+            if not less(ordered[child], ordered[i]) then break end
+            ordered[i], ordered[child] = ordered[child], ordered[i]
+            i = child
+        end
     end
-    eventIDs = reversed
-else
-    eventIDs = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore)
+end
+-- Rank ranges avoid walking an ever-growing score-range offset. The heap
+-- bounds selection memory for a limited read; Redis still scans the tie.
+for start = first, last, 512 do
+    local entries = redis.call('ZRANGE', idxKey, start, math.min(start + 511, last), 'WITHSCORES')
+    for i = 1, #entries, 2 do retain({id = entries[i], score = tonumber(entries[i + 1])}) end
+end
+table.sort(ordered, less)
+local eventIDs = {}
+for i = 1, #ordered do
+    eventIDs[i] = ordered[i].id
 end
 
 local result = {}
