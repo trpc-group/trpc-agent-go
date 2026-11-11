@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
 	"google.golang.org/genai"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -150,6 +151,11 @@ func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
 		model.NewUserMessage("old"),
 		model.NewUserMessage("q"),
 	}}
+
+	original := append([]model.Message(nil), req.Messages...)
+	approvedCtx := imodelrequest.WithTokenTailoringDisabled(context.Background(), req)
+	m.applyTokenTailoring(approvedCtx, req)
+	require.Equal(t, original, req.Messages, "caller-approved input must remain intact")
 
 	m.applyTokenTailoring(context.Background(), req)
 

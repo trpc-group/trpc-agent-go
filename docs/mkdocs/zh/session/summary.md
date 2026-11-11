@@ -219,7 +219,7 @@ user prompt 模板、source boundary 和 fork prompt 都会保持完整。
 前缀，其余 events 保持未覆盖，留待后续摘要。前缀只能结束在稳定的 event 边界，
 不能拆开同一 response 的 chunks，也不能拆开仍未闭合的 tool call/result round。
 只有模型生成与 post-summary 处理都完成后，summary boundary 才会推进到所选前缀。
-如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
+默认情况下，如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
 配置 `WithPreSummaryHook(...)` 时不会启用部分前缀 fallback，因为 hook 重写后的文本
 无法安全映射回 event boundary。前缀摘要始终使用 standalone 请求，不会复用
 cache-safe fork。
@@ -647,8 +647,9 @@ summary.WithChecksAny(
 | 选项 | 说明 |
 | --- | --- |
 | `WithPreSummaryHook(h PreSummaryHook)` | 摘要前的 Hook，可修改输入文本 |
+| `WithInputOverflowHook(h InputOverflowHook)` | 摘要输入超预算时决定原文放行、替换后放行或返回错误 |
 | `WithPostSummaryHook(h PostSummaryHook)` | 摘要后的 Hook，可修改输出摘要 |
-| `WithSummaryHookAbortOnError(abort bool)` | Hook 报错时是否中断，默认 `false`（忽略错误） |
+| `WithSummaryHookAbortOnError(abort bool)` | Pre/Post Summary Hook 报错时是否中断，默认 `false`（忽略这些错误）；超预算决策 Hook 报错始终中断 |
 
 ### 消息内容
 
@@ -967,6 +968,104 @@ type PreSummaryHookContext struct {
 
 type PreSummaryHook func(in *PreSummaryHookContext) error
 ```
+
+### InputOverflowHook
+
+使用 `WithInputOverflowHook`，可以在摘要输入被估算为超预算时，由业务决定发送原文、
+替换正文，或返回错误。不配置这个选项时，超预算仍按原有策略处理。
+
+#### 什么时候触发
+
+框架先尝试正常摘要和按完整事件分批。只有最早一批完整事件仍被估算为超预算时，
+才调用这个 Hook。正常摘要和能够放进预算的批次不会调用它。
+同时配置 `WithPreSummaryHook` 时，处理范围见下文“与其他 Hook 的关系”。
+
+#### 最小接入方式
+
+把这个选项加入已有的 `NewSummarizer` 配置即可，原有摘要触发阈值和近期保留策略
+可以保持不变。下面的例子允许使用原文请求摘要模型：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithInputOverflowHook(
+        func(ctx context.Context, in summary.InputOverflow) (*summary.OverflowDecision, error) {
+            return &summary.OverflowDecision{Text: in.Text}, nil
+        },
+    ),
+)
+```
+
+#### 返回什么
+
+- `&summary.OverflowDecision{Text: in.Text}, nil`：使用原文。
+- `&summary.OverflowDecision{Text: text}, nil`：使用业务处理后的正文。
+- `nil, nil`：不作额外处理，仍返回框架原来的超预算错误。
+- `nil, err`：终止本次摘要，返回业务错误。
+
+同时返回结果和错误时，以错误为准。返回空字符串或只有空白的正文也会报错。
+
+#### 放行后会发生什么
+
+**业务返回有效结果后，框架不会再因为本地 token 估算超预算而拒发，也不会让内置模型
+适配器自动裁剪这次输入。** 已配置的模型回调仍然执行，摘要模型也仍可能拒绝请求。
+
+只有本次摘要整体成功后，框架才会推进摘要覆盖边界。模型报错、返回空摘要、这个 Hook
+返回错误或任务取消时，边界不推进。业务放行后的这次摘要不会自动缩小预算重试。
+后续摘要任务仍可能再次处理这个失败批次。
+模型明确返回 `model_context_window_exceeded`、`max_tokens` 或 `length` 时，
+表示生成被截断；即使已有非空摘要，本次放行调用也会返回错误，保留原覆盖边界。
+
+#### 替换文本代表哪些历史
+
+框架先固定本次要处理的一批事件，再把对应正文放入 `in.Text`。
+**返回的替换文本代表这一整批历史，框架不会根据替换文本自动缩小覆盖范围。**
+
+如果业务只保留前半段正文，摘要成功后，整批历史仍会被视为已摘要。
+因此，替换正文时需要保留业务希望模型记住的信息。后面尚未选入这一批的历史，
+仍留待后续摘要处理。
+
+#### 与其他 Hook 的关系
+
+- `WithInputOverflowHook` 本身不会关闭按完整事件分批。
+- `WithPreSummaryHook` 在摘要前改写正文。配置它后，框架按既有规则关闭部分前缀分批，
+  因为改写后的文本无法可靠对应到原始事件。这时，超预算 Hook 收到的是 Pre Hook
+  改写后的整个已选区间，摘要成功后也按这个完整区间记录覆盖范围。
+- `WithSummaryHookAbortOnError` 只控制 Pre/Post Summary Hook 自己返回的错误。
+  它不会绕过框架的预算检查。**InputOverflowHook 返回错误时始终终止摘要，即使
+  `WithSummaryHookAbortOnError(false)` 也一样。**
+
+回调可能在不同会话间并发执行，需要保证业务代码可并发调用。
+
+#### 文本和请求细节
+
+`in.Text` 是填入摘要模板 `{conversation_text}` 的正文，已经过工具 formatter 处理。
+模板使用 `{previous_summary}` 时，旧摘要会作为独立输入保留，无需在替换文本中重复添加。
+未使用该占位符时，`in.Text` 可能已经包含旧摘要，替换时需要一起考虑。
+
+放行后的请求单独构建（standalone），不复用主模型请求的完整前缀。
+摘要模板、生成参数和独立的旧摘要保持原有配置，`BeforeModel` / `AfterModel` 回调仍执行。
+如果 `BeforeModel` 回调代发这次请求，应把收到的 `ctx` 和 `args.Request` 传给模型。
+放行只适用于这个请求对象；回调中另外创建的请求，即使使用相同 context，也仍按原配置裁剪。
+
+#### 接口定义
+
+```go
+type InputOverflow struct {
+    Text string
+}
+
+type OverflowDecision struct {
+    Text string
+}
+
+type InputOverflowHook func(
+    context.Context,
+    InputOverflow,
+) (*OverflowDecision, error)
+```
+
+可运行的离线示例和接入说明位于 `examples/summary/inputoverflow`。
 
 ### PostSummaryHook
 
