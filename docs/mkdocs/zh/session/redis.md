@@ -32,6 +32,8 @@ Redis Standalone、Sentinel 和 Cluster 均可兼容，但 client builder 必须
 
 在 Cluster 模式下，同一个多 Key Lua 脚本或事务涉及的所有 Key 必须位于同一 hash slot。内置 Key 格式通过 `{userID}` 或 `{appName}` hash tag 满足该要求；按用户执行的 `SCAN` pattern 也包含相同的固定 hash tag，Cluster 客户端可以将其路由到对应 slot 所在节点。
 
+HashIdx 在限制历史返回条数时，如果截断位置落在很大的同分组内，会分页扫描索引，并用 `WATCH` 和 `EXEC` 校验读到的数据。扫描期间 track 有变更时会重试，持续变更时会返回错误。
+
 对于 Redis 兼容代理或其他兼容实现，需要单独验证 `SCAN`/`HSCAN`、Lua 5.1 与 `cjson`、事务及脚本缓存行为。若后端的 `EVALSHA` 缓存不可靠，可使用 `WithDisableScriptCache(true)` 仅通过 `EVAL` 执行脚本。根据连接 URL 的配置，内置 `go-redis` 客户端还可能发送 `AUTH`、`SELECT`、`CLIENT SETNAME`，并探测 `HELLO`、`CLIENT SETINFO` 等较新的命令。Redis OSS 4.0 会为不支持的探测命令返回普通错误，客户端随后回退或继续初始化，但遇到未知命令时直接断开连接的代理需要另行验证。
 
 Redis 4.x 和 5.x 不支持 ACL 用户名。这些版本启用鉴权时应仅配置密码，例如 `redis://:password@127.0.0.1:6379/0`；用户名加密码的鉴权方式要求 Redis 6.0 及以上版本。

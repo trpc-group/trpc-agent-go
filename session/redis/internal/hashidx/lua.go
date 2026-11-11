@@ -565,7 +565,9 @@ return id
 // ARGV[1] = minScore (afterTime UnixNano, use "-inf" for no lower bound)
 // ARGV[2] = maxScore (use "+inf" for no upper bound)
 // ARGV[3] = limit (0 = no limit)
-// Returns: list of TrackEvent JSON strings in chronological order.
+// ARGV[4] = scan batch size, or 0 to return the candidate rank range only
+// Returns: chronological TrackEvent JSON strings, nil for a large cutoff tie,
+// or [first, last] when only the rank range was requested.
 var luaLoadTrackEvents = redis.NewScript(`
 local dataKey = KEYS[1]
 local idxKey = KEYS[2]
@@ -573,6 +575,7 @@ local idxKey = KEYS[2]
 local minScore = ARGV[1]
 local maxScore = ARGV[2]
 local limit = tonumber(ARGV[3])
+local batchSize = tonumber(ARGV[4])
 
 -- Equal-score members are ordered lexically by Redis. Include all IDs at
 -- the cutoff score, then select the latest limit entries by numeric ID.
@@ -584,6 +587,8 @@ if limit > 0 and count > limit then
     local boundary = redis.call('ZRANGE', idxKey, cutoff, cutoff, 'WITHSCORES')
     first = redis.call('ZCOUNT', idxKey, '-inf', '(' .. boundary[2])
 end
+if batchSize == 0 then return {first, last} end
+if limit > 0 and last - first + 1 > limit + batchSize then return false end
 
 local function less(a, b)
     if a.score ~= b.score then return a.score < b.score end
@@ -591,44 +596,23 @@ local function less(a, b)
     return a.id < b.id
 end
 local ordered = {}
-local function retain(entry)
-    if limit <= 0 then table.insert(ordered, entry); return end
-    if #ordered < limit then
-        table.insert(ordered, entry)
-        local i = #ordered
-        while i > 1 do
-            local parent = math.floor(i / 2)
-            if not less(ordered[i], ordered[parent]) then break end
-            ordered[i], ordered[parent] = ordered[parent], ordered[i]
-            i = parent
-        end
-    elseif less(ordered[1], entry) then
-        ordered[1] = entry
-        local i = 1
-        while i * 2 <= #ordered do
-            local child = i * 2
-            if child < #ordered and less(ordered[child + 1], ordered[child]) then child = child + 1 end
-            if not less(ordered[child], ordered[i]) then break end
-            ordered[i], ordered[child] = ordered[child], ordered[i]
-            i = child
-        end
+-- Rank ranges avoid walking an ever-growing score-range offset.
+for start = first, last, batchSize do
+    local entries = redis.call('ZRANGE', idxKey, start, math.min(start + batchSize - 1, last), 'WITHSCORES')
+    for i = 1, #entries, 2 do
+        table.insert(ordered, {id = entries[i], score = tonumber(entries[i + 1])})
     end
-end
--- Rank ranges avoid walking an ever-growing score-range offset. The heap
--- bounds selection memory for a limited read; Redis still scans the tie.
-for start = first, last, 512 do
-    local entries = redis.call('ZRANGE', idxKey, start, math.min(start + 511, last), 'WITHSCORES')
-    for i = 1, #entries, 2 do retain({id = entries[i], score = tonumber(entries[i + 1])}) end
 end
 table.sort(ordered, less)
 local eventIDs = {}
-for i = 1, #ordered do
-    eventIDs[i] = ordered[i].id
+local firstOrdered = 1
+if limit > 0 then firstOrdered = math.max(1, #ordered - limit + 1) end
+for i = firstOrdered, #ordered do
+    table.insert(eventIDs, ordered[i].id)
 end
 
 local result = {}
 if #eventIDs > 0 then
-    local batchSize = 512
     for startIdx = 1, #eventIDs, batchSize do
         local batchIDs = {}
         local endIdx = math.min(startIdx + batchSize - 1, #eventIDs)
