@@ -34,6 +34,8 @@ func (f RetryConditionFunc) Match(err error) bool { return f(err) }
 // RetryPolicy defines per-node or default retry configuration.
 // Attempts are counted inclusive of the first try. For example,
 // MaxAttempts=3 means 1 initial try + up to 2 retries.
+// Errors reporting ToolCallReplaySafe() == false are never retried, even when
+// a RetryOn condition matches. Wrapped and joined errors retain this constraint.
 type RetryPolicy struct {
 	MaxAttempts     int
 	InitialInterval time.Duration

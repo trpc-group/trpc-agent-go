@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -337,7 +338,7 @@ func (e *Executor) Execute(
 		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
-			if IsInterruptError(err) {
+			if _, ok := resumableInterrupt(err); ok {
 				// For interrupt errors, we don't emit an error event.
 				// The interrupt will be handled by the caller.
 				return
@@ -1371,7 +1372,7 @@ func (e *Executor) handleExecuteStepError(
 	extInterrupt *externalInterruptWatcher,
 	stepErr error,
 ) error {
-	if interrupt, ok := GetInterruptError(stepErr); ok {
+	if interrupt, ok := resumableInterrupt(stepErr); ok {
 		return e.handleInterrupt(
 			stepCtx,
 			invocation,
@@ -1415,7 +1416,7 @@ func (e *Executor) shouldForceExternalInterrupt(
 	if !extInterrupt.forced(ctx) {
 		return false
 	}
-	if stepErr == nil {
+	if stepErr == nil || toolretry.IsReplayUnsafe(stepErr) {
 		return false
 	}
 	if errors.Is(stepErr, context.Canceled) {
@@ -1831,7 +1832,7 @@ func emitTerminalGraphErrorEvent(
 		if invocation != nil {
 			invocationID = invocation.InvocationID
 		}
-		agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
+		ev := NewPregelErrorEvent(
 			WithPregelEventInvocationID(invocationID),
 			WithPregelEventStepNumber(-1),
 			WithPregelEventError(err.Error()),
@@ -1841,7 +1842,11 @@ func emitTerminalGraphErrorEvent(
 					model.ErrorTypeFlowError,
 				),
 			),
-		))
+		)
+		if toolretry.IsReplayUnsafe(err) {
+			ev.ErrorCause = err
+		}
+		agent.EmitEvent(ctx, invocation, eventChan, ev)
 		return
 	}
 	invocationID := ""
@@ -1852,17 +1857,11 @@ func emitTerminalGraphErrorEvent(
 			author = invocation.AgentName
 		}
 	}
-	agent.EmitEvent(
-		ctx,
-		invocation,
-		eventChan,
-		event.NewErrorEvent(
-			invocationID,
-			author,
-			model.ErrorTypeFlowError,
-			err.Error(),
-		),
-	)
+	ev := event.NewErrorEvent(invocationID, author, model.ErrorTypeFlowError, err.Error())
+	if toolretry.IsReplayUnsafe(err) {
+		ev.ErrorCause = err
+	}
+	agent.EmitEvent(ctx, invocation, eventChan, ev)
 }
 
 // applyPendingWrites replays pending writes into channels to rebuild frontier.
@@ -2627,12 +2626,14 @@ func (e *Executor) executeStep(
 	wg.Wait()
 	close(results)
 
+	failures := make([]error, 0, len(results))
 	for err := range results {
-		if err != nil {
-			return err
-		}
+		failures = append(failures, err)
 	}
-	return nil
+	if len(failures) == 0 {
+		return nil
+	}
+	return preserveReplayUnsafeToolErrors(failures[0], failures[1:]...)
 }
 
 func (e *Executor) workerCount(taskCount int) int {
@@ -3125,7 +3126,7 @@ func (e *Executor) executeTaskWithRetry(
 		}
 		shouldRetry, retryErr := e.evaluateRetryDecision(ctx, invocation, execCtx, t, step, nodeCtx, retryCtx)
 		if !shouldRetry {
-			if IsInterruptError(retryErr) {
+			if _, ok := resumableInterrupt(retryErr); ok {
 				nodeCtx.metricRecorder.recordError(ctx, retryErr)
 				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotIfEnabled(invocation, result), retryErr)
 				return retryErr
@@ -3396,14 +3397,12 @@ func (e *Executor) evaluateRetryDecision(
 	retryCtx *retryContext,
 ) (bool, error) {
 	// Interrupt errors should not be retried.
-	if IsInterruptError(retryCtx.err) {
-		if interrupt, ok := GetInterruptError(retryCtx.err); ok {
-			interrupt.NodeID = t.NodeID
-			if interrupt.TaskID == "" {
-				interrupt.TaskID = t.NodeID
-			}
-			interrupt.Step = step
+	if interrupt, ok := resumableInterrupt(retryCtx.err); ok {
+		interrupt.NodeID = t.NodeID
+		if interrupt.TaskID == "" {
+			interrupt.TaskID = t.NodeID
 		}
+		interrupt.Step = step
 		return false, retryCtx.err
 	}
 
@@ -3416,11 +3415,11 @@ func (e *Executor) evaluateRetryDecision(
 	// Evaluate retry policy.
 	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
 	if !matched {
-		// No retry policy matched -> emit error and exit.
+		// No policy matched, or replay is unsafe: emit the original error and exit.
 		nodeCtx.metricRecorder.recordError(ctx, retryCtx.err)
 		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, retryCtx.err)
 		if err := e.emitNodeBarrierAndWait(ctx, invocation, execCtx, t.NodeID, step); err != nil {
-			return false, fmt.Errorf("emit node barrier: %w", err)
+			return false, fmt.Errorf("emit node barrier: %w", preserveReplayUnsafeToolErrors(err, retryCtx.err))
 		}
 		return false, fmt.Errorf("node %s execution failed: %w", t.NodeID, retryCtx.err)
 	}
@@ -4593,6 +4592,9 @@ func (e *Executor) getUpdatedChannels(execCtx *ExecutionContext) []string {
 // Returns whether a match was found, the chosen policy, and its MaxAttempts
 // (falling back to 1 when unspecified or invalid).
 func (e *Executor) selectRetryPolicy(err error, policies []RetryPolicy) (bool, RetryPolicy, int) {
+	if toolretry.IsReplayUnsafe(err) {
+		return false, RetryPolicy{}, 0
+	}
 	for _, p := range policies {
 		if p.ShouldRetry(err) {
 			maxA := p.MaxAttempts

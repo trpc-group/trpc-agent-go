@@ -15,12 +15,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
-	"golang.org/x/sync/singleflight"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -194,14 +196,24 @@ type mcpSessionManager struct {
 	mcpOptions             []mcp.ClientOption      // MCP client options
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration
 	client                 mcp.Connector
-	mu                     sync.RWMutex
+	mu                     sessionLock
 	connected              bool
 	initialized            bool
-	reconnectGroup         singleflight.Group // Ensures only one reconnection happens at a time
+	tasksEnabled           atomic.Bool
+
+	reconnectMu      sync.Mutex
+	reconnect        *sessionReconnect
+	reconnectVersion uint64
+
+	taskMu       sync.Mutex
+	taskCalls    map[uint64]context.CancelFunc
+	nextTaskCall uint64
+	closingTasks int
 }
 
 // newMCPSessionManager creates a new MCP session manager.
 func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption, sessionReconnectConfig *SessionReconnectConfig) *mcpSessionManager {
+	config.Headers = maps.Clone(config.Headers)
 	manager := &mcpSessionManager{
 		config:                 config,
 		mcpOptions:             mcpOptions,
@@ -213,7 +225,9 @@ func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption
 
 // connect establishes connection to the MCP server.
 func (m *mcpSessionManager) connect(ctx context.Context) error {
-	m.mu.Lock()
+	if err := m.mu.lock(ctx); err != nil {
+		return err
+	}
 	defer m.mu.Unlock()
 
 	if m.connected {
@@ -227,7 +241,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
-	m.client = client
+	m.setClient(client)
 	m.connected = true
 
 	// Initialize the session.
@@ -243,6 +257,14 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 
 	log.DebugContext(ctx, "Successfully connected to MCP server")
 	return nil
+}
+
+// setClient installs a client under mu. Keep its task policy when a
+// failed reconnect clears the client, so the next call still gets one deadline.
+func (m *mcpSessionManager) setClient(client mcp.Connector) {
+	m.client = client
+	capability, ok := client.(toolTaskClient)
+	m.tasksEnabled.Store(ok && capability.TasksEnabled())
 }
 
 // createClient creates the appropriate MCP client based on transport configuration.
@@ -352,7 +374,9 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 
 	// Execute with session reconnection support
 	operationErr := m.executeWithSessionReconnect(ctx, func() error {
-		m.mu.RLock()
+		if err := m.mu.rlock(ctx); err != nil {
+			return err
+		}
 		defer m.mu.RUnlock()
 
 		if m.client == nil {
@@ -381,10 +405,22 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 // Returns the full CallToolResult including Meta field for metadata access.
 func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) (*mcp.CallToolResult, error) {
 	var result *mcp.CallToolResult
+	var attempt toolCallAttempt
+	if m.tasksEnabled.Load() {
+		// Task recovery shares one deadline; ordinary clients keep their existing
+		// per-attempt timeout behavior.
+		var cancel context.CancelFunc
+		ctx, cancel = m.createTimeoutContext(ctx, "callTool")
+		defer cancel()
+		ctx, cancel = m.taskCallContext(ctx)
+		defer cancel()
+	}
 
 	// Execute with session reconnection support
 	operationErr := m.executeWithSessionReconnect(ctx, func() error {
-		m.mu.RLock()
+		if err := m.mu.rlock(ctx); err != nil {
+			return err
+		}
 		defer m.mu.RUnlock()
 
 		if m.client == nil {
@@ -393,13 +429,13 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 
 		log.DebugContext(ctx, "Calling tool", "name", name, "arguments", arguments)
 
-		toolCtx, cancel := m.createTimeoutContext(ctx, "callTool")
-		defer cancel()
 		callReq := &mcp.CallToolRequest{}
 		callReq.Params.Name = name
 		callReq.Params.Arguments = arguments
 
-		callResp, callErr := m.client.CallTool(toolCtx, callReq)
+		callCtx, cancel := m.createTimeoutContext(ctx, "callTool")
+		defer cancel()
+		callResp, callErr := attempt.call(callCtx, m.client, callReq)
 		if callErr != nil {
 			// Enhanced error with parameter information.
 			enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, callErr)
@@ -427,15 +463,56 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		return nil
 	})
 
-	// Ensure result is nil on error
+	// A session failure can replace the task error before the SDK resumes it.
 	if operationErr != nil {
+		if attempt.unsafeErr != nil && !toolretry.IsReplayUnsafe(operationErr) {
+			return nil, errors.Join(operationErr, attempt.unsafeErr)
+		}
 		return nil, operationErr
 	}
 	return result, nil
 }
 
+// taskCallContext binds a logical call and its reconnect attempts to Close.
+func (m *mcpSessionManager) taskCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	m.taskMu.Lock()
+	if m.closingTasks != 0 {
+		m.taskMu.Unlock()
+		cancel()
+		return ctx, cancel
+	}
+	if m.taskCalls == nil {
+		m.taskCalls = make(map[uint64]context.CancelFunc)
+	}
+	m.nextTaskCall++
+	id := m.nextTaskCall
+	m.taskCalls[id] = cancel
+	m.taskMu.Unlock()
+	return ctx, func() {
+		cancel()
+		m.taskMu.Lock()
+		delete(m.taskCalls, id)
+		m.taskMu.Unlock()
+	}
+}
+
 // close closes the MCP session and client connection.
 func (m *mcpSessionManager) close() error {
+	// Polling holds a read lock until the SDK returns. Signal it before
+	// waiting for the write lock, including when no call deadline is set.
+	m.taskMu.Lock()
+	m.closingTasks++
+	for _, cancel := range m.taskCalls {
+		cancel()
+	}
+	m.taskMu.Unlock()
+	defer func() {
+		m.taskMu.Lock()
+		m.closingTasks--
+		m.taskMu.Unlock()
+	}()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -495,7 +572,7 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 		if ctx.Err() != nil {
 			log.DebugfContext(ctx, "Context cancelled or timed out, stopping reconnection attempts "+
 				"(attempt=%d, error=%v)", attempt, ctx.Err())
-			return fmt.Errorf("reconnection aborted: %w", ctx.Err())
+			return fmt.Errorf("reconnection aborted: %w", errors.Join(ctx.Err(), err))
 		}
 
 		log.DebugfContext(ctx,
@@ -507,6 +584,9 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 			log.ErrorfContext(ctx, "Session reconnection failed (attempt=%d/%d, reconnect_error=%v, "+
 				"original_error=%v)", attempt, maxAttempts, reconnectErr, err)
 
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("reconnection aborted: %w", errors.Join(ctxErr, err, reconnectErr))
+			}
 			// If this was the last attempt, return the original error.
 			if attempt >= maxAttempts {
 				log.WarnfContext(ctx, "Max session reconnect attempts reached for this operation, "+
@@ -522,12 +602,17 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 			attempt)
 
 		// Retry the operation after successful reconnection.
-		err = operation()
-		if err == nil {
+		operationErr := operation()
+		if operationErr == nil {
 			log.DebugfContext(ctx, "Operation succeeded after session reconnection (attempt=%d)",
 				attempt)
 			return nil
 		}
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("reconnection aborted: %w", errors.Join(ctxErr, operationErr, err))
+		}
+		err = operationErr
 
 		// If operation still fails, check if we should retry reconnection.
 		if !m.shouldAttemptSessionReconnect(err) {
@@ -559,6 +644,26 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 		return false
 	}
 
+	var sdkTaskErr *mcp.TaskError
+	var rpcErr *mcp.TaskRPCError
+	if errors.As(err, &sdkTaskErr) && (sdkTaskErr.Status != "" || errors.As(sdkTaskErr, &rpcErr)) {
+		// Task status and JSON-RPC errors come from the server. Their message
+		// text does not indicate transport failure.
+		return false
+	}
+
+	var taskErr toolTaskFailure
+	if errors.As(err, &taskErr) && !taskErr.ToolCallReplaySafe() {
+		if taskErr.TaskID() == "" {
+			return false
+		}
+		// The SDK's HTTP transport reports expired sessions with this wording.
+		// Only task polling may use this fallback; never replay tools/call.
+		if strings.Contains(err.Error(), "status code 404") {
+			return true
+		}
+	}
+
 	errStr := err.Error()
 
 	// Check for connection/session errors that indicate reconnection should be attempted.
@@ -571,23 +676,75 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 	return false
 }
 
-// recreateSession recreates the MCP session by closing the old connection,
-// creating a new client, and re-initializing the session.
-// Uses singleflight to ensure only one reconnection happens at a time across all goroutines.
-func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
-	// Use singleflight to ensure only one reconnection happens at a time
-	// If multiple goroutines call this simultaneously, only one will execute,
-	// and others will wait for the result
-	_, err, _ := m.reconnectGroup.Do("reconnect", func() (any, error) {
-		return nil, m.doRecreateSession(ctx)
-	})
-	return err
+type sessionReconnect struct {
+	done          chan struct{}
+	err           error
+	ownerCanceled bool
 }
 
-// doRecreateSession performs the actual session recreation logic.
+// recreateSession shares an in-flight reconnect. Waiters can leave on their
+// own context without cancelling the caller that owns the reconnect.
+func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
+	m.reconnectMu.Lock()
+	version := m.reconnectVersion
+	m.reconnectMu.Unlock()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.reconnectMu.Lock()
+		if m.reconnectVersion != version {
+			m.reconnectMu.Unlock()
+			return nil
+		}
+		attempt := m.reconnect
+		if attempt == nil {
+			attempt = &sessionReconnect{
+				done: make(chan struct{}),
+				err:  errors.New("mcp session recreation did not complete"),
+			}
+			m.reconnect = attempt
+			m.reconnectMu.Unlock()
+			return m.runReconnect(ctx, attempt)
+		}
+		m.reconnectMu.Unlock()
+		select {
+		case <-attempt.done:
+			if !attempt.ownerCanceled {
+				return attempt.err
+			}
+			// The owner ran out of time. A live waiter may take over
+			// without charging this aborted attempt to its budget.
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (m *mcpSessionManager) runReconnect(ctx context.Context, attempt *sessionReconnect) error {
+	defer func() {
+		attempt.ownerCanceled = attempt.err != nil && ctx.Err() != nil
+		m.reconnectMu.Lock()
+		if attempt.err == nil {
+			m.reconnectVersion++
+		}
+		m.reconnect = nil
+		close(attempt.done)
+		m.reconnectMu.Unlock()
+	}()
+	attempt.err = m.doRecreateSession(ctx)
+	return attempt.err
+}
+
+// doRecreateSession closes the old client and initializes its replacement.
 func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
-	m.mu.Lock()
+	if err := m.mu.lock(ctx); err != nil {
+		return err
+	}
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	log.DebugContext(ctx, "Recreating MCP session")
 
@@ -608,6 +765,9 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 	// Reset connection state (will be set to true on success).
 	m.connected = false
 	m.initialized = false
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Create new client.
 	client, err := m.createClient()
@@ -615,7 +775,7 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 		return fmt.Errorf("failed to create new MCP client during session recreation: %w", err)
 	}
 
-	m.client = client
+	m.setClient(client)
 	m.connected = true
 
 	// Re-initialize the session.

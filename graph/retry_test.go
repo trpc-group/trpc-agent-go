@@ -12,7 +12,10 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,7 +24,230 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type replaySafetyTestError struct {
+	safe  bool
+	cause error
+}
+
+func (*replaySafetyTestError) Error() string              { return "tool task interrupted" }
+func (e *replaySafetyTestError) Unwrap() error            { return e.cause }
+func (e *replaySafetyTestError) ToolCallReplaySafe() bool { return e.safe }
+
+func TestReplayUnsafeToolDoesNotCreateInterruptCheckpoint(t *testing.T) {
+	for _, engine := range []ExecutionEngine{ExecutionEngineBSP, ExecutionEngineDAG} {
+		for _, mode := range []string{"parallel", "callback", "forced"} {
+			t.Run(fmt.Sprintf("%s/%s", engine, mode), func(t *testing.T) {
+				started := make(chan struct{})
+				original := &replaySafetyTestError{cause: context.Canceled}
+				var calls atomic.Int32
+				tools := map[string]tool.Tool{"charge": &retryTool{
+					name: "charge", callFn: func(ctx context.Context, _ []byte) (any, error) {
+						calls.Add(1)
+						close(started)
+						if mode != "callback" {
+							<-ctx.Done()
+						}
+						return nil, original
+					},
+				}}
+				names := []string{"charge"}
+				var observed error
+				opts := []Option{WithNodeErrorCallback(func(_ context.Context, _ *NodeCallbackContext, _ State, err error) {
+					observed = err
+				})}
+				if mode == "parallel" {
+					names = append(names, "pause")
+					opts = append(opts, WithEnableParallelTools(true))
+					tools["pause"] = &retryTool{name: "pause", callFn: func(ctx context.Context, _ []byte) (any, error) {
+						select {
+						case <-started:
+							return nil, NewInterruptError("approval")
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						}
+					}}
+				}
+				if mode == "callback" {
+					callbacks := tool.NewCallbacks().RegisterAfterTool(tool.AfterToolCallbackStructured(
+						func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+							return nil, NewInterruptError("approval")
+						}))
+					opts = append(opts, WithToolCallbacks(callbacks))
+				}
+				sg := NewStateGraph(NewStateSchema())
+				sg.AddToolsNode("tools", tools, opts...)
+				g := sg.SetEntryPoint("tools").SetFinishPoint("tools").MustCompile()
+				saver := newMockSaver()
+				exec, err := NewExecutor(g, WithExecutionEngine(engine), WithCheckpointSaver(saver))
+				require.NoError(t, err)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				runCtx, pause := WithGraphInterrupt(ctx)
+				events, err := exec.Execute(runCtx, State{StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant, ToolCalls: makeToolCalls(names...),
+				}}}, agent.NewInvocation())
+				require.NoError(t, err)
+				if mode == "forced" {
+					select {
+					case <-started:
+						pause(WithGraphInterruptTimeout(0))
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+				}
+				for range events {
+				}
+				require.EqualValues(t, 1, calls.Load())
+				for _, tuple := range saver.byID {
+					require.Nil(t, tuple.Checkpoint.InterruptState, "the failed tool must not be checkpointed for replay")
+				}
+				require.ErrorIs(t, observed, original)
+			})
+		}
+	}
+}
+
+// TestNodeRetry_ReplayUnsafeToolRunsOnce exercises full graph execution: node
+// policies must report the task failure without repeating the tool's side effect.
+func TestNodeRetry_ReplayUnsafeToolRunsOnce(t *testing.T) {
+	for _, mode := range []string{"node policy", "node and tool policies", "default node policy"} {
+		for _, joined := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/joined=%t", mode, joined), func(t *testing.T) {
+				var calls atomic.Int32
+				original := &replaySafetyTestError{cause: io.ErrUnexpectedEOF}
+				var callErr error = fmt.Errorf("wrapped: %w", original)
+				if joined {
+					callErr = errors.Join(&replaySafetyTestError{safe: true}, callErr)
+				}
+				policy := RetryPolicy{MaxAttempts: 2, RetryOn: []RetryCondition{
+					RetryConditionFunc(func(error) bool { return true }),
+				}}
+				var options []Option
+				if mode != "default node policy" {
+					options = append(options, WithRetryPolicy(policy))
+				}
+				if mode == "node and tool policies" {
+					options = append(options, WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 2}))
+				}
+				sg := NewStateGraph(NewStateSchema())
+				sg.AddToolsNode("tools", map[string]tool.Tool{"charge": &retryTool{
+					name: "charge", callFn: func(context.Context, []byte) (any, error) {
+						calls.Add(1)
+						return nil, callErr
+					},
+				}}, options...)
+				g, err := sg.SetEntryPoint("tools").SetFinishPoint("tools").Compile()
+				require.NoError(t, err)
+				var execOptions []ExecutorOption
+				if mode == "default node policy" {
+					execOptions = append(execOptions, WithDefaultRetryPolicy(policy))
+				}
+				exec, err := NewExecutor(g, execOptions...)
+				require.NoError(t, err)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				events, err := exec.Execute(ctx, State{StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant, ToolCalls: makeToolCalls("charge"),
+				}}}, agent.NewInvocation())
+				require.NoError(t, err)
+				var reported bool
+				for evt := range events {
+					if evt.Error != nil && strings.Contains(evt.Error.Message, original.Error()) {
+						reported = true
+					}
+				}
+				require.EqualValues(t, 1, calls.Load())
+				require.True(t, reported, "the original task failure must be emitted")
+			})
+		}
+	}
+}
+
+func TestNodeRetry_PreservesReplayUnsafeToolFailure(t *testing.T) {
+	for _, mode := range []string{"parallel sibling", "node callback", "plugin callback"} {
+		t.Run(mode, func(t *testing.T) {
+			parallel := mode == "parallel sibling"
+			started := make(chan struct{})
+			var calls atomic.Int32
+			taskErr := &replaySafetyTestError{cause: io.ErrUnexpectedEOF}
+			tools := map[string]tool.Tool{"charge": &retryTool{
+				name: "charge", callFn: func(ctx context.Context, _ []byte) (any, error) {
+					if calls.Add(1) > 1 {
+						return "charged again", nil
+					}
+					if parallel {
+						close(started)
+						<-ctx.Done()
+						taskErr.cause = ctx.Err()
+					}
+					return nil, taskErr
+				},
+			}}
+			toolCalls := makeToolCalls("charge")
+			inv := agent.NewInvocation()
+			primaryErr := errors.New(mode + " failure")
+			var nodeErr error
+			opts := []Option{
+				WithRetryPolicy(RetryPolicy{MaxAttempts: 2, RetryOn: []RetryCondition{RetryOnErrors(primaryErr)}}),
+				WithNodeErrorCallback(func(_ context.Context, _ *NodeCallbackContext, _ State, err error) {
+					nodeErr = err
+				}),
+			}
+			if parallel {
+				tools["sibling"] = &retryTool{name: "sibling", callFn: func(ctx context.Context, _ []byte) (any, error) {
+					select {
+					case <-started:
+						return nil, primaryErr
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}}
+				toolCalls = makeToolCalls("charge", "sibling")
+				opts = append(opts, WithEnableParallelTools(true))
+			} else {
+				callbacks := tool.NewCallbacks().RegisterAfterTool(tool.AfterToolCallbackStructured(
+					func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+						if errors.Is(args.Error, taskErr) {
+							return nil, primaryErr
+						}
+						return nil, nil
+					},
+				))
+				if mode == "plugin callback" {
+					inv.Plugins = &toolCallbacksPluginManager{callbacks: callbacks}
+				} else {
+					opts = append(opts, WithToolCallbacks(callbacks))
+				}
+			}
+			sg := NewStateGraph(NewStateSchema())
+			sg.AddToolsNode("tools", tools, opts...)
+			g, err := sg.SetEntryPoint("tools").SetFinishPoint("tools").Compile()
+			require.NoError(t, err)
+			exec, err := NewExecutor(g)
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			events, err := exec.Execute(ctx, State{StateKeyMessages: []model.Message{{
+				Role: model.RoleAssistant, ToolCalls: toolCalls,
+			}}}, inv)
+			require.NoError(t, err)
+			for range events {
+			}
+			require.EqualValues(t, 1, calls.Load(), "charge submissions")
+			require.ErrorIs(t, nodeErr, primaryErr)
+			var gotTaskErr *replaySafetyTestError
+			require.ErrorAs(t, nodeErr, &gotTaskErr)
+			require.Same(t, taskErr, gotTaskErr)
+			if parallel {
+				require.ErrorIs(t, gotTaskErr, context.Canceled)
+			}
+		})
+	}
+}
 
 // Test that a node with retry policy succeeds after initial failures and downstream runs once.
 func TestNodeRetry_SucceedsAfterFailures(t *testing.T) {
