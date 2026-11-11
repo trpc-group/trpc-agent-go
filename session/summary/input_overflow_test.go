@@ -13,6 +13,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -160,6 +161,34 @@ func TestInputOverflowHook_HandlesSingleCompleteBatch(t *testing.T) {
 	require.Equal(t, "assistant-event-1", string(sess.State[lastIncludedEventIDKey]))
 }
 
+func TestInputOverflowHook_PreservesMergedPreviousSummary(t *testing.T) {
+	capture := &cacheSafeCaptureModel{contextWindow: 100_000, inputBudget: 100, response: "summary"}
+	previous := "The previous summary contains an important earlier fact."
+	s := NewSummarizer(capture, WithInputOverflowHook(
+		func(_ context.Context, in InputOverflow) (*OverflowDecision, error) {
+			require.Contains(t, in.Text, previous)
+			require.Contains(t, in.Text, "assistant-marker-1")
+			require.NotContains(t, in.Text, "user-marker-2")
+			return &OverflowDecision{Text: in.Text}, nil
+		}),
+	)
+	conversation := newSummaryPrefixRounds(2, 128)
+	sess := &session.Session{ID: "merged-overflow", Events: append([]event.Event{{
+		Author: authorSystem, Timestamp: conversation[0].Timestamp.Add(-time.Second),
+		Response: &model.Response{Choices: []model.Choice{{Message: model.NewSystemMessage(previous)}}},
+	}}, conversation...)}
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), previous)
+
+	_, err := s.Summarize(ctx, sess)
+
+	require.NoError(t, err)
+	require.NotNil(t, capture.request)
+	require.Contains(t, capture.request.Messages[0].Content, previous)
+	require.Contains(t, capture.request.Messages[0].Content, "assistant-marker-1")
+	require.NotContains(t, capture.request.Messages[0].Content, "user-marker-2")
+	require.Equal(t, "assistant-event-1", string(sess.State[lastIncludedEventIDKey]))
+}
+
 func TestInputOverflowHook_DoesNotRetryProviderFailureOrEmptySummary(t *testing.T) {
 	code := "context_length_exceeded"
 	for _, response := range []*model.Response{
@@ -218,20 +247,37 @@ func TestInputOverflowHook_AuthorizesOverflowAfterProviderRetry(t *testing.T) {
 }
 
 func TestInputOverflowHook_RespectsCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	capture := &cacheSafeCaptureModel{contextWindow: 100_000, inputBudget: 100}
-	s := NewSummarizer(capture, WithInputOverflowHook(
-		func(_ context.Context, in InputOverflow) (*OverflowDecision, error) {
-			cancel()
-			return &OverflowDecision{Text: in.Text}, nil
-		}),
-	)
-	sess := &session.Session{ID: "overflow", Events: newSummaryPrefixRounds(1, 128)}
-	_, err := s.Summarize(ctx, sess)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Nil(t, capture.request)
-	require.Empty(t, sess.State[lastIncludedEventIDKey])
+	for _, stage := range []string{"before summary", "overflow hook", "before model"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			capture := &cacheSafeCaptureModel{contextWindow: 100_000, inputBudget: 100}
+			s := NewSummarizer(capture,
+				WithInputOverflowHook(func(_ context.Context, in InputOverflow) (*OverflowDecision, error) {
+					if stage == "overflow hook" {
+						cancel()
+					}
+					return &OverflowDecision{Text: in.Text}, nil
+				}),
+				WithModelCallbacks(model.NewCallbacks().RegisterBeforeModel(
+					func(context.Context, *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+						if stage == "before model" {
+							cancel()
+						}
+						return nil, nil
+					},
+				)),
+			)
+			if stage == "before summary" {
+				cancel()
+			}
+			sess := &session.Session{ID: "overflow", Events: newSummaryPrefixRounds(1, 128)}
+			_, err := s.Summarize(ctx, sess)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, capture.request)
+			require.Empty(t, sess.State[lastIncludedEventIDKey])
+		})
+	}
 }
 
 func TestInputOverflowHook_AppliesAfterPreSummaryHook(t *testing.T) {

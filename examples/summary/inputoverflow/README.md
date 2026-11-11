@@ -86,6 +86,8 @@ hook := func(ctx context.Context, in summary.InputOverflow) (*summary.OverflowDe
 
 放行后的请求单独构建（standalone），不复用主模型请求的完整前缀。
 摘要模板、生成参数和独立的旧摘要保持原有配置，`BeforeModel` / `AfterModel` 回调仍执行。
+如果 `BeforeModel` 回调代发这次请求，应把收到的 `ctx` 和 `args.Request` 传给模型。
+放行只适用于这个请求对象；回调中另外创建的请求，即使使用相同 context，也仍按原配置裁剪。
 
 ## 本地运行
 

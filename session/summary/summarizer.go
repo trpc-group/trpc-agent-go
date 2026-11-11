@@ -1670,6 +1670,9 @@ func (s *sessionSummarizer) runSummaryAttempt(
 		result.mode = preparedMode
 	}
 
+	if budgetApproved {
+		ctx = modelrequest.WithTokenTailoringDisabled(ctx, request)
+	}
 	ctx, responseChan, err := s.runBeforeModelCallbacks(ctx, request)
 	result.ctx = ctx
 	if err != nil {
@@ -1687,10 +1690,7 @@ func (s *sessionSummarizer) runSummaryAttempt(
 		if budgetLimit > 0 && budgetLimit < result.budget {
 			result.budget = budgetLimit
 		}
-		modelCtx := ctx
-		if budgetApproved {
-			modelCtx = modelrequest.WithTokenTailoringDisabled(ctx)
-		} else {
+		if !budgetApproved {
 			if fitErr := s.ensureSummaryRequestFits(ctx, request, false, result.budget); fitErr != nil {
 				result.err = fmt.Errorf(
 					"summary request no longer fits after before-model callbacks: %w", fitErr,
@@ -1699,7 +1699,7 @@ func (s *sessionSummarizer) runSummaryAttempt(
 			}
 		}
 		s.recordReportCall(ctx, request, result.mode)
-		responseChan, err = s.model.GenerateContent(modelCtx, request)
+		responseChan, err = s.model.GenerateContent(ctx, request)
 		if err != nil {
 			result.err = fmt.Errorf(
 				"failed to generate summary: %w",
@@ -2357,7 +2357,8 @@ func (s *sessionSummarizer) runBeforeModelCallbacks(
 		return ctx, nil, nil
 	}
 
-	result, err := s.modelCallbacks.RunBeforeModel(
+	callbacks := summaryCallbacksForRequest(ctx, s.modelCallbacks, request)
+	result, err := callbacks.RunBeforeModel(
 		ctx,
 		&model.BeforeModelArgs{Request: request},
 	)
@@ -2365,7 +2366,11 @@ func (s *sessionSummarizer) runBeforeModelCallbacks(
 		return ctx, nil, fmt.Errorf("before model callback failed: %w", err)
 	}
 	if result != nil && result.Context != nil {
+		approved := modelrequest.TokenTailoringDisabled(ctx, request)
 		ctx = inheritReportContext(result.Context, ctx)
+		if approved {
+			ctx = modelrequest.WithTokenTailoringDisabled(ctx, request)
+		}
 	}
 	if result == nil || result.CustomResponse == nil {
 		return ctx, nil, nil

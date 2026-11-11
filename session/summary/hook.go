@@ -56,8 +56,10 @@ type OverflowDecision struct {
 // InputOverflowHook handles an estimated overflow after complete-prefix fallback
 // cannot select a batch within budget. A non-nil decision authorizes one
 // standalone model attempt without token-budget rejection or token tailoring by
-// the framework's model adapters. Model callbacks still run. Provider errors and
-// empty summaries are returned without an automatic summary retry.
+// the framework's model adapters. Model callbacks still run; callbacks delegating
+// the approved request must pass their supplied context and request pointer.
+// Other requests sharing that context retain token tailoring. Provider errors
+// and empty summaries are returned without an automatic summary retry.
 //
 // Returning nil, nil preserves the original overflow error. A non-nil error
 // rejects the batch even when a decision is also returned, independently of

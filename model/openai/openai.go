@@ -770,7 +770,7 @@ func (m *Model) optimizeMessagesForCache(messages []model.Message) []model.Messa
 // It uses the token tailoring strategy defined in imodel package.
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
 	// Early return if token tailoring is disabled or no messages to process.
-	if !m.enableTokenTailoring || len(request.Messages) == 0 || imodelrequest.TokenTailoringDisabled(ctx) {
+	if !m.enableTokenTailoring || len(request.Messages) == 0 || imodelrequest.TokenTailoringDisabled(ctx, request) {
 		return
 	}
 

@@ -13,7 +13,27 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+func TestTokenTailoringApprovalIsRequestScoped(t *testing.T) {
+	request := &model.Request{Messages: []model.Message{model.NewUserMessage("approved input")}}
+	parent := context.Background()
+	approved := WithTokenTailoringDisabled(parent, request)
+
+	require.True(t, TokenTailoringDisabled(approved, request))
+	require.False(t, TokenTailoringDisabled(parent, request))
+	require.False(t, TokenTailoringDisabled(approved, &model.Request{Messages: request.Messages}))
+	require.False(t, TokenTailoringDisabled(approved, nil))
+	require.False(t, TokenTailoringDisabled(nil, request))
+	require.False(t, TokenTailoringDisabled(WithTokenTailoringDisabled(parent, nil), request))
+
+	derived, cancel := context.WithCancel(approved)
+	defer cancel()
+	require.True(t, TokenTailoringDisabled(derived, request))
+	auxiliary := &model.Request{Messages: []model.Message{model.NewUserMessage("auxiliary input")}}
+	require.False(t, TokenTailoringDisabled(derived, auxiliary))
+}
 
 func TestTokenTailoringObserver(t *testing.T) {
 	var callbacks []TokenTailoringRecord

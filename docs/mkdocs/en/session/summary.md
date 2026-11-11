@@ -1128,6 +1128,10 @@ Approved input uses a separately built (standalone) request rather than the main
 model request's full prefix. The summary prompt, generation settings, and any
 separate previous summary retain their configuration. `BeforeModel` and
 `AfterModel` callbacks still run.
+When a `BeforeModel` callback delegates this call to a model, pass its supplied
+`ctx` and `args.Request`. Approval applies to that request object only. A new
+request created by a callback retains configured tailoring even when it shares
+the same context.
 
 #### API definitions
 
