@@ -266,6 +266,8 @@ func New(opts ...Option) (*CodeExecutor, error) {
 }
 
 // NewWithContext is like New but accepts a context used for sandbox setup.
+// It copies environment, metadata, and header maps after applying the options,
+// so later caller edits do not change the configuration used for replacements.
 func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
 	c := &CodeExecutor{
 		template:         ci.DefaultTemplate,
@@ -283,6 +285,9 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		)
 	}
 
+	c.envVars = cloneStringMap(c.envVars)
+	c.metadata = cloneStringMap(c.metadata)
+	c.headers = cloneStringMap(c.headers)
 	sbxOpts := c.sandboxOpts()
 
 	var (

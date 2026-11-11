@@ -149,14 +149,22 @@ func TestAutoRecreateConfirmedDeath(t *testing.T) {
 
 func TestAutoRecreateTerminalStateAndCreationOptions(t *testing.T) {
 	srv := newLifeServer(t)
+	envVars := map[string]string{"MODE": "recreate"}
+	metadata := map[string]string{"owner": "executor"}
+	headers := map[string]string{"X-Tenant": "team-a"}
 	executor := srv.executor(t,
 		WithTemplate("tmpl-recreate"),
 		WithSandboxTimeout(2*time.Minute),
-		WithEnvVars(map[string]string{"MODE": "recreate"}),
-		WithMetadata(map[string]string{"owner": "executor"}),
-		WithHeaders(map[string]string{"X-Tenant": "team-a"}),
+		WithEnvVars(envVars),
+		WithMetadata(metadata),
+		WithHeaders(headers),
 	)
 	first := srv.sandboxIDs()[0]
+	// Caller-owned maps may be reused after construction. Replacements must
+	// retain the executor's original configuration.
+	envVars["MODE"] = "changed"
+	metadata["owner"] = "caller"
+	headers["X-Tenant"] = "team-b"
 	srv.setInfo(first, http.StatusOK, "killed", "2099-01-01T00:00:00Z")
 	srv.setExecute(func(host, _ string) (int, string) {
 		if hostHasSandbox(host, first) {
