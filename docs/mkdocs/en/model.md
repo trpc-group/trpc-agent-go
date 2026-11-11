@@ -66,6 +66,43 @@ func main() {
 
 Example code is located at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
+### Preserving tools during call-limit finalization
+
+OpenAI-compatible endpoints that honor `tool_choice: "none"` can keep tool
+definitions during finalization to improve prompt-cache reuse:
+
+```go
+m := openai.New(modelName,
+    openai.WithBaseURL(baseURL),
+    openai.WithAPIKey(apiKey),
+    openai.WithToolChoiceNoneWhenToolsDisabled(true),
+)
+a := llmagent.New("assistant",
+    llmagent.WithModel(m),
+    llmagent.WithTools(tools),
+    llmagent.WithMaxToolIterations(5),
+    llmagent.WithToolIterationLimitFinalization("Answer using the available results."),
+)
+```
+
+The default is false and omits tools as before. This setting applies to both
+LLM-call and tool-iteration finalization, and leaves ordinary calls unchanged.
+When enabled, `BeforeModel` callbacks, input-token budgeting, and telemetry see
+the retained tool definitions. Callbacks can remove existing tools and modify
+their schemas (including descriptions, parameters, and `strict`). Removed tools
+are not restored; new or renamed tools are filtered out. The adapter retains
+the resulting tool order and forces `tool_choice: "none"` after provider
+callbacks, extra fields, and SDK options. If no tools remain, both `tools` and
+`tool_choice` are omitted.
+Model wrappers must forward `PreservesToolsWhenDisabled() bool` to retain this
+optimization; wrappers without that capability use tool omission.
+
+Verify the endpoint and model before enabling this option. Some compatible
+gateways reject or ignore `"none"`. API errors follow the existing error path,
+and tool calls returned during finalization are rejected without execution.
+There is no additional fallback request; finalization still counts toward
+`MaxLLMCalls`. Cache reuse depends on the provider and is not guaranteed.
+
 ### Usage Methods and Platform Integration Guide
 
 The Model module supports multiple usage methods and platform integration. The following are common usage scenarios based on Runner examples:

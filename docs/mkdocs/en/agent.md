@@ -572,7 +572,7 @@ agent := llmagent.New(
 - Tool-limit finalization requires every tool call in the limit-reaching iteration to be framework-executed. If any call is external or deferred by `WithToolExecutionFilter`, the response still counts toward `MaxToolIterations`, but the current run follows the existing caller-executed lifecycle and ends without a finalization call. A later caller continuation is a new invocation with independent limits.
 - `MaxLLMCalls` remains a strict outer budget. Finalization calls count toward it, so reserve an LLM call when combining tool-limit finalization with `WithMaxLLMCalls`.
 - For the final model request, the instruction is appended as a transient tail user message without changing the existing system prompt. It is visible to before-model callbacks but is not emitted or persisted as a user event.
-- During finalization, tools and forced tool-choice fields are removed before before-model callbacks and scrubbed again after callbacks. If a tool call is still produced, the framework rejects it without executing the tool.
+- By default, finalization removes tools and forced tool-choice fields before before-model callbacks and scrubs them again after callbacks. Verified OpenAI-compatible endpoints can instead retain tool definitions with `tool_choice: "none"`; see [model configuration](model.md#preserving-tools-during-call-limit-finalization). If a tool call is still produced, the framework rejects it without executing the tool.
 - If both finalization policies become eligible on the same LLM call, the LLM-limit instruction takes precedence.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.

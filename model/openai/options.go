@@ -139,6 +139,8 @@ type options struct {
 
 	// textOnlyMessageContent overrides the variant default when set.
 	textOnlyMessageContent *bool
+
+	toolChoiceNoneWhenDisabled bool
 }
 
 var (
@@ -160,6 +162,24 @@ var (
 
 // Option is a function that configures an OpenAI model.
 type Option func(*options)
+
+// WithToolChoiceNoneWhenToolsDisabled preserves tool definitions and forces
+// tool_choice to "none" when the framework disables tools, including during
+// call-limit finalization. The default is false, which omits tool definitions.
+// Callbacks may remove existing tools or edit their schemas; newly added or
+// renamed tools are filtered out. Provider callbacks retain the tools that
+// remain after BeforeModel callbacks. Tool-control extra fields and SDK options
+// cannot override this policy.
+// Enable this only for endpoints verified to honor "none". Cache reuse depends
+// on the provider. With no tool definitions, both tools and tool_choice are
+// omitted. API errors and unexpected tool calls follow the existing
+// finalization error behavior without an additional fallback request.
+// This option does not change tool choice for ordinary model calls.
+func WithToolChoiceNoneWhenToolsDisabled(enabled bool) Option {
+	return func(opts *options) {
+		opts.toolChoiceNoneWhenDisabled = enabled
+	}
+}
 
 // WithAPIKey sets the API key for the OpenAI client.
 func WithAPIKey(key string) Option {

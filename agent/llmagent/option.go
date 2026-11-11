@@ -840,7 +840,9 @@ func WithMaxToolIterations(limit int) Option {
 // default. This option has no effect when the LLM call limit is not positive.
 // The instruction is appended as a transient tail user message for the final
 // model request; it is not emitted or persisted as a user event. Before-model
-// callbacks observe the tool-free finalization request.
+// callbacks observe the tool-free finalization request. OpenAI-compatible models
+// configured with openai.WithToolChoiceNoneWhenToolsDisabled retain tool
+// definitions while disabling their use.
 //
 // When this option is not set, exceeding MaxLLMCalls preserves the default
 // terminal StopError behavior.
@@ -863,7 +865,9 @@ func WithLLMCallLimitFinalization(instruction string) Option {
 // tool iteration limit is not positive.
 // The instruction is appended as a transient tail user message for the final
 // model request; it is not emitted or persisted as a user event. Before-model
-// callbacks observe the tool-free finalization request.
+// callbacks observe the tool-free finalization request. OpenAI-compatible models
+// configured with openai.WithToolChoiceNoneWhenToolsDisabled retain tool
+// definitions while disabling their use.
 //
 // When this option is not set, exceeding MaxToolIterations preserves the
 // default terminal flow_error behavior.

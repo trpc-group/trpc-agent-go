@@ -3156,7 +3156,7 @@ func TestFlow_RunBeforeModelCallbacks_NoModelCallbacks(t *testing.T) {
 	inv.Plugins = stubPluginManager{}
 
 	ctx := context.Background()
-	gotCtx, resp, err := f.runBeforeModelCallbacks(ctx, inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(ctx, inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Equal(t, ctx, gotCtx)
 	require.Nil(t, resp)
@@ -3174,7 +3174,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesInvocationContext(t *testing.T) {
 		return &model.BeforeModelResult{Context: context.WithValue(ctx, testCtxKey{}, "v")}, nil
 	})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3195,7 +3195,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesReplacedInvocationContext(t *test
 		}, nil
 	})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3225,7 +3225,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesInvocationContextWithinCallbackGr
 			return nil, nil
 		})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3256,7 +3256,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesReplacedInvocationWithinCallbackG
 			return nil, nil
 		})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	callbackInvocation, ok := agent.InvocationFromContext(gotCtx)
@@ -3288,7 +3288,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesReplacementInvocationForFreshResu
 			}, nil
 		})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3309,7 +3309,7 @@ func TestFlow_RunBeforeModelCallbacks_DoesNotMutateSharedBeforeModelResult(t *te
 	})
 	f := New(nil, nil, Options{ModelCallbacks: local})
 	firstInvocation := agent.NewInvocation(agent.WithInvocationID("first-invocation-id"))
-	firstCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), firstInvocation, &model.Request{})
+	firstCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), firstInvocation, &model.Request{}, firstInvocation.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", firstCtx.Value(testCtxKey{}))
@@ -3317,7 +3317,7 @@ func TestFlow_RunBeforeModelCallbacks_DoesNotMutateSharedBeforeModelResult(t *te
 	require.True(t, ok)
 	require.Same(t, firstInvocation, firstCallbackInvocation)
 	secondInvocation := agent.NewInvocation(agent.WithInvocationID("second-invocation-id"))
-	secondCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), secondInvocation, &model.Request{})
+	secondCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), secondInvocation, &model.Request{}, secondInvocation.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", secondCtx.Value(testCtxKey{}))

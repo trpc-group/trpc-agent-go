@@ -51,6 +51,7 @@ func contextWithModelRetryCallbacks(
 				callbackCtx,
 				invocation,
 				req,
+				callModel,
 			)
 		},
 		func(

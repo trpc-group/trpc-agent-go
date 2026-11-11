@@ -517,7 +517,7 @@ agent := llmagent.New(
 - 工具迭代上限收尾要求达到上限的这一轮中所有工具调用都由框架执行。如果其中任何调用是 external tool，或被 `WithToolExecutionFilter` 延后给调用方执行，该回复仍会计入 `MaxToolIterations`，但当前运行会沿用 caller-executed tool 的既有生命周期并直接结束，不再发起收尾调用。调用方后续继续执行时会创建新的 invocation，并使用独立的限制计数。
 - `MaxLLMCalls` 始终是严格的外层硬预算，收尾调用也计入其中。因此组合使用工具上限收尾和 `WithMaxLLMCalls` 时，需要预留一次 LLM 调用。
 - 最后一次模型请求会在消息尾部追加一条临时 user instruction，而不会修改已有 system prompt。`BeforeModel` callback 可以看到该消息，但它不会作为真实 user event 发送或持久化。
-- 收尾期间，框架会在 `BeforeModel` callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。
+- 默认情况下，收尾期间框架会在 `BeforeModel` callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。对于已验证支持 `tool_choice: "none"` 的 OpenAI 兼容端点，可通过 [model 配置](model.md#在调用上限收尾时保留工具定义) 保留工具定义并禁用调用，争取复用缓存。
 - 如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
