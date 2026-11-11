@@ -901,6 +901,60 @@ func (f *Flow) processStreamingResponses(
 	return processor.lastEvent, nil
 }
 
+// truncatedToolCallErrorMessage is reported when the truncated-tool-call policy
+// rejects a completed response. Keep the wording stable so applications can map
+// it to their own error codes.
+const truncatedToolCallErrorMessage = "model output was truncated by the length limit; " +
+	"the partially generated tool calls were not executed"
+
+// rejectingInvocation returns the invocation when the configured policy rejects
+// truncated tool calls, and nil when the response must be processed as before.
+func (p *streamingResponseProcessor) rejectingInvocation() *agent.Invocation {
+	invocation := invocationFromContextOrDefault(p.ctx, p.currentInvocation)
+	if invocation == nil ||
+		invocation.TruncatedToolCallPolicy == agent.TruncatedToolCallPolicyIgnore {
+		return nil
+	}
+	return invocation
+}
+
+// rejectTruncatedToolCall emits the terminal truncation error and stops the
+// invocation. The rejected completed response is never emitted, so it cannot be
+// persisted as replayable history; its usage is carried on the error event so
+// callers still account for the call.
+func (p *streamingResponseProcessor) rejectTruncatedToolCall(
+	eventInvocation *agent.Invocation,
+	invocation *agent.Invocation,
+	response *model.Response,
+	finishReason string,
+	traceUsage *model.Usage,
+) {
+	errEvent := event.NewErrorEvent(
+		flowInvocationID(eventInvocation),
+		flowAgentName(eventInvocation),
+		model.ErrorTypeFlowError,
+		truncatedToolCallErrorMessage,
+	)
+	if errEvent.Response != nil && response != nil && response.Usage != nil {
+		usage := *response.Usage
+		errEvent.Response.Usage = &usage
+	}
+	if p.startedSpan && response != nil {
+		itelemetry.TraceRejectedChatResponse(p.span, traceUsage, finishReason)
+	}
+	agent.EmitEvent(p.ctx, eventInvocation, p.eventChan, errEvent)
+	invocation.EndInvocation = true
+	p.lastEvent = errEvent
+}
+
+func (p *streamingResponseProcessor) snapshotTraceUsage(response *model.Response) *model.Usage {
+	if !p.startedSpan || response == nil || response.Usage == nil {
+		return nil
+	}
+	usage := *response.Usage
+	return &usage
+}
+
 type streamingResponseProcessor struct {
 	flow                    *Flow
 	ctx                     context.Context
@@ -1010,6 +1064,8 @@ func (p *streamingResponseProcessor) process(
 	)
 	p.updateMetricsState()
 	trackModelResponseTelemetry(response, p.tracker)
+	// Timing attachment can create a Usage even when the model did not report tokens.
+	traceUsage := p.snapshotTraceUsage(response)
 	callbackTimingAttachment := responseusage.AttachTimingForCallback(
 		response,
 		p.timingInfo,
@@ -1017,10 +1073,13 @@ func (p *streamingResponseProcessor) process(
 	)
 	eventInvocation := p.eventInvocation()
 	var nativeSnapshot providerdata.ResponseSnapshot
+	var truncatedSnapshot truncatedOutputSnapshot
 	hasAfterCallbacks := p.flow.hasAfterModelCallbacks(p.currentInvocation)
 	if hasAfterCallbacks {
 		nativeSnapshot = providerdata.SnapshotResponse(response)
+		truncatedSnapshot = snapshotTruncatedOutput(response)
 	}
+	truncatedSnapshot.traceUsage = traceUsage
 	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
 		p.ctx,
 		eventInvocation,
@@ -1050,8 +1109,9 @@ func (p *streamingResponseProcessor) process(
 		}
 	}
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
-	p.repairToolCallArguments(response)
-	p.repairToolCallTextAndStats(response)
+	if !p.prepareToolCalls(eventInvocation, response, truncatedSnapshot) {
+		return false
+	}
 	if err := providerdata.ValidateResponse(response, p.producerInfo); err != nil {
 		*p.err = err
 		responseErr = err
