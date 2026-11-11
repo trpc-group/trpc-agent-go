@@ -775,6 +775,9 @@ func (s *Summary) Clone() *Summary {
 // Options contains shared session-service options.
 // Not every field applies to every service method.
 type Options struct {
+	// TrackCursor requests a storage cursor for GetTrackEvents. Nil disables cursor mode.
+	TrackCursor *string
+
 	EventNum            int              // EventNum is the number of recent events (context-window mode).
 	EventTime           time.Time        // EventTime is the after time.
 	EventPage           *EventPage       // EventPage enables GetSession-only offset pagination when non-nil.
