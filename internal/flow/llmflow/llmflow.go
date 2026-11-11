@@ -3146,8 +3146,20 @@ func (f *Flow) generateContentSeq(
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
 	if callModel != nil && providerdata.MessagesHaveData(llmRequest.Messages) {
-		if err := providerdata.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
-			return nil, err
+		// Session histories persist native records across turns. A record the
+		// selected model cannot replay natively degrades to ordinary history
+		// instead of failing the whole request, so one native-capable turn
+		// never poisons the session for every other model.
+		var degraded int
+		llmRequest.Messages, degraded = providerdata.DegradeMessagesFor(
+			llmRequest.Messages, callModel.Info(),
+		)
+		if degraded > 0 {
+			log.WarnfContext(
+				ctx,
+				"Degrading %d native provider record(s) from another model for agent %s; replaying them as ordinary history",
+				degraded, invocation.AgentName,
+			)
 		}
 	}
 	ctx, span, started := startLatencySpan(

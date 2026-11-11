@@ -102,6 +102,46 @@ func ValidateMessages(messages []model.Message, info model.Info) error {
 	return nil
 }
 
+// DegradeMessagesFor rewrites messages so that every native record the
+// consumer in info cannot replay natively is degraded to ordinary history.
+// A degraded message keeps its projected text and tool calls while its
+// native record, reasoning content and reasoning signature are cleared,
+// following the same rule as withoutToolCalls in the content processor: a
+// native record is indivisible from its native reasoning, so when the record
+// cannot be replayed natively the remaining visible text becomes ordinary
+// history and the reasoning is not replayed. Records that pass
+// ValidateMessage for info are kept for native replay, and messages without
+// a record are ignored, so legacy histories are unaffected. It returns the
+// effective message slice and the number of degraded records.
+//
+// It exists for cross-model calls on persisted histories: sessions keep
+// native records across turns, and a follow-up call that selects a different
+// model would otherwise fail the whole request at validation time even
+// though the projections beside each record are usable history. Without this
+// degradation one native-capable turn permanently poisons that history for
+// every other model.
+//
+// The input slice is never mutated: graph request messages can alias graph
+// state, so the messages are copied only when degradation is actually
+// needed and the input keeps its original records.
+func DegradeMessagesFor(messages []model.Message, info model.Info) ([]model.Message, int) {
+	out := messages
+	degraded := 0
+	for index := range messages {
+		if messages[index].ProviderData == nil || ValidateMessage(messages[index], info) == nil {
+			continue
+		}
+		if degraded == 0 {
+			out = append([]model.Message(nil), messages...)
+		}
+		out[index].ProviderData = nil
+		out[index].ReasoningContent = ""
+		out[index].ReasoningSignature = ""
+		degraded++
+	}
+	return out, degraded
+}
+
 // ValidateResponse checks the native records that remain in a model response
 // before its messages are published or its tool calls are executed. Callbacks
 // may edit message projections or replace responses; each final native record
