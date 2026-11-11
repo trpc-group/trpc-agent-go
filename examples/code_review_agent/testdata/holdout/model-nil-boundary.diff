@@ -1,0 +1,13 @@
+diff --git a/discount.go b/discount.go
+--- a/discount.go
++++ b/discount.go
+@@ -4,6 +4,9 @@ func applyDiscount(order *Order) int {
+ 	if order == nil {
+ 		return 0
+ 	}
++	// CR_AGENT_FAKE_MODEL_HIGH CR_AGENT_FAKE_MODEL_NIL_BOUNDARY: nil coupon now silently grants the default discount.
++	if order.Coupon == nil {
++		return defaultDiscount
++	}
+ 	return order.Coupon.Percent
+ }
