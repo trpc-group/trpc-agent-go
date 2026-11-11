@@ -198,6 +198,14 @@ still use `/execute`; this migration covers program execution only.
 - A non-positive `RunProgramSpec.Timeout` uses 30 seconds. The timeout covers
   directory preparation and the command. `WithExecutionTimeout` applies to
   code cells, not workspace programs.
+- `WithMaxProgramTimeout` optionally caps each program timeout after its
+  default is resolved. It applies to direct calls, Engine callers and
+  `workspace_exec`; zero or negative values leave the timeout uncapped.
+  For example, `e2b.WithMaxProgramTimeout(10*time.Second)` limits a model's
+  `timeout_sec: 60` to 10 seconds and preserves `timeout_sec: 5` as 5 seconds.
+  Omitted tool timeouts retain the tool's 5-minute default before capping.
+  The cap does not affect `ExecuteCode`, workspace file operations or sandbox
+  lifetime. Configure `WithExecutionTimeout` separately for code cells.
 - Stdout and stderr preserve their exact bytes, including trailing newlines
   and text matching the former output sentinels. Capture is not truncated.
 - A normal non-zero exit is returned in `RunResult.ExitCode` with a nil error.
