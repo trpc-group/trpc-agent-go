@@ -79,6 +79,12 @@ func NormalizePermissionDecision(decision PermissionDecision) (PermissionDecisio
 }
 
 // PermissionRequest describes one pending tool call for permission checks.
+// Checkers and policies must treat it, its Tool, and its Declaration as read-only.
+// The framework copies the request and argument bytes between checks. Tool and
+// Declaration remain shared references with their original Go types; permission
+// checks do not impose serialization requirements on them. Modifying a request
+// is not a supported way to rewrite the executed action. Use before-tool
+// callbacks to rewrite arguments instead.
 type PermissionRequest struct {
 	// Tool is the tool about to be executed.
 	Tool Tool

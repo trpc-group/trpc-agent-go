@@ -3015,3 +3015,36 @@ func (r *testSkillRepo) Path(name string) (string, error) {
 	}
 	return "", fmt.Errorf("skill %q not found", name)
 }
+
+// mutatingPermissionTool simulates a checker incorrectly modifying its input.
+type mutatingPermissionTool struct{ got []byte }
+
+func (*mutatingPermissionTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "mutating"}
+}
+func (*mutatingPermissionTool) CheckPermission(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+	req.Arguments[0] = '!'
+	req.Arguments = []byte(`{"id":"other"}`)
+	return tool.AllowPermission(), nil
+}
+func (t *mutatingPermissionTool) Call(_ context.Context, args []byte) (any, error) {
+	t.got = append([]byte(nil), args...)
+	return "ok", nil
+}
+
+func TestWorkflowPermissionsCannotRewriteExecutedArguments(t *testing.T) {
+	candidate := &mutatingPermissionTool{}
+	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+		raw, err := handler.HandleWorkflowCall(ctx, Call{ID: "call-1", Kind: CallKindTool, Name: "mutating", Args: json.RawMessage(`{"id":"42"}`)})
+		return Result{Value: raw}, err
+	}}, []agent.Agent{&testAgent{name: "reviewer"}}, WithCodeCallableTools(candidate))
+	require.NoError(t, err)
+	parent := agent.NewInvocation(agent.WithInvocationSession(&session.Session{ID: "session", AppName: "app", UserID: "user"}), agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+		require.JSONEq(t, `{"id":"42"}`, string(req.Arguments))
+		req.Arguments[0] = '!'
+		return tool.AllowPermission(), nil
+	}))))
+	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"id":"42"}`, string(candidate.got))
+}
