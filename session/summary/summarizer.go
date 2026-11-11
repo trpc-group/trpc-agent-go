@@ -1717,13 +1717,8 @@ func (s *sessionSummarizer) runSummaryAttempt(
 		responseChan,
 		trackResponse,
 		ensureTimingInfo,
+		budgetApproved,
 	)
-	if budgetApproved && err == nil {
-		err = approvedSummaryCompletionError(finalResp)
-		if err != nil {
-			summaryText = ""
-		}
-	}
 	result.ctx = ctx
 	result.summaryText = summaryText
 	result.response = finalResp
@@ -2447,14 +2442,16 @@ func (s *sessionSummarizer) collectSummaryFromResponses(
 	responseChan <-chan *model.Response,
 	trackResponse func(resp *model.Response),
 	ensureTimingInfo func(resp *model.Response),
+	checkCompletion bool,
 ) (context.Context, string, *model.Response, error) {
 	if responseChan == nil {
 		return ctx, "", nil, errors.New("model returned nil response channel")
 	}
 
 	var (
-		summary   strings.Builder
-		finalResp *model.Response
+		summary       strings.Builder
+		finalResp     *model.Response
+		completionErr error
 	)
 
 	for {
@@ -2464,6 +2461,9 @@ func (s *sessionSummarizer) collectSummaryFromResponses(
 		case response, ok := <-responseChan:
 			if !ok {
 				summaryText := strings.TrimSpace(summary.String())
+				if completionErr != nil {
+					return ctx, "", finalResp, completionErr
+				}
 				return ctx, summaryText, finalResp, nil
 			}
 			if trackResponse != nil {
@@ -2486,6 +2486,11 @@ func (s *sessionSummarizer) collectSummaryFromResponses(
 			if response.Error != nil {
 				return ctx, "", finalResp, formatResponseError(response.Error)
 			}
+			// Retain truncation without ending the stream so later usage and
+			// callbacks are still processed.
+			if checkCompletion && completionErr == nil {
+				completionErr = approvedSummaryCompletionError(response)
+			}
 			if len(response.Choices) > 0 {
 				content := response.Choices[0].Message.Content
 				if content != "" {
@@ -2494,6 +2499,9 @@ func (s *sessionSummarizer) collectSummaryFromResponses(
 			}
 			if response.Done {
 				summaryText := strings.TrimSpace(summary.String())
+				if completionErr != nil {
+					return ctx, "", finalResp, completionErr
+				}
 				return ctx, summaryText, finalResp, nil
 			}
 		}

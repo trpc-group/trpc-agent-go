@@ -264,12 +264,20 @@ func TestInputOverflowHook_UnusedHookPreservesFinishReasonBehavior(t *testing.T)
 }
 
 func TestInputOverflowHook_TruncatedStreamProcessesFinalResponse(t *testing.T) {
-	reason := "model_context_window_exceeded"
-	final := &model.Response{Done: true, Usage: &model.Usage{PromptTokens: 500, CompletionTokens: 8},
-		Choices: []model.Choice{{Message: model.NewAssistantMessage("incomplete summary"), FinishReason: &reason}},
+	reason := "length"
+	partial := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("incomplete summary"),
+			FinishReason: &reason,
+		}},
+	}
+	final := &model.Response{
+		Done:  true,
+		Usage: &model.Usage{PromptTokens: 500, CompletionTokens: 8, TotalTokens: 508},
 	}
 	capture := &reportModel{responses: []*model.Response{
-		{IsPartial: true, Choices: []model.Choice{{FinishReason: &reason}}},
+		partial,
 		final,
 	}}
 	callbacksSeen := 0
@@ -291,20 +299,90 @@ func TestInputOverflowHook_TruncatedStreamProcessesFinalResponse(t *testing.T) {
 				if args.Response.Done {
 					require.Same(t, final, args.Response)
 					require.Equal(t, 500, args.Response.Usage.PromptTokens)
+					require.Empty(t, args.Response.Choices)
+				} else {
+					require.Same(t, partial, args.Response)
+					require.Equal(t, reason, *args.Response.Choices[0].FinishReason)
 				}
 				return nil, nil
 			},
 		)),
 	)
+	summarizer := s.(*sessionSummarizer)
+	result := summarizer.runSummaryAttempt(
+		context.Background(),
+		&model.Request{},
+		callModeStandalone,
+		summaryPromptInput{},
+		100,
+		true,
+		nil,
+		nil,
+	)
+	require.ErrorContains(t, result.err, reason)
+	require.Empty(t, result.summaryText)
+	require.Same(t, final, result.response)
+	require.Equal(t, 500, result.response.Usage.PromptTokens)
+	require.Equal(t, 8, result.response.Usage.CompletionTokens)
+	require.Equal(t, 2, callbacksSeen)
+	callbacksSeen = 0
+
 	sess := &session.Session{ID: "truncated-stream", Events: newSummaryPrefixRounds(1, 128)}
 
-	_, err := s.Summarize(context.Background(), sess)
+	_, err := summarizer.Summarize(context.Background(), sess)
 
 	require.ErrorContains(t, err, reason)
 	require.Equal(t, 2, callbacksSeen)
 	require.Equal(t, 500, report.Call.PromptTokens)
 	require.ErrorContains(t, report.Error, reason)
 	require.Empty(t, sess.State[lastIncludedEventIDKey])
+}
+
+func TestInputOverflowHook_ApprovedCompletionUsesAfterModelReplacement(t *testing.T) {
+	truncatedReason := "length"
+	replacementReason := "stop"
+	partial := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("truncated summary"),
+			FinishReason: &truncatedReason,
+		}},
+	}
+	replacement := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("replacement summary"),
+			FinishReason: &replacementReason,
+		}},
+	}
+	final := &model.Response{Done: true, Usage: &model.Usage{PromptTokens: 500}}
+	capture := &reportModel{responses: []*model.Response{partial, final}}
+	callbacksSeen := 0
+	s := NewSummarizer(capture, WithModelCallbacks(model.NewCallbacks().RegisterAfterModel(
+		func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			callbacksSeen++
+			if args.Response == partial {
+				return &model.AfterModelResult{CustomResponse: replacement}, nil
+			}
+			return nil, nil
+		},
+	))).(*sessionSummarizer)
+
+	result := s.runSummaryAttempt(
+		context.Background(),
+		&model.Request{},
+		callModeStandalone,
+		summaryPromptInput{},
+		100,
+		true,
+		nil,
+		nil,
+	)
+
+	require.NoError(t, result.err)
+	require.Equal(t, "replacement summary", result.summaryText)
+	require.Same(t, final, result.response)
+	require.Equal(t, 2, callbacksSeen)
 }
 
 func TestInputOverflowHook_AuthorizesOverflowAfterProviderRetry(t *testing.T) {
