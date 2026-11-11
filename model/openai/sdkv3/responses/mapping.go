@@ -11,6 +11,7 @@ package responses
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -36,11 +37,16 @@ const (
 
 	incompleteReasonContentFilter = "content_filter"
 
-	outputTypeMessage      = "message"
-	outputTypeFunctionCall = "function_call"
-	outputTypeReasoning    = "reasoning"
-	contentTypeOutputText  = "output_text"
-	contentTypeRefusal     = "refusal"
+	outputTypeMessage          = "message"
+	outputTypeFunctionCall     = "function_call"
+	outputTypeReasoning        = "reasoning"
+	outputTypeToolSearchCall   = "tool_search_call"
+	outputTypeToolSearchOutput = "tool_search_output"
+	contentTypeOutputText      = "output_text"
+	contentTypeRefusal         = "refusal"
+
+	executionServer = "server"
+	executionClient = "client"
 
 	// extraFieldInclude is the only extra-field key consumed as an additive
 	// include list. Nested and indexed paths keep the managed-field rejection.
@@ -58,18 +64,34 @@ var officialReasoningEfforts = map[string]shared.ReasoningEffort{
 }
 
 type nativeItem struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id"`
-	Status    string          `json:"status"`
-	Role      string          `json:"role"`
-	Phase     string          `json:"phase"`
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments string          `json:"arguments"`
-	Content   []nativeContent `json:"content"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Role   string `json:"role"`
+	Phase  string `json:"phase"`
+	CallID string `json:"call_id"`
+	Name   string `json:"name"`
+	// Namespace is set on a function call to a tool inside a namespace.
+	Namespace string `json:"namespace"`
+	// Arguments is a JSON string on function calls and a JSON value on tool
+	// search calls.
+	Arguments json.RawMessage `json:"arguments"`
+	// Execution is "server" or "client" on tool search items.
+	Execution string            `json:"execution"`
+	Tools     []json.RawMessage `json:"tools"`
+	Content   []nativeContent   `json:"content"`
 	Summary   []struct {
 		Text string `json:"text"`
 	} `json:"summary"`
+}
+
+// functionArguments returns the JSON string arguments of a function call.
+func (item nativeItem) functionArguments() (string, error) {
+	var arguments string
+	if err := json.Unmarshal(item.Arguments, &arguments); err != nil {
+		return "", err
+	}
+	return arguments, nil
 }
 
 type nativeContent struct {
@@ -105,17 +127,35 @@ func validateRequest(request *model.Request) error {
 	return nil
 }
 
-func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams, error) {
+// buildParams converts request into API parameters. The returned tool plan
+// maps function calls in the response back to request tools.
+func (m *Model) buildParams(ctx context.Context, request *model.Request) (responses.ResponseNewParams, *toolPlan, error) {
 	if strings.TrimSpace(m.name) == "" {
-		return responses.ResponseNewParams{}, fmt.Errorf("openai/responses: model name cannot be empty")
+		return responses.ResponseNewParams{}, nil, fmt.Errorf("openai/responses: model name cannot be empty")
 	}
 	if err := validateExtraFields(m.extraFields); err != nil {
-		return responses.ResponseNewParams{}, err
+		return responses.ResponseNewParams{}, nil, err
 	}
 	items, err := convertMessages(request.Messages, m.name)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return responses.ResponseNewParams{}, nil, err
 	}
+	plan, err := m.planTools(ctx, request)
+	if err != nil {
+		return responses.ResponseNewParams{}, nil, err
+	}
+	params, err := m.buildRequestParams(request, items, plan)
+	if err != nil {
+		return responses.ResponseNewParams{}, nil, err
+	}
+	return params, plan, nil
+}
+
+func (m *Model) buildRequestParams(
+	request *model.Request,
+	items responses.ResponseInputParam,
+	plan *toolPlan,
+) (responses.ResponseNewParams, error) {
 	include, err := mergeIncludes(m.extraFields, request.ExtraFields)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
@@ -140,11 +180,8 @@ func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams
 	if request.ReasoningEffort != nil && strings.TrimSpace(*request.ReasoningEffort) != "" {
 		params.Reasoning.Effort = officialReasoningEfforts[*request.ReasoningEffort]
 	}
-	if len(request.Tools) > 0 {
-		params.Tools, err = convertTools(request.Tools)
-		if err != nil {
-			return responses.ResponseNewParams{}, err
-		}
+	if len(plan.params) > 0 {
+		params.Tools = plan.params
 	}
 	if request.StructuredOutput != nil {
 		format, ok := convertStructuredOutput(request.StructuredOutput)
@@ -296,11 +333,10 @@ func applyToolChoice(params *responses.ResponseNewParams, fields map[string]any)
 
 func convertMessages(messages []model.Message, modelName string) (responses.ResponseInputParam, error) {
 	items := make(responses.ResponseInputParam, 0, len(messages)*2)
-	called := make(map[string]struct{})
-	completed := make(map[string]struct{})
+	calls := newCallTracker()
 	for messageIndex, msg := range messages {
 		if msg.ProviderData != nil {
-			converted, err := convertProviderDataMessage(msg, modelName, messageIndex, called, completed)
+			converted, err := convertProviderDataMessage(msg, modelName, messageIndex, calls)
 			if err != nil {
 				return nil, err
 			}
@@ -314,10 +350,10 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 			if strings.TrimSpace(callID) == "" {
 				return nil, fmt.Errorf("openai/responses: tool result at message %d has an empty call_id", messageIndex)
 			}
-			if _, ok := called[callID]; !ok {
+			if _, ok := calls.called[callID]; !ok {
 				return nil, fmt.Errorf("openai/responses: tool result %q has no preceding function call", callID)
 			}
-			if _, ok := completed[callID]; ok {
+			if _, ok := calls.completed[callID]; ok {
 				return nil, fmt.Errorf("openai/responses: duplicate tool result for call_id %q", callID)
 			}
 			text, err := messageText(msg)
@@ -327,9 +363,9 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 			item := responses.ResponseInputItemParamOfFunctionCallOutput(text)
 			item.OfFunctionCallOutput.CallID = openai.String(callID)
 			items = append(items, item)
-			completed[callID] = struct{}{}
+			calls.completed[callID] = struct{}{}
 		case model.RoleAssistant:
-			converted, err := convertAssistantMessage(msg, called, completed)
+			converted, err := convertAssistantMessage(msg, calls)
 			if err != nil {
 				return nil, fmt.Errorf("openai/responses: assistant message %d: %w", messageIndex, err)
 			}
@@ -344,15 +380,20 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 			return nil, fmt.Errorf("openai/responses: unsupported message role %q at message %d", msg.Role, messageIndex)
 		}
 	}
-	for callID := range called {
-		if _, ok := completed[callID]; !ok {
+	for callID := range calls.called {
+		if _, ok := calls.completed[callID]; !ok {
 			return nil, fmt.Errorf("openai/responses: function call %q has no tool result", callID)
+		}
+	}
+	for _, callID := range calls.searchOrder {
+		if !calls.searches[callID] {
+			return nil, fmt.Errorf("openai/responses: client tool_search_call %q has no tool_search_output", callID)
 		}
 	}
 	return items, nil
 }
 
-func convertProviderDataMessage(msg model.Message, modelName string, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func convertProviderDataMessage(msg model.Message, modelName string, messageIndex int, calls *callTracker) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	info := model.Info{Name: modelName, ProviderDataProtocol: responseProvider}
 	if err := providerdata.ValidateMessage(msg, info); err != nil {
@@ -364,7 +405,11 @@ func convertProviderDataMessage(msg model.Message, modelName string, messageInde
 		return nil, fmt.Errorf("openai/responses: invalid provider data items at message %d: %w", messageIndex, err)
 	}
 	for _, item := range native {
-		if err := trackCall(item, called, completed); err != nil {
+		if msg.Role == model.RoleTool &&
+			(item.Type != outputTypeToolSearchOutput || item.Execution != executionClient || item.CallID != msg.ToolID) {
+			return nil, fmt.Errorf("openai/responses: tool message %d may only record the client tool_search_output for call_id %q", messageIndex, msg.ToolID)
+		}
+		if err := calls.track(item, msg.Role); err != nil {
 			return nil, fmt.Errorf("openai/responses: message %d: %w", messageIndex, err)
 		}
 	}
@@ -378,7 +423,7 @@ func convertProviderDataMessage(msg model.Message, modelName string, messageInde
 	return items, nil
 }
 
-func convertAssistantMessage(msg model.Message, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func convertAssistantMessage(msg model.Message, calls *callTracker) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	if msg.ReasoningContent != "" || msg.ReasoningSignature != "" {
 		return nil, fmt.Errorf("assistant reasoning requires provider data")
@@ -396,7 +441,7 @@ func convertAssistantMessage(msg model.Message, called, completed map[string]str
 		if err := validateLegacyToolCall(call); err != nil {
 			return nil, err
 		}
-		if err := trackCall(nativeItem{Type: outputTypeFunctionCall, CallID: call.ID}, called, completed); err != nil {
+		if err := calls.track(nativeItem{Type: outputTypeFunctionCall, CallID: call.ID}, model.RoleAssistant); err != nil {
 			return nil, err
 		}
 		items = append(items, responses.ResponseInputItemParamOfFunctionCall(
@@ -419,29 +464,80 @@ func validateLegacyToolCall(call model.ToolCall) error {
 	return nil
 }
 
-func trackCall(item nativeItem, called, completed map[string]struct{}) error {
+// callTracker pairs calls with their results across replayed history and
+// within one model output.
+type callTracker struct {
+	called    map[string]struct{}
+	completed map[string]struct{}
+	// searches records client tool search calls by call_id and whether a
+	// tool_search_output answered them. searchOrder keeps call order.
+	searches    map[string]bool
+	searchOrder []string
+}
+
+func newCallTracker() *callTracker {
+	return &callTracker{
+		called:    make(map[string]struct{}),
+		completed: make(map[string]struct{}),
+		searches:  make(map[string]bool),
+	}
+}
+
+// track records item from a message with role. Model output records are
+// assistant messages; client tool search results are tool messages.
+func (t *callTracker) track(item nativeItem, role model.Role) error {
 	switch item.Type {
 	case outputTypeFunctionCall:
 		callID := item.CallID
 		if strings.TrimSpace(callID) == "" {
 			return fmt.Errorf("function call has an empty call_id")
 		}
-		if _, ok := called[callID]; ok {
+		if _, ok := t.called[callID]; ok {
 			return fmt.Errorf("duplicate function call call_id %q", callID)
 		}
-		called[callID] = struct{}{}
+		t.called[callID] = struct{}{}
 	case "function_call_output":
 		callID := item.CallID
 		if strings.TrimSpace(callID) == "" {
 			return fmt.Errorf("function_call_output has an empty call_id")
 		}
-		if _, ok := called[callID]; !ok {
+		if _, ok := t.called[callID]; !ok {
 			return fmt.Errorf("function_call_output %q has no preceding function call", callID)
 		}
-		if _, ok := completed[callID]; ok {
+		if _, ok := t.completed[callID]; ok {
 			return fmt.Errorf("duplicate function_call_output for call_id %q", callID)
 		}
-		completed[callID] = struct{}{}
+		t.completed[callID] = struct{}{}
+	case outputTypeToolSearchCall:
+		if role != model.RoleAssistant {
+			return fmt.Errorf("tool_search_call %q must be recorded in model output", item.CallID)
+		}
+		if item.Execution != executionClient {
+			return nil
+		}
+		if _, ok := t.searches[item.CallID]; ok {
+			return fmt.Errorf("duplicate tool_search_call call_id %q", item.CallID)
+		}
+		t.searches[item.CallID] = false
+		t.searchOrder = append(t.searchOrder, item.CallID)
+	case outputTypeToolSearchOutput:
+		if item.Execution != executionClient {
+			if role != model.RoleAssistant {
+				return fmt.Errorf("hosted tool_search_output must be recorded in model output")
+			}
+			return nil
+		}
+		if role != model.RoleTool {
+			return fmt.Errorf("client tool_search_output %q must be recorded on a tool message", item.CallID)
+		}
+		answered, ok := t.searches[item.CallID]
+		if !ok {
+			return fmt.Errorf("tool_search_output %q has no preceding tool_search_call", item.CallID)
+		}
+		if answered {
+			return fmt.Errorf("duplicate tool_search_output for call_id %q", item.CallID)
+		}
+		t.searches[item.CallID] = true
 	}
 	return nil
 }
@@ -473,13 +569,16 @@ func parseNativeItems(payload json.RawMessage, requireCompleted bool) ([]nativeI
 
 func validateNativeItem(item nativeItem, requireCompleted bool) error {
 	switch item.Type {
-	case outputTypeReasoning, outputTypeMessage, outputTypeFunctionCall:
+	case outputTypeReasoning, outputTypeMessage, outputTypeFunctionCall,
+		outputTypeToolSearchCall, outputTypeToolSearchOutput:
 	default:
 		return fmt.Errorf("unsupported native item type %q", item.Type)
 	}
-	// Function-call item IDs are optional; call_id is the required correlation
-	// key. Preserve an absent item ID instead of inventing one during replay.
-	if item.Type != outputTypeFunctionCall && strings.TrimSpace(item.ID) == "" {
+	// Function-call and tool-search item IDs are optional; call_id is the
+	// correlation key, and an application-built search output has no ID.
+	// Preserve an absent item ID instead of inventing one during replay.
+	if (item.Type == outputTypeReasoning || item.Type == outputTypeMessage) &&
+		strings.TrimSpace(item.ID) == "" {
 		return fmt.Errorf("%s item has an empty id", item.Type)
 	}
 	// The API requires status on messages, but makes it optional on reasoning
@@ -505,8 +604,35 @@ func validateNativeItem(item nativeItem, requireCompleted bool) error {
 		if strings.TrimSpace(item.Name) == "" {
 			return fmt.Errorf("function_call item %q has an empty name", item.ID)
 		}
-		if !isJSONObject([]byte(item.Arguments)) {
+		arguments, err := item.functionArguments()
+		if err != nil || !isJSONObject([]byte(arguments)) {
 			return fmt.Errorf("function_call item %q has invalid JSON arguments", item.ID)
+		}
+	case outputTypeToolSearchCall, outputTypeToolSearchOutput:
+		return validateToolSearchItem(item)
+	}
+	return nil
+}
+
+// validateToolSearchItem checks a hosted or client tool search item. Hosted
+// items have a null call_id; client items are paired by call_id.
+func validateToolSearchItem(item nativeItem) error {
+	switch item.Execution {
+	case executionServer:
+	case executionClient:
+		if strings.TrimSpace(item.CallID) == "" {
+			return fmt.Errorf("client %s item %q has an empty call_id", item.Type, item.ID)
+		}
+	default:
+		return fmt.Errorf("%s item %q has unsupported execution %q", item.Type, item.ID, item.Execution)
+	}
+	if item.Type == outputTypeToolSearchCall {
+		if len(bytes.TrimSpace(item.Arguments)) > 0 && !json.Valid(item.Arguments) {
+			return fmt.Errorf("tool_search_call item %q has invalid JSON arguments", item.ID)
+		}
+		if item.Execution == executionClient &&
+			!isJSONObject(clientSearchArguments(item.Arguments)) {
+			return fmt.Errorf("client tool_search_call item %q has invalid JSON arguments", item.ID)
 		}
 	}
 	return nil
@@ -684,42 +810,68 @@ func messageText(msg model.Message) (string, error) {
 func convertTools(tools map[string]tool.Tool) ([]responses.ToolUnionParam, error) {
 	result := make([]responses.ToolUnionParam, 0, len(tools))
 	for _, t := range toolorder.SortedTools(tools) {
-		if t == nil {
-			return nil, fmt.Errorf("openai/responses: tool cannot be nil")
+		decl, err := toolDeclaration(t)
+		if err != nil {
+			return nil, err
 		}
-		decl := t.Declaration()
-		if decl == nil {
-			return nil, fmt.Errorf("openai/responses: tool has no declaration")
-		}
-		parameters := map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}
-		if decl.InputSchema != nil {
-			schemaBytes, err := json.Marshal(decl.InputSchema)
-			if err != nil {
-				return nil, fmt.Errorf("openai/responses: marshal schema for tool %q: %w", decl.Name, err)
-			}
-			if err := json.Unmarshal(schemaBytes, &parameters); err != nil {
-				return nil, fmt.Errorf("openai/responses: decode schema for tool %q: %w", decl.Name, err)
-			}
-			if typ, ok := parameters["type"].(string); ok && typ == "object" {
-				if props, exists := parameters["properties"]; !exists || props == nil {
-					parameters["properties"] = map[string]any{}
-				}
-			}
-		}
-		fn := responses.FunctionToolParam{
-			Name:       decl.Name,
-			Parameters: parameters,
-			Strict:     openai.Bool(false),
-		}
-		if decl.Description != "" {
-			fn.Description = openai.String(decl.Description)
+		fn, err := functionToolParam(decl)
+		if err != nil {
+			return nil, err
 		}
 		result = append(result, responses.ToolUnionParam{OfFunction: &fn})
 	}
 	return result, nil
+}
+
+func toolDeclaration(t tool.Tool) (*tool.Declaration, error) {
+	if t == nil {
+		return nil, fmt.Errorf("openai/responses: tool cannot be nil")
+	}
+	decl := t.Declaration()
+	if decl == nil {
+		return nil, fmt.Errorf("openai/responses: tool has no declaration")
+	}
+	return decl, nil
+}
+
+func functionToolParam(decl *tool.Declaration) (responses.FunctionToolParam, error) {
+	parameters, err := functionParameters(decl)
+	if err != nil {
+		return responses.FunctionToolParam{}, err
+	}
+	fn := responses.FunctionToolParam{
+		Name:       decl.Name,
+		Parameters: parameters,
+		Strict:     openai.Bool(false),
+	}
+	if decl.Description != "" {
+		fn.Description = openai.String(decl.Description)
+	}
+	return fn, nil
+}
+
+// functionParameters returns the JSON schema sent for a function tool.
+func functionParameters(decl *tool.Declaration) (map[string]any, error) {
+	parameters := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+	if decl.InputSchema == nil {
+		return parameters, nil
+	}
+	schemaBytes, err := json.Marshal(decl.InputSchema)
+	if err != nil {
+		return nil, fmt.Errorf("openai/responses: marshal schema for tool %q: %w", decl.Name, err)
+	}
+	if err := json.Unmarshal(schemaBytes, &parameters); err != nil {
+		return nil, fmt.Errorf("openai/responses: decode schema for tool %q: %w", decl.Name, err)
+	}
+	if typ, ok := parameters["type"].(string); ok && typ == "object" {
+		if props, exists := parameters["properties"]; !exists || props == nil {
+			parameters["properties"] = map[string]any{}
+		}
+	}
+	return parameters, nil
 }
 
 func convertStructuredOutput(out *model.StructuredOutput) (responses.ResponseFormatTextConfigUnionParam, bool) {
@@ -745,13 +897,20 @@ func convertStructuredOutput(out *model.StructuredOutput) (responses.ResponseFor
 }
 
 func projectResponse(resp *responses.Response, modelName string) (*model.Response, error) {
+	return projectRequestResponse(resp, modelName, nil)
+}
+
+// projectRequestResponse projects a completed response to the request that
+// tools describes. A response that delegates client tool searches is not
+// Done: the caller completes them through CompleteProviderActions.
+func projectRequestResponse(resp *responses.Response, modelName string, tools *toolPlan) (*model.Response, error) {
 	if resp == nil {
 		return nil, fmt.Errorf("openai/responses: response is nil")
 	}
 	if resp.Status != responses.ResponseStatusCompleted {
 		return nil, fmt.Errorf("openai/responses: response status %q is not completed", resp.Status)
 	}
-	projected, payload, err := projectOutput(resp.Output)
+	projected, payload, err := projectOutput(resp.Output, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -778,7 +937,7 @@ func projectResponse(resp *responses.Response, modelName string) (*model.Respons
 		Created:   createdUnix(resp),
 		Model:     firstNonEmpty(modelName, string(resp.Model)),
 		Timestamp: time.Now(),
-		Done:      true,
+		Done:      !projected.pendingSearch,
 		Choices: []model.Choice{{
 			Index:        0,
 			Message:      message,
@@ -792,15 +951,19 @@ type projectedOutput struct {
 	text      string
 	reasoning string
 	toolCalls []model.ToolCall
+	// pendingSearch reports a client tool search call that the caller must
+	// answer before the next model step.
+	pendingSearch bool
 }
 
-func projectOutput(output []responses.ResponseOutputItemUnion) (projectedOutput, json.RawMessage, error) {
+// projectOutput projects native output items. tools maps namespaced function
+// calls back to request tools; without it, such calls cannot be projected.
+func projectOutput(output []responses.ResponseOutputItemUnion, tools *toolPlan) (projectedOutput, json.RawMessage, error) {
 	var out projectedOutput
 	items := make([]json.RawMessage, 0, len(output))
 	var text strings.Builder
 	var reasoning strings.Builder
-	called := make(map[string]struct{})
-	completed := make(map[string]struct{})
+	calls := newCallTracker()
 	for index, item := range output {
 		raw := item.RawJSON()
 		if raw == "" {
@@ -818,7 +981,7 @@ func projectOutput(output []responses.ResponseOutputItemUnion) (projectedOutput,
 		if err := validateNativeItem(native, true); err != nil {
 			return out, nil, fmt.Errorf("openai/responses: output item %d: %w", index, err)
 		}
-		if err := trackCall(native, called, completed); err != nil {
+		if err := calls.track(native, model.RoleAssistant); err != nil {
 			return out, nil, fmt.Errorf("openai/responses: output item %d: %w", index, err)
 		}
 		items = append(items, encoded)
@@ -833,16 +996,25 @@ func projectOutput(output []responses.ResponseOutputItemUnion) (projectedOutput,
 				}
 			}
 		case outputTypeFunctionCall:
+			name, err := tools.functionName(native.Namespace, native.Name)
+			if err != nil {
+				return out, nil, fmt.Errorf("openai/responses: output item %d: %w", index, err)
+			}
+			arguments, _ := native.functionArguments()
 			idx := len(out.toolCalls)
 			out.toolCalls = append(out.toolCalls, model.ToolCall{
 				Type:  functionToolType,
 				ID:    native.CallID,
 				Index: intPtr(idx),
 				Function: model.FunctionDefinitionParam{
-					Name:      native.Name,
-					Arguments: []byte(native.Arguments),
+					Name:      name,
+					Arguments: []byte(arguments),
 				},
 			})
+		case outputTypeToolSearchCall:
+			if native.Execution == executionClient {
+				out.pendingSearch = true
+			}
 		case outputTypeReasoning:
 			for _, part := range native.Summary {
 				reasoning.WriteString(part.Text)

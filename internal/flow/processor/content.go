@@ -2676,11 +2676,14 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 		}
 	}
 
-	// Skip orphaned tool results whose corresponding call was truncated.
+	// Skip orphaned tool results whose corresponding call was truncated. A
+	// native tool result answers an action inside an earlier native record,
+	// so at the boundary its call is always truncated.
 	for startIdx < len(messages) &&
 		messages[startIdx].Role == model.RoleTool &&
 		messages[startIdx].ToolID != "" {
-		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+		_, orphaned := truncatedToolIDs[messages[startIdx].ToolID]
+		if orphaned || messages[startIdx].ProviderData != nil {
 			startIdx++
 			continue
 		}
@@ -2693,8 +2696,10 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 // pendingNativeToolRoundStart moves a history limit back to the latest native
 // tool-call record when every later message is a tool result. That record is
 // the active continuation: dropping it would discard opaque reasoning while
-// the model is answering its calls. Completed native rounds stay subject to the
-// ordinary limit, which removes a call together with its orphaned results.
+// the model is answering its calls. A native record followed by tool results
+// is such a record even when its calls are provider actions rather than
+// projected tool calls. Completed native rounds stay subject to the ordinary
+// limit, which removes a call together with its orphaned results.
 func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -2702,7 +2707,8 @@ func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
 			continue
 		}
 		if i < startIdx && msg.Role == model.RoleAssistant &&
-			msg.ProviderData != nil && len(msg.ToolCalls) > 0 {
+			msg.ProviderData != nil &&
+			(len(msg.ToolCalls) > 0 || i < len(messages)-1) {
 			return i
 		}
 		return startIdx
@@ -3928,6 +3934,11 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	if functionCallEventIdx == -1 {
 		return events
 	}
+	// A native response can contain other actions alongside function calls.
+	// Preserve their results and order rather than rebuilding a function-only round.
+	if eventHasProviderData(events[functionCallEventIdx]) {
+		return events
+	}
 
 	// Collect function response events between call and latest response.
 	var functionResponseEvents []event.Event
@@ -3961,6 +3972,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
 	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
+	nativeResults := nativeToolResponseEvents(events, responseMatchesByCallEvent)
 
 	var resultEvents []event.Event
 	for i, evt := range events {
@@ -3970,9 +3982,18 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		evt := evt
 
 		if evt.IsToolResultResponse() {
-			// Function response should be handled with function call below.
+			if native, ok := nativeResults[i]; ok {
+				resultEvents = append(resultEvents, native)
+			}
+			// Ordinary function responses are moved next to their call below.
 			continue
 		} else if evt.IsToolCallResponse() {
+			if eventHasProviderData(evt) {
+				// Native rounds keep their original order, including results
+				// of provider actions that are not projected as ToolCalls.
+				resultEvents = append(resultEvents, evt)
+				continue
+			}
 			responseMatches := responseMatchesByCallEvent[i]
 			callIDs := evt.GetToolCallIDs()
 			perToolCallResultRound := hasPerToolCallResultRound(
@@ -3980,11 +4001,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 				i,
 				responseMatches,
 			)
-			// A native record cannot drop calls without losing its opaque
-			// reasoning, so its partial round stays intact and the provider
-			// adapter rejects the missing results explicitly.
-			if !eventHasProviderData(evt) &&
-				!allToolCallIDsMatched(callIDs, events, responseMatches) &&
+			if !allToolCallIDsMatched(callIDs, events, responseMatches) &&
 				perToolCallResultRound {
 				// Keep persisted events for audit, but do not project a
 				// provider-invalid partial tool round into a later model
@@ -4028,6 +4045,43 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	}
 
 	return resultEvents
+}
+
+// nativeToolResponseEvents selects result choices that must retain their
+// original position. Results for ordinary calls still use the existing
+// rearrangement, even when the same event also answers a native call.
+func nativeToolResponseEvents(
+	events []event.Event,
+	matchesByCall map[int][]matchedToolResponseEvent,
+) map[int]event.Event {
+	nativeChoices := make(map[int]map[int]bool)
+	for callIndex, matches := range matchesByCall {
+		for _, match := range matches {
+			if nativeChoices[match.eventIndex] == nil {
+				nativeChoices[match.eventIndex] = make(map[int]bool)
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				nativeChoices[match.eventIndex][choiceIndex] = eventHasProviderData(events[callIndex])
+			}
+		}
+	}
+	results := make(map[int]event.Event)
+	for i, evt := range events {
+		if !evt.IsToolResultResponse() {
+			continue
+		}
+		var keep []int
+		for j, choice := range evt.Response.Choices {
+			native, matched := nativeChoices[i][j]
+			if native || (!matched && (choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil)) {
+				keep = append(keep, j)
+			}
+		}
+		if len(keep) > 0 {
+			results[i] = filterToolResponseEvent(events, matchedToolResponseEvent{eventIndex: i, choiceIndices: keep})
+		}
+	}
+	return results
 }
 
 func hasPerToolCallResultRound(

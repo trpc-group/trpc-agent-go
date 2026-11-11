@@ -21,6 +21,7 @@ import (
 type NamedToolSet struct {
 	toolSet  tool.ToolSet
 	nameMode tool.ToolSetToolNameMode
+	deferral *Deferral
 }
 
 // NewNamedToolSet creates a new named toolset wrapper.
@@ -46,12 +47,24 @@ func NewNamedToolSetWithMode(
 		return &NamedToolSet{
 			toolSet:  t.toolSet,
 			nameMode: mode,
+			deferral: t.deferral,
 		}
 	}
 	return &NamedToolSet{
 		toolSet:  toolSet,
 		nameMode: mode,
 	}
+}
+
+// WithDeferral returns a copy of s whose members use d instead of their own
+// deferral preference. A nil d returns s.
+func (s *NamedToolSet) WithDeferral(d *Deferral) *NamedToolSet {
+	if d == nil {
+		return s
+	}
+	copied := *s
+	copied.deferral = d
+	return &copied
 }
 
 func normalizeToolSetToolNameMode(mode tool.ToolSetToolNameMode) tool.ToolSetToolNameMode {
@@ -72,11 +85,14 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 	}
 	// Create tools with model-facing names while retaining the source ToolSet
 	// name for runtime policy and tracing checks.
+	description := s.Description()
 	namedTools := make([]tool.Tool, 0, len(tools))
 	for _, t := range tools {
 		namedTool := &NamedTool{
-			original:    t,
-			toolSetName: toolSetName,
+			original:           t,
+			toolSetName:        toolSetName,
+			toolSetDescription: description,
+			deferral:           s.deferral,
 		}
 		if s.nameMode == tool.ToolSetToolNameModeQualified {
 			namedTool.name = toolSetName
@@ -97,12 +113,22 @@ func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
 }
 
+// Description implements tool.ToolSetDescriber for the wrapped ToolSet.
+func (s *NamedToolSet) Description() string {
+	if describer, ok := s.toolSet.(tool.ToolSetDescriber); ok {
+		return describer.Description()
+	}
+	return ""
+}
+
 // NamedTool wraps an original tool with a model-facing name and retains the
 // source ToolSet identity for runtime policy checks.
 type NamedTool struct {
-	original    tool.Tool
-	name        string
-	toolSetName string
+	original           tool.Tool
+	name               string
+	toolSetName        string
+	toolSetDescription string
+	deferral           *Deferral
 }
 
 // NewUnprefixedNamedTool wraps a tool as a NamedTool without adding any name
@@ -309,8 +335,12 @@ func (t *NamedTool) IsConcurrencySafe() bool {
 	return tool.MetadataOf(t.original).ConcurrencySafe
 }
 
-// ShouldDefer delegates to the original tool.
+// ShouldDefer applies the ToolSet's agent deferral decision to the original
+// tool, or delegates to the original tool when no decision is configured.
 func (t *NamedTool) ShouldDefer(ctx context.Context) bool {
+	if t.deferral != nil {
+		return t.deferral.Defers(ctx, t.original)
+	}
 	return tool.ShouldDefer(ctx, t.original)
 }
 

@@ -2181,7 +2181,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	}
 	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
 	if hasAfterCallbacks {
-		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel); err != nil {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel, config.Request); err != nil {
 			return ctx, nil, err
 		}
 	}
@@ -4889,6 +4889,10 @@ type modelExecutionConfig struct {
 const (
 	errMsgNoModelResponse = "no response received from model"
 	errMsgNoModelChoices  = "model returned no choices"
+	// errMsgProviderActions reports a response that delegates provider-native
+	// actions, such as a client-executed tool search, which LLM nodes do not
+	// complete. Treating it as the node result would lose the pending action.
+	errMsgProviderActions = "model response requests provider actions, which graph LLM nodes do not complete"
 )
 
 type modelDeltaStreamTap struct {
@@ -4960,6 +4964,13 @@ func validateFinalModelResponse(
 			errMsgNoModelChoices,
 		))
 		return nil, errors.New(errMsgNoModelChoices)
+	}
+	if providerdata.ResponseRequestsActions(resp) {
+		span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgProviderActions,
+		))
+		return nil, errors.New(errMsgProviderActions)
 	}
 	return resp, nil
 }

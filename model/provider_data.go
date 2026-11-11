@@ -22,7 +22,8 @@ import (
 // and ToolCalls through the model's ProviderDataProjector before publication and
 // tool execution. When the payload is unchanged, callbacks may edit display
 // fields and ToolCalls independently. A message carrying ProviderData must
-// remain an assistant message.
+// remain an assistant message, or a tool message whose ToolID names the
+// provider-native action it answers; see ProviderActionCompleter.
 //
 // Callbacks may edit Payload on their message while preserving the producer's
 // Protocol and Model. A nil Message.ProviderData means the message carries no

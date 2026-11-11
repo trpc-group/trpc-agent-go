@@ -103,6 +103,17 @@ func (t *declaredCallableTool) Declaration() *tool.Declaration {
 	return t.decl
 }
 
+// Original preserves tool identity through this declaration wrapper.
+func (t *declaredCallableTool) Original() tool.Tool {
+	return t.inner
+}
+
+// ShouldDefer preserves the immediate tool's loading policy, including an
+// explicit agent override of the underlying tool's preference.
+func (t *declaredCallableTool) ShouldDefer(ctx context.Context) bool {
+	return tool.ShouldDefer(ctx, t.inner)
+}
+
 // Call implements tool.CallableTool — delegates directly to inner.
 // Note: argument stripping is handled by BeforeTool, not here.
 func (t *declaredCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -299,6 +300,10 @@ type Options struct {
 	// toolSetToolNameModes configures model-facing tool names by ToolSet name.
 	// ToolSet.Name remains the stable identity used by activation and policy.
 	toolSetToolNameModes map[string]tool.ToolSetToolNameMode
+	// deferredTools is the deferral decision for tools registered with WithTools.
+	deferredTools *itool.Deferral
+	// deferredToolSets holds deferral decisions by ToolSet name.
+	deferredToolSets map[string]*itool.Deferral
 	// activatableToolSets is the list of tool sets available for runtime activation.
 	activatableToolSets []tool.ToolSet
 	// toolActivationRules stores runtime tool activation rules.
@@ -955,6 +960,52 @@ func WithToolSetToolNameMode(toolSetName string, mode tool.ToolSetToolNameMode) 
 			opts.toolSetToolNameModes = make(map[string]tool.ToolSetToolNameMode)
 		}
 		opts.toolSetToolNameModes[strings.TrimSpace(toolSetName)] = mode
+	}
+}
+
+// WithDeferredTools defers tools registered with WithTools. A deferred tool
+// stays registered, filtered, and executed like any other tool; only its
+// exposure to the model changes. A model adapter that loads tools on demand,
+// such as the OpenAI Responses adapter with tool search enabled, may leave
+// deferred tools out of the initial tool list and load them when the model
+// searches for them. Adapters without on-demand loading ignore the decision
+// and expose every tool as usual. Unlike the option of the same name in
+// plugin/toolsearch, it registers no tools and adds no search tool.
+//
+// filter receives each tool registered with WithTools and reports whether it
+// is deferred. A nil filter defers all of them. filter may be called
+// concurrently by different runs. Within this scope the decision replaces each
+// tool's own tool.DeferredTool preference; tools outside every configured
+// scope, including tools that replace or extend the agent's tools for a single
+// run, keep that preference. A later call replaces an earlier one.
+func WithDeferredTools(filter tool.FilterFunc) Option {
+	return func(opts *Options) {
+		opts.deferredTools = &itool.Deferral{Filter: filter}
+	}
+}
+
+// WithDeferredToolSet defers members of the named ToolSet. filter receives
+// each member with its original declaration, before any name qualification,
+// so members can be selected by their original names, for example with
+// tool.NewIncludeToolNamesFilter. A nil filter defers the whole ToolSet.
+// Members that filter does not select stay eager, even when they implement
+// tool.DeferredTool. The rule applies to ToolSets and activatable ToolSets,
+// including members refreshed from a dynamic source such as MCP, and is
+// evaluated for each request; filter may be called concurrently by different
+// runs.
+//
+// Adapters that group ToolSet members, such as Responses tool namespaces, use
+// the ToolSet name as the group name and tool.ToolSetDescriber as the group
+// description; see WithDeferredTools for how deferral affects exposure. A later
+// call for the same ToolSet replaces an earlier one. New panics during agent
+// construction if the ToolSet name is blank or no registered ToolSet has the
+// given name.
+func WithDeferredToolSet(toolSetName string, filter tool.FilterFunc) Option {
+	return func(opts *Options) {
+		if opts.deferredToolSets == nil {
+			opts.deferredToolSets = make(map[string]*itool.Deferral)
+		}
+		opts.deferredToolSets[strings.TrimSpace(toolSetName)] = &itool.Deferral{Filter: filter}
 	}
 }
 
