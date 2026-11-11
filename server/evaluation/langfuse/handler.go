@@ -39,6 +39,10 @@ type executionOptions struct {
 	runDescription string
 	userID         string
 	traceTags      []string
+	// experimentID and datasetID are set only for APIVersionV4, where they stand in
+	// for the dataset run id the legacy dataset-run-items response used to return.
+	experimentID string
+	datasetID    string
 }
 
 // Handler serves Langfuse remote experiment webhooks.
@@ -56,6 +60,7 @@ type Handler struct {
 	metricManager  metric.Manager
 	resultManager  evalresult.Manager
 	runOptions     []agent.RunOption
+	apiVersion     APIVersion
 }
 
 // New creates a Langfuse remote experiment handler.
@@ -105,6 +110,9 @@ func New(
 	if opts.timeout < 0 {
 		return nil, errors.New("langfuse handler: timeout must not be negative")
 	}
+	if !opts.apiVersion.valid() {
+		return nil, fmt.Errorf("langfuse handler: unsupported API version %q", opts.apiVersion)
+	}
 	rawPath := strings.TrimSpace(opts.path)
 	if rawPath == "" {
 		return nil, errors.New("langfuse handler: path must not be empty")
@@ -122,6 +130,7 @@ func New(
 		return nil, fmt.Errorf("langfuse handler: base URL must include scheme and host, got %q", baseURL)
 	}
 	handler := &Handler{
+		apiVersion:     opts.apiVersion,
 		path:           routePath,
 		appName:        appName,
 		userIDSupplier: opts.userIDSupplier,
@@ -193,6 +202,9 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if strings.TrimSpace(dataset.ID) != "" {
 		remoteRequest.DatasetID = dataset.ID
+	}
+	if strings.TrimSpace(remoteRequest.ProjectID) == "" {
+		remoteRequest.ProjectID = dataset.ProjectID
 	}
 	caseSpecs, err := h.buildCaseSpecs(ctx, &remoteRequest, opts, dataset)
 	if err != nil {
@@ -317,7 +329,15 @@ func (h *Handler) executeRemoteExperiment(
 	datasetRunID := ""
 	passedCases := 0
 	scoreCount := 0
-	evaluationResult, traces, err := h.evaluateCases(ctx, remoteRequest.DatasetID, caseSpecs)
+	if h.apiVersion == APIVersionV4 {
+		experimentID, err := newExperimentID(remoteRequest, opts.runName)
+		if err != nil {
+			return nil, err
+		}
+		opts.experimentID = experimentID
+		opts.datasetID = remoteRequest.DatasetID
+	}
+	evaluationResult, traces, err := h.evaluateCases(ctx, remoteRequest.DatasetID, opts, caseSpecs)
 	if err != nil {
 		return nil, err
 	}
@@ -407,6 +427,13 @@ func (h *Handler) publishCase(
 		return nil, "", 0, fmt.Errorf("resolve case artifacts for case %s: %w", spec.EvalCase.EvalID, err)
 	}
 	traceID := trace.idForSession(inferenceDetail.SessionID)
+	var observationID string
+	if h.apiVersion == APIVersionV4 {
+		observationID = trace.observationIDForSession(inferenceDetail.SessionID)
+		if observationID == "" {
+			return nil, "", 0, fmt.Errorf("experiment item span was not captured for case %s", spec.EvalCase.EvalID)
+		}
+	}
 	if traceID == "" {
 		return nil, "", 0, fmt.Errorf("trace id was not captured for case %s", spec.EvalCase.EvalID)
 	}
@@ -417,32 +444,39 @@ func (h *Handler) publishCase(
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("extract final output for case %s: %w", spec.EvalCase.EvalID, err)
 	}
-	if err := h.client.createTrace(ctx, traceCreateRequest{
-		ID:          traceID,
-		Timestamp:   time.Now().UTC(),
-		Name:        spec.TraceName,
-		Input:       spec.TraceInput,
-		Output:      finalOutput,
-		SessionID:   resolveSessionID(inferenceDetail, spec),
-		UserID:      resolveUserID(inferenceDetail, spec, opts),
-		Environment: h.environment,
-		Metadata:    spec.TraceMetadata,
-		Tags:        opts.traceTags,
-	}); err != nil {
-		return nil, "", 0, fmt.Errorf("create trace for case %s: %w", spec.EvalCase.EvalID, err)
-	}
-	runItem, err := h.client.createDatasetRunItem(ctx, datasetRunItemCreateRequest{
-		RunName:        opts.runName,
-		RunDescription: opts.runDescription,
-		DatasetItemID:  spec.DatasetItemID,
-		TraceID:        traceID,
-		Metadata: map[string]any{
-			"appName": h.appName,
-			"runName": opts.runName,
-		},
-	})
-	if err != nil {
-		return nil, "", 0, fmt.Errorf("create dataset run item for case %s: %w", spec.EvalCase.EvalID, err)
+	datasetRunID := opts.experimentID
+	if h.apiVersion != APIVersionV4 {
+		// Langfuse v3 keeps a trace table and a dataset run item per case. In v4 the
+		// same data is on the case's root span (see v4CaseAttributes), and the
+		// experiment id replaces the dataset run id.
+		if err := h.client.createTrace(ctx, traceCreateRequest{
+			ID:          traceID,
+			Timestamp:   time.Now().UTC(),
+			Name:        spec.TraceName,
+			Input:       spec.TraceInput,
+			Output:      finalOutput,
+			SessionID:   resolveSessionID(inferenceDetail, spec),
+			UserID:      resolveUserID(inferenceDetail, spec, opts),
+			Environment: h.environment,
+			Metadata:    spec.TraceMetadata,
+			Tags:        opts.traceTags,
+		}); err != nil {
+			return nil, "", 0, fmt.Errorf("create trace for case %s: %w", spec.EvalCase.EvalID, err)
+		}
+		runItem, err := h.client.createDatasetRunItem(ctx, datasetRunItemCreateRequest{
+			RunName:        opts.runName,
+			RunDescription: opts.runDescription,
+			DatasetItemID:  spec.DatasetItemID,
+			TraceID:        traceID,
+			Metadata: map[string]any{
+				"appName": h.appName,
+				"runName": opts.runName,
+			},
+		})
+		if err != nil {
+			return nil, "", 0, fmt.Errorf("create dataset run item for case %s: %w", spec.EvalCase.EvalID, err)
+		}
+		datasetRunID = runItem.DatasetRunID
 	}
 	summary := &remoteCaseSummary{
 		CaseID:        spec.EvalCase.EvalID,
@@ -456,12 +490,13 @@ func (h *Handler) publishCase(
 	for _, metricResult := range runCaseResult.OverallEvalMetricResults {
 		comment := resolveMetricReason(metricResult)
 		if err := h.client.createScore(ctx, scoreCreateRequest{
-			Name:        metricResult.MetricName,
-			TraceID:     traceID,
-			Value:       metricResult.Score,
-			DataType:    "NUMERIC",
-			Environment: h.environment,
-			Comment:     comment,
+			Name:          metricResult.MetricName,
+			TraceID:       traceID,
+			ObservationID: observationID,
+			Value:         metricResult.Score,
+			DataType:      "NUMERIC",
+			Environment:   h.environment,
+			Comment:       comment,
 			Metadata: map[string]any{
 				"datasetItemId": spec.DatasetItemID,
 				"evalCaseId":    spec.EvalCase.EvalID,
@@ -480,7 +515,7 @@ func (h *Handler) publishCase(
 	if len(summary.MetricReasons) == 0 {
 		summary.MetricReasons = nil
 	}
-	return summary, runItem.DatasetRunID, scoreCount, nil
+	return summary, datasetRunID, scoreCount, nil
 }
 
 func (h *Handler) syncEvalSet(

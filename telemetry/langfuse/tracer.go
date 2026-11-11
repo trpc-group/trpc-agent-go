@@ -44,11 +44,18 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 		return nil, fmt.Errorf("langfuse: secret key, public key and host must be provided. Host should be in 'hostname:port' format (e.g., 'cloud.langfuse.com:443')")
 	}
 
+	if config.ingestionVersion != "" && config.ingestionVersion != "4" {
+		return nil, fmt.Errorf("langfuse: unsupported ingestion version %q", config.ingestionVersion)
+	}
+	headers := map[string]string{
+		"Authorization": fmt.Sprintf("Basic %s", encodeAuth(config.publicKey, config.secretKey)),
+	}
+	if config.ingestionVersion != "" {
+		headers["x-langfuse-ingestion-version"] = config.ingestionVersion
+	}
 	otelOpts := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(config.host),
-		otlptracehttp.WithHeaders(map[string]string{
-			"Authorization": fmt.Sprintf("Basic %s", encodeAuth(config.publicKey, config.secretKey)),
-		}),
+		otlptracehttp.WithHeaders(headers),
 		otlptracehttp.WithURLPath("/api/public/otel/v1/traces"),
 	}
 

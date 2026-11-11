@@ -184,6 +184,32 @@ handler 追加逐 case 生命周期回调，保留应用和 service 已配置的
 的结果语义。后续 Langfuse 写入失败可能保留此前已写入的数据，不进行回滚。
 runner、callback 和 manager 需支持 evaluator 配置所启用的并发。
 
+### Langfuse API 版本
+
+默认使用 Langfuse v3 的 trace 和 dataset-run-item API。使用 v4 时，需同时
+配置 handler 和 telemetry/langfuse exporter：
+
+```go
+// evaluation handler 选项：
+langfuseeval.WithAPIVersion(langfuseeval.APIVersionV4),
+
+// telemetry/langfuse.Start 选项：
+langfuse.WithIngestionVersion("4"),
+```
+
+开始评测前须启动可记录 span 的 telemetry。自定义 OTLP exporter 需向
+`/api/public/otel/v1/traces` 发送 `x-langfuse-ingestion-version: 4`。
+
+handler 为每次推理创建 `experiment-item-task` 根 observation，保存输入和最终
+响应。agent 与 tool span 继承 trace 和实验关联；自定义 runner 必须保留传入的
+父上下文。case score 关联根 observation。run score 仍通过公共 Scores API
+发送，使用 webhook 的 `projectId`、dataset ID 和 run name 派生的确定性实验 ID。
+此模式不再调用旧的 trace 或 dataset-run-item 写入接口。
+
+span 可在评测过程中导出，因此后续 case 或 batch 失败、取消都不会撤回已导出的
+数据。v3 部署应保留默认配置。参见
+[Langfuse OTLP 实验协议](https://langfuse.com/integrations/native/opentelemetry/experiments)。
+
 ### 数据格式
 
 Langfuse 允许用户在平台侧自行组织 dataset item 的内容结构，因此数据项中的 `input`、`expectedOutput`、`metadata` 并不要求遵循固定格式。对 tRPC-Agent-Go 而言，评估执行最终仍然需要落到明确的 `EvalCase` 结构上，因此需要通过 `CaseBuilder` 在两者之间建立一层转换逻辑。
