@@ -4572,6 +4572,14 @@ still use <code>/execute</code>; this migration covers program execution only.</
 <li>A non-positive <code>RunProgramSpec.Timeout</code> uses 30 seconds. The timeout covers
   directory preparation and the command. <code>WithExecutionTimeout</code> applies to
   code cells, not workspace programs.</li>
+<li><code>WithMaxProgramTimeout</code> optionally caps each program timeout after its
+  default is resolved. It applies to direct calls, Engine callers and
+  <code>workspace_exec</code>; zero or negative values leave the timeout uncapped.
+  For example, <code>e2b.WithMaxProgramTimeout(10*time.Second)</code> limits a model's
+  <code>timeout_sec: 60</code> to 10 seconds and preserves <code>timeout_sec: 5</code> as 5 seconds.
+  Omitted tool timeouts retain the tool's 5-minute default before capping.
+  The cap does not affect <code>ExecuteCode</code>, workspace file operations or sandbox
+  lifetime. Configure <code>WithExecutionTimeout</code> separately for code cells.</li>
 <li>Stdout and stderr preserve their exact bytes, including trailing newlines
   and text matching the former output sentinels. Capture is not truncated.</li>
 <li>A normal non-zero exit is returned in <code>RunResult.ExitCode</code> with a nil error.
@@ -5707,7 +5715,7 @@ exposes it depends on the higher-level Agent and tool wiring.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 5, 2026 12:25:47 UTC">2026-11-05 12:25:47</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 11, 2026 09:51:22 UTC">2026-11-11 09:51:22</span>
   </span>
 
     

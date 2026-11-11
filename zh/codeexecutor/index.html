@@ -4553,6 +4553,12 @@ Workspace 文件系统操作仍使用 <code>/execute</code>，本次迁移仅覆
 <ul>
 <li><code>RunProgramSpec.Timeout</code> 非正时默认 <strong>30 秒</strong>，覆盖目录准备和命令执行。
   <code>WithExecutionTimeout</code> 作用于代码单元，不控制 workspace 程序。</li>
+<li><code>WithMaxProgramTimeout</code> 可限制每次程序执行的最大超时，在解析默认值后生效。
+  直接调用、Engine 调用和 <code>workspace_exec</code> 均受约束；零值或负值不设上限。
+  例如，<code>e2b.WithMaxProgramTimeout(10*time.Second)</code> 会将模型的
+  <code>timeout_sec: 60</code> 限制为 10 秒，传入 5 秒则仍为 5 秒。工具未传超时时，
+  先使用原有的 5 分钟默认值，再应用上限。该选项不影响 <code>ExecuteCode</code>、
+  workspace 文件操作或 sandbox 寿命；代码单元仍单独配置 <code>WithExecutionTimeout</code>。</li>
 <li>stdout/stderr 保留原始字节、末尾换行及与旧哨兵字符串相同的内容，不做截断。</li>
 <li>正常的非零退出通过 <code>RunResult.ExitCode</code> 返回，Go error 为 nil。
   调用方取消、HTTP/RPC 故障返回错误；只有进程自身的 deadline 设置 <code>TimedOut</code>，
@@ -5589,7 +5595,7 @@ deny，攻击者只要能找到任何不在 deny 集合里的二进制——包�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月5日 12:25:47 UTC">2026-11-05 12:25:47</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月11日 09:51:22 UTC">2026-11-11 09:51:22</span>
   </span>
 
     
