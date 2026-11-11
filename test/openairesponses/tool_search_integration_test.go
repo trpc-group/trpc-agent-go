@@ -656,9 +656,13 @@ func TestRunnerClientToolSearchFailureAndResume(t *testing.T) {
 			recorded := make(chan struct{})
 			var recordOnce sync.Once
 			var handlerCalls int
+			failuresBeforeSuccess := 1
+			if failure == "error" {
+				failuresBeforeSuccess = 2
+			}
 			handler := func(handlerCtx context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
 				handlerCalls++
-				if handlerCalls > 1 {
+				if handlerCalls > failuresBeforeSuccess {
 					return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
 				}
 				if failure == "cancel" {
@@ -708,6 +712,18 @@ func TestRunnerClientToolSearchFailureAndResume(t *testing.T) {
 			require.NoError(t, r.Close())
 			require.NoError(t, svc.Close())
 
+			for attempt := 1; attempt < failuresBeforeSuccess; attempt++ {
+				svc = openNativeRoutingSQLite(t, path)
+				r = runner.NewRunner("search", newSearchAgent(m, executions, false), runner.WithSessionService(svc))
+				_, failures = runSearch(t, r, model.Message{}, agent.WithResume(true))
+				require.Len(t, failures, 1)
+				require.Contains(t, failures[0], "search index unavailable")
+				require.Equal(t, attempt+1, handlerCalls)
+				require.Len(t, server.requests(), 1, "failed recovery does not repeat the model request")
+				require.NoError(t, r.Close())
+				require.NoError(t, svc.Close())
+			}
+
 			svc = openNativeRoutingSQLite(t, path)
 			defer svc.Close()
 			sess, err := svc.GetSession(context.Background(), session.Key{AppName: "search", UserID: "user", SessionID: "session"})
@@ -729,11 +745,54 @@ func TestRunnerClientToolSearchFailureAndResume(t *testing.T) {
 			events, failures := runSearch(t, r, model.Message{}, agent.WithResume(true))
 			require.Empty(t, failures)
 			require.Equal(t, "invoice paid", finalText(events))
-			require.Equal(t, 2, handlerCalls, "resume runs the pending search once more")
+			require.Equal(t, failuresBeforeSuccess+1, handlerCalls, "each resume retries the unanswered search")
 			require.Equal(t, []string{"billing.lookup"}, executions.executed())
 			second := conversationItems(t, server.requests()[1]["input"])
 			require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output"}, inputTypes(second),
 				"the failure is not replayed between the call and its output")
 		})
+	}
+}
+
+func TestRunnerMixedClientSearchAndFunctionCall(t *testing.T) {
+	search := `{"type":"tool_search_call","id":"ts_mixed","execution":"client","call_id":"search_1","status":"completed","arguments":{"query":"invoice status"}}`
+	function := `{"type":"function_call","id":"fc_weather","status":"completed","call_id":"weather_1","name":"weather","arguments":"{\"id\":\"city\"}"}`
+	for _, searchFirst := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("searchFirst=%v/stream=%v", searchFirst, stream), func(t *testing.T) {
+				output := "[" + function + "," + search + "]"
+				callTypes := []string{"function_call", "tool_search_call"}
+				if searchFirst {
+					output = "[" + search + "," + function + "]"
+					callTypes = []string{"tool_search_call", "function_call"}
+				}
+				server, srv := newSearchServer(t, output, loadedBillingCall, messageOutput("msg_done", "done"))
+				executions := &searchExecutions{}
+				var searches int
+				handler := func(context.Context, *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+					searches++
+					return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
+				}
+				r := runner.NewRunner("search", newSearchAgent(
+					newSearchModel(srv, responses.WithClientToolSearch(handler)), executions, stream))
+				t.Cleanup(func() { _ = r.Close() })
+				events, failures := runSearch(t, r, model.NewUserMessage("weather and invoice status"))
+				require.Empty(t, failures)
+				require.Equal(t, "done", finalText(events))
+				require.Equal(t, 1, searches)
+				require.Equal(t, []string{"weather", "billing.lookup"}, executions.executed())
+				requests := server.requests()
+				require.Len(t, requests, 3)
+				second := conversationItems(t, requests[1]["input"])
+				expected := append([]string{"message:user"}, callTypes...)
+				expected = append(expected, "tool_search_output", "function_call_output")
+				require.Equal(t, expected, inputTypes(second))
+				require.Equal(t, "search_1", second[3].CallID)
+				require.Contains(t, string(second[3].Tools), "lookup", "the loaded schema reaches the model")
+				require.Equal(t, "weather_1", second[4].CallID)
+				third := conversationItems(t, requests[2]["input"])
+				require.Equal(t, second, third[:len(second)], "the complete mixed round survives later history preparation")
+			})
+		}
 	}
 }

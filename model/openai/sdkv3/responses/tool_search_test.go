@@ -453,6 +453,66 @@ func TestClientToolSearchResumeSkipsSavedResults(t *testing.T) {
 	require.NoError(t, err, "the recovered round can be sent to the model")
 }
 
+func TestClientToolSearchAcceptsStringArguments(t *testing.T) {
+	var handled bool
+	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) (*ToolSearchResult, error) {
+		handled = true
+		require.Equal(t, "invoice", req.Query)
+		require.JSONEq(t, `{"query":"invoice"}`, string(req.Arguments))
+		return nil, nil
+	}))
+	response := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+			Protocol: responseProvider, Model: "gpt-5", Payload: json.RawMessage(`[
+			{"type":"tool_search_call","execution":"client","call_id":"s1","status":"completed","arguments":"{\"query\":\"invoice\"}"}]`),
+		},
+	}}}}
+	results, err := m.CompleteProviderActions(context.Background(), &model.Request{}, response)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Len(t, results, 1)
+	require.Equal(t, "s1", results[0].ToolID)
+	require.JSONEq(t, `[{"type":"tool_search_output","execution":"client","call_id":"s1","status":"completed","tools":[]}]`, string(results[0].ProviderData.Payload))
+}
+
+func TestClientToolSearchRecoveryRejectsInvalidSavedResults(t *testing.T) {
+	var handled int
+	m := New("gpt-5", WithClientToolSearch(func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
+		handled++
+		return nil, nil
+	}))
+	pending := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+			Protocol: responseProvider, Model: "gpt-5", Payload: json.RawMessage(`[
+			{"type":"tool_search_call","execution":"client","call_id":"s1","status":"completed","arguments":{"query":"invoice"}}]`),
+		},
+	}}}}
+	for _, tc := range []struct {
+		name, modelName, payload, want string
+	}{
+		{"different model", "other", `[]`, "invalid saved search result"},
+		{"invalid item", "gpt-5", `[{"type":"function_call"}]`, "invalid saved search result"},
+		{"different call", "gpt-5", `[{"type":"tool_search_output","execution":"client","call_id":"s2","status":"completed","tools":[]}]`, "does not answer call_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := model.Message{Role: model.RoleTool, ToolID: "s1", ProviderData: &model.ProviderData{
+				Protocol: responseProvider, Model: tc.modelName, Payload: json.RawMessage(tc.payload),
+			}}
+			results, err := m.CompleteProviderActions(context.Background(), &model.Request{Messages: []model.Message{saved}}, pending)
+			require.ErrorContains(t, err, tc.want)
+			require.Empty(t, results)
+		})
+	}
+	_, err := m.CompleteProviderActions(context.Background(), nil, pending)
+	require.ErrorContains(t, err, "requires the model request")
+	partial := *pending
+	partial.IsPartial = true
+	results, err := m.CompleteProviderActions(context.Background(), &model.Request{}, &partial)
+	require.NoError(t, err)
+	require.Empty(t, results, "partial streaming output must not invoke a search handler")
+	require.Zero(t, handled, "invalid saved state cannot silently cause a repeated search")
+}
+
 func TestToolSearchHistoryPairing(t *testing.T) {
 	call := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
 		Protocol: responseProvider, Model: "gpt-5",

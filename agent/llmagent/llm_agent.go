@@ -161,13 +161,9 @@ func New(name string, opts ...Option) *LLMAgent {
 	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
 		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
-	if err := validateAndNormalizeToolSetToolNameModes(&options); err != nil {
+	if err := prepareToolExposure(&options); err != nil {
 		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
-	if err := validateAndNormalizeDeferredToolSets(&options); err != nil {
-		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
-	}
-	options.Tools = applyDeferredTools(options.Tools, options.deferredTools)
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	// Also track which tools are user-registered (via WithTools) for filtering purposes.

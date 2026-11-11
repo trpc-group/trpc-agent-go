@@ -517,16 +517,16 @@ func pendingProviderActionBeforeNativeResults(
 		return nil
 	}
 	index := len(events) - 1
-	last := &events[index]
-	if errorcontent.IsSynthetic(last) && nativeResumeEventMatches(invocation, last) {
-		index--
-	}
-
 	var protocol, modelName string
 	for ; index >= 0; index-- {
 		current := &events[index]
 		if !nativeResumeEventMatches(invocation, current) {
 			return nil
+		}
+		// Each failed attempt can append an error. None of those errors
+		// answers the pending action, including between partial results.
+		if errorcontent.IsSynthetic(current) {
+			continue
 		}
 		if current.Response == nil || current.IsPartial || !current.IsValidContent() {
 			return nil

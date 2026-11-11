@@ -180,8 +180,22 @@ func TestPendingToolCallResponseLooksPastFailedProviderAction(t *testing.T) {
 	}
 	require.Same(t, pending.Response, resume(pending, failure),
 		"a provider action stopped by an error is still pending")
+	require.Same(t, pending.Response, resume(pending, failure, failure),
+		"repeated failures do not hide the unanswered action")
+	result := event.NewResponseEvent("inv-1", "agent", &model.Response{Done: true,
+		Choices: []model.Choice{{Message: savedActionResult("a2")}}})
+	require.Same(t, pending.Response, resume(pending, failure, result, failure),
+		"errors between partially persisted native results do not answer the action")
+	other := *failure
+	other.Author = "other"
+	require.Nil(t, resume(pending, &other, failure), "resume does not cross another agent's events")
+	user := event.NewResponseEvent("inv-2", "agent", &model.Response{Done: true,
+		Choices: []model.Choice{{Message: model.NewUserMessage("new question")}}})
+	require.Nil(t, resume(pending, user, failure), "a new user turn remains a boundary")
 	require.Nil(t, resume(calls, failure), "a tool call round keeps the last-event boundary")
+	require.Nil(t, resume(calls, failure, failure))
 	require.Nil(t, resume(failure))
+	require.Nil(t, resume(failure, failure))
 }
 
 func TestRun_WithResumeCompletesPendingProviderActions(t *testing.T) {

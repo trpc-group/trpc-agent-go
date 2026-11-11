@@ -36,8 +36,8 @@ func (t deferralTestTool) ToolMetadata() tool.ToolMetadata {
 
 type streamingDeferralTestTool struct{ deferralTestTool }
 
-func (t streamingDeferralTestTool) StreamableCall(context.Context, []byte) (*tool.StreamReader, error) {
-	return nil, nil
+func (t streamingDeferralTestTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	return nil, ctx.Err()
 }
 
 type deferralTestToolSet struct {
@@ -61,7 +61,10 @@ func TestWithDeferralKeepsToolCapabilities(t *testing.T) {
 	require.Equal(t, base.Declaration(), wrapped.Declaration())
 	require.Equal(t, tool.Tool(base), ResolveDeclaration(wrapped))
 	require.Equal(t, tool.Tool(base), ResolveSemantic(wrapped))
+	require.Equal(t, tool.Tool(base), wrapped.(interface{ Original() tool.Tool }).Original(),
+		"extensions can inspect the original tool without importing private wrapper types")
 	require.True(t, tool.MetadataOf(ResolveSemantic(wrapped)).ConcurrencySafe)
+	require.True(t, wrapped.(interface{ IsConcurrencySafe() bool }).IsConcurrencySafe())
 	require.Equal(t, tool.MetadataOf(base), tool.MetadataOf(wrapped),
 		"metadata filters see the original metadata without unwrapping the tool")
 	callable, ok := wrapped.(tool.CallableTool)
@@ -83,6 +86,44 @@ func TestWithDeferralKeepsToolCapabilities(t *testing.T) {
 	explicit := WithDeferral(selfDeferred, &Deferral{Filter: tool.NewIncludeToolNamesFilter("other")})
 	require.False(t, tool.ShouldDefer(ctx, explicit),
 		"an explicit decision replaces the tool's own preference")
+}
+
+type declarationOnlyDeferralTestTool struct{}
+
+func (declarationOnlyDeferralTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "declaration-only"}
+}
+
+type streamOnlyDeferralTestTool struct {
+	declarationOnlyDeferralTestTool
+}
+
+func (streamOnlyDeferralTestTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	return nil, ctx.Err()
+}
+
+func TestWithDeferralPreservesExecutionModes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dual := WithDeferral(streamingDeferralTestTool{deferralTestTool{name: "dual"}}, &Deferral{})
+	value, err := dual.(tool.CallableTool).Call(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, "dual", value)
+	_, err = dual.(tool.StreamableTool).StreamableCall(ctx, nil)
+	require.ErrorIs(t, err, context.Canceled, "stream errors are not swallowed by the wrapper")
+
+	streamOnly := WithDeferral(streamOnlyDeferralTestTool{}, &Deferral{})
+	_, callable := streamOnly.(tool.CallableTool)
+	require.False(t, callable, "a streaming-only tool must not gain a synchronous execution path")
+	_, err = streamOnly.(tool.StreamableTool).StreamableCall(ctx, nil)
+	require.ErrorIs(t, err, context.Canceled)
+
+	declarationOnly := WithDeferral(declarationOnlyDeferralTestTool{}, &Deferral{})
+	_, callable = declarationOnly.(tool.CallableTool)
+	_, streamable := declarationOnly.(tool.StreamableTool)
+	require.False(t, callable)
+	require.False(t, streamable)
+	require.True(t, tool.ShouldDefer(context.Background(), declarationOnly))
 }
 
 func TestNamedToolSetDeferralAndIdentity(t *testing.T) {
@@ -132,4 +173,28 @@ func TestNamedToolSetDeferralAndIdentity(t *testing.T) {
 	_, memberName, _, ok = ToolSetMember(overlaid[0])
 	require.True(t, ok)
 	require.Equal(t, "lookup", memberName)
+}
+
+// externalDeclarationWrapper models an extension that changes the request
+// schema while exposing its original tool through the existing convention.
+type externalDeclarationWrapper struct {
+	tool.Tool
+}
+
+func (t externalDeclarationWrapper) Original() tool.Tool { return t.Tool }
+
+func TestToolSetMemberThroughExternalDeclarationWrapper(t *testing.T) {
+	named := NewNamedToolSet(deferralTestToolSet{
+		name: "crm", description: "CRM tools.", tools: []tool.Tool{deferralTestTool{name: "lookup"}},
+	}).Tools(context.Background())[0]
+	wrapped := externalDeclarationWrapper{WithDeferral(named, &Deferral{})}
+	overlaid := ApplyDeclarations([]tool.Tool{wrapped}, []tool.Declaration{{Name: "crm_lookup", Description: "extension schema"}})[0]
+	namespace, name, description, ok := ToolSetMember(overlaid)
+	require.True(t, ok)
+	require.Equal(t, "crm", namespace)
+	require.Equal(t, "lookup", name)
+	require.Equal(t, "CRM tools.", description)
+	require.Equal(t, "extension schema", overlaid.Declaration().Description, "identity resolution leaves the outer declaration intact")
+	_, _, _, ok = ToolSetMember(externalDeclarationWrapper{})
+	require.False(t, ok)
 }

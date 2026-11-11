@@ -3934,6 +3934,11 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	if functionCallEventIdx == -1 {
 		return events
 	}
+	// A native response can contain other actions alongside function calls.
+	// Preserve their results and order rather than rebuilding a function-only round.
+	if eventHasProviderData(events[functionCallEventIdx]) {
+		return events
+	}
 
 	// Collect function response events between call and latest response.
 	var functionResponseEvents []event.Event
@@ -3967,12 +3972,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
 	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
-	matchedResponseEvents := make(map[int]struct{})
-	for _, matches := range responseMatchesByCallEvent {
-		for _, match := range matches {
-			matchedResponseEvents[match.eventIndex] = struct{}{}
-		}
-	}
+	nativeResults := nativeToolResponseEvents(events, responseMatchesByCallEvent)
 
 	var resultEvents []event.Event
 	for i, evt := range events {
@@ -3982,16 +3982,18 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		evt := evt
 
 		if evt.IsToolResultResponse() {
-			// A native result of a provider action answers a call inside an
-			// earlier native record rather than a projected tool call. It
-			// keeps its position so the adapter can pair it.
-			if _, matched := matchedResponseEvents[i]; !matched &&
-				eventHasProviderData(evt) {
-				resultEvents = append(resultEvents, evt)
+			if native, ok := nativeResults[i]; ok {
+				resultEvents = append(resultEvents, native)
 			}
-			// Function response should be handled with function call below.
+			// Ordinary function responses are moved next to their call below.
 			continue
 		} else if evt.IsToolCallResponse() {
+			if eventHasProviderData(evt) {
+				// Native rounds keep their original order, including results
+				// of provider actions that are not projected as ToolCalls.
+				resultEvents = append(resultEvents, evt)
+				continue
+			}
 			responseMatches := responseMatchesByCallEvent[i]
 			callIDs := evt.GetToolCallIDs()
 			perToolCallResultRound := hasPerToolCallResultRound(
@@ -3999,11 +4001,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 				i,
 				responseMatches,
 			)
-			// A native record cannot drop calls without losing its opaque
-			// reasoning, so its partial round stays intact and the provider
-			// adapter rejects the missing results explicitly.
-			if !eventHasProviderData(evt) &&
-				!allToolCallIDsMatched(callIDs, events, responseMatches) &&
+			if !allToolCallIDsMatched(callIDs, events, responseMatches) &&
 				perToolCallResultRound {
 				// Keep persisted events for audit, but do not project a
 				// provider-invalid partial tool round into a later model
@@ -4047,6 +4045,43 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	}
 
 	return resultEvents
+}
+
+// nativeToolResponseEvents selects result choices that must retain their
+// original position. Results for ordinary calls still use the existing
+// rearrangement, even when the same event also answers a native call.
+func nativeToolResponseEvents(
+	events []event.Event,
+	matchesByCall map[int][]matchedToolResponseEvent,
+) map[int]event.Event {
+	nativeChoices := make(map[int]map[int]bool)
+	for callIndex, matches := range matchesByCall {
+		for _, match := range matches {
+			if nativeChoices[match.eventIndex] == nil {
+				nativeChoices[match.eventIndex] = make(map[int]bool)
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				nativeChoices[match.eventIndex][choiceIndex] = eventHasProviderData(events[callIndex])
+			}
+		}
+	}
+	results := make(map[int]event.Event)
+	for i, evt := range events {
+		if !evt.IsToolResultResponse() {
+			continue
+		}
+		var keep []int
+		for j, choice := range evt.Response.Choices {
+			native, matched := nativeChoices[i][j]
+			if native || (!matched && (choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil)) {
+				keep = append(keep, j)
+			}
+		}
+		if len(keep) > 0 {
+			results[i] = filterToolResponseEvent(events, matchedToolResponseEvent{eventIndex: i, choiceIndices: keep})
+		}
+	}
+	return results
 }
 
 func hasPerToolCallResultRound(

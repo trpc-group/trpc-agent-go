@@ -119,3 +119,47 @@ func TestPendingNativeToolRoundStartWithProviderActions(t *testing.T) {
 	require.Equal(t, 2, pendingNativeToolRoundStart([]model.Message{user, record}, 2),
 		"a native record without results or calls is a completed answer")
 }
+
+func TestRearrangeMixedNativeActionResults(t *testing.T) {
+	call := testCallMessage(t, true, "reasoning", "call_1")
+	searchResult := toolTranscriptTestEvent("req1", "inv1", nativeActionResult(), model.ObjectTypeToolResponse)
+	functionResult := toolTranscriptTestEvent("req1", "inv1",
+		model.NewToolMessage("call_1", "lookup", "result"), model.ObjectTypeToolResponse)
+	for name, results := range map[string][]event.Event{
+		"search then function": {searchResult, functionResult},
+		"function then search": {functionResult, searchResult},
+	} {
+		t.Run(name, func(t *testing.T) {
+			events := append([]event.Event{
+				toolTranscriptTestEvent("req1", "inv1", model.NewUserMessage("find orders"), ""),
+				toolTranscriptTestEvent("req1", "inv1", call, ""),
+			}, results...)
+			for _, history := range [][]event.Event{events, persistTestEvents(t, events)} {
+				p := NewContentRequestProcessor()
+				got := p.rearrangeLatestFuncResp(history)
+				require.Equal(t, history, got, "latest-result handling must retain the complete native round")
+				got = p.rearrangeAsyncFuncRespHist(got)
+				require.Equal(t, history, got, "history preparation must preserve result order")
+			}
+		})
+	}
+}
+
+func TestRearrangeSharedLegacyAndNativeResultEvent(t *testing.T) {
+	legacy := toolTranscriptTestEvent("req1", "inv1", testCallMessage(t, false, "", "legacy"), "")
+	native := toolTranscriptTestEvent("req2", "inv2", testCallMessage(t, true, "reasoning", "native"), "")
+	result := toolTranscriptTestEvent("req2", "inv2",
+		model.NewToolMessage("native", "lookup", "native result"), model.ObjectTypeToolResponse)
+	result.Choices = append(result.Choices,
+		model.Choice{Message: model.NewToolMessage("legacy", "lookup", "legacy result")},
+		model.Choice{Message: nativeActionResult()})
+	events := []event.Event{legacy, native, result}
+	got := NewContentRequestProcessor().rearrangeAsyncFuncRespHist(events)
+	require.Len(t, got, 4)
+	require.Equal(t, legacy, got[0])
+	require.Equal(t, []model.Choice{result.Choices[1]}, got[1].Choices,
+		"ordinary results retain their existing placement next to the call")
+	require.Equal(t, native, got[2])
+	require.Equal(t, []model.Choice{result.Choices[0], result.Choices[2]}, got[3].Choices)
+	require.Len(t, events[2].Choices, 3, "history preparation does not mutate the stored event")
+}

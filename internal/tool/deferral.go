@@ -60,7 +60,7 @@ func WithDeferral(t tool.Tool, d *Deferral) tool.Tool {
 // name, the member's original name inside it, and the ToolSet description.
 // It reports false for tools that do not come from a named ToolSet.
 func ToolSetMember(t tool.Tool) (toolSetName, memberName, description string, ok bool) {
-	named, isNamed := ResolveDeclaration(t).(*NamedTool)
+	named, isNamed := toolSetIdentity(t).(*NamedTool)
 	if !isNamed || named.toolSetName == "" {
 		return "", "", "", false
 	}
@@ -69,6 +69,24 @@ func ToolSetMember(t tool.Tool) (toolSetName, memberName, description string, ok
 		return "", "", "", false
 	}
 	return named.toolSetName, decl.Name, named.toolSetDescription, true
+}
+
+// toolSetIdentity follows wrappers only to find the owning ToolSet. Callers
+// must still use the outer tool's Declaration, which may augment its schema.
+func toolSetIdentity(t tool.Tool) tool.Tool {
+	for t != nil {
+		switch wrapped := t.(type) {
+		case *NamedTool:
+			return wrapped
+		case declarationWrapper:
+			t = wrapped.originalTool()
+		case interface{ Original() tool.Tool }:
+			t = wrapped.Original()
+		default:
+			return t
+		}
+	}
+	return nil
 }
 
 type deferralTool struct {
@@ -89,6 +107,11 @@ func (t *deferralTool) IsConcurrencySafe() bool {
 }
 
 func (t *deferralTool) originalTool() tool.Tool {
+	return t.base
+}
+
+// Original lets extensions inspect the wrapped tool's execution capabilities.
+func (t *deferralTool) Original() tool.Tool {
 	return t.base
 }
 

@@ -25,6 +25,17 @@ type toolSetExposure struct {
 	deferrals map[string]*itool.Deferral
 }
 
+func prepareToolExposure(options *Options) error {
+	if err := validateAndNormalizeToolSetToolNameModes(options); err != nil {
+		return err
+	}
+	if err := validateAndNormalizeDeferredToolSets(options); err != nil {
+		return err
+	}
+	options.Tools = applyDeferredTools(options.Tools, options.deferredTools)
+	return nil
+}
+
 func (o *Options) toolSetExposure() *toolSetExposure {
 	return &toolSetExposure{
 		nameModes: o.toolSetToolNameModes,
