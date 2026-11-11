@@ -549,6 +549,58 @@ func TestAutoRecreateWhenCreatingWorkspace(t *testing.T) {
 	assert.Equal(t, 2, counts.attempts)
 }
 
+func TestAutoRecreateStageInputsPreservesUnsafeMetadataError(t *testing.T) {
+	srv := newLifeServer(t)
+	executor := srv.executor(t)
+	ws := srv.mustWorkspace(t, executor)
+	first := executor.SandboxID()
+	before := len(srv.counts().executeCodes)
+	srv.setInfo(first, http.StatusNotFound, "", "")
+	srv.setExecute(func(host, _ string) (int, string) {
+		if hostHasSandbox(host, first) {
+			return http.StatusNotFound, "sandbox deleted"
+		}
+		return http.StatusOK, ""
+	})
+
+	err := executor.StageInputs(context.Background(), ws, []codeexecutor.InputSpec{{
+		From: "host://" + t.TempDir(), To: "work/inputs",
+	}})
+	require.NotEqual(t, first, executor.SandboxID())
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	assert.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	assert.False(t, codeexecutor.IsWorkspaceRetrySafe(err))
+	var notFound *ci.NotFoundError
+	assert.ErrorAs(t, err, &notFound)
+	counts := srv.counts()
+	require.Len(t, counts.ids, 2)
+	require.Len(t, counts.executeCodes, before+1, "failed metadata read must stop input staging")
+	assert.Contains(t, counts.executeCodes[before], "__E2B_SIZE__")
+}
+
+func TestAutoRecreateStageInputsWithMissingMetadata(t *testing.T) {
+	srv := newLifeServer(t)
+	executor := srv.executor(t)
+	ws := srv.mustWorkspace(t, executor)
+	first := executor.SandboxID()
+	srv.setExecute(func(_ string, code string) (int, string) {
+		if strings.Contains(code, "__E2B_SIZE__") {
+			return http.StatusOK, ndjsonLines(errorMsg("ShellError", "metadata file not found", ""))
+		}
+		return http.StatusOK, ""
+	})
+
+	err := executor.StageInputs(context.Background(), ws, []codeexecutor.InputSpec{{
+		From: "host://" + t.TempDir(), To: "work/inputs",
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, first, executor.SandboxID())
+	counts := srv.counts()
+	assert.Len(t, counts.ids, 1)
+	assert.Empty(t, counts.infoCalls)
+	assert.Equal(t, 1, stringsCount(counts.executeCodes, "__E2B_SIZE__"))
+}
+
 func TestAutoRecreateWorkspaceRebuildAndStaleHandles(t *testing.T) {
 	srv := newLifeServer(t)
 	executor := srv.executor(t, WithWorkspacePersistence(WorkspacePersistencePerSession))

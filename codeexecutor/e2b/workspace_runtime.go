@@ -1166,6 +1166,9 @@ func (r *workspaceRuntime) loadWorkspaceMetadata(
 	full := path.Join(ws.Path, codeexecutor.MetaFileName)
 	data, _, err := r.readFile(ctx, full, maxReadSizeBytes)
 	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceRetryUnsafe) {
+			return md, err
+		}
 		return md, nil // fall back to fresh metadata
 	}
 	trimmed := strings.TrimSpace(string(data))
