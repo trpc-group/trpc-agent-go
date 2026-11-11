@@ -41,6 +41,9 @@ type TrackEvent struct {
 type TrackEvents struct {
 	Track  Track        `json:"track"`
 	Events []TrackEvent `json:"events"`
+	// Cursor is an optional backend continuation for WithTrackCursor reads.
+	// It is absent from persisted state and wire payloads. Nil means unsupported.
+	Cursor *string `json:"-"`
 }
 
 // TracksFromState returns the tracks stored in the session state.

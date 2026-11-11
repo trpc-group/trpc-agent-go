@@ -278,7 +278,26 @@ server, err := agui.New(
 
 完整示例可参考 [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow)，前端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
+### 续传位置
+
+MySQL 和内存 Session 在 `GetTrackEvents` 上支持 `session.WithTrackCursor`。
+续传模式会在首次快照和后续轮询中请求这一能力。返回的 `TrackEvents.Cursor`
+表示持久化追加位置，因此时间戳相同、甚至内容完全相同的独立事件也会分别转发。
+游标不会写入快照或 SSE 内容；没有传入该选项的调用保持原有行为。
+
+游标绑定后端、具体会话实例和 track。会话删除重建，或 MySQL 中游标指向的记录
+已经过期或被删除时，续传会返回错误，此时应重新获取快照。原有保留策略仍然适用。
+MySQL 依赖写入方先锁定 session 行、再插入 track 记录的约定；直接执行 SQL 的
+写入方不能绕过该顺序约束。
+
+游标读取只执行一次现有 `GetSessionHook` 链，支持 key 改写及读取后的过滤。
+不读取底层存储、直接构造快照的 hook 无法提供可靠的续传位置，会明确返回错误。
+hook 替换读取选项时必须保留原游标。
+包装器需要转发该选项并保留返回的游标字段。其余尚未支持游标的后端和包装器仍使用
+原有的时间续传路径，不具备同时间戳事件不遗漏的保证。
+
 ## 尽力加载历史
+
 
 默认情况下，消息快照会严格校验已持久化 AG-UI 事件之间的配对关系。比如 `TEXT_MESSAGE_CONTENT` 需要先看到同一条消息的 `TEXT_MESSAGE_START`，`TOOL_CALL_RESULT` 需要匹配已经完成参数流的工具调用。如果历史数据中存在缺失、乱序或重复事件，快照路由会尽量返回出错位置之前已经还原出的 `MESSAGES_SNAPSHOT`，随后返回 `RUN_ERROR`。
 
