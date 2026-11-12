@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 )
 
+// TestAddMemoryUpsertAtCapacity verifies that updating existing memory entries is allowed at capacity.
 func TestAddMemoryUpsertAtCapacity(t *testing.T) {
 	eventTime := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
@@ -65,6 +66,7 @@ func TestAddMemoryUpsertAtCapacity(t *testing.T) {
 	}
 }
 
+// TestAddMemoryConcurrentUpsertsAtCapacity verifies that concurrent updates preserve the size limit.
 func TestAddMemoryConcurrentUpsertsAtCapacity(t *testing.T) {
 	ctx := context.Background()
 	service := inmemory.NewMemoryService(inmemory.WithMemoryLimit(1))
