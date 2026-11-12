@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -194,6 +195,10 @@ func isUserMessageTrackEvent(trackEvent session.TrackEvent) bool {
 	if err != nil {
 		return false
 	}
+	return isUserMessageEvent(evt)
+}
+
+func isUserMessageEvent(evt aguievents.Event) bool {
 	switch e := evt.(type) {
 	case *aguievents.CustomEvent:
 		return e.Name == multimodal.CustomEventNameUserMessage
@@ -247,16 +252,10 @@ func (r *runner) messagesSnapshotFollow(
 }
 
 func (r *runner) shouldFollowMessagesSnapshot(key session.Key, trackEvents *session.TrackEvents) bool {
-	if trackEvents == nil || trackEndsWithTerminalRunEvent(trackEvents.Events) {
+	if trackEvents == nil || r.flushInterval <= 0 || trackEndsWithTerminalRunEvent(trackEvents.Events) {
 		return false
 	}
-	if r.flushInterval <= 0 {
-		return false
-	}
-	if len(trackEvents.Events) > 0 {
-		return true
-	}
-	return r.isRunning(key)
+	return len(trackEvents.Events) > 0 || r.isRunning(key)
 }
 
 func (r *runner) handleMessagesSnapshotFollowTick(
@@ -311,20 +310,171 @@ func isEmptyTrackEventsError(err error) bool {
 	return errors.Is(err, session.ErrTracksEmpty) || errors.Is(err, session.ErrTrackEventsNotFound)
 }
 
+type snapshotRunID struct {
+	value   string
+	tracked bool // Internal identities and legacy wire IDs are separate namespaces.
+}
+
+type snapshotRuns struct {
+	latest          snapshotRunID
+	observed        map[snapshotRunID]snapshotRun
+	hasBoundary     bool
+	completed       bool
+	ambiguousLegacy bool
+}
+
+type snapshotRun struct {
+	hasBoundary bool
+	finished    bool
+}
+
+type orderedSnapshotRun struct {
+	owner    snapshotRunID
+	sequence uint64
+}
+
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	if len(events) == 0 {
+	runs := snapshotRuns{observed: make(map[snapshotRunID]snapshotRun)}
+	latestByEpoch := make(map[string]orderedSnapshotRun)
+	var previous aguievents.EventType
+	for _, event := range events {
+		id, order := track.HistoryRun(event.Payload)
+		latest := latestByEpoch[order.Epoch]
+		ordered := id != "" && order.Epoch != "" && order.Sequence > 0
+		if ordered && order.Sequence < latest.sequence {
+			previous = ""
+			continue
+		}
+		evt, err := aguievents.EventFromJSON(event.Payload)
+		if err != nil {
+			continue
+		}
+		terminal, _ := terminalRunSignal(evt)
+		eventType := evt.Type()
+		userMessage := isUserMessageEvent(evt)
+		if id != "" {
+			previous = ""
+			boundary := eventType == aguievents.EventTypeRunStarted || userMessage
+			var orderedBoundary bool
+			if ordered && order.Sequence > latest.sequence {
+				// An admission orders the owners even if one startup batch was
+				// delayed or lost. Drop only older runs from the same epoch.
+				delete(runs.observed, latest.owner)
+				latestByEpoch[order.Epoch] = orderedSnapshotRun{
+					owner:    snapshotRunID{value: id, tracked: true},
+					sequence: order.Sequence,
+				}
+				// A response or terminal can establish a boundary only when
+				// there is no boundary or this order supersedes its owner.
+				orderedBoundary = !runs.hasBoundary || latest.sequence != 0 && runs.latest == latest.owner
+			}
+			runs.observeTracked(id, boundary, orderedBoundary, terminal)
+			continue
+		}
+
+		switch {
+		case eventType == aguievents.EventTypeRunStarted:
+			runs.observeLegacyBoundary(evt.RunID())
+		case userMessage:
+			// Legacy tracks can place a text user message just after its start.
+			if previous != aguievents.EventTypeRunStarted || eventType == aguievents.EventTypeCustom {
+				runs.observeLegacyBoundary("")
+			}
+		case terminal:
+			if runs.matchesLegacyTerminal(evt.RunID()) {
+				runs.completed = true
+			}
+		case runs.completed && isSnapshotResponseEvent(eventType):
+			// An untagged response can belong to a newer run whose startup
+			// records are missing, even when an older run is still active.
+			runs.ambiguousLegacy = runs.hasOtherActiveRun()
+			runs.latest, runs.hasBoundary, runs.completed = snapshotRunID{}, true, false
+		}
+		previous = eventType
+	}
+	return runs.completed && !runs.hasUnresolvedRun(len(latestByEpoch) > 1)
+}
+
+func (r *snapshotRuns) observeTracked(id string, boundary, orderedBoundary, terminal bool) {
+	owner := snapshotRunID{value: id, tracked: true}
+	run := r.observed[owner]
+	// The first visible boundary establishes order. Later events from
+	// the same invocation only update that invocation's state.
+	if (boundary || orderedBoundary) && !run.hasBoundary {
+		run.hasBoundary = boundary
+		r.latest, r.hasBoundary, r.completed = owner, true, run.finished
+		r.ambiguousLegacy = false
+	}
+	if terminal {
+		run.finished = true
+		if owner == r.latest || !r.hasBoundary {
+			r.completed = true
+		}
+	}
+	r.observed[owner] = run
+}
+
+func (r *snapshotRuns) observeLegacyBoundary(id string) {
+	owner := snapshotRunID{value: id}
+	if id != "" {
+		r.observed[owner] = snapshotRun{hasBoundary: true}
+	}
+	r.ambiguousLegacy = id == "" && r.hasBoundary && r.latest.value == "" && !r.completed
+	r.latest, r.hasBoundary, r.completed = owner, true, false
+}
+
+func (r *snapshotRuns) matchesLegacyTerminal(id string) bool {
+	if id != "" {
+		owner := snapshotRunID{value: id}
+		run, observed := r.observed[owner]
+		run.finished = true
+		r.observed[owner] = run
+		if r.latest.value != "" {
+			return owner == r.latest
+		}
+		return !observed && !r.ambiguousLegacy
+	}
+	// Older callbacks may omit the terminal's run ID. Infer ownership
+	// only among untagged runs with no other active candidate.
+	if r.latest.tracked || r.ambiguousLegacy || r.hasOtherActiveRun() {
 		return false
 	}
-	last := events[len(events)-1]
-	if len(last.Payload) == 0 {
+	if r.latest.value != "" {
+		run := r.observed[r.latest]
+		run.finished = true
+		r.observed[r.latest] = run
+	}
+	return true
+}
+
+func (r *snapshotRuns) hasOtherActiveRun() bool {
+	for id, run := range r.observed {
+		if !run.finished && id != r.latest {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *snapshotRuns) hasUnresolvedRun(multipleEpochs bool) bool {
+	for id, run := range r.observed {
+		if !run.finished && (!run.hasBoundary || multipleEpochs && id.tracked && id != r.latest) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSnapshotResponseEvent(eventType aguievents.EventType) bool {
+	switch eventType {
+	case aguievents.EventTypeTextMessageStart, aguievents.EventTypeTextMessageContent, aguievents.EventTypeTextMessageChunk,
+		aguievents.EventTypeReasoningMessageStart, aguievents.EventTypeReasoningMessageContent, aguievents.EventTypeReasoningMessageChunk,
+		aguievents.EventTypeToolCallStart, aguievents.EventTypeToolCallArgs, aguievents.EventTypeToolCallChunk,
+		aguievents.EventTypeToolCallResult:
+		return true
+	default:
 		return false
 	}
-	evt, err := aguievents.EventFromJSON(last.Payload)
-	if err != nil {
-		return false
-	}
-	terminal, _ := terminalRunSignal(evt)
-	return terminal
 }
 
 func terminalRunSignal(evt aguievents.Event) (terminal bool, errMessage string) {

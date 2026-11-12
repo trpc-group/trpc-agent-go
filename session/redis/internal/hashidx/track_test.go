@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -375,7 +376,7 @@ func TestAppendTrackEvent_LuaError(t *testing.T) {
 	assert.Contains(t, err.Error(), "append track event")
 }
 
-func TestLoadTrackEventsViaLua_BadEventJSON(t *testing.T) {
+func TestLoadTrackEvents_BadEventJSON(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
 	ctx := context.Background()
@@ -402,7 +403,7 @@ func TestLoadTrackEventsViaLua_BadEventJSON(t *testing.T) {
 		Member: badID,
 	}).Err())
 
-	// loadTrackEventsViaLua should skip bad JSON via continue, returning only valid events
+	// Malformed stored payloads are skipped without dropping valid events.
 	result, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
 	require.NoError(t, err)
 	assert.Len(t, result["alpha"], 1)
@@ -440,4 +441,117 @@ func TestListTracksForSession_UnmarshalError(t *testing.T) {
 	_, err = c.ListTracksForSession(ctx, key)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal session meta")
+}
+
+func TestClient_TrackEventsEqualTimestampOrder(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "ties"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	timestamp := time.Unix(1700000000, 0)
+	for i := 1; i <= 1105; i++ {
+		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{Track: "alpha", Timestamp: timestamp, Payload: json.RawMessage(fmt.Sprint(i))}, nil))
+	}
+	for _, limit := range []int{0, 1, 7, 100, 110} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			events, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, limit, time.Time{})
+			require.NoError(t, err)
+			count := 1105
+			if limit > 0 && limit < count {
+				count = limit
+			}
+			require.Len(t, events["alpha"], count)
+			for i, evt := range events["alpha"] {
+				require.Equal(t, fmt.Sprint(1106-count+i), string(evt.Payload))
+			}
+		})
+	}
+}
+
+func TestClient_TrackEventsBoundaryScoreOrder(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "boundary"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	timestamp := time.Unix(1700000000, 0)
+	// Seed the existing storage format, including IDs beyond Lua's exact integer range.
+	ids := []string{"9", "10", "99", "100", "9007199254740992", "9007199254740993", "9007199254740994"}
+	for i, id := range ids {
+		ts := timestamp
+		if i == 0 {
+			ts = ts.Add(-time.Second)
+		}
+		if i == len(ids)-1 {
+			ts = ts.Add(time.Second)
+		}
+		payload, err := json.Marshal(session.TrackEvent{Track: "alpha", Timestamp: ts, Payload: json.RawMessage(fmt.Sprintf("%q", id))})
+		require.NoError(t, err)
+		require.NoError(t, rdb.HSet(ctx, c.keys.TrackDataKey(key, "alpha"), id, payload).Err())
+		require.NoError(t, rdb.ZAdd(ctx, c.keys.TrackTimeIndexKey(key, "alpha"), redis.Z{Score: float64(ts.UnixNano()), Member: id}).Err())
+	}
+	for _, limit := range []int{0, 1, 3, 5} {
+		got, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, limit, timestamp)
+		require.NoError(t, err)
+		want := ids[1:]
+		if limit > 0 && limit < len(want) {
+			want = want[len(want)-limit:]
+		}
+		require.Len(t, got["alpha"], len(want))
+		for i, evt := range got["alpha"] {
+			require.JSONEq(t, fmt.Sprintf("%q", want[i]), string(evt.Payload))
+		}
+	}
+}
+
+func TestClient_LimitedTrackReadWithScriptOnlyPermissions(t *testing.T) {
+	url := os.Getenv("TRPC_TEST_REDIS_URL")
+	if url == "" {
+		t.Skip("requires a standalone Redis server")
+	}
+	opts, err := redis.ParseURL(url)
+	require.NoError(t, err)
+	writer := redis.NewClient(opts)
+	defer writer.Close()
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	cfg := defaultConfig()
+	cfg.KeyPrefix = fmt.Sprintf("review-acl-%d", time.Now().UnixNano())
+	user := cfg.KeyPrefix
+	err = writer.Do(ctx, "ACL", "SETUSER", user, "on", ">fixture-password",
+		"~*", "+@all", "-watch", "-multi", "-exec").Err()
+	if redis.HasErrorPrefix(err, "unknown command `ACL`") || redis.HasErrorPrefix(err, "unknown command 'ACL'") {
+		t.Skip("Redis server does not support the ACL command")
+	}
+	require.NoError(t, err)
+	defer writer.Do(context.Background(), "ACL", "DELUSER", user)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "read"}
+	w := NewClient(writer, cfg)
+	_, err = w.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	defer w.DeleteSession(context.Background(), key)
+	for i := 1; i <= 600; i++ {
+		require.NoError(t, w.AppendTrackEvent(ctx, key, &session.TrackEvent{
+			Track: "agui", Timestamp: time.Unix(1700000000, 0),
+			Payload: json.RawMessage(fmt.Sprint(i)),
+		}, nil))
+	}
+	readerOpts := *opts
+	readerOpts.Username = user
+	readerOpts.Password = "fixture-password"
+	reader := redis.NewClient(&readerOpts)
+	defer reader.Close()
+	r := NewClient(reader, cfg)
+	// Small reads stay on the ordinary Lua path.
+	small, err := r.GetTrackEvents(ctx, key, []session.Track{"agui"}, 600, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, small["agui"], 600)
+	got, err := r.GetTrackEvents(ctx, key, []session.Track{"agui"}, 1, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, got["agui"], 1)
+	require.Equal(t, "600", string(got["agui"][0].Payload))
 }

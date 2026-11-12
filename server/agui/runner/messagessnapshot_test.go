@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -1310,9 +1311,90 @@ func TestTrackEndsWithTerminalRunEvent(t *testing.T) {
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{}))
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{{Track: track.TrackAGUI, Timestamp: base}}))
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{{Track: track.TrackAGUI, Payload: []byte("{"), Timestamp: base}}))
-	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, nonTerminal}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, nonTerminal}))
+	started := newTrackEventAt(t, aguievents.NewRunStartedEvent("thread", "next-run"), base.Add(3*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, started, nonTerminal}))
+	user := newUserMessageTrackEventAt(t, "next-user", "next prompt", base.Add(3*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, user, nonTerminal}))
+	textUser := newTrackEventAt(t, aguievents.NewTextMessageStartEvent("next-user", aguievents.WithRole("user")), base.Add(3*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{finished, textUser, nonTerminal}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{nonTerminal, finished}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{nonTerminal, runErr}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, finished, nonTerminal}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, runErr, nonTerminal}))
+	olderStarted := newTrackEventAt(t, aguievents.NewRunStartedEvent("thread", "run"), base)
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, runErr, nonTerminal}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, finished, runErr, nonTerminal}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, user, finished}))
+	output := newTrackEventAt(t, aguievents.NewTextMessageContentEvent("new-output", "still streaming"), base.Add(4*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, finished, output}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, finished, output, runErr}))
+	nextFinished := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "next-run"), base.Add(4*time.Millisecond))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, nextFinished, finished, nonTerminal}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, user, output, nextFinished}))
+	// The older terminal cannot establish ownership of the untagged output.
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output, finished}))
+	unmatched := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "unmatched"), base.Add(5*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output, finished, unmatched}))
+
+	// A remains active while B ends and C writes output without a startup batch.
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{
+		user, newUserMessageTrackEventAt(t, "third-user", "third prompt", base), finished,
+	}))
+}
+
+func TestTrackEndsWithTerminalRunEventUsesPersistedRunIdentity(t *testing.T) {
+	const olderID = "00000000-0001-7000-8000-000000000000"
+	const latestID = "00000000-0002-7000-8000-000000000000"
+	const nextID = "00000000-0003-7000-8000-000000000000"
+	at := time.Now()
+	tagged := func(id string, evt aguievents.Event) session.TrackEvent {
+		t.Helper()
+		event := newTrackEventAt(t, evt, at)
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(event.Payload, &fields))
+		fields["trpcRunId"] = json.RawMessage(fmt.Sprintf("%q", id))
+		var err error
+		event.Payload, err = json.Marshal(fields)
+		require.NoError(t, err)
+		return event
+	}
+
+	latestStart := tagged(latestID, aguievents.NewRunStartedEvent("thread", "run"))
+	olderOutput := tagged(olderID, aguievents.NewTextMessageContentEvent("old-message", "late"))
+	olderFinished := tagged(olderID, aguievents.NewRunFinishedEvent("thread", "run"))
+	anonymous := newTrackEventAt(t, aguievents.NewRunErrorEvent("legacy"), at)
+	latestFinished := tagged(latestID, aguievents.NewRunErrorEvent("callback override"))
+	nextOutput := tagged(nextID, aguievents.NewTextMessageContentEvent("new-message", "startup write failed"))
+
+	reversedOlder := tagged(latestID, aguievents.NewRunStartedEvent("thread", "older"))
+	reversedNewer := tagged(olderID, aguievents.NewRunStartedEvent("thread", "newer"))
+	reversedOlderFinished := tagged(latestID, aguievents.NewRunFinishedEvent("thread", "older"))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{reversedOlder, reversedNewer, reversedOlderFinished}))
+
+	mixedNewer := aguievents.NewRunStartedEvent("thread", "legacy-newer")
+	mixedNewer.SetTimestamp(1)
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{
+		reversedOlder, newTrackEventAt(t, mixedNewer, at), reversedOlderFinished,
+	}))
+
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, olderOutput, olderFinished, anonymous}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, latestFinished, olderOutput, olderFinished}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, latestFinished, nextOutput, olderFinished}))
+
+	// A rolling upgrade can interleave tagged writes with legacy runners.
+	legacyLatest := aguievents.NewRunStartedEvent("thread", "legacy-latest")
+	legacyLatest.SetTimestamp(2)
+	legacyLatestStart := newTrackEventAt(t, legacyLatest, at)
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{legacyLatestStart, olderOutput, olderFinished}))
+
+	legacyOlder := aguievents.NewRunStartedEvent("thread", "legacy-older")
+	legacyOlder.SetTimestamp(3)
+	legacyOlderStart := newTrackEventAt(t, legacyOlder, at)
+	legacyOlderFinished := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "legacy-older"), at)
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{legacyOlderStart, latestStart, latestFinished, legacyOlderFinished}))
+
 }
 
 func TestMessagesSnapshotFollowSkipsWhenInitialAlreadyTerminal(t *testing.T) {
