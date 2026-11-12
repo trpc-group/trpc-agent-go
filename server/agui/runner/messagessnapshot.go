@@ -18,7 +18,6 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
-	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -323,14 +322,20 @@ type snapshotRunID struct {
 }
 
 type snapshotRuns struct {
-	latest        snapshotRunID
-	active        map[snapshotRunID]bool // Retain completed IDs to recognize late events.
-	startedMillis int64
-	completed     bool
+	latest          snapshotRunID
+	observed        map[snapshotRunID]snapshotRun
+	hasBoundary     bool
+	completed       bool
+	ambiguousLegacy bool
+}
+
+type snapshotRun struct {
+	hasBoundary bool
+	finished    bool
 }
 
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	runs := snapshotRuns{active: make(map[snapshotRunID]bool)}
+	runs := snapshotRuns{observed: make(map[snapshotRunID]snapshotRun)}
 	var previous aguievents.EventType
 	for _, event := range events {
 		evt, err := aguievents.EventFromJSON(event.Payload)
@@ -338,107 +343,101 @@ func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 			continue
 		}
 		terminal, _ := terminalRunSignal(evt)
+		eventType := evt.Type()
+		userMessage := isUserMessageEvent(evt)
 		if id := track.HistoryRunID(event.Payload); id != "" {
-			runs.observeTracked(id, terminal)
+			runs.observeTracked(id, eventType == aguievents.EventTypeRunStarted || userMessage, terminal)
 			previous = ""
 			continue
 		}
 
-		eventType := evt.Type()
 		switch {
 		case eventType == aguievents.EventTypeRunStarted:
-			runs.observeLegacyBoundary(evt.RunID(), evt.Timestamp(), event.Timestamp)
-		case isUserMessageEvent(evt):
+			runs.observeLegacyBoundary(evt.RunID())
+		case userMessage:
 			// Legacy tracks can place a text user message just after its start.
 			if previous != aguievents.EventTypeRunStarted || eventType == aguievents.EventTypeCustom {
-				runs.observeLegacyBoundary("", evt.Timestamp(), event.Timestamp)
+				runs.observeLegacyBoundary("")
 			}
 		case terminal:
 			if runs.matchesLegacyTerminal(evt.RunID()) {
 				runs.completed = true
 			}
-		case runs.completed && isSnapshotResponseEvent(eventType) && !runs.hasOtherActiveRun():
-			// With no observed run that could own this response, a legacy
-			// startup write may have failed before a new run produced output.
-			runs.latest, runs.completed = snapshotRunID{}, false
+		case runs.completed && isSnapshotResponseEvent(eventType):
+			// An untagged response can belong to a newer run whose startup
+			// records are missing, even when an older run is still active.
+			runs.ambiguousLegacy = runs.hasOtherActiveRun()
+			runs.latest, runs.hasBoundary, runs.completed = snapshotRunID{}, true, false
 		}
 		previous = eventType
 	}
-	return runs.completed
+	return runs.completed && !runs.hasActiveRunWithoutBoundary()
 }
 
-func (r *snapshotRuns) observeTracked(id string, terminal bool) {
+func (r *snapshotRuns) observeTracked(id string, boundary, terminal bool) {
 	owner := snapshotRunID{value: id, tracked: true}
-	if _, observed := r.active[owner]; !observed {
-		r.active[owner] = true
-		// The identity is assigned when the run starts. Its first persisted
-		// event may arrive after a newer run if a startup write failed.
-		started := trackedRunStartMillis(id)
-		if r.latest.tracked && r.latest.value < id ||
-			!r.latest.tracked && (started == 0 || started >= r.startedMillis) {
-			r.latest, r.startedMillis, r.completed = owner, started, false
-		}
+	run := r.observed[owner]
+	// The first visible boundary establishes order. Later events from
+	// the same invocation only update that invocation's state.
+	if boundary && !run.hasBoundary {
+		run.hasBoundary = true
+		r.latest, r.hasBoundary, r.completed = owner, true, run.finished
+		r.ambiguousLegacy = false
 	}
 	if terminal {
-		r.active[owner] = false
-		if owner == r.latest {
+		run.finished = true
+		if owner == r.latest || !r.hasBoundary {
 			r.completed = true
 		}
 	}
+	r.observed[owner] = run
 }
 
-func trackedRunStartMillis(id string) int64 {
-	parsed, err := uuid.Parse(id)
-	if err != nil || parsed.Version() != 7 {
-		return 0
-	}
-	sec, nsec := parsed.Time().UnixTime()
-	return time.Unix(sec, nsec).UnixMilli()
-}
-
-func (r *snapshotRuns) observeLegacyBoundary(id string, emittedMillis *int64, persistedAt time.Time) {
+func (r *snapshotRuns) observeLegacyBoundary(id string) {
 	owner := snapshotRunID{value: id}
 	if id != "" {
-		r.active[owner] = true
+		r.observed[owner] = snapshotRun{hasBoundary: true}
 	}
-	var started int64
-	if emittedMillis != nil {
-		started = *emittedMillis
-	} else if !persistedAt.IsZero() {
-		started = persistedAt.UnixMilli()
-	}
-	// During a rolling upgrade, a legacy start can be persisted after a
-	// tracked run even though the legacy runner emitted its start earlier.
-	if r.latest.tracked && started != 0 && started < r.startedMillis {
-		return
-	}
-	r.latest, r.startedMillis, r.completed = owner, started, false
+	r.ambiguousLegacy = id == "" && r.hasBoundary && r.latest.value == "" && !r.completed
+	r.latest, r.hasBoundary, r.completed = owner, true, false
 }
 
 func (r *snapshotRuns) matchesLegacyTerminal(id string) bool {
 	if id != "" {
 		owner := snapshotRunID{value: id}
-		_, observed := r.active[owner]
-		r.active[owner] = false
+		run, observed := r.observed[owner]
+		run.finished = true
+		r.observed[owner] = run
 		if r.latest.value != "" {
 			return owner == r.latest
 		}
-		return !observed
+		return !observed && !r.ambiguousLegacy
 	}
 	// Older callbacks may omit the terminal's run ID. Infer ownership
 	// only among untagged runs with no other active candidate.
-	if r.latest.tracked || r.hasOtherActiveRun() {
+	if r.latest.tracked || r.ambiguousLegacy || r.hasOtherActiveRun() {
 		return false
 	}
 	if r.latest.value != "" {
-		r.active[r.latest] = false
+		run := r.observed[r.latest]
+		run.finished = true
+		r.observed[r.latest] = run
 	}
 	return true
 }
 
 func (r *snapshotRuns) hasOtherActiveRun() bool {
-	for id, active := range r.active {
-		if active && id != r.latest {
+	for id, run := range r.observed {
+		if !run.finished && id != r.latest {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *snapshotRuns) hasActiveRunWithoutBoundary() bool {
+	for _, run := range r.observed {
+		if !run.hasBoundary && !run.finished {
 			return true
 		}
 	}

@@ -1331,7 +1331,17 @@ func TestTrackEndsWithTerminalRunEvent(t *testing.T) {
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, finished, output, runErr}))
 	nextFinished := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "next-run"), base.Add(4*time.Millisecond))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{started, nextFinished, finished, nonTerminal}))
-	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output, finished}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, user, output, nextFinished}))
+	// The older terminal cannot establish ownership of the untagged output.
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output, finished}))
+	unmatched := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "unmatched"), base.Add(5*time.Millisecond))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output, finished, unmatched}))
+
+	// A remains active while B ends and C writes output without a startup batch.
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{olderStarted, started, nextFinished, output}))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{
+		user, newUserMessageTrackEventAt(t, "third-user", "third prompt", base), finished,
+	}))
 }
 
 func TestTrackEndsWithTerminalRunEventUsesPersistedRunIdentity(t *testing.T) {
@@ -1358,6 +1368,17 @@ func TestTrackEndsWithTerminalRunEventUsesPersistedRunIdentity(t *testing.T) {
 	latestFinished := tagged(latestID, aguievents.NewRunErrorEvent("callback override"))
 	nextOutput := tagged(nextID, aguievents.NewTextMessageContentEvent("new-message", "startup write failed"))
 
+	reversedOlder := tagged(latestID, aguievents.NewRunStartedEvent("thread", "older"))
+	reversedNewer := tagged(olderID, aguievents.NewRunStartedEvent("thread", "newer"))
+	reversedOlderFinished := tagged(latestID, aguievents.NewRunFinishedEvent("thread", "older"))
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{reversedOlder, reversedNewer, reversedOlderFinished}))
+
+	mixedNewer := aguievents.NewRunStartedEvent("thread", "legacy-newer")
+	mixedNewer.SetTimestamp(1)
+	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{
+		reversedOlder, newTrackEventAt(t, mixedNewer, at), reversedOlderFinished,
+	}))
+
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, olderOutput, olderFinished, anonymous}))
 	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, latestFinished, olderOutput, olderFinished}))
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, latestFinished, nextOutput, olderFinished}))
@@ -1369,10 +1390,10 @@ func TestTrackEndsWithTerminalRunEventUsesPersistedRunIdentity(t *testing.T) {
 	require.False(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{legacyLatestStart, olderOutput, olderFinished}))
 
 	legacyOlder := aguievents.NewRunStartedEvent("thread", "legacy-older")
-	legacyOlder.SetTimestamp(1)
+	legacyOlder.SetTimestamp(3)
 	legacyOlderStart := newTrackEventAt(t, legacyOlder, at)
 	legacyOlderFinished := newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "legacy-older"), at)
-	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{latestStart, latestFinished, legacyOlderStart, legacyOlderFinished}))
+	require.True(t, trackEndsWithTerminalRunEvent([]session.TrackEvent{legacyOlderStart, latestStart, latestFinished, legacyOlderFinished}))
 
 }
 

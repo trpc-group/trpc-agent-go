@@ -95,7 +95,10 @@ func TestAGUIRedisHistoryCompletesWithTiedEvents(t *testing.T) {
 }
 
 func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
-	for _, scenario := range []string{"old-finished-before-snapshot", "older-finishes-last", "start-replaced", "startup-write-fails"} {
+	for _, scenario := range []string{
+		"old-finished-before-snapshot", "older-finishes-last", "start-replaced", "startup-write-fails",
+		"reversed-uuid-order", "legacy-startup-write-fails-with-active-run",
+	} {
 		t.Run(scenario, func(t *testing.T) { testAGUIRedisHistoryFollowsLatestRun(t, scenario) })
 	}
 }
@@ -120,13 +123,25 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	}
 	oldModel := historyStreamModel{responses: make(chan *model.Response, 1)}
 	latestModel := historyStreamModel{responses: make(chan *model.Response, 1)}
-	oldServer := newAGUIHTTPServerWithOptions(t, oldModel, newService(),
-		agui.WithFlushInterval(5*time.Millisecond))
+	legacy := scenario == "legacy-startup-write-fails-with-active-run"
+	oldRedisService := newService()
+	var oldService session.Service = oldRedisService
 	latestService := newService()
 	var liveService session.Service = latestService
-	if scenario == "startup-write-fails" {
-		liveService = &failFirstHistoryAppend{Service: latestService}
+	switch scenario {
+	case "startup-write-fails":
+		liveService = &historyPersistenceFixture{Service: latestService, failFirstAppend: true}
+	case "reversed-uuid-order":
+		// Persist the newer run's start second while giving it a smaller UUIDv7.
+		oldService = &historyPersistenceFixture{
+			Service: oldRedisService, runID: "00000000-0002-7000-8000-000000000000",
+		}
+		liveService = &historyPersistenceFixture{Service: latestService, runID: "00000000-0001-7000-8000-000000000000"}
+	case "legacy-startup-write-fails-with-active-run":
+		oldService = &historyPersistenceFixture{Service: oldRedisService, omitRunID: true}
+		liveService = &historyPersistenceFixture{Service: latestService, omitRunID: true, failFirstAppend: true}
 	}
+	oldServer := newAGUIHTTPServerWithOptions(t, oldModel, oldService, agui.WithFlushInterval(5*time.Millisecond))
 	callbacks := translator.NewCallbacks().RegisterAfterTranslate(func(_ context.Context, e aguievents.Event) (aguievents.Event, error) {
 		if scenario == "start-replaced" && e.Type() == aguievents.EventTypeRunStarted && e.RunID() == "latest" {
 			return aguievents.NewCustomEvent("start-replaced"), nil
@@ -145,6 +160,19 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	oldRun := postJSON(t, oldServer.Client(), oldServer.URL+"/agui",
 		`{"threadId":"thread","runId":"old","messages":[{"id":"old-user","role":"user","content":"old"}],"forwardedProps":{"userId":"user"}}`,
 		10*time.Second)
+	previousModel, previousRun, previousMessage := oldModel, oldRun, "old-message"
+	if legacy {
+		// Leave the oldest run active while the middle run finishes and the
+		// latest run writes its first response after losing the startup batch.
+		defer close(oldModel.responses)
+		middleModel := historyStreamModel{responses: make(chan *model.Response, 1)}
+		middleServer := newAGUIHTTPServerWithOptions(t, middleModel,
+			&historyPersistenceFixture{Service: newService(), omitRunID: true}, agui.WithFlushInterval(5*time.Millisecond))
+		middleRun := postJSON(t, middleServer.Client(), middleServer.URL+"/agui",
+			`{"threadId":"thread","runId":"middle","messages":[{"id":"middle-user","role":"user","content":"middle"}],"forwardedProps":{"userId":"user"}}`,
+			10*time.Second)
+		previousModel, previousRun, previousMessage = middleModel, middleRun, "middle-message"
+	}
 	latestRun := postJSON(t, latestServer.Client(), latestServer.URL+"/agui",
 		`{"threadId":"thread","runId":"latest","messages":[{"id":"latest-user","role":"user","content":"latest"}],"forwardedProps":{"userId":"user"}}`,
 		10*time.Second)
@@ -162,9 +190,9 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 		events := readSSEEvents(t, latestRun.Body)
 		require.IsType(t, &aguievents.RunFinishedEvent{}, events[len(events)-1])
 	}
-	finish(oldModel, "old-message")
-	oldEvents := readSSEEvents(t, oldRun.Body)
-	require.IsType(t, &aguievents.RunFinishedEvent{}, oldEvents[len(oldEvents)-1])
+	finish(previousModel, previousMessage)
+	previousEvents := readSSEEvents(t, previousRun.Body)
+	require.IsType(t, &aguievents.RunFinishedEvent{}, previousEvents[len(previousEvents)-1])
 
 	if scenario == "older-finishes-last" {
 		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
@@ -203,6 +231,25 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 		return err == nil && ok && content.Delta == "before snapshot"
 	}, 3*time.Second, 5*time.Millisecond)
 
+	if legacy {
+		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
+		require.NoError(t, err)
+		var startedRuns, finishedRuns []string
+		for _, event := range history.Events {
+			require.NotContains(t, string(event.Payload), `"trpcRunId"`)
+			stored, err := aguievents.EventFromJSON(event.Payload)
+			require.NoError(t, err)
+			switch stored.Type() {
+			case aguievents.EventTypeRunStarted:
+				startedRuns = append(startedRuns, stored.RunID())
+			case aguievents.EventTypeRunFinished:
+				finishedRuns = append(finishedRuns, stored.RunID())
+			}
+		}
+		require.Equal(t, []string{"old", "middle"}, startedRuns)
+		require.Equal(t, []string{"middle"}, finishedRuns)
+	}
+
 	snapshot := postJSON(t, latestServer.Client(), latestServer.URL+"/history", snapshotInput, 10*time.Second)
 	reader := r3sse.NewEventStreamReader(snapshot.Body, 1024*1024)
 	next := func() aguievents.Event {
@@ -229,14 +276,36 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	require.IsType(t, &aguievents.RunFinishedEvent{}, runEvents[len(runEvents)-1])
 }
 
-type failFirstHistoryAppend struct {
+type historyPersistenceFixture struct {
 	*redisservice.Service
-	failed atomic.Bool
+	runID           string
+	omitRunID       bool
+	failFirstAppend bool
+	failed          atomic.Bool
 }
 
-func (s *failFirstHistoryAppend) AppendTrackEvent(ctx context.Context, sess *session.Session, event *session.TrackEvent, opts ...session.Option) error {
-	if s.failed.CompareAndSwap(false, true) {
+func (s *historyPersistenceFixture) AppendTrackEvent(ctx context.Context, sess *session.Session, event *session.TrackEvent, opts ...session.Option) error {
+	if s.failFirstAppend && s.failed.CompareAndSwap(false, true) {
 		return errors.New("temporary startup track write failure")
+	}
+	if s.runID != "" || s.omitRunID {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return err
+		}
+		if s.omitRunID {
+			delete(payload, "trpcRunId")
+		} else {
+			runID, _ := json.Marshal(s.runID)
+			payload["trpcRunId"] = runID
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		rewritten := *event
+		rewritten.Payload = raw
+		event = &rewritten
 	}
 	return s.Service.AppendTrackEvent(ctx, sess, event, opts...)
 }
