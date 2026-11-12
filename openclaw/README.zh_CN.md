@@ -61,7 +61,7 @@ cd openclaw
 go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
-注意：默认情况下，OpenClaw 使用 `-mode openai` 和 `-model gpt-5`。
+注意：默认情况下，OpenClaw 使用 `-mode openai` 和 `-model gpt-5.6-sol`。
 如果没有模型凭据，请继续使用 `-mode mock`。
 
 ## Agent 类型
@@ -677,7 +677,7 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
-默认情况下，`-model` 使用 `$OPENAI_MODEL`（如已设置），否则回退到 `gpt-5`。
+默认情况下，`-model` 使用 `$OPENAI_MODEL`（如已设置），否则回退到 `gpt-5.6-sol`。
 
 ### 请求级模型选择
 
