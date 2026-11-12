@@ -12,7 +12,8 @@ memoryService := memoryinmemory.NewMemoryService()
 
 **配置选项**：
 
-- `WithMemoryLimit(limit int)`: 设置每用户记忆数量上限
+- `WithMemoryLimit(limit int)`: 设置每用户记忆数量上限。达到上限后，
+  `AddMemory` 仍可写入已有记忆 ID（包括更新主题标签）；仅新增 ID 需要剩余容量。
 - `WithMinSearchScore(score float64)`: 过滤低于阈值的关键词搜索结果
   （默认 0.3）
 - `WithMaxResults(maxResults int)`: 限制关键词搜索结果数（默认 10；设为 0
