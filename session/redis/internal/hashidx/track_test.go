@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -444,79 +443,6 @@ func TestListTracksForSession_UnmarshalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unmarshal session meta")
 }
 
-func TestClient_TrackEventsPagedReadRetriesConcurrentAppend(t *testing.T) {
-	url := os.Getenv("TRPC_TEST_REDIS_URL")
-	if url == "" {
-		url = "redis://" + miniredis.RunT(t).Addr()
-	}
-	opts, err := redis.ParseURL(url)
-	require.NoError(t, err)
-	opts.PoolSize = 1
-	reader := redis.NewClient(opts)
-	writerOpts := *opts
-	writer := redis.NewClient(&writerOpts)
-	t.Cleanup(func() {
-		require.NoError(t, reader.Close())
-		require.NoError(t, writer.Close())
-	})
-	cfg := defaultConfig()
-	cfg.KeyPrefix = fmt.Sprintf("track-read-test-%d", time.Now().UnixNano())
-	c := NewClient(reader, cfg)
-	w := NewClient(writer, cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "paged-read"}
-	_, err = w.CreateSession(ctx, key, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, w.DeleteSession(context.Background(), key)) })
-
-	timestamp := time.Unix(1700000000, 0)
-	appendEvent := func(payload string) {
-		t.Helper()
-		require.NoError(t, w.AppendTrackEvent(ctx, key, &session.TrackEvent{
-			Track: "alpha", Timestamp: timestamp, Payload: json.RawMessage(payload),
-		}, nil))
-	}
-	for i := 1; i <= 600; i++ {
-		appendEvent(fmt.Sprint(i))
-	}
-	pages := 0
-	reader.AddHook(trackReadPageHook{afterPage: func(cmd redis.Cmder) {
-		pages++
-		start, end := cmd.Args()[2].(int64), cmd.Args()[3].(int64)
-		require.LessOrEqual(t, end-start+1, int64(512))
-		if pages == 1 {
-			appendEvent("601")
-		}
-	}})
-
-	got, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 1, time.Time{})
-	require.NoError(t, err)
-	require.Len(t, got["alpha"], 1)
-	require.Equal(t, "601", string(got["alpha"][0].Payload))
-	require.Equal(t, 4, pages, "the append invalidates the first two-page scan")
-}
-
-type trackReadPageHook struct {
-	afterPage func(redis.Cmder)
-}
-
-func (h trackReadPageHook) DialHook(next redis.DialHook) redis.DialHook { return next }
-
-func (h trackReadPageHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error {
-		err := next(ctx, cmd)
-		if err == nil && cmd.Name() == "zrange" {
-			h.afterPage(cmd)
-		}
-		return err
-	}
-}
-
-func (h trackReadPageHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
-	return next
-}
-
 func TestClient_TrackEventsEqualTimestampOrder(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
@@ -579,4 +505,48 @@ func TestClient_TrackEventsBoundaryScoreOrder(t *testing.T) {
 			require.JSONEq(t, fmt.Sprintf("%q", want[i]), string(evt.Payload))
 		}
 	}
+}
+
+func TestClient_LimitedTrackReadWithScriptOnlyPermissions(t *testing.T) {
+	url := os.Getenv("TRPC_TEST_REDIS_URL")
+	if url == "" {
+		t.Skip("requires a standalone Redis server")
+	}
+	opts, err := redis.ParseURL(url)
+	require.NoError(t, err)
+	writer := redis.NewClient(opts)
+	defer writer.Close()
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	cfg := defaultConfig()
+	cfg.KeyPrefix = fmt.Sprintf("review-acl-%d", time.Now().UnixNano())
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "read"}
+	w := NewClient(writer, cfg)
+	_, err = w.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	defer w.DeleteSession(context.Background(), key)
+	for i := 1; i <= 600; i++ {
+		require.NoError(t, w.AppendTrackEvent(ctx, key, &session.TrackEvent{
+			Track: "agui", Timestamp: time.Unix(1700000000, 0),
+			Payload: json.RawMessage(fmt.Sprint(i)),
+		}, nil))
+	}
+	user := cfg.KeyPrefix
+	require.NoError(t, writer.Do(ctx, "ACL", "SETUSER", user, "on", ">fixture-password",
+		"~*", "+@all", "-watch", "-multi", "-exec").Err())
+	defer writer.Do(context.Background(), "ACL", "DELUSER", user)
+	readerOpts := *opts
+	readerOpts.Username = user
+	readerOpts.Password = "fixture-password"
+	reader := redis.NewClient(&readerOpts)
+	defer reader.Close()
+	r := NewClient(reader, cfg)
+	// Small reads stay on the ordinary Lua path.
+	small, err := r.GetTrackEvents(ctx, key, []session.Track{"agui"}, 600, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, small["agui"], 600)
+	got, err := r.GetTrackEvents(ctx, key, []session.Track{"agui"}, 1, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, got["agui"], 1)
+	require.Equal(t, "600", string(got["agui"][0].Payload))
 }

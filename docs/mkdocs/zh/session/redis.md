@@ -23,7 +23,7 @@ Redis Session Service 使用的命令兼容 Redis OSS 4.0 及以上版本。Redi
 | Key 与字符串 | `DEL`、`EXISTS`、`EXPIRE`、`GET`、`PERSIST`、`PEXPIRE`、`PTTL`、`SCAN`、`SET`、`SETNX` |
 | Hash | `HDEL`、`HEXISTS`、`HGET`、`HGETALL`、`HINCRBY`、`HMGET`、`HSCAN`、`HSET` |
 | Set | `SADD`、`SMEMBERS` |
-| Sorted Set | `ZADD`、`ZRANGE`、`ZRANGEBYSCORE`、`ZRANK`、`ZREM`、`ZREVRANGE`、`ZREVRANGEBYSCORE` |
+| Sorted Set | `ZADD`、`ZCOUNT`、`ZRANGE`、`ZRANGEBYSCORE`、`ZRANK`、`ZREM`、`ZREVRANGE`、`ZREVRANGEBYSCORE` |
 | Lua 与事务 | `EVAL`、`EVALSHA`、`WATCH`、`UNWATCH`、`MULTI`、`EXEC` |
 
 这里只要求当前服务实际使用的命令形式，不依赖后续 Redis 版本新增的可选参数。Lua 脚本使用 Redis 的 Lua 5.1 环境和 `cjson`。
@@ -31,8 +31,6 @@ Redis Session Service 使用的命令兼容 Redis OSS 4.0 及以上版本。Redi
 Redis Standalone、Sentinel 和 Cluster 均可兼容，但 client builder 必须返回与部署模式对应的 `go-redis` 客户端。`WithRedisClientURL` 使用的默认 builder 只会根据单个地址创建单节点客户端；使用 Sentinel 或 Cluster 时，需要通过 `storage/redis.SetClientBuilder` 配置自定义 builder。
 
 在 Cluster 模式下，同一个多 Key Lua 脚本或事务涉及的所有 Key 必须位于同一 hash slot。内置 Key 格式通过 `{userID}` 或 `{appName}` hash tag 满足该要求；按用户执行的 `SCAN` pattern 也包含相同的固定 hash tag，Cluster 客户端可以将其路由到对应 slot 所在节点。
-
-HashIdx 在限制历史返回条数时，如果截断位置落在很大的同分组内，会分页扫描索引，并用 `WATCH` 和 `EXEC` 校验读到的数据。扫描期间 track 有变更时会重试，持续变更时会返回错误。
 
 对于 Redis 兼容代理或其他兼容实现，需要单独验证 `SCAN`/`HSCAN`、Lua 5.1 与 `cjson`、事务及脚本缓存行为。若后端的 `EVALSHA` 缓存不可靠，可使用 `WithDisableScriptCache(true)` 仅通过 `EVAL` 执行脚本。根据连接 URL 的配置，内置 `go-redis` 客户端还可能发送 `AUTH`、`SELECT`、`CLIENT SETNAME`，并探测 `HELLO`、`CLIENT SETINFO` 等较新的命令。Redis OSS 4.0 会为不支持的探测命令返回普通错误，客户端随后回退或继续初始化，但遇到未知命令时直接断开连接的代理需要另行验证。
 

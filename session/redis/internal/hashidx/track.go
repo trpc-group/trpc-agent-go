@@ -10,13 +10,10 @@
 package hashidx
 
 import (
-	"container/heap"
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -86,7 +83,7 @@ func ttlSecondsCeil(ttl time.Duration) int64 {
 }
 
 // GetTrackEvents retrieves track events for a session using Hash+ZSet structure.
-// Each track is loaded from the time index and event data as one consistent read.
+// Each track is loaded via a Lua script that reads from ZSet index then HMGETs from Hash.
 func (c *Client) GetTrackEvents(
 	ctx context.Context,
 	key session.Key,
@@ -106,7 +103,7 @@ func (c *Client) GetTrackEvents(
 
 	results := make(map[session.Track][]session.TrackEvent)
 	for _, track := range tracks {
-		events, err := c.loadTrackEvents(ctx, key, track, minScore, maxScore, limit)
+		events, err := c.loadTrackEventsViaLua(ctx, key, track, minScore, maxScore, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -117,22 +114,25 @@ func (c *Client) GetTrackEvents(
 	return results, nil
 }
 
-func (c *Client) loadTrackEvents(
+// loadTrackEventsViaLua loads track events for a single track via Lua script.
+func (c *Client) loadTrackEventsViaLua(
 	ctx context.Context,
 	key session.Key,
 	track session.Track,
 	minScore, maxScore string,
 	limit int,
 ) ([]session.TrackEvent, error) {
-	keys := []string{c.keys.TrackDataKey(key, track), c.keys.TrackTimeIndexKey(key, track)}
-	rawEvents, err := c.runScript(ctx, luaLoadTrackEvents, keys, minScore, maxScore, limit, trackReadBatchSize).StringSlice()
-	if err == redis.Nil {
-		if limit <= 0 {
+	rawEvents, err := c.runScript(ctx, luaLoadTrackEvents,
+		[]string{
+			c.keys.TrackDataKey(key, track),
+			c.keys.TrackTimeIndexKey(key, track),
+		},
+		minScore, maxScore, limit,
+	).StringSlice()
+	if err != nil {
+		if err == redis.Nil {
 			return nil, nil
 		}
-		rawEvents, err = c.loadTrackEventsPaged(ctx, keys, minScore, maxScore, limit)
-	}
-	if err != nil {
 		return nil, fmt.Errorf("load track events: %w", err)
 	}
 
@@ -145,130 +145,6 @@ func (c *Client) loadTrackEvents(
 		events = append(events, evt)
 	}
 	return events, nil
-}
-
-const trackReadBatchSize = 512
-
-// loadTrackEventsPaged scans large cutoff ties outside Lua so Redis can serve
-// other clients between pages. EXEC validates that the index and selected
-// payloads came from the same track version. Changes restart the read.
-func (c *Client) loadTrackEventsPaged(
-	ctx context.Context,
-	keys []string,
-	minScore, maxScore string,
-	limit int,
-) ([]string, error) {
-	dataKey, indexKey := keys[0], keys[1]
-	runRange := luaLoadTrackEvents.Run
-	if c.cfg.DisableScriptCache {
-		runRange = luaLoadTrackEvents.Eval
-	}
-	for attempt := 0; attempt < 3; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		var payloads []string
-		err := c.client.Watch(ctx, func(tx *redis.Tx) error {
-			ranks, err := runRange(ctx, tx, keys, minScore, maxScore, limit, 0).Int64Slice()
-			if err != nil {
-				return err
-			}
-			if ranks[0] > ranks[1] {
-				return nil
-			}
-
-			ids, err := selectTrackEventIDs(ctx, tx, indexKey, ranks[0], ranks[1], limit)
-			if err != nil {
-				return err
-			}
-			for first := 0; first < len(ids); first += trackReadBatchSize {
-				last := min(first+trackReadBatchSize, len(ids))
-				values, err := tx.HMGet(ctx, dataKey, ids[first:last]...).Result()
-				if err != nil {
-					return err
-				}
-				for _, value := range values {
-					if value != nil {
-						payloads = append(payloads, value.(string))
-					}
-				}
-			}
-
-			var indexExists, dataExists *redis.IntCmd
-			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				indexExists = pipe.Exists(ctx, indexKey)
-				dataExists = pipe.Exists(ctx, dataKey)
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			// Before Redis 6.0.9, expiration alone did not abort a WATCH.
-			if indexExists.Val() == 0 || (len(payloads) > 0 && dataExists.Val() == 0) {
-				return redis.TxFailedErr
-			}
-			return nil
-		}, keys...)
-		if !errors.Is(err, redis.TxFailedErr) {
-			return payloads, err
-		}
-	}
-	return nil, fmt.Errorf("track changed during paged history read: %w", redis.TxFailedErr)
-}
-
-func selectTrackEventIDs(
-	ctx context.Context,
-	tx *redis.Tx,
-	indexKey string,
-	first, last int64,
-	limit int,
-) ([]string, error) {
-	var selected trackEventHeap
-	for start := first; start <= last; start += trackReadBatchSize {
-		end := min(start+trackReadBatchSize-1, last)
-		entries, err := tx.ZRangeWithScores(ctx, indexKey, start, end).Result()
-		if err != nil {
-			return nil, err
-		}
-		for _, entry := range entries {
-			if len(selected) < limit {
-				heap.Push(&selected, entry)
-			} else if trackEventLess(selected[0], entry) {
-				selected[0] = entry
-				heap.Fix(&selected, 0)
-			}
-		}
-	}
-	sort.Sort(selected)
-	ids := make([]string, len(selected))
-	for i, entry := range selected {
-		ids[i] = entry.Member.(string)
-	}
-	return ids, nil
-}
-
-type trackEventHeap []redis.Z
-
-func (h trackEventHeap) Len() int           { return len(h) }
-func (h trackEventHeap) Less(i, j int) bool { return trackEventLess(h[i], h[j]) }
-func (h trackEventHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *trackEventHeap) Push(value any)    { *h = append(*h, value.(redis.Z)) }
-func (h *trackEventHeap) Pop() any {
-	last := len(*h) - 1
-	value := (*h)[last]
-	*h = (*h)[:last]
-	return value
-}
-
-func trackEventLess(a, b redis.Z) bool {
-	if a.Score != b.Score {
-		return a.Score < b.Score
-	}
-	aID, bID := a.Member.(string), b.Member.(string)
-	if len(aID) != len(bID) {
-		return len(aID) < len(bID)
-	}
-	return aID < bID
 }
 
 // ListTracksForSession returns the list of tracks from session state.
