@@ -520,6 +520,15 @@ func TestClient_LimitedTrackReadWithScriptOnlyPermissions(t *testing.T) {
 	defer stop()
 	cfg := defaultConfig()
 	cfg.KeyPrefix = fmt.Sprintf("review-acl-%d", time.Now().UnixNano())
+	user := cfg.KeyPrefix
+	err = writer.Do(ctx, "ACL", "SETUSER", user, "on", ">fixture-password",
+		"~*", "+@all", "-watch", "-multi", "-exec").Err()
+	if redis.HasErrorPrefix(err, "unknown command `ACL`") || redis.HasErrorPrefix(err, "unknown command 'ACL'") {
+		t.Skip("Redis server does not support the ACL command")
+	}
+	require.NoError(t, err)
+	defer writer.Do(context.Background(), "ACL", "DELUSER", user)
+
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "read"}
 	w := NewClient(writer, cfg)
 	_, err = w.CreateSession(ctx, key, nil)
@@ -531,10 +540,6 @@ func TestClient_LimitedTrackReadWithScriptOnlyPermissions(t *testing.T) {
 			Payload: json.RawMessage(fmt.Sprint(i)),
 		}, nil))
 	}
-	user := cfg.KeyPrefix
-	require.NoError(t, writer.Do(ctx, "ACL", "SETUSER", user, "on", ">fixture-password",
-		"~*", "+@all", "-watch", "-multi", "-exec").Err())
-	defer writer.Do(context.Background(), "ACL", "DELUSER", user)
 	readerOpts := *opts
 	readerOpts.Username = user
 	readerOpts.Password = "fixture-password"
