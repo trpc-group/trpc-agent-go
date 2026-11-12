@@ -252,16 +252,10 @@ func (r *runner) messagesSnapshotFollow(
 }
 
 func (r *runner) shouldFollowMessagesSnapshot(key session.Key, trackEvents *session.TrackEvents) bool {
-	if trackEvents == nil || trackEndsWithTerminalRunEvent(trackEvents.Events) {
+	if trackEvents == nil || r.flushInterval <= 0 || trackEndsWithTerminalRunEvent(trackEvents.Events) {
 		return false
 	}
-	if r.flushInterval <= 0 {
-		return false
-	}
-	if len(trackEvents.Events) > 0 {
-		return true
-	}
-	return r.isRunning(key)
+	return len(trackEvents.Events) > 0 || r.isRunning(key)
 }
 
 func (r *runner) handleMessagesSnapshotFollowTick(
@@ -334,10 +328,23 @@ type snapshotRun struct {
 	finished    bool
 }
 
+type orderedSnapshotRun struct {
+	owner    snapshotRunID
+	sequence uint64
+}
+
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 	runs := snapshotRuns{observed: make(map[snapshotRunID]snapshotRun)}
+	latestByEpoch := make(map[string]orderedSnapshotRun)
 	var previous aguievents.EventType
 	for _, event := range events {
+		id, order := track.HistoryRun(event.Payload)
+		latest := latestByEpoch[order.Epoch]
+		ordered := id != "" && order.Epoch != "" && order.Sequence > 0
+		if ordered && order.Sequence < latest.sequence {
+			previous = ""
+			continue
+		}
 		evt, err := aguievents.EventFromJSON(event.Payload)
 		if err != nil {
 			continue
@@ -345,9 +352,23 @@ func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 		terminal, _ := terminalRunSignal(evt)
 		eventType := evt.Type()
 		userMessage := isUserMessageEvent(evt)
-		if id := track.HistoryRunID(event.Payload); id != "" {
-			runs.observeTracked(id, eventType == aguievents.EventTypeRunStarted || userMessage, terminal)
+		if id != "" {
 			previous = ""
+			boundary := eventType == aguievents.EventTypeRunStarted || userMessage
+			var orderedBoundary bool
+			if ordered && order.Sequence > latest.sequence {
+				// An admission orders the owners even if one startup batch was
+				// delayed or lost. Drop only older runs from the same epoch.
+				delete(runs.observed, latest.owner)
+				latestByEpoch[order.Epoch] = orderedSnapshotRun{
+					owner:    snapshotRunID{value: id, tracked: true},
+					sequence: order.Sequence,
+				}
+				// A response or terminal can establish a boundary only when
+				// there is no boundary or this order supersedes its owner.
+				orderedBoundary = !runs.hasBoundary || latest.sequence != 0 && runs.latest == latest.owner
+			}
+			runs.observeTracked(id, boundary, orderedBoundary, terminal)
 			continue
 		}
 
@@ -371,16 +392,16 @@ func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 		}
 		previous = eventType
 	}
-	return runs.completed && !runs.hasActiveRunWithoutBoundary()
+	return runs.completed && !runs.hasUnresolvedRun(len(latestByEpoch) > 1)
 }
 
-func (r *snapshotRuns) observeTracked(id string, boundary, terminal bool) {
+func (r *snapshotRuns) observeTracked(id string, boundary, orderedBoundary, terminal bool) {
 	owner := snapshotRunID{value: id, tracked: true}
 	run := r.observed[owner]
 	// The first visible boundary establishes order. Later events from
 	// the same invocation only update that invocation's state.
-	if boundary && !run.hasBoundary {
-		run.hasBoundary = true
+	if (boundary || orderedBoundary) && !run.hasBoundary {
+		run.hasBoundary = boundary
 		r.latest, r.hasBoundary, r.completed = owner, true, run.finished
 		r.ambiguousLegacy = false
 	}
@@ -435,9 +456,9 @@ func (r *snapshotRuns) hasOtherActiveRun() bool {
 	return false
 }
 
-func (r *snapshotRuns) hasActiveRunWithoutBoundary() bool {
-	for _, run := range r.observed {
-		if !run.hasBoundary && !run.finished {
+func (r *snapshotRuns) hasUnresolvedRun(multipleEpochs bool) bool {
+	for id, run := range r.observed {
+		if !run.finished && (!run.hasBoundary || multipleEpochs && id.tracked && id != r.latest) {
 			return true
 		}
 	}
@@ -448,7 +469,8 @@ func isSnapshotResponseEvent(eventType aguievents.EventType) bool {
 	switch eventType {
 	case aguievents.EventTypeTextMessageStart, aguievents.EventTypeTextMessageContent, aguievents.EventTypeTextMessageChunk,
 		aguievents.EventTypeReasoningMessageStart, aguievents.EventTypeReasoningMessageContent, aguievents.EventTypeReasoningMessageChunk,
-		aguievents.EventTypeToolCallStart, aguievents.EventTypeToolCallArgs, aguievents.EventTypeToolCallChunk:
+		aguievents.EventTypeToolCallStart, aguievents.EventTypeToolCallArgs, aguievents.EventTypeToolCallChunk,
+		aguievents.EventTypeToolCallResult:
 		return true
 	default:
 		return false

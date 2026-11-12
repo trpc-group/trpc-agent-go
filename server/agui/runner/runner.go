@@ -501,6 +501,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	}()
 	if input.enableTrack {
 		input.historyID = uuid.Must(uuid.NewV7()).String()
+		r.admitHistoryRun(ctx, input)
 		var stopTrackFlush func()
 		var startTrackFlushOnce sync.Once
 		input.startTrackFlush = func() {
@@ -1516,6 +1517,24 @@ func (r *runner) recordTrackEvent(ctx context.Context, input *runInput, event ag
 	trackCtx, cancel := r.newTrackPersistenceContext(ctx)
 	defer cancel()
 	return r.tracker.AppendEvent(track.WithHistoryRunID(trackCtx, input.historyID), input.key, event)
+}
+
+func (r *runner) admitHistoryRun(ctx context.Context, input *runInput) {
+	tracker, ok := r.tracker.(interface {
+		AdmitHistoryRun(context.Context, session.Key) error
+	})
+	if !ok || r.flushInterval <= 0 {
+		return
+	}
+	if r.trackPersistenceTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.trackPersistenceTimeout)
+		defer cancel()
+	}
+	if err := tracker.AdmitHistoryRun(track.WithHistoryRunID(ctx, input.historyID), input.key); err != nil {
+		log.WarnfContext(ctx, "agui run: threadID: %s, runID: %s, record history admission: %v",
+			input.threadID, input.runID, err)
+	}
 }
 
 func isExplicitRunCancel(ctx context.Context) bool {

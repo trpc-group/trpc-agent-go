@@ -58,6 +58,7 @@ type sessionState struct {
 	persistMu  sync.Mutex            // persistMu serializes storage writes for the session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
 	runID      string                // run owning this session state, assigned when it is created.
+	order      json.RawMessage       // persistMu guards the encoded admission order.
 	pending    []json.RawMessage     // pending stores immutable payloads waiting for persistence.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
 	closing    bool                  // closing rejects appends while Close is draining the final batch.
@@ -181,7 +182,7 @@ func (t *tracker) persistEvents(
 	for _, payload := range payloads {
 		trackEvent := &session.TrackEvent{
 			Track:     TrackAGUI,
-			Payload:   historyPayload(payload, state.runID),
+			Payload:   historyPayload(payload, state.runID, state.order),
 			Timestamp: time.Now(),
 		}
 		if sess == nil {
@@ -228,9 +229,13 @@ func (t *tracker) ensureSessionExists(ctx context.Context, key session.Key, stat
 		state.session = sess
 		return state.session, nil
 	}
-	sess, err = t.sessionService.CreateSession(ctx, key, session.StateMap{})
-	if err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
+	sess, createErr := t.sessionService.CreateSession(ctx, key, session.StateMap{})
+	if createErr != nil {
+		// A separate runner may have created the same session in the meantime.
+		sess, err = t.sessionService.GetSession(ctx, key)
+		if err != nil || sess == nil {
+			return nil, fmt.Errorf("create session: %w", createErr)
+		}
 	}
 	state.session = sess
 	return state.session, nil

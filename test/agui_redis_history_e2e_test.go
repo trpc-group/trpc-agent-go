@@ -13,7 +13,9 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,6 +100,9 @@ func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
 	for _, scenario := range []string{
 		"old-finished-before-snapshot", "older-finishes-last", "start-replaced", "startup-write-fails",
 		"reversed-uuid-order", "legacy-startup-write-fails-with-active-run",
+		"newer-legacy-run", "newer-legacy-run-finishes", "older-ordered-startup-lost-newer-legacy",
+		"older-startup-lost-before-newer-start", "latest-finishes-without-startup",
+		"older-startup-flush-delayed", "older-startup-delayed-newer-startup-lost",
 	} {
 		t.Run(scenario, func(t *testing.T) { testAGUIRedisHistoryFollowsLatestRun(t, scenario) })
 	}
@@ -124,12 +129,21 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	oldModel := historyStreamModel{responses: make(chan *model.Response, 1)}
 	latestModel := historyStreamModel{responses: make(chan *model.Response, 1)}
 	legacy := scenario == "legacy-startup-write-fails-with-active-run"
+	olderStartupLost := scenario == "older-startup-lost-before-newer-start"
+	leaveOlderRunning := olderStartupLost || scenario == "latest-finishes-without-startup" ||
+		scenario == "newer-legacy-run-finishes"
+	latestStartupLostWithDelay := scenario == "older-startup-delayed-newer-startup-lost"
+	delayOlderStartup := scenario == "older-startup-flush-delayed" || latestStartupLostWithDelay
+	olderOrderedStartupLost := scenario == "older-ordered-startup-lost-newer-legacy"
+	previewBeforeOlderFinishes := latestStartupLostWithDelay || olderOrderedStartupLost
 	oldRedisService := newService()
 	var oldService session.Service = oldRedisService
 	latestService := newService()
 	var liveService session.Service = latestService
 	switch scenario {
-	case "startup-write-fails":
+	case "older-startup-lost-before-newer-start":
+		oldService = &historyPersistenceFixture{Service: oldRedisService, failFirstAppend: true}
+	case "startup-write-fails", "latest-finishes-without-startup", "older-startup-delayed-newer-startup-lost":
 		liveService = &historyPersistenceFixture{Service: latestService, failFirstAppend: true}
 	case "reversed-uuid-order":
 		// Persist the newer run's start second while giving it a smaller UUIDv7.
@@ -137,11 +151,23 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 			Service: oldRedisService, runID: "00000000-0002-7000-8000-000000000000",
 		}
 		liveService = &historyPersistenceFixture{Service: latestService, runID: "00000000-0001-7000-8000-000000000000"}
+	case "older-ordered-startup-lost-newer-legacy":
+		oldService = &historyPersistenceFixture{Service: oldRedisService, failFirstAppend: true}
+		liveService = &historyPersistenceFixture{Service: latestService, omitRunID: true}
+	case "newer-legacy-run", "newer-legacy-run-finishes":
+		// A legacy writer can start after a run with a stored order.
+		liveService = &historyPersistenceFixture{Service: latestService, omitRunID: true}
 	case "legacy-startup-write-fails-with-active-run":
 		oldService = &historyPersistenceFixture{Service: oldRedisService, omitRunID: true}
 		liveService = &historyPersistenceFixture{Service: latestService, omitRunID: true, failFirstAppend: true}
 	}
-	oldServer := newAGUIHTTPServerWithOptions(t, oldModel, oldService, agui.WithFlushInterval(5*time.Millisecond))
+	olderGate := newHistoryStartupGate("old")
+	oldCallbacks := translator.NewCallbacks()
+	if delayOlderStartup {
+		oldCallbacks.RegisterAfterTranslate(olderGate.pause)
+	}
+	oldServer := newAGUIHTTPServerWithOptions(t, oldModel, oldService,
+		agui.WithAGUIRunnerOptions(aguirunner.WithTranslateCallbacks(oldCallbacks)), agui.WithFlushInterval(5*time.Millisecond))
 	callbacks := translator.NewCallbacks().RegisterAfterTranslate(func(_ context.Context, e aguievents.Event) (aguievents.Event, error) {
 		if scenario == "start-replaced" && e.Type() == aguievents.EventTypeRunStarted && e.RunID() == "latest" {
 			return aguievents.NewCustomEvent("start-replaced"), nil
@@ -157,14 +183,45 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	key := session.Key{AppName: testAppName, UserID: "user", SessionID: "thread"}
 	t.Cleanup(func() { require.NoError(t, latestService.DeleteSession(context.Background(), key)) })
 
-	oldRun := postJSON(t, oldServer.Client(), oldServer.URL+"/agui",
-		`{"threadId":"thread","runId":"old","messages":[{"id":"old-user","role":"user","content":"old"}],"forwardedProps":{"userId":"user"}}`,
-		10*time.Second)
+	const olderPayload = `{"threadId":"thread","runId":"old","messages":[{"id":"old-user","role":"user","content":"old"}],"forwardedProps":{"userId":"user"}}`
+	const olderPreview = "older output before newer run starts"
+	const latestPreview = "before snapshot"
+	persistPreview := func(stream historyStreamModel, messageID, delta string) {
+		t.Helper()
+		response := historyDelta(delta)
+		response.ID = messageID
+		stream.responses <- response
+		require.Eventually(t, func() bool {
+			history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
+			if err != nil || len(history.Events) == 0 {
+				return false
+			}
+			last, err := aguievents.EventFromJSON(history.Events[len(history.Events)-1].Payload)
+			content, ok := last.(*aguievents.TextMessageContentEvent)
+			return err == nil && ok && content.Delta == delta
+		}, 3*time.Second, 5*time.Millisecond)
+	}
+
+	var oldRun *http.Response
+	var resumeOlder func() *http.Response
+	if delayOlderStartup {
+		resumeOlder = olderGate.start(t, oldServer.Client(), oldServer.URL+"/agui", olderPayload)
+	} else {
+		oldRun = postJSON(t, oldServer.Client(), oldServer.URL+"/agui", olderPayload, 10*time.Second)
+	}
+	if leaveOlderRunning || legacy {
+		defer func() {
+			close(oldModel.responses)
+			readSSEEvents(t, oldRun.Body)
+		}()
+	}
+	if olderStartupLost {
+		persistPreview(oldModel, "older-preview", olderPreview)
+	}
 	previousModel, previousRun, previousMessage := oldModel, oldRun, "old-message"
 	if legacy {
 		// Leave the oldest run active while the middle run finishes and the
 		// latest run writes its first response after losing the startup batch.
-		defer close(oldModel.responses)
 		middleModel := historyStreamModel{responses: make(chan *model.Response, 1)}
 		middleServer := newAGUIHTTPServerWithOptions(t, middleModel,
 			&historyPersistenceFixture{Service: newService(), omitRunID: true}, agui.WithFlushInterval(5*time.Millisecond))
@@ -173,9 +230,14 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 			10*time.Second)
 		previousModel, previousRun, previousMessage = middleModel, middleRun, "middle-message"
 	}
-	latestRun := postJSON(t, latestServer.Client(), latestServer.URL+"/agui",
-		`{"threadId":"thread","runId":"latest","messages":[{"id":"latest-user","role":"user","content":"latest"}],"forwardedProps":{"userId":"user"}}`,
-		10*time.Second)
+	const latestPayload = `{"threadId":"thread","runId":"latest","messages":[{"id":"latest-user","role":"user","content":"latest"}],"forwardedProps":{"userId":"user"}}`
+	latestRun := postJSON(t, latestServer.Client(), latestServer.URL+"/agui", latestPayload, 10*time.Second)
+	if previewBeforeOlderFinishes {
+		persistPreview(latestModel, "latest-message", latestPreview)
+	}
+	if delayOlderStartup {
+		previousRun = resumeOlder()
+	}
 
 	finish := func(stream historyStreamModel, id string) {
 		stream.responses <- &model.Response{
@@ -185,31 +247,69 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 		close(stream.responses)
 	}
 	snapshotInput := `{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`
-	if scenario == "older-finishes-last" {
+	latestCompleted := leaveOlderRunning || scenario == "older-finishes-last"
+	if latestCompleted {
 		finish(latestModel, "latest-message")
 		events := readSSEEvents(t, latestRun.Body)
 		require.IsType(t, &aguievents.RunFinishedEvent{}, events[len(events)-1])
 	}
-	finish(previousModel, previousMessage)
-	previousEvents := readSSEEvents(t, previousRun.Body)
-	require.IsType(t, &aguievents.RunFinishedEvent{}, previousEvents[len(previousEvents)-1])
+	if !leaveOlderRunning {
+		finish(previousModel, previousMessage)
+		previousEvents := readSSEEvents(t, previousRun.Body)
+		require.IsType(t, &aguievents.RunFinishedEvent{}, previousEvents[len(previousEvents)-1])
+	}
+	if !latestCompleted && !previewBeforeOlderFinishes {
+		persistPreview(latestModel, "latest-message", latestPreview)
+	}
 
-	if scenario == "older-finishes-last" {
+	var expectedTrackOrder []string
+	switch scenario {
+	case "older-finishes-last":
+		expectedTrackOrder = []string{"start:old", "start:latest", "finish:latest", "finish:old"}
+	case "older-startup-lost-before-newer-start":
+		expectedTrackOrder = []string{olderPreview, "start:latest", "finish:latest"}
+	case "latest-finishes-without-startup":
+		expectedTrackOrder = []string{"start:old", "finish:latest"}
+	case "older-startup-flush-delayed":
+		expectedTrackOrder = []string{"start:latest", "start:old", "finish:old", latestPreview}
+	case "older-startup-delayed-newer-startup-lost":
+		expectedTrackOrder = []string{latestPreview, "start:old", "finish:old"}
+	case "older-ordered-startup-lost-newer-legacy":
+		expectedTrackOrder = []string{"start:latest", latestPreview, "finish:old"}
+	case "newer-legacy-run-finishes":
+		expectedTrackOrder = []string{"start:old", "start:latest", "finish:latest"}
+	case "newer-legacy-run":
+		expectedTrackOrder = []string{"start:old", "start:latest", "finish:old", latestPreview}
+	}
+	if expectedTrackOrder != nil {
 		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
 		require.NoError(t, err)
-		var finishedRuns []string
-		for _, event := range history.Events {
-			stored, err := aguievents.EventFromJSON(event.Payload)
+		var trackOrder []string
+		for _, record := range history.Events {
+			event, err := aguievents.EventFromJSON(record.Payload)
 			require.NoError(t, err)
-			if terminal, ok := stored.(*aguievents.RunFinishedEvent); ok {
-				finishedRuns = append(finishedRuns, terminal.RunID())
+			switch event := event.(type) {
+			case *aguievents.RunStartedEvent:
+				trackOrder = append(trackOrder, "start:"+event.RunID())
+			case *aguievents.RunFinishedEvent:
+				if olderOrderedStartupLost && event.RunID() == "old" {
+					require.Contains(t, string(record.Payload), `"trpcRunOrder"`)
+				}
+				trackOrder = append(trackOrder, "finish:"+event.RunID())
+			case *aguievents.TextMessageContentEvent:
+				if event.Delta == olderPreview || event.Delta == latestPreview {
+					trackOrder = append(trackOrder, event.Delta)
+				}
 			}
 		}
-		require.Equal(t, []string{"latest", "old"}, finishedRuns)
+		require.Equal(t, expectedTrackOrder, trackOrder)
+	}
 
+	if latestCompleted {
 		snapshot := postJSON(t, latestServer.Client(), latestServer.URL+"/history", snapshotInput, 5*time.Second)
 		events := readSSEEvents(t, snapshot.Body)
 		require.Len(t, events, 3)
+		require.IsType(t, &aguievents.RunStartedEvent{}, events[0])
 		require.IsType(t, &aguievents.MessagesSnapshotEvent{}, events[1])
 		if failure, ok := events[2].(*aguievents.RunErrorEvent); ok {
 			t.Fatalf("completed history returned RUN_ERROR: %s", failure.Message)
@@ -220,23 +320,13 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 		return
 	}
 
-	latestModel.responses <- historyDelta("before snapshot")
-	require.Eventually(t, func() bool {
-		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
-		if err != nil || len(history.Events) == 0 {
-			return false
-		}
-		last, err := aguievents.EventFromJSON(history.Events[len(history.Events)-1].Payload)
-		content, ok := last.(*aguievents.TextMessageContentEvent)
-		return err == nil && ok && content.Delta == "before snapshot"
-	}, 3*time.Second, 5*time.Millisecond)
-
 	if legacy {
 		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
 		require.NoError(t, err)
 		var startedRuns, finishedRuns []string
 		for _, event := range history.Events {
 			require.NotContains(t, string(event.Payload), `"trpcRunId"`)
+			require.NotContains(t, string(event.Payload), `"trpcRunOrder"`)
 			stored, err := aguievents.EventFromJSON(event.Payload)
 			require.NoError(t, err)
 			switch stored.Type() {
@@ -265,8 +355,9 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	latestModel.responses <- historyDelta("after snapshot")
 	close(latestModel.responses)
 
-	content, ok := next().(*aguievents.TextMessageContentEvent)
-	require.True(t, ok, "history ended before delivering the latest run's next content")
+	observed := next()
+	content, ok := observed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok, "history ended before delivering the latest run's next content: %s", observed.Type())
 	require.Equal(t, "after snapshot", content.Delta)
 	require.IsType(t, &aguievents.TextMessageEndEvent{}, next())
 	finished, ok := next().(*aguievents.RunFinishedEvent)
@@ -276,12 +367,85 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	require.IsType(t, &aguievents.RunFinishedEvent{}, runEvents[len(runEvents)-1])
 }
 
+// historyStartupGate pauses a live run before its startup batch is stored.
+type historyStartupGate struct {
+	runID   string
+	reached chan struct{}
+	release chan struct{}
+}
+
+func newHistoryStartupGate(runID string) *historyStartupGate {
+	return &historyStartupGate{runID: runID, reached: make(chan struct{}), release: make(chan struct{}, 1)}
+}
+
+func (g *historyStartupGate) pause(_ context.Context, event aguievents.Event) (aguievents.Event, error) {
+	if event.Type() == aguievents.EventTypeRunStarted && event.RunID() == g.runID {
+		close(g.reached)
+		<-g.release
+	}
+	return nil, nil
+}
+
+func (g *historyStartupGate) start(t *testing.T, client *http.Client, url, payload string) func() *http.Response {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	t.Cleanup(func() { close(g.release) })
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	type runResponse struct {
+		response *http.Response
+		err      error
+	}
+	responses := make(chan runResponse, 1)
+	go func() {
+		response, err := client.Do(request)
+		responses <- runResponse{response, err}
+	}()
+	select {
+	case <-g.reached:
+	case result := <-responses:
+		if result.response != nil {
+			_ = result.response.Body.Close()
+		}
+		t.Fatalf("run %s returned before reaching startup callback: %v", g.runID, result.err)
+	case <-ctx.Done():
+		t.Fatalf("run %s did not reach startup callback", g.runID)
+	}
+	return func() *http.Response {
+		t.Helper()
+		g.release <- struct{}{}
+		result := <-responses
+		require.NoError(t, result.err)
+		t.Cleanup(func() { _ = result.response.Body.Close() })
+		require.Equal(t, http.StatusOK, result.response.StatusCode)
+		return result.response
+	}
+}
+
 type historyPersistenceFixture struct {
 	*redisservice.Service
 	runID           string
 	omitRunID       bool
 	failFirstAppend bool
 	failed          atomic.Bool
+}
+
+var _ session.StateInitializationService = (*historyPersistenceFixture)(nil)
+
+func (s *historyPersistenceFixture) LoadOrInitializeSessionState(
+	ctx context.Context,
+	key session.Key,
+	stateKey string,
+	validate func([]byte) bool,
+	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
+) ([]byte, bool, error) {
+	if s.omitRunID {
+		return nil, false, errors.New("legacy writer does not allocate history run order")
+	}
+	return s.Service.LoadOrInitializeSessionState(ctx, key, stateKey, validate, initialize, projections...)
 }
 
 func (s *historyPersistenceFixture) AppendTrackEvent(ctx context.Context, sess *session.Session, event *session.TrackEvent, opts ...session.Option) error {
@@ -295,6 +459,7 @@ func (s *historyPersistenceFixture) AppendTrackEvent(ctx context.Context, sess *
 		}
 		if s.omitRunID {
 			delete(payload, "trpcRunId")
+			delete(payload, "trpcRunOrder")
 		} else {
 			runID, _ := json.Marshal(s.runID)
 			payload["trpcRunId"] = runID
