@@ -84,6 +84,28 @@ curl -N -X POST http://localhost:8080/history \
 
 完整的示例可参考 [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot)。
 
+## 限制首屏历史读取量
+
+对于较长的会话，可以通过 `agui.WithMessagesSnapshotMaxTrackEvents(limit)`，让首屏快照只请求最近的指定数量的已持久化 AG-UI track events：
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithAppName("demo-app"),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotMaxTrackEvents(1000),
+)
+```
+
+计量单位是**已持久化的 track events**，不是页面消息数、模型上下文事件数或会话轮数。一条消息可能由多个事件组成。`1000` 仅为示例，应根据实际事件大小和可用内存设置上限。
+
+- 默认值为 `0`，保持现有读取行为。向这个服务端选项传入负数会使 `agui.New` 返回错误。直接使用 AG-UI runner 时，可配置 `aguirunner.WithMessagesSnapshotMaxTrackEvents`；负数会使 `MessagesSnapshot` 在读取存储前返回错误。
+- 上限通过 `session.WithEventNum` 下推给存储，在消息重建前生效。Redis Hash+ZSet 读取器会先限制选中的事件 ID 数量，再加载对应内容。自定义 session service 必须正确处理该选项才能限制读取量；先全量读取再截断不能提供同等保护。
+- 沿用已有的安全起点规则：丢弃窗口内第一条用户消息之前的事件。如果窗口中没有用户消息起点，则返回空快照并跳过 follow，不会扩大窗口或退回全量读取。该选项不保证返回固定数量的完整消息或完整轮次。
+- 只限制初始读取，follow 读取保持现有行为，`/history` 请求和 SSE 响应格式不变。该选项不提供旧历史游标、`hasMore` 字段或翻页路由。
+- 这是事件数量上限，不是字节上限或数据保留策略。单个大事件、follow 积压，以及 Redis 已达到内存上限等情况仍可能导致失败。它不会删除已有历史，也不影响模型上下文加载。容量、保留策略和运行监控仍需单独配置。
+
 ## Session 存储与事件聚合
 
 `SessionService` 是消息快照的数据来源。实时对话路由产生的 AG-UI 事件会写入会话存储，消息快照路由再从同一个 `SessionService` 中读取已持久化的 AG-UI 事件并还原历史消息。

@@ -104,6 +104,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
 		messagesSnapshotRunLifecycleEventsEnabled: opts.MessagesSnapshotRunLifecycleEventsEnabled,
 		messagesSnapshotBestEffortEnabled:         opts.MessagesSnapshotBestEffortEnabled,
+		messagesSnapshotMaxTrackEvents:            opts.MessagesSnapshotMaxTrackEvents,
 		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
 		toolCallDeltaStreamingEnabled:             opts.ToolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
@@ -145,6 +146,7 @@ type runner struct {
 	messagesSnapshotFollowMaxDuration         time.Duration
 	messagesSnapshotRunLifecycleEventsEnabled bool
 	messagesSnapshotBestEffortEnabled         bool
+	messagesSnapshotMaxTrackEvents            int
 	toolResultInputTranslationEnabled         bool
 	toolCallDeltaStreamingEnabled             bool
 	streamingToolResultActivityEnabled        bool

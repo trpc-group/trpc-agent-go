@@ -37,6 +37,9 @@ func New(runner runner.Runner, opt ...Option) (*Server, error) {
 		return nil, errors.New("agui: runner must not be nil")
 	}
 	opts := newOptions(opt...)
+	if opts.messagesSnapshotMaxTrackEvents < 0 {
+		return nil, errors.New("agui: messages snapshot max track events must be non-negative")
+	}
 	aguiService, err := newService(runner, opts)
 	if err != nil {
 		return nil, fmt.Errorf("new service: %w", err)

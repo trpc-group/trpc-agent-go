@@ -195,6 +195,13 @@ func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
 	assert.True(t, ro.MessagesSnapshotFollowEnabled)
 }
 
+func TestWithMessagesSnapshotMaxTrackEvents(t *testing.T) {
+	assert.Zero(t, aguirunner.NewOptions(newOptions().aguiRunnerOptions...).MessagesSnapshotMaxTrackEvents)
+	opts := newOptions(WithMessagesSnapshotMaxTrackEvents(10), WithMessagesSnapshotMaxTrackEvents(20))
+	assert.Equal(t, 20, opts.messagesSnapshotMaxTrackEvents)
+	assert.Equal(t, 20, aguirunner.NewOptions(opts.aguiRunnerOptions...).MessagesSnapshotMaxTrackEvents)
+}
+
 func TestWithMessagesSnapshotFollowMaxDuration(t *testing.T) {
 	opts := newOptions(WithMessagesSnapshotFollowMaxDuration(2 * time.Second))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
