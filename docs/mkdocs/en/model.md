@@ -2251,9 +2251,8 @@ Use `model/openai/sdkv3/responses` to access the OpenAI Responses API for conver
 The adapter is published from the separate
 `model/openai/sdkv3` Go module and requires Go 1.25 or newer. It
 currently pins OpenAI Go SDK `v3.74.0`. The `sdkv3` path identifies the SDK
-generation; the adapter module follows its own `v1.x` release line. This
-module provides Responses only. For Chat Completions, continue using
-`openai.New` from `model/openai`.
+generation; the adapter module follows its own `v1.x` release line. For Chat
+Completions, use `openai.New` from `model/openai`.
 
 ### Environment and minimal integration
 
@@ -2363,6 +2362,14 @@ for a complete SDK-based callback and model wrapper requirements.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).
+
+## Decision models
+
+Use `decision.Decider` to evaluate shared evidence with named predicate, choice,
+or score questions. The same request can run through OpenAI Decisions or
+System One (Jev and compatible Laya servers). See the
+[decision model guide](https://github.com/trpc-group/trpc-agent-go/tree/main/decision)
+for backend configuration and a runnable example.
 
 ## Anthropic Model
 
