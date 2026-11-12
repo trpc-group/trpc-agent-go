@@ -23,7 +23,7 @@ The service currently relies on the following data-path commands:
 | Keys and strings | `DEL`, `EXISTS`, `EXPIRE`, `GET`, `PERSIST`, `PEXPIRE`, `PTTL`, `SCAN`, `SET`, `SETNX` |
 | Hashes | `HDEL`, `HEXISTS`, `HGET`, `HGETALL`, `HINCRBY`, `HMGET`, `HSCAN`, `HSET` |
 | Sets | `SADD`, `SMEMBERS` |
-| Sorted sets | `ZADD`, `ZCOUNT`, `ZRANGE`, `ZRANGEBYSCORE`, `ZRANK`, `ZREM`, `ZREVRANGE`, `ZREVRANGEBYSCORE` |
+| Sorted sets | `ZADD`, `ZRANGE`, `ZRANGEBYSCORE`, `ZRANK`, `ZREM`, `ZREVRANGE`, `ZREVRANGEBYSCORE` |
 | Scripting and transactions | `EVAL`, `EVALSHA`, `WATCH`, `UNWATCH`, `MULTI`, `EXEC` |
 
 Only the command forms used by this service are required; optional modifiers introduced in later Redis releases are not prerequisites. The Lua scripts use the Redis Lua 5.1 environment and `cjson`.

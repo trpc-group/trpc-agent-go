@@ -23,7 +23,7 @@ Redis Session Service 使用的命令兼容 Redis OSS 4.0 及以上版本。Redi
 | Key 与字符串 | `DEL`、`EXISTS`、`EXPIRE`、`GET`、`PERSIST`、`PEXPIRE`、`PTTL`、`SCAN`、`SET`、`SETNX` |
 | Hash | `HDEL`、`HEXISTS`、`HGET`、`HGETALL`、`HINCRBY`、`HMGET`、`HSCAN`、`HSET` |
 | Set | `SADD`、`SMEMBERS` |
-| Sorted Set | `ZADD`、`ZCOUNT`、`ZRANGE`、`ZRANGEBYSCORE`、`ZRANK`、`ZREM`、`ZREVRANGE`、`ZREVRANGEBYSCORE` |
+| Sorted Set | `ZADD`、`ZRANGE`、`ZRANGEBYSCORE`、`ZRANK`、`ZREM`、`ZREVRANGE`、`ZREVRANGEBYSCORE` |
 | Lua 与事务 | `EVAL`、`EVALSHA`、`WATCH`、`UNWATCH`、`MULTI`、`EXEC` |
 
 这里只要求当前服务实际使用的命令形式，不依赖后续 Redis 版本新增的可选参数。Lua 脚本使用 Redis 的 Lua 5.1 环境和 `cjson`。

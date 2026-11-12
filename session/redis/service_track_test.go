@@ -12,9 +12,13 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"net/url"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -130,6 +134,68 @@ func TestService_GetTrackEvents_ReadsTrackStorage(t *testing.T) {
 			require.Empty(t, missing.Events)
 		})
 	}
+}
+
+func TestService_TrackReadsWithExistingACL(t *testing.T) {
+	redisURL := os.Getenv("TRPC_TEST_REDIS_URL")
+	if redisURL == "" {
+		t.Skip("requires a standalone Redis server")
+	}
+	opts, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	admin := redis.NewClient(opts)
+	defer admin.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	user := "track-acl-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	const password = "fixture-password"
+	// The existing documented data-path commands plus connection setup commands.
+	err = admin.Do(ctx, "ACL", "SETUSER", user, "on", ">"+password, "~*",
+		"+auth", "+select", "+hello", "+client",
+		"+del", "+exists", "+expire", "+get", "+persist", "+pexpire", "+pttl", "+scan", "+set", "+setnx",
+		"+hdel", "+hexists", "+hget", "+hgetall", "+hincrby", "+hmget", "+hscan", "+hset",
+		"+sadd", "+smembers",
+		"+zadd", "+zrange", "+zrangebyscore", "+zrank", "+zrem", "+zrevrange", "+zrevrangebyscore",
+		"+eval", "+evalsha", "+watch", "+unwatch", "+multi", "+exec").Err()
+	if redis.HasErrorPrefix(err, "unknown command `ACL`") || redis.HasErrorPrefix(err, "unknown command 'ACL'") {
+		t.Skip("Redis server does not support the ACL command")
+	}
+	require.NoError(t, err)
+	defer admin.Do(context.Background(), "ACL", "DELUSER", user)
+
+	restrictedURL, err := url.Parse(redisURL)
+	require.NoError(t, err)
+	restrictedURL.User = url.UserPassword(user, password)
+	service, err := NewService(WithRedisClientURL(restrictedURL.String()), WithKeyPrefix(user),
+		WithCompatMode(CompatModeNone), WithEnableAsyncPersist(false))
+	require.NoError(t, err)
+	defer service.Close()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "track"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	defer service.DeleteSession(context.Background(), key)
+	for i := 1; i <= 12; i++ {
+		require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+			Track: "agui", Timestamp: time.Unix(1700000000, 0), Payload: json.RawMessage(strconv.Itoa(i)),
+		}))
+	}
+	t.Run("limited track read", func(t *testing.T) {
+		got, err := service.GetTrackEvents(ctx, key, "agui", session.WithEventNum(2))
+		require.NoError(t, err)
+		require.Len(t, got.Events, 2)
+		require.Equal(t, "11", string(got.Events[0].Payload))
+		require.Equal(t, "12", string(got.Events[1].Payload))
+	})
+	t.Run("session with tracks", func(t *testing.T) {
+		got, err := service.GetSession(ctx, key)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Contains(t, got.Tracks, session.Track("agui"))
+		require.Len(t, got.Tracks["agui"].Events, 12)
+		for i, event := range got.Tracks["agui"].Events {
+			require.Equal(t, strconv.Itoa(i+1), string(event.Payload))
+		}
+	})
 }
 
 func TestService_GetTrackEvents_ReadsTrackStorageWithoutSessionState(t *testing.T) {

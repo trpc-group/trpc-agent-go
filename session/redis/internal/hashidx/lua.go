@@ -570,13 +570,17 @@ end
 
 const luaTrackReadRange = `
 local function trackReadRange(idxKey, minScore, maxScore, limit)
-    local last = redis.call('ZCOUNT', idxKey, '-inf', maxScore) - 1
-    local count = redis.call('ZCOUNT', idxKey, minScore, maxScore)
-    local first = last - count + 1
-    if limit > 0 and count > limit then
+    local oldest = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore, 'LIMIT', 0, 1)
+    if #oldest == 0 then return 0, -1 end
+
+    local newest = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, 1)
+    local first = redis.call('ZRANK', idxKey, oldest[1])
+    local last = redis.call('ZRANK', idxKey, newest[1])
+    if limit > 0 and last - first + 1 > limit then
         local cutoff = last - limit + 1
         local boundary = redis.call('ZRANGE', idxKey, cutoff, cutoff, 'WITHSCORES')
-        first = redis.call('ZCOUNT', idxKey, '-inf', '(' .. boundary[2])
+        local tied = redis.call('ZRANGEBYSCORE', idxKey, boundary[2], boundary[2], 'LIMIT', 0, 1)
+        first = redis.call('ZRANK', idxKey, tied[1])
     end
     return first, last
 end
