@@ -3,7 +3,8 @@
 This independent module contains tRPC-Agent-Go adapters for the OpenAI Go
 SDK v3 generation. Its module path is
 `trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3`, and it requires Go 1.25.
-The current implementation provides the [Responses adapter](responses/README.md).
+The module provides the [Responses adapter](responses/README.md) for conversation
+and the [Decisions adapter](../../../decision/README.md) for classification and scoring.
 For Chat Completions, continue using `model/openai` and `openai.New`.
 
 ## Module versioning and release
@@ -17,7 +18,7 @@ Use the tag format `model/openai/sdkv3/v1.x.x`. For example, a module release
 at `v1.12.0` uses `model/openai/sdkv3/v1.12.0`.
 
 Before publishing this module, release a root framework version containing
-the required ProviderData fields and APIs. Then update this module's root
+the required ProviderData and decision APIs. Then update this module's root
 framework dependency and verify it from an external consumer without repository
 `replace` directives.
 

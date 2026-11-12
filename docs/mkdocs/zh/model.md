@@ -2203,7 +2203,7 @@ llm := openai.New(
 
 使用 `model/openai/sdkv3/responses` 接入 OpenAI Responses API，支持对话、流式输出和函数调用。通过 `responses.New` 创建模型，再传给 `LLMAgent` 即可使用。
 
-该适配器从独立的 `model/openai/sdkv3` Go 模块发布，要求 Go 1.25 或更高版本，目前固定使用 OpenAI Go SDK `v3.74.0`。`sdkv3` 路径表示 SDK 的主版本，适配器模块自身按 `v1.x` 发布。此模块只提供 Responses。使用 Chat Completions 时，继续使用 `model/openai` 的 `openai.New`。
+该适配器从独立的 `model/openai/sdkv3` Go 模块发布，要求 Go 1.25 或更高版本，目前固定使用 OpenAI Go SDK `v3.74.0`。`sdkv3` 路径表示 SDK 的主版本，适配器模块自身按 `v1.x` 发布。使用 Chat Completions 时，使用 `model/openai` 的 `openai.New`。
 
 ### 环境变量与最小集成
 
@@ -2308,6 +2308,12 @@ go run ./tools -streaming=false
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。
+
+## 决策模型
+
+通过 `decision.Decider`，可对同一份材料提交带 ID 的真伪、选择或评分问题。
+同一份请求可以交给 OpenAI Decisions 或 System One（Jev 和兼容的 Laya 服务）。
+后端配置和可运行示例见[决策模型指南](https://github.com/trpc-group/trpc-agent-go/tree/main/decision)。
 
 ## Anthropic Model
 
