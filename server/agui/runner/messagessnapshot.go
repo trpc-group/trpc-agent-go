@@ -18,12 +18,14 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -315,65 +317,132 @@ func isEmptyTrackEventsError(err error) bool {
 	return errors.Is(err, session.ErrTracksEmpty) || errors.Is(err, session.ErrTrackEventsNotFound)
 }
 
+type snapshotRunID struct {
+	value   string
+	tracked bool // Internal identities and legacy wire IDs are separate namespaces.
+}
+
+type snapshotRuns struct {
+	latest        snapshotRunID
+	active        map[snapshotRunID]bool // Retain completed IDs to recognize late events.
+	startedMillis int64
+	completed     bool
+}
+
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	// Keep earlier run IDs so a terminal arriving after a newer user boundary
-	// cannot complete a run whose start was omitted.
-	runs := make(map[string]bool) // true while an observed run is active
-	var latest string
+	runs := snapshotRuns{active: make(map[snapshotRunID]bool)}
 	var previous aguievents.EventType
-	var completed bool
 	for _, event := range events {
 		evt, err := aguievents.EventFromJSON(event.Payload)
 		if err != nil {
 			continue
 		}
-		eventType := evt.Type()
 		terminal, _ := terminalRunSignal(evt)
+		if id := track.HistoryRunID(event.Payload); id != "" {
+			runs.observeTracked(id, terminal)
+			previous = ""
+			continue
+		}
+
+		eventType := evt.Type()
 		switch {
 		case eventType == aguievents.EventTypeRunStarted:
-			latest, completed = evt.RunID(), false
-			if latest != "" {
-				runs[latest] = true
-			}
+			runs.observeLegacyBoundary(evt.RunID(), evt.Timestamp(), event.Timestamp)
 		case isUserMessageEvent(evt):
 			// Legacy tracks can place a text user message just after its start.
 			if previous != aguievents.EventTypeRunStarted || eventType == aguievents.EventTypeCustom {
-				latest, completed = "", false
+				runs.observeLegacyBoundary("", evt.Timestamp(), event.Timestamp)
 			}
 		case terminal:
-			if matchesSnapshotTerminal(evt.RunID(), latest, runs) {
-				completed = true
+			if runs.matchesLegacyTerminal(evt.RunID()) {
+				runs.completed = true
 			}
-		case completed && isSnapshotResponseEvent(eventType):
-			// A failed startup write can leave response events as the first
-			// evidence of a subsequent run. Trailing activity alone is allowed.
-			latest, completed = "", false
+		case runs.completed && isSnapshotResponseEvent(eventType) && !runs.hasOtherActiveRun():
+			// With no observed run that could own this response, a legacy
+			// startup write may have failed before a new run produced output.
+			runs.latest, runs.completed = snapshotRunID{}, false
 		}
 		previous = eventType
 	}
-	return completed
+	return runs.completed
 }
 
-func matchesSnapshotTerminal(id, latest string, runs map[string]bool) bool {
+func (r *snapshotRuns) observeTracked(id string, terminal bool) {
+	owner := snapshotRunID{value: id, tracked: true}
+	if _, observed := r.active[owner]; !observed {
+		r.active[owner] = true
+		// The identity is assigned when the run starts. Its first persisted
+		// event may arrive after a newer run if a startup write failed.
+		started := trackedRunStartMillis(id)
+		if r.latest.tracked && r.latest.value < id ||
+			!r.latest.tracked && (started == 0 || started >= r.startedMillis) {
+			r.latest, r.startedMillis, r.completed = owner, started, false
+		}
+	}
+	if terminal {
+		r.active[owner] = false
+		if owner == r.latest {
+			r.completed = true
+		}
+	}
+}
+
+func trackedRunStartMillis(id string) int64 {
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed.Version() != 7 {
+		return 0
+	}
+	sec, nsec := parsed.Time().UnixTime()
+	return time.Unix(sec, nsec).UnixMilli()
+}
+
+func (r *snapshotRuns) observeLegacyBoundary(id string, emittedMillis *int64, persistedAt time.Time) {
+	owner := snapshotRunID{value: id}
 	if id != "" {
-		_, observed := runs[id]
-		runs[id] = false
-		if latest != "" {
-			return id == latest
+		r.active[owner] = true
+	}
+	var started int64
+	if emittedMillis != nil {
+		started = *emittedMillis
+	} else if !persistedAt.IsZero() {
+		started = persistedAt.UnixMilli()
+	}
+	// During a rolling upgrade, a legacy start can be persisted after a
+	// tracked run even though the legacy runner emitted its start earlier.
+	if r.latest.tracked && started != 0 && started < r.startedMillis {
+		return
+	}
+	r.latest, r.startedMillis, r.completed = owner, started, false
+}
+
+func (r *snapshotRuns) matchesLegacyTerminal(id string) bool {
+	if id != "" {
+		owner := snapshotRunID{value: id}
+		_, observed := r.active[owner]
+		r.active[owner] = false
+		if r.latest.value != "" {
+			return owner == r.latest
 		}
 		return !observed
 	}
-	// An older callback may omit the terminal's run ID. Infer the owner
-	// only when there is no other observed active run it could belong to.
-	for id, active := range runs {
-		if active && id != latest {
-			return false
-		}
+	// Older callbacks may omit the terminal's run ID. Infer ownership
+	// only among untagged runs with no other active candidate.
+	if r.latest.tracked || r.hasOtherActiveRun() {
+		return false
 	}
-	if latest != "" {
-		runs[latest] = false
+	if r.latest.value != "" {
+		r.active[r.latest] = false
 	}
 	return true
+}
+
+func (r *snapshotRuns) hasOtherActiveRun() bool {
+	for id, active := range r.active {
+		if active && id != r.latest {
+			return true
+		}
+	}
+	return false
 }
 
 func isSnapshotResponseEvent(eventType aguievents.EventType) bool {

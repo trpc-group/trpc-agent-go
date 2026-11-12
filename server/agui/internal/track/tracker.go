@@ -57,6 +57,7 @@ type sessionState struct {
 	mu         sync.Mutex            // mu guards the aggregator and pending events.
 	persistMu  sync.Mutex            // persistMu serializes storage writes for the session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
+	runID      string                // run owning this session state, assigned when it is created.
 	pending    []json.RawMessage     // pending stores immutable payloads waiting for persistence.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
 	closing    bool                  // closing rejects appends while Close is draining the final batch.
@@ -180,7 +181,7 @@ func (t *tracker) persistEvents(
 	for _, payload := range payloads {
 		trackEvent := &session.TrackEvent{
 			Track:     TrackAGUI,
-			Payload:   json.RawMessage(append([]byte(nil), payload...)),
+			Payload:   historyPayload(payload, state.runID),
 			Timestamp: time.Now(),
 		}
 		if sess == nil {
@@ -244,6 +245,7 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 	}
 	state := &sessionState{
 		aggregator: t.aggregatorFactory(ctx, t.aggregationOption...),
+		runID:      historyRunID(ctx),
 	}
 	t.sessionStates[key] = state
 	return state

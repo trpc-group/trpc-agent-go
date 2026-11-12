@@ -95,7 +95,7 @@ func TestAGUIRedisHistoryCompletesWithTiedEvents(t *testing.T) {
 }
 
 func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
-	for _, scenario := range []string{"old-finished-before-snapshot", "start-replaced", "startup-write-fails"} {
+	for _, scenario := range []string{"old-finished-before-snapshot", "older-finishes-last", "start-replaced", "startup-write-fails"} {
 		t.Run(scenario, func(t *testing.T) { testAGUIRedisHistoryFollowsLatestRun(t, scenario) })
 	}
 }
@@ -149,13 +149,48 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 		`{"threadId":"thread","runId":"latest","messages":[{"id":"latest-user","role":"user","content":"latest"}],"forwardedProps":{"userId":"user"}}`,
 		10*time.Second)
 
-	oldModel.responses <- &model.Response{
-		ID: "old-message", Object: model.ObjectTypeChatCompletion, Done: true,
-		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "old response"}}},
+	finish := func(stream historyStreamModel, id string) {
+		stream.responses <- &model.Response{
+			ID: id, Object: model.ObjectTypeChatCompletion, Done: true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage(id)}},
+		}
+		close(stream.responses)
 	}
-	close(oldModel.responses)
+	snapshotInput := `{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`
+	if scenario == "older-finishes-last" {
+		finish(latestModel, "latest-message")
+		events := readSSEEvents(t, latestRun.Body)
+		require.IsType(t, &aguievents.RunFinishedEvent{}, events[len(events)-1])
+	}
+	finish(oldModel, "old-message")
 	oldEvents := readSSEEvents(t, oldRun.Body)
 	require.IsType(t, &aguievents.RunFinishedEvent{}, oldEvents[len(oldEvents)-1])
+
+	if scenario == "older-finishes-last" {
+		history, err := latestService.GetTrackEvents(context.Background(), key, "agui")
+		require.NoError(t, err)
+		var finishedRuns []string
+		for _, event := range history.Events {
+			stored, err := aguievents.EventFromJSON(event.Payload)
+			require.NoError(t, err)
+			if terminal, ok := stored.(*aguievents.RunFinishedEvent); ok {
+				finishedRuns = append(finishedRuns, terminal.RunID())
+			}
+		}
+		require.Equal(t, []string{"latest", "old"}, finishedRuns)
+
+		snapshot := postJSON(t, latestServer.Client(), latestServer.URL+"/history", snapshotInput, 5*time.Second)
+		events := readSSEEvents(t, snapshot.Body)
+		require.Len(t, events, 3)
+		require.IsType(t, &aguievents.MessagesSnapshotEvent{}, events[1])
+		if failure, ok := events[2].(*aguievents.RunErrorEvent); ok {
+			t.Fatalf("completed history returned RUN_ERROR: %s", failure.Message)
+		}
+		finished, ok := events[2].(*aguievents.RunFinishedEvent)
+		require.True(t, ok)
+		require.Equal(t, "snapshot", finished.RunID())
+		return
+	}
 
 	latestModel.responses <- historyDelta("before snapshot")
 	require.Eventually(t, func() bool {
@@ -168,9 +203,7 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 		return err == nil && ok && content.Delta == "before snapshot"
 	}, 3*time.Second, 5*time.Millisecond)
 
-	snapshot := postJSON(t, latestServer.Client(), latestServer.URL+"/history",
-		`{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`,
-		10*time.Second)
+	snapshot := postJSON(t, latestServer.Client(), latestServer.URL+"/history", snapshotInput, 10*time.Second)
 	reader := r3sse.NewEventStreamReader(snapshot.Body, 1024*1024)
 	next := func() aguievents.Event {
 		t.Helper()

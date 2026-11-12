@@ -164,6 +164,7 @@ type runInput struct {
 	key             session.Key
 	threadID        string
 	runID           string
+	historyID       string
 	userID          string
 	messages        *runAgentMessages
 	runOption       []agent.RunOption
@@ -499,6 +500,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 		close(events)
 	}()
 	if input.enableTrack {
+		input.historyID = uuid.Must(uuid.NewV7()).String()
 		var stopTrackFlush func()
 		var startTrackFlushOnce sync.Once
 		input.startTrackFlush = func() {
@@ -660,7 +662,7 @@ func (r *runner) persistExternalAssistantMessage(ctx context.Context, input *run
 		aguievents.NewTextMessageEndEvent(messageID),
 	}
 	for _, trackEvent := range trackEvents {
-		if err := r.recordTrackEvent(ctx, input.key, trackEvent); err != nil {
+		if err := r.recordTrackEvent(ctx, input, trackEvent); err != nil {
 			return err
 		}
 	}
@@ -1311,7 +1313,7 @@ func (r *runner) writeEventWithStartupFlush(ctx context.Context, events chan<- a
 		input.runID,
 	)
 	if input.enableTrack && r.shouldTrackEvent(event) {
-		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
+		if err := r.recordTrackEvent(ctx, input, event); err != nil {
 			log.WarnfContext(
 				ctx,
 				"agui emit event: record track event failed: "+
@@ -1391,7 +1393,7 @@ func (r *runner) recordUserMessage(ctx context.Context, input *runInput) error {
 	if metadata, ok := r.forwardedPropsSourceMetadata(ctx, input); ok {
 		evt.GetBaseEvent().RawEvent = metadata
 	}
-	if err := r.recordTrackEvent(ctx, input.key, evt); err != nil {
+	if err := r.recordTrackEvent(ctx, input, evt); err != nil {
 		return fmt.Errorf("record track event: %w", err)
 	}
 	return nil
@@ -1510,10 +1512,10 @@ func (r *runner) unregister(key session.Key) {
 	delete(r.running, key)
 }
 
-func (r *runner) recordTrackEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+func (r *runner) recordTrackEvent(ctx context.Context, input *runInput, event aguievents.Event) error {
 	trackCtx, cancel := r.newTrackPersistenceContext(ctx)
 	defer cancel()
-	return r.tracker.AppendEvent(trackCtx, key, event)
+	return r.tracker.AppendEvent(track.WithHistoryRunID(trackCtx, input.historyID), input.key, event)
 }
 
 func isExplicitRunCancel(ctx context.Context) bool {

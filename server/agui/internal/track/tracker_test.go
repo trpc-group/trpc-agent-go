@@ -388,6 +388,29 @@ func TestTrackerGetEventsSuccess(t *testing.T) {
 	require.Equal(t, first.MessageID, start.MessageID)
 }
 
+func TestTrackerPersistsRunIdentityAfterAggregation(t *testing.T) {
+	ctx := WithHistoryRunID(context.Background(), "run-id")
+	svc := inmemory.NewSessionService()
+	tracker, err := New(svc, WithAggregationOption(aggregator.WithEnabled(true)))
+	require.NoError(t, err)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "first ")))
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "second")))
+	require.NoError(t, tracker.Flush(ctx, key))
+
+	events, err := tracker.GetEvents(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, events.Events, 1)
+	raw := events.Events[0].Payload
+	require.Equal(t, "run-id", HistoryRunID(raw))
+	parsed, err := aguievents.EventFromJSON(raw)
+	require.NoError(t, err)
+	require.Equal(t, "first second", parsed.(*aguievents.TextMessageContentEvent).Delta)
+	wire, err := parsed.ToJSON()
+	require.NoError(t, err)
+	require.Empty(t, HistoryRunID(wire))
+}
+
 func TestTrackerSnapshotsAppendOutputBeforeCallerMutation(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		t.Run(fmt.Sprintf("aggregation_enabled_%t", enabled), func(t *testing.T) {

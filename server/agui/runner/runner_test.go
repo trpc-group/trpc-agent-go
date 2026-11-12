@@ -3979,7 +3979,7 @@ func TestRecordTrackEventUsesDetachedPersistenceContext(t *testing.T) {
 
 	err := r.recordTrackEvent(
 		parentCtx,
-		session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
+		&runInput{key: session.Key{AppName: "app", UserID: "user", SessionID: "thread"}},
 		aguievents.NewRunStartedEvent("thread", "run"),
 	)
 	require.NoError(t, err)
@@ -3998,7 +3998,7 @@ func TestRecordTrackEventTimeoutBoundsDetachedPersistence(t *testing.T) {
 	start := time.Now()
 	err := r.recordTrackEvent(
 		context.Background(),
-		session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
+		&runInput{key: session.Key{AppName: "app", UserID: "user", SessionID: "thread"}},
 		aguievents.NewRunStartedEvent("thread", "run"),
 	)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
