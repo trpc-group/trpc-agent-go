@@ -6,6 +6,7 @@ require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260514093510-e9e910b230b9
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/r3labs/sse/v2 v2.10.0
+	github.com/redis/go-redis/v9 v9.11.0
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb
 	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260813112030-aed2c1f02f9c
@@ -13,6 +14,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20260108131845-87b14951638b
 	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3
 )
 
 require (
@@ -24,7 +26,6 @@ require (
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
-	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -41,7 +42,6 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v1.10.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
 
 require (
@@ -54,7 +54,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.2 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
