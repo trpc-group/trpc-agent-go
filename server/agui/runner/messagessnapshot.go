@@ -316,30 +316,75 @@ func isEmptyTrackEventsError(err error) bool {
 }
 
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
-	// A terminal event can be followed by activity or belong to an older
-	// overlapping run. Collect terminal IDs until we find the latest start.
-	terminalRuns := make(map[string]bool)
-	for i := len(events) - 1; i >= 0; i-- {
-		evt, err := aguievents.EventFromJSON(events[i].Payload)
+	// Keep earlier run IDs so a terminal arriving after a newer user boundary
+	// cannot complete a run whose start was omitted.
+	runs := make(map[string]bool) // true while an observed run is active
+	var latest string
+	var previous aguievents.EventType
+	var completed bool
+	for _, event := range events {
+		evt, err := aguievents.EventFromJSON(event.Payload)
 		if err != nil {
 			continue
 		}
-		if started, ok := evt.(*aguievents.RunStartedEvent); ok {
-			if id := started.RunID(); id != "" {
-				return terminalRuns[id]
+		eventType := evt.Type()
+		terminal, _ := terminalRunSignal(evt)
+		switch {
+		case eventType == aguievents.EventTypeRunStarted:
+			latest, completed = evt.RunID(), false
+			if latest != "" {
+				runs[latest] = true
 			}
-			break
+		case isUserMessageEvent(evt):
+			// Legacy tracks can place a text user message just after its start.
+			if previous != aguievents.EventTypeRunStarted || eventType == aguievents.EventTypeCustom {
+				latest, completed = "", false
+			}
+		case terminal:
+			if matchesSnapshotTerminal(evt.RunID(), latest, runs) {
+				completed = true
+			}
+		case completed && isSnapshotResponseEvent(eventType):
+			// A failed startup write can leave response events as the first
+			// evidence of a subsequent run. Trailing activity alone is allowed.
+			latest, completed = "", false
 		}
-		if isUserMessageEvent(evt) {
-			break
+		previous = eventType
+	}
+	return completed
+}
+
+func matchesSnapshotTerminal(id, latest string, runs map[string]bool) bool {
+	if id != "" {
+		_, observed := runs[id]
+		runs[id] = false
+		if latest != "" {
+			return id == latest
 		}
-		if terminal, _ := terminalRunSignal(evt); terminal {
-			terminalRuns[evt.RunID()] = true
+		return !observed
+	}
+	// An older callback may omit the terminal's run ID. Infer the owner
+	// only when there is no other observed active run it could belong to.
+	for id, active := range runs {
+		if active && id != latest {
+			return false
 		}
 	}
-	// With no identifiable start in this window, retain the positional
-	// fallback for older or truncated history.
-	return len(terminalRuns) > 0
+	if latest != "" {
+		runs[latest] = false
+	}
+	return true
+}
+
+func isSnapshotResponseEvent(eventType aguievents.EventType) bool {
+	switch eventType {
+	case aguievents.EventTypeTextMessageStart, aguievents.EventTypeTextMessageContent, aguievents.EventTypeTextMessageChunk,
+		aguievents.EventTypeReasoningMessageStart, aguievents.EventTypeReasoningMessageContent, aguievents.EventTypeReasoningMessageChunk,
+		aguievents.EventTypeToolCallStart, aguievents.EventTypeToolCallArgs, aguievents.EventTypeToolCallChunk:
+		return true
+	default:
+		return false
+	}
 }
 
 func terminalRunSignal(evt aguievents.Event) (terminal bool, errMessage string) {

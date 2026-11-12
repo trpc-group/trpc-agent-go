@@ -12,7 +12,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,7 +24,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	redisservice "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
@@ -90,6 +95,13 @@ func TestAGUIRedisHistoryCompletesWithTiedEvents(t *testing.T) {
 }
 
 func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
+	for _, scenario := range []string{"old-finished-before-snapshot", "start-replaced", "startup-write-fails"} {
+		t.Run(scenario, func(t *testing.T) { testAGUIRedisHistoryFollowsLatestRun(t, scenario) })
+	}
+}
+
+func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
+	t.Helper()
 	url := os.Getenv("TRPC_TEST_REDIS_URL")
 	if url == "" {
 		url = "redis://" + miniredis.RunT(t).Addr()
@@ -111,7 +123,18 @@ func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
 	oldServer := newAGUIHTTPServerWithOptions(t, oldModel, newService(),
 		agui.WithFlushInterval(5*time.Millisecond))
 	latestService := newService()
-	latestServer := newAGUIHTTPServerWithOptions(t, latestModel, latestService,
+	var liveService session.Service = latestService
+	if scenario == "startup-write-fails" {
+		liveService = &failFirstHistoryAppend{Service: latestService}
+	}
+	callbacks := translator.NewCallbacks().RegisterAfterTranslate(func(_ context.Context, e aguievents.Event) (aguievents.Event, error) {
+		if scenario == "start-replaced" && e.Type() == aguievents.EventTypeRunStarted && e.RunID() == "latest" {
+			return aguievents.NewCustomEvent("start-replaced"), nil
+		}
+		return nil, nil
+	})
+	latestServer := newAGUIHTTPServerWithOptions(t, latestModel, liveService,
+		agui.WithAGUIRunnerOptions(aguirunner.WithTranslateCallbacks(callbacks)),
 		agui.WithFlushInterval(5*time.Millisecond),
 		agui.WithMessagesSnapshotFollowEnabled(true),
 		agui.WithMessagesSnapshotFollowMaxDuration(3*time.Second),
@@ -173,6 +196,18 @@ func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
 	require.IsType(t, &aguievents.RunFinishedEvent{}, runEvents[len(runEvents)-1])
 }
 
+type failFirstHistoryAppend struct {
+	*redisservice.Service
+	failed atomic.Bool
+}
+
+func (s *failFirstHistoryAppend) AppendTrackEvent(ctx context.Context, sess *session.Session, event *session.TrackEvent, opts ...session.Option) error {
+	if s.failed.CompareAndSwap(false, true) {
+		return errors.New("temporary startup track write failure")
+	}
+	return s.Service.AppendTrackEvent(ctx, sess, event, opts...)
+}
+
 type historyStreamModel struct {
 	responses chan *model.Response
 }
@@ -188,4 +223,47 @@ func historyDelta(content string) *model.Response {
 		ID: "latest-message", Object: model.ObjectTypeChatCompletionChunk, IsPartial: true,
 		Choices: []model.Choice{{Delta: model.Message{Role: model.RoleAssistant, Content: content}}},
 	}
+}
+
+func TestAGUIHistoryCompletesAfterAnonymousCallbackTerminal(t *testing.T) {
+	m := &QueueModel{}
+	m.Push(Call{Responses: []*model.Response{{
+		ID: "answer", Object: model.ObjectTypeChatCompletion, Done: true,
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("answer")}},
+	}}})
+	svc := inmemory.NewSessionService()
+	callback := translator.NewCallbacks().RegisterAfterTranslate(func(_ context.Context, e aguievents.Event) (aguievents.Event, error) {
+		if _, ok := e.(*aguievents.RunFinishedEvent); ok && e.RunID() == "original" {
+			return aguievents.NewRunErrorEvent("callback override"), nil
+		}
+		return nil, nil
+	})
+	srv := newAGUIHTTPServerWithOptions(t, m, svc,
+		agui.WithAGUIRunnerOptions(aguirunner.WithTranslateCallbacks(callback)),
+		agui.WithFlushInterval(10*time.Millisecond),
+		agui.WithMessagesSnapshotFollowEnabled(true),
+		agui.WithMessagesSnapshotFollowMaxDuration(250*time.Millisecond),
+	)
+	live := readSSEEvents(t, postJSON(t, srv.Client(), srv.URL+"/agui",
+		`{"threadId":"thread","runId":"original","messages":[{"id":"u","role":"user","content":"hello"}],"forwardedProps":{"userId":"user"}}`,
+		5*time.Second).Body)
+	terminal, ok := live[len(live)-1].(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	require.Empty(t, terminal.RunID())
+	history, err := svc.GetTrackEvents(context.Background(), session.Key{
+		AppName: testAppName, UserID: "user", SessionID: "thread",
+	}, "agui")
+	require.NoError(t, err)
+	stored, err := aguievents.EventFromJSON(history.Events[len(history.Events)-1].Payload)
+	require.NoError(t, err)
+	require.IsType(t, &aguievents.RunErrorEvent{}, stored)
+	require.Empty(t, stored.RunID())
+	out := readSSEEvents(t, postJSON(t, srv.Client(), srv.URL+"/history",
+		`{"threadId":"thread","runId":"snapshot","messages":[],"forwardedProps":{"userId":"user"}}`,
+		5*time.Second).Body)
+	last := out[len(out)-1]
+	if failure, ok := last.(*aguievents.RunErrorEvent); ok {
+		t.Fatalf("completed history returned RUN_ERROR: %s", failure.Message)
+	}
+	require.IsType(t, &aguievents.RunFinishedEvent{}, last)
 }
