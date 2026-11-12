@@ -44,6 +44,8 @@ type options struct {
 	heartbeatInterval        time.Duration
 	appName                  string
 	sessionService           session.Service
+
+	messagesSnapshotMaxTrackEvents int
 }
 
 // newOptions creates a new options instance.
@@ -279,6 +281,21 @@ func WithMessagesSnapshotPath(p string) Option {
 func WithMessagesSnapshotEnabled(e bool) Option {
 	return func(o *options) {
 		o.messagesSnapshotEnabled = e
+	}
+}
+
+// WithMessagesSnapshotMaxTrackEvents requests at most limit recent persisted
+// AG-UI track events for the initial messages snapshot. Zero (the default) keeps
+// existing read behavior; a negative limit causes New to return an error.
+// The session service must honor session.WithEventNum to bound storage reads.
+// Leading events before the first user message are discarded. If no user
+// message remains, the snapshot is empty and follow is skipped; no larger read
+// is attempted. This does not limit follow reads, payload bytes, or retention,
+// and does not enable pagination of older messages.
+func WithMessagesSnapshotMaxTrackEvents(limit int) Option {
+	return func(o *options) {
+		o.messagesSnapshotMaxTrackEvents = limit
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithMessagesSnapshotMaxTrackEvents(limit))
 	}
 }
 

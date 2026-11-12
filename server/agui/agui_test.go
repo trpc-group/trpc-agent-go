@@ -40,6 +40,15 @@ func TestNewNilRunner(t *testing.T) {
 	assert.EqualError(t, err, "agui: runner must not be nil")
 }
 
+func TestNewRejectsNegativeMessagesSnapshotMaxTrackEvents(t *testing.T) {
+	a := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(a.Info().Name, a)
+	t.Cleanup(func() { _ = r.Close() })
+	srv, err := New(r, WithMessagesSnapshotMaxTrackEvents(-1))
+	assert.Nil(t, srv)
+	assert.EqualError(t, err, "agui: messages snapshot max track events must be non-negative")
+}
+
 func TestDefaultPath(t *testing.T) {
 	agent := &mockAgent{info: agent.Info{Name: "demo"}}
 	r := runner.NewRunner(agent.Info().Name, agent)
