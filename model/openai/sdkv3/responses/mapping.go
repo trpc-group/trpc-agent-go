@@ -320,12 +320,16 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 			if _, ok := completed[callID]; ok {
 				return nil, fmt.Errorf("openai/responses: duplicate tool result for call_id %q", callID)
 			}
-			text, err := messageText(msg)
+			output, err := convertToolOutput(msg)
 			if err != nil {
 				return nil, fmt.Errorf("openai/responses: tool result %q: %w", callID, err)
 			}
-			item := responses.ResponseInputItemParamOfFunctionCallOutput(text)
-			item.OfFunctionCallOutput.CallID = openai.String(callID)
+			item := responses.ResponseInputItemUnionParam{
+				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+					CallID: openai.String(callID),
+					Output: output,
+				},
+			}
 			items = append(items, item)
 			completed[callID] = struct{}{}
 		case model.RoleAssistant:
@@ -662,6 +666,57 @@ func imageToURLOrBase64(image *model.Image) string {
 		return "data:" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 	}
 	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+}
+
+// convertToolOutput keeps text-only results in their original string form.
+// Only explicit image parts opt into the native content array; JSON in Content
+// is ordinary tool text, even when it resembles a provider content array.
+func convertToolOutput(msg model.Message) (responses.ResponseInputItemFunctionCallOutputOutputUnionParam, error) {
+	var output responses.ResponseInputItemFunctionCallOutputOutputUnionParam
+	hasImage := false
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeImage {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		text, err := messageText(msg)
+		if err != nil {
+			return output, err
+		}
+		output.OfString = openai.String(text)
+		return output, nil
+	}
+
+	parts := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(msg.ContentParts)+1)
+	if msg.Content != "" {
+		parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(msg.Content))
+	}
+	for _, part := range msg.ContentParts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text != nil {
+				parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(*part.Text))
+			}
+		case model.ContentTypeImage:
+			image, err := convertImagePart(part.Image)
+			if err != nil {
+				return output, err
+			}
+			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{
+				OfInputImage: &responses.ResponseInputImageContentParam{
+					ImageURL: image.OfInputImage.ImageURL,
+					Detail:   responses.ResponseInputImageContentDetail(image.OfInputImage.Detail),
+				},
+			})
+		case "":
+		default:
+			return output, fmt.Errorf("tool messages only support text and image content, got %s", part.Type)
+		}
+	}
+	output.OfResponseFunctionCallOutputItemArray = parts
+	return output, nil
 }
 
 func messageText(msg model.Message) (string, error) {
