@@ -29,10 +29,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 func TestWithAutoRecreateRejectsExternalSandbox(t *testing.T) {
@@ -560,6 +566,8 @@ func TestAutoRecreateRunProgramRecovery(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	assert.ErrorContains(t, err, "sandbox was recreated")
+	assert.ErrorContains(t, err, "Check the required files and runtime environment before continuing")
 	require.Len(t, srv.sandboxIDs(), 2)
 
 	_, err = executor.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
@@ -567,6 +575,7 @@ func TestAutoRecreateRunProgramRecovery(t *testing.T) {
 	})
 	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
 	require.True(t, codeexecutor.IsWorkspaceRetrySafe(err))
+	assert.NotContains(t, err.Error(), "sandbox was recreated")
 	assert.Equal(t, 1, stringsCount(srv.counts().processLines, " die"))
 
 	replacement := srv.mustWorkspace(t, executor)
@@ -576,6 +585,70 @@ func TestAutoRecreateRunProgramRecovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok\n", result.Stdout)
 	assert.Contains(t, replacement.Path, "/inst/2/")
+}
+
+func TestAutoRecreateReportsReplacementInWorkspaceToolResult(t *testing.T) {
+	srv := newLifeServer(t)
+	executor := srv.executor(t)
+	first := executor.SandboxID()
+	srv.setInfo(first, http.StatusNotFound, "", "")
+	srv.setProcess(func(host, _ string) error {
+		if hostHasSandbox(host, first) {
+			return connect.NewError(connect.CodeUnavailable, errors.New("sandbox unavailable"))
+		}
+		return nil
+	})
+
+	execTool := workspaceexec.NewExecTool(executor, workspaceexec.WithAllowedCommands("true"))
+	toolCallID := "call-workspace"
+	response := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: toolCallID,
+					Function: model.FunctionDefinitionParam{
+						Name:      "workspace_exec",
+						Arguments: []byte(`{"command":"true"}`),
+					},
+				}},
+			},
+		}},
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "workspace-recovery",
+		AgentName:    "test-agent",
+	}
+	request := &model.Request{Tools: map[string]tool.Tool{"workspace_exec": execTool}}
+	events := make(chan *event.Event, 4)
+	proc := processor.NewFunctionCallResponseProcessor(false, nil,
+		processor.WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts: 2,
+			RetryOn:     func(context.Context, *tool.RetryInfo) (bool, error) { return true, nil },
+		}),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	proc.ProcessResponse(ctx, invocation, request, response, events)
+	close(events)
+
+	var messages []model.Message
+	for ev := range events {
+		if ev.Response == nil {
+			continue
+		}
+		for _, choice := range ev.Response.Choices {
+			if choice.Message.Role == model.RoleTool && choice.Message.ToolID == toolCallID {
+				messages = append(messages, choice.Message)
+			}
+		}
+	}
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "sandbox unavailable")
+	assert.Contains(t, messages[0].Content, "sandbox was recreated")
+	assert.Contains(t, messages[0].Content, "Check the required files and runtime environment before continuing")
+	assert.NotEqual(t, first, executor.SandboxID())
+	assert.Len(t, srv.counts().processLines, 1, "the original command must not be replayed")
 }
 
 func TestAutoRecreateWhenCreatingWorkspace(t *testing.T) {
@@ -889,6 +962,7 @@ func TestAutoRecreateCancellationAndFailedRecovery(t *testing.T) {
 			CodeBlocks: []codeexecutor.CodeBlock{{Code: "fails"}},
 		})
 		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "sandbox was recreated")
 		assert.Equal(t, []string{first}, srv.sandboxIDs())
 		assert.Equal(t, 2, srv.counts().attempts)
 
@@ -989,6 +1063,7 @@ func TestAutoRecreatePauseDiscardsUnpublishedSandbox(t *testing.T) {
 	err := <-errCh
 	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
 	require.False(t, codeexecutor.IsWorkspaceRetrySafe(err))
+	assert.NotContains(t, err.Error(), "sandbox was recreated")
 	assert.Equal(t, first, executor.SandboxID())
 	ids := srv.sandboxIDs()
 	require.Len(t, ids, 2)
@@ -1112,6 +1187,7 @@ func TestAutoRecreateCloseDropsUnpublishedSandbox(t *testing.T) {
 	err := <-errCh
 	require.Error(t, err)
 	require.ErrorIs(t, err, errExecutorClosed)
+	assert.NotContains(t, err.Error(), "sandbox was recreated")
 	kills := srv.counts().kills
 	require.Contains(t, kills, first)
 	require.Len(t, srv.sandboxIDs(), 2)

@@ -256,13 +256,16 @@ When execution fails with an error that may indicate sandbox loss, the
 executor checks the management API. It creates a replacement with the
 original configuration only if the API confirms the instance is missing or
 terminal. The current call still returns an error without replaying the
-operation. After successful recreation, the next call uses the new instance.
+operation. Once the executor switches to the new instance, the error asks the
+agent to check the files and runtime environment it needs before continuing.
+The next call uses the new instance.
 
-Files, processes, and interpreter state from the previous sandbox are lost.
-The framework reinitializes managed workspaces on the replacement. If you
-manage workspaces directly, operations such as `RunProgram` return
-`codeexecutor.ErrWorkspaceStale` for an old handle. Call `CreateWorkspace`
-again and stage any required inputs.
+The executor does not restore sandbox-local files, processes, or interpreter
+state. Files saved to persistent storage may still be available when the
+replacement mounts the same storage. The framework reinitializes managed
+workspaces on the replacement. If you manage workspaces directly, operations
+such as `RunProgram` return `codeexecutor.ErrWorkspaceStale` for an old handle.
+Call `CreateWorkspace` again and stage any required inputs.
 An operation that triggers recovery can return both `ErrWorkspaceStale` and
 `ErrWorkspaceRetryUnsafe` because it may already have produced side effects.
 Retry automatically only if `codeexecutor.IsWorkspaceRetrySafe(err)` returns true.

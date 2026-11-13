@@ -141,8 +141,9 @@ func WithSandboxID(sandboxID string) Option {
 // When the option is enabled, a later call may create one replacement from the
 // template, environment variables, metadata, and connection settings captured
 // at construction, including defaults resolved from the environment. The
-// replacement is a new instance. Files, running processes, interpreter
-// variables, and temporary data are not restored.
+// replacement is a new instance. The executor does not restore sandbox-local
+// files, running processes, or interpreter state. Files on persistent mounts
+// may remain available.
 // Logical workspace IDs may be reused, but their directories, staged inputs,
 // bootstrap, and workspace init hooks are applied again through the existing
 // workspace registry. Paths created while this option is on include the
@@ -153,8 +154,10 @@ func WithSandboxID(sandboxID string) Option {
 // Callers of one dead generation share a single creation attempt. A failed
 // attempt stays retryable by a later call. The call that already reached the
 // data plane is not replayed, and ExecuteCode does not run earlier blocks
-// again. A replacement that loses to Close or Pause is killed. After a
-// replacement is published, the owned sandbox it replaced is killed.
+// again. After a successful switch, the triggering error asks the caller to
+// check required files and the runtime environment before continuing.
+// A replacement that loses to Close or Pause is killed. After a replacement
+// is published, the owned sandbox it replaced is killed.
 //
 // Expiry time alone, a transport or execution timeout, a lost stream, an HTTP
 // 5xx, and an arbitrary HTTP 404 do not prove that the sandbox was deleted.

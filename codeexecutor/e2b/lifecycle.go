@@ -396,39 +396,47 @@ func (c *CodeExecutor) observeLoss(
 	err error,
 ) error {
 	if !c.shouldConfirmLoss(snap, err) {
-		return c.lossResult(snap, err)
+		return c.lossResult(snap, err, false)
 	}
 	dead, confirmErr := confirmSandboxDead(ctx, snap.sbx)
 	if confirmErr != nil || !dead {
 		if ctx.Err() != nil {
 			return errors.Join(err, ctx.Err())
 		}
-		return c.lossResult(snap, err)
+		return c.lossResult(snap, err, false)
 	}
 	c.markDead(snap.generation)
 	recErr := c.recover(ctx, snap.generation)
 	if recErr != nil {
 		log.Debugf("e2b: sandbox recreation: %v", recErr)
 	}
-	wrapped := errors.Join(
-		err,
-		codeexecutor.ErrWorkspaceStale,
-		codeexecutor.ErrWorkspaceRetryUnsafe,
-	)
+	wrapped := c.lossResult(snap, err, true)
 	if ctx.Err() != nil || errors.Is(recErr, errExecutorClosed) {
 		return errors.Join(wrapped, ctx.Err(), recErr)
 	}
 	return wrapped
 }
 
-func (c *CodeExecutor) lossResult(snap sandboxSnap, err error) error {
-	if !c.generationMoved(snap) {
+func (c *CodeExecutor) lossResult(
+	snap sandboxSnap,
+	err error,
+	confirmedDead bool,
+) error {
+	// Close or Pause can discard a replacement even after creation succeeds.
+	recreated := c.generationMoved(snap)
+	if !confirmedDead && !recreated {
 		return err
+	}
+	var notice error
+	if recreated {
+		notice = errors.New("e2b: sandbox was recreated. " +
+			"Check the required files and runtime environment before continuing")
 	}
 	return errors.Join(
 		err,
 		codeexecutor.ErrWorkspaceStale,
 		codeexecutor.ErrWorkspaceRetryUnsafe,
+		notice,
 	)
 }
 
