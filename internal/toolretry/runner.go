@@ -18,6 +18,7 @@ import (
 	"math/big"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -127,6 +128,10 @@ func shouldReturnAttempt(
 	outcome attemptOutcome,
 ) bool {
 	if policy == nil || attempt == maxAttempts {
+		return true
+	}
+	// The workspace operation may already have produced side effects.
+	if errors.Is(outcome.RawError, codeexecutor.ErrWorkspaceRetryUnsafe) {
 		return true
 	}
 	if isTerminalError != nil && outcome.RawError != nil && isTerminalError(outcome.RawError) {

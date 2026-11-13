@@ -246,7 +246,13 @@ func mapHTTPError(status int, body string) error {
 	case http.StatusTooManyRequests:
 		return &RateLimitError{Message: msg}
 	case http.StatusBadGateway, http.StatusGatewayTimeout:
-		return &TimeoutError{Message: msg + ": This error is likely due to sandbox timeout. You can modify the sandbox timeout by passing 'Timeout' when starting the sandbox or by calling 'SetTimeout' on the sandbox with the desired timeout."}
+		return &TimeoutError{
+			StatusCode: status,
+			Message: msg + ": This error is likely due to sandbox timeout. " +
+				"You can modify the sandbox timeout by passing 'Timeout' when " +
+				"starting the sandbox or by calling 'SetTimeout' on the sandbox " +
+				"with the desired timeout.",
+		}
 	default:
 		return &SandboxError{StatusCode: status, Message: msg}
 	}

@@ -11,6 +11,7 @@ package codeinterpreter
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -210,8 +211,21 @@ func TestMapHTTPError(t *testing.T) {
 		t.Errorf("expected RateLimitError, got %T", err)
 	}
 	err = mapHTTPError(502, "timeout")
-	if _, ok := err.(*TimeoutError); !ok {
+	timeoutErr, ok := err.(*TimeoutError)
+	if !ok {
 		t.Errorf("expected TimeoutError, got %T", err)
+	} else if timeoutErr.StatusCode != http.StatusBadGateway {
+		t.Errorf("gateway status = %d, want 502", timeoutErr.StatusCode)
+	}
+	err = mapHTTPError(504, "gateway timeout")
+	timeoutErr, ok = err.(*TimeoutError)
+	if !ok {
+		t.Errorf("expected TimeoutError, got %T", err)
+	} else if timeoutErr.StatusCode != http.StatusGatewayTimeout {
+		t.Errorf("gateway status = %d, want 504", timeoutErr.StatusCode)
+	}
+	if got := formatRequestTimeoutError(); got.(*TimeoutError).StatusCode != 0 {
+		t.Errorf("client deadline StatusCode = %d, want 0", got.(*TimeoutError).StatusCode)
 	}
 	err = mapHTTPError(500, "boom")
 	if _, ok := err.(*SandboxError); !ok {

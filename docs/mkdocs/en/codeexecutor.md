@@ -245,6 +245,45 @@ account through `WithHeaders` using Basic authentication, for example
 the local server's account. Kernel-local environment changes are not inherited
 by native processes; check HOME/PATH when migrating custom templates.
 
+### E2B sandbox recreation
+
+`WithAutoRecreate` is off by default. Enable it for sandboxes created by the
+executor.
+
+```go
+executor, err := e2b.New(
+    e2b.WithTemplate("code-interpreter-v1"),
+    e2b.WithAutoRecreate(true),
+)
+```
+
+Enabling this option with `WithSandboxID` returns a constructor error.
+Sandboxes paused with `Pause` are also excluded from automatic recreation.
+
+When execution fails with an error that may indicate sandbox loss, the
+executor checks the management API. It creates a replacement with the
+original configuration only if the API confirms the instance is missing or
+terminal. The current call still returns an error without replaying the
+operation. Once the executor switches to the new instance, the error asks the
+agent to check the files and runtime environment it needs before continuing.
+The next call uses the new instance.
+
+The executor does not restore sandbox-local files, processes, or interpreter
+state. Files saved to persistent storage may still be available when the
+replacement mounts the same storage. The framework reinitializes managed
+workspaces on the replacement. If you manage workspaces directly, operations
+such as `RunProgram` return `codeexecutor.ErrWorkspaceStale` for an old handle.
+Call `CreateWorkspace` again and stage any required inputs.
+An operation that triggers recovery can return both `ErrWorkspaceStale` and
+`ErrWorkspaceRetryUnsafe` because it may already have produced side effects.
+Retry automatically only if `codeexecutor.IsWorkspaceRetrySafe(err)` returns true.
+
+Calling `Sandbox()` or using the returned instance directly does not trigger
+recreation. If recreation fails, `Sandbox()` may still return the old
+instance, and a later executor operation can retry creation. Compare
+`SandboxID()` before and after the operation. A different, non-empty ID
+indicates a replacement that you can fetch with `Sandbox()`.
+
 ## Workspace Layout
 
 Programs run inside a workspace. Common directories are:

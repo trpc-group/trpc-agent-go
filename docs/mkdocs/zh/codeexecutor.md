@@ -214,6 +214,31 @@ Basic 认证，例如在 HTTPS 上使用 `Authorization: Basic dXNlcjo=` 表示 
 账号。kernel 进程内临时修改的环境不会被原生进程继承；自定义模板迁移时仍需
 核对 HOME/PATH。
 
+### E2B 沙箱自动重建
+
+`WithAutoRecreate` 默认关闭。可为执行器自行创建的沙箱开启自动重建。
+
+```go
+executor, err := e2b.New(
+    e2b.WithTemplate("code-interpreter-v1"),
+    e2b.WithAutoRecreate(true),
+)
+```
+
+开启时传入 `WithSandboxID` 会导致构造函数返回错误。通过 `Pause` 暂停的沙箱也不会自动重建。
+
+执行遇到可能由沙箱失效引起的错误时，执行器会查询管理 API。确认实例已不存在或处于终态后，才会用原配置创建新实例。当前调用仍返回错误，不会自动重跑。成功切换到新实例后，错误会提醒 Agent 在继续执行前检查所需的文件和运行环境。下一次调用使用新实例。
+
+执行器不会恢复旧沙箱本地的文件、进程和解释器状态。如果新实例挂载了同一持久化存储，之前写入该存储的文件仍可能可用。框架会在新沙箱上重新初始化它管理的工作区。
+如果自行管理工作区，用旧句柄调用 `RunProgram` 等操作会收到 `codeexecutor.ErrWorkspaceStale`。
+请重新调用 `CreateWorkspace`，并准备所需的输入文件。
+触发恢复的操作可能已产生副作用，返回的错误可能同时匹配 `ErrWorkspaceStale` 和 `ErrWorkspaceRetryUnsafe`。
+只有 `codeexecutor.IsWorkspaceRetrySafe(err)` 返回 true 时，才可以自动重试原操作。
+
+调用 `Sandbox()` 或直接操作它返回的实例，都不会触发重建。
+重建失败时，`Sandbox()` 可能仍返回旧实例，后续执行器操作可以再次尝试创建。
+比较操作前后的 `SandboxID()`。如果 ID 变为不同的非空值，就可以用 `Sandbox()` 获取新实例。
+
 ## Workspace 中有哪些目录
 
 执行器会在一个 workspace 中运行程序。常见目录约定如下：
