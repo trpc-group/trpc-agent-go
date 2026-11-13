@@ -40,7 +40,7 @@ type FunctionTool[I, O any] struct {
 	// the post-tool summarization step after this tool returns.
 	skipSummarization bool
 	// resultFormatter optionally formats the final tool result as model-visible
-	// message content. When nil, the framework keeps its default JSON behavior.
+	// message content. When nil, the framework uses its default result conversion.
 	resultFormatter resultformat.Formatter
 	// concurrencySafe reports whether this tool may share a turn with others on
 	// the parallel tool path. It defaults to true, which is how a tool that
@@ -148,12 +148,13 @@ func WithDisableOutputSchemaGen() Option {
 // Tool.Call consumers do not currently apply it. The formatter changes only
 // the default model-visible tool message content; the framework continues to
 // manage the message role, tool name, tool call ID, ordering, and session
-// persistence. When formatter is nil, the framework uses its default JSON
-// representation. A formatter runs only when the tool declared a result for
-// the call: when a before-tool callback or plugin short-circuits the call with
-// its own result, the tool never runs and the framework keeps its default
-// JSON. An after-tool callback replacing the result of a tool that did run is
-// a different case: the replacement is formatted, so it has to be a value the
+// persistence. When formatter is nil, the framework preserves a returned
+// model.ToolResultContent as content and uses JSON for other results. An explicit
+// formatter takes precedence over this structured-content conversion.
+// A formatter runs only when the tool declared a result for the call: when a before-tool callback or plugin short-circuits the call with
+// its own result, the tool never runs and the framework uses its default
+// result conversion. An after-tool callback replacing the result of a tool
+// that did run is a different case: the replacement is formatted, so it has to be a value the
 // formatter accepts. A streamable tool must declare its final result with
 // tool.FinalResultChunk to be formatted; see
 // StreamableFunctionTool.ResultFormatter. Repeated configuration is

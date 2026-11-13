@@ -495,10 +495,74 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 因此，如果你会在回调里替换 context，记得把已有的 context value
 一并透传。
 
+## 结构化工具结果
+
+工具直接产生文字、图片等模型内容时，可以返回 `model.ToolResultContent`。
+LLMAgent 默认工具调用流程和 Graph ToolsNode 会将这个值转换为工具消息，无需注册
+`ToolResultMessages` callback。消息角色、工具名和 tool call ID 由框架填写。
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+type ReadImageArgs struct {
+    ImageID string `json:"image_id"`
+}
+
+// loadPNG is supplied by the application and returns raw PNG bytes.
+func newReadImageTool(loadPNG func(context.Context, string) ([]byte, error)) *function.FunctionTool[ReadImageArgs, model.ToolResultContent] {
+    return function.NewFunctionTool(
+        func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
+            data, err := loadPNG(ctx, args.ImageID)
+            if err != nil {
+                return nil, err
+            }
+            text := "Image loaded."
+            return model.ToolResultContent{
+                {Type: model.ContentTypeText, Text: &text},
+                {Type: model.ContentTypeImage, Image: &model.Image{
+                    Data: data, Format: "png",
+                }},
+            }, nil
+        },
+        function.WithName("read_image"),
+        function.WithDescription("Read an image by ID."),
+    )
+}
+```
+
+- 纯文字结果按顺序拼接到 `Message.Content`，不额外插入分隔符。包含媒体的结果将有序
+  内容块保存在 `Message.ContentParts`，不会再把文字重复写入 `Content`。
+  包含外部内容引用的内容块也保留在 `ContentParts` 中。
+- nil 或空的 `model.ToolResultContent` 表示内容为空的工具回执，不表示省略回执。
+  空结果（包括拼接后为空的纯文字结果）在 `ContentParts` 中保留一个显式的空文本块，
+  用于区别于没有内容的占位消息。未指定类型的 nil 保持原有 JSON 行为。
+- 应直接返回这个定义类型的值。其他结果，包括 `[]byte`、普通
+  `[]model.ContentPart` 和 `*model.ToolResultContent`，保持原有 JSON 表示。
+  框架不会猜测图片类型或下载 URL。
+- 框架会复制内容块及二进制数据。处理返回值期间，不要修改结果及其底层缓冲区。
+- 流式工具可以把这个值放在 `tool.FinalResultChunk.Result` 中返回，中间流式事件
+  保持原有行为。
+- LLMAgent 显式配置的 result formatter 优先，并将结果转换为文本。
+  `ToolResultMessages` 随后执行，仍可覆盖默认消息。实现状态更新的工具继续收到原始
+  返回值的 JSON。按照既有规则，callback 改写 `Message.Content` 时会替换状态输入；
+  只修改 `ContentParts` 不会改变状态输入。
+- 直接调用 `Tool.Call` 会得到原始 Go 返回值；自行构造工具消息的其他执行链路需要
+  自行处理该类型。
+
+**模型支持范围：** 框架保留内容块，不代表模型适配器或服务端已经支持这些内容。
+仅在所选适配器支持相应工具媒体输出时使用媒体结果。Chat Completions 适配器不会
+自动把这些内容块转换为 user message。本 API 不修改协议映射，也不扩展适配器支持
+的媒体类型。
+
 ## 工具结果格式化
 
-Function Tool 默认使用 JSON 构造模型可见的工具结果消息。当某个工具需要 XML-like
-observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
+Function Tool 对普通返回值使用 JSON，对 `model.ToolResultContent` 使用上面的
+结构化内容转换。当某个工具需要 XML-like observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
 `model.Message` 或维护 tool call ID。
 
 当前支持：
@@ -538,12 +602,13 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
 `DefaultToolMessage.Content`。消息角色、工具名、tool call ID 配对、顺序、事件和
 会话记录仍由框架维护。
 
-- 未配置 formatter 时，现有默认 JSON 输出保持不变。
+- 未配置 formatter 时，普通返回值保持原有 JSON 输出；`model.ToolResultContent`
+  使用上面的结构化内容转换。
 - formatter 返回错误或发生 panic 时，本次工具结果会报告错误；框架不会回退 JSON，
   也不会重新执行已经完成的工具。格式化失败只是展示失败，工具已经执行完毕，它的会话
   状态更新照常写入。
-- formatter 只在工具为本次调用声明了结果时才会运行。工具没有声明结果时，框架保持
-  默认 JSON：`tool.PermissionResult`、仅携带状态的流式最终结果、`BeforeTool`
+- formatter 只在工具为本次调用声明了结果时才会运行。工具没有声明结果时，框架使用
+  默认结果转换：`tool.PermissionResult`、仅携带状态的流式最终结果、`BeforeTool`
   callback 或插件短路本次调用时返回的 `CustomResult`，以及流结束时没有
   `tool.FinalResultChunk` 而由框架合并出的流内容（见下一条）。工具确实执行并声明了
   结果时，`AfterTool` callback 的替换值属于另一种情况：它会被格式化，因此必须是
@@ -551,16 +616,15 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
 - 其他 `StreamableTool` 只格式化最终结果，中间事件不变。流式工具必须通过
   `tool.FinalResultChunk` 声明这个最终结果。若数据流结束时没有 final chunk，最终
   结果就是框架合并出的流内容，而不是工具声明的输出类型，此时框架跳过 formatter、
-  保持默认 JSON，并打印一条告警；`AfterTool` callback 即使替换了合并内容，本次调用
+  使用默认结果转换，并打印一条告警；`AfterTool` callback 即使替换了合并内容，本次调用
   也不会重新具备格式化资格。要让流式结果被格式化，请发出
   `tool.FinalResultChunk`。
-- 对于会更新会话状态的工具，状态更新消费的是「未配置 formatter 时框架会发出的那条
-  工具消息内容」，也就是 `AfterTool` callback 处理后结果的 JSON。formatter 不参与
-  状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
-  修改前的内容。如果 `ToolResultMessages` 改写了工具消息内容，则以改写后的内容为
+- 对于会更新会话状态的工具，状态更新消费的是 `AfterTool` callback 处理后原始
+  返回值的 JSON，与结构化内容转换或格式化无关。formatter 不参与状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
+  修改前的内容。如果 `ToolResultMessages` 改写了 `Message.Content`，则以改写后的内容为
   准——这与引入 formatter 之前的行为一致。
 - `ToolResultMessages` callback 仍会在默认工具结果消息生成后执行，并可用其返回的消息
-  覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。注意
+  覆盖默认消息；多消息、自定义内容转换或完全接管消息协议的场景继续使用该 callback。注意
   formatter 是按工具配置的，而 `ToolResultMessages` 是整个 Agent 全局的：对配置了
   formatter 的工具，回调拿到的 `DefaultToolMessage.Content` 是格式化后的文本而不是
   JSON。回调如果需要结构化数据，请读取 `ToolResultMessagesInput.Result`，不要解析

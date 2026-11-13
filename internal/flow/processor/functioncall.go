@@ -2251,11 +2251,11 @@ func marshalStateDeltaInput(result any) (b []byte, err error) {
 }
 
 // stateDeltaInputAfterOverride returns the content consumed by the tool state
-// protocol. legacy is the tool message content the framework would send without
-// a result formatter, so a formatter never redefines the state protocol.
-// A ToolResultMessages callback that rewrites the tool message owns that
-// protocol, as it always has; a callback that returns the framework's default
-// message unchanged is not a rewrite.
+// protocol. legacy is the raw tool result serialized as JSON, so content
+// conversion and formatters never redefine the state protocol.
+// A ToolResultMessages callback that rewrites Message.Content owns that
+// protocol, as it always has; changes to ContentParts alone do not redefine
+// the state protocol.
 func stateDeltaInputAfterOverride(
 	legacy []byte,
 	defaultMsg model.Message,
@@ -2270,8 +2270,8 @@ func stateDeltaInputAfterOverride(
 	return []byte(choices[0].Message.Content)
 }
 
-// attachStateDelta copies a tool-provided state delta using the tool result
-// message content the framework would send without a result formatter.
+// attachStateDelta copies a tool-provided state delta using the raw result JSON
+// unless a ToolResultMessages callback rewrites the content.
 func (p *FunctionCallResponseProcessor) attachStateDelta(
 	inv *agent.Invocation,
 	tl tool.Tool,
@@ -2814,8 +2814,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			formatter = nil
 		}
 	}
-	// The state-delta input reproduces the tool message content the framework
-	// would send without a formatter. Permission and state-only results are
+	// The state-delta input preserves the raw tool result's JSON independently
+	// of model content conversion. Permission and state-only results are
 	// filtered out downstream by the skip markers set during execution, so this
 	// projection must not gate on them.
 	needsStateDeltaInput := toolProvidesStateDelta(tl)
@@ -3851,6 +3851,20 @@ func buildDefaultToolMessage(
 	needsStateDeltaInput bool,
 ) (model.Message, []byte, error) {
 	if formatter == nil {
+		if msg, ok := itool.ResultMessage(result); ok {
+			msg.ToolID = toolCallID
+			if !needsStateDeltaInput {
+				return msg, nil, nil
+			}
+			// Model content and the tool's state protocol are independent.
+			// StateDelta providers continue to consume the raw result's JSON.
+			stateDeltaInput, err := marshalStateDeltaInput(result)
+			if err != nil {
+				return model.Message{}, nil,
+					fmt.Errorf("%s: %w", ErrorMarshalResult, err)
+			}
+			return msg, stateDeltaInput, nil
+		}
 		// Preserve legacy tool message serialization for default fallback content.
 		// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
 		// code containing "<-done") are preserved verbatim instead of being escaped
