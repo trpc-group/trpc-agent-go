@@ -100,10 +100,10 @@ func (c *CodeExecutor) sandboxOpts() *ci.SandboxOpts {
 		RequestTimeout:            c.requestTimeout,
 		Timeout:                   c.sandboxTimeout,
 		Template:                  c.template,
-		Metadata:                  cloneStringMap(c.metadata),
-		EnvVars:                   cloneStringMap(c.envVars),
+		Metadata:                  c.metadata,
+		EnvVars:                   c.envVars,
 		HTTPClient:                c.httpClient,
-		Headers:                   cloneStringMap(c.headers),
+		Headers:                   c.headers,
 	}
 }
 
@@ -256,7 +256,7 @@ func (c *CodeExecutor) leadRecover(
 	deadGen uint64,
 	call *recreateCall,
 ) error {
-	sbx, err := ci.Create(ctx, c.sandboxOpts())
+	sbx, err := c.createSandbox(ctx)
 	discard := c.completeRecover(deadGen, call, sbx, err)
 	if discard != nil {
 		killDiscardedSandbox(ctx, discard)

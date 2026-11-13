@@ -198,6 +198,55 @@ func TestAutoRecreateTerminalStateAndCreationOptions(t *testing.T) {
 	assert.NotEqual(t, first, executor.SandboxID())
 }
 
+func TestAutoRecreateKeepsResolvedConnectionSettings(t *testing.T) {
+	t.Setenv("E2B_API_KEY", "initial-key")
+	t.Setenv("E2B_DOMAIN", "initial.test")
+	t.Setenv("E2B_API_URL", "")
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+	t.Setenv("E2B_DEBUG", "false")
+	srv := newLifeServer(t)
+	ctx := context.Background()
+	executor, err := NewWithContext(ctx,
+		WithHTTPClient(srv.client()),
+		WithAutoRecreate(true),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = executor.Close() })
+	first := executor.SandboxID()
+
+	t.Setenv("E2B_API_KEY", "changed-key")
+	t.Setenv("E2B_DOMAIN", "changed.test")
+	t.Setenv("E2B_API_URL", "http://changed.test")
+	t.Setenv("E2B_ACCESS_TOKEN", "changed-token")
+	t.Setenv("E2B_DEBUG", "true")
+	srv.setInfo(first, http.StatusNotFound, "", "")
+	srv.setExecute(func(host, _ string) (int, string) {
+		if hostHasSandbox(host, first) {
+			return http.StatusNotFound, "sandbox not found"
+		}
+		return http.StatusOK, ndjsonLines(stdoutMsg("recovered\n"))
+	})
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{Code: "print('ok')"}},
+	}
+	_, err = executor.ExecuteCode(ctx, input)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	result, err := executor.ExecuteCode(ctx, input)
+	require.NoError(t, err)
+	assert.Equal(t, "recovered\n", result.Output)
+	assert.NotEqual(t, first, executor.SandboxID())
+
+	counts := srv.counts()
+	require.Len(t, counts.headers, 2)
+	for _, header := range counts.headers {
+		assert.Equal(t, "https", header.Get("X-Original-Scheme"))
+		assert.Equal(t, "api.initial.test", header.Get("X-Original-Host"))
+		assert.Equal(t, "initial-key", header.Get("X-API-Key"))
+		assert.Empty(t, header.Get("X-Access-Token"))
+	}
+}
+
 func TestAutoRecreateDoesNotTreatOrdinaryFailuresAsDeletion(t *testing.T) {
 	t.Run("management API unavailable", func(t *testing.T) {
 		srv := newLifeServer(t)
@@ -1425,6 +1474,7 @@ func (t *lifeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	cloned := req.Clone(req.Context())
 	cloned.Header.Set("X-Original-Host", req.URL.Host)
+	cloned.Header.Set("X-Original-Scheme", req.URL.Scheme)
 	cloned.URL.Scheme = t.scheme
 	cloned.URL.Host = t.host
 	cloned.Host = t.host

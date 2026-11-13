@@ -140,8 +140,9 @@ func WithSandboxID(sandboxID string) Option {
 //
 // When the option is enabled, a later call may create one replacement from the
 // template, environment variables, metadata, and connection settings captured
-// for this executor. The replacement is a new instance. Files, running
-// processes, interpreter variables, and temporary data are not restored.
+// at construction, including defaults resolved from the environment. The
+// replacement is a new instance. Files, running processes, interpreter
+// variables, and temporary data are not restored.
 // Logical workspace IDs may be reused, but their directories, staged inputs,
 // bootstrap, and workspace init hooks are applied again through the existing
 // workspace registry. Paths created while this option is on include the
@@ -237,7 +238,8 @@ type CodeExecutor struct {
 	rt                   *workspaceRuntime
 
 	// Sandbox instance.
-	sbx *ci.Sandbox
+	sbx           *ci.Sandbox
+	createSandbox func(context.Context) (*ci.Sandbox, error)
 	// executorID distinguishes this executor from others in the same process.
 	// It is assigned once by New and is never reused.
 	executorID uint64
@@ -298,7 +300,8 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		sbx, err = ci.Connect(ctx, c.sandboxID, sbxOpts)
 		c.owned = false
 	} else {
-		sbx, err = ci.Create(ctx, sbxOpts)
+		c.createSandbox = ci.PrepareCreate(*sbxOpts)
+		sbx, err = c.createSandbox(ctx)
 		c.owned = true
 	}
 	if err != nil {

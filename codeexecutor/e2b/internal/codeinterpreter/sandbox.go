@@ -146,8 +146,14 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 	if opts == nil {
 		opts = &SandboxOpts{}
 	}
+	return PrepareCreate(*opts)(ctx)
+}
 
-	cfg := &ConnectionConfig{
+// PrepareCreate resolves connection defaults once and returns a function that
+// creates sandboxes with those settings. The option maps are read-only for the
+// lifetime of the function.
+func PrepareCreate(opts SandboxOpts) func(context.Context) (*Sandbox, error) {
+	cfg := ConnectionConfig{
 		APIKey:         opts.APIKey,
 		AccessToken:    opts.AccessToken,
 		Domain:         opts.Domain,
@@ -158,7 +164,14 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 		Headers:        opts.Headers,
 	}
 	cfg.init()
+	return func(ctx context.Context) (*Sandbox, error) {
+		// create receives its own copy so tokens from the response stay with
+		// the sandbox that was issued those tokens.
+		return create(ctx, &opts, cfg)
+	}
+}
 
+func create(ctx context.Context, opts *SandboxOpts, cfg ConnectionConfig) (*Sandbox, error) {
 	if cfg.APIKey == "" {
 		return nil, &AuthenticationError{Message: "API key is required; set E2B_API_KEY or SandboxOpts.APIKey"}
 	}
@@ -205,7 +218,7 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 		envdPort:      out.EnvdPort,
 		envdVersion:   out.EnvdVersion,
 		sandboxDomain: out.Domain,
-		connection:    cfg,
+		connection:    &cfg,
 	}, nil
 }
 
