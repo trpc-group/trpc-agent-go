@@ -513,9 +513,83 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
+## Structured Tool Results
+
+Return `model.ToolResultContent` when a tool produces model content directly,
+such as text and an image. LLMAgent's default tool-call flow and Graph ToolsNode
+convert this value into a tool message without requiring a
+`ToolResultMessages` callback. The framework supplies the role, tool name, and
+tool call ID.
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+type ReadImageArgs struct {
+    ImageID string `json:"image_id"`
+}
+
+// loadPNG is supplied by the application and returns raw PNG bytes.
+func newReadImageTool(loadPNG func(context.Context, string) ([]byte, error)) *function.FunctionTool[ReadImageArgs, model.ToolResultContent] {
+    return function.NewFunctionTool(
+        func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
+            data, err := loadPNG(ctx, args.ImageID)
+            if err != nil {
+                return nil, err
+            }
+            text := "Image loaded."
+            return model.ToolResultContent{
+                {Type: model.ContentTypeText, Text: &text},
+                {Type: model.ContentTypeImage, Image: &model.Image{
+                    Data: data, Format: "png",
+                }},
+            }, nil
+        },
+        function.WithName("read_image"),
+        function.WithDescription("Read an image by ID."),
+    )
+}
+```
+
+- A text-only result becomes `Message.Content`, with text parts concatenated
+  in order without inserted separators. A result containing media keeps its
+  ordered parts in `Message.ContentParts`; text is not duplicated in `Content`.
+  Parts containing externalized content references also remain in `ContentParts`.
+- A nil or empty `model.ToolResultContent` represents an empty tool response.
+  It does not suppress the response. Empty results, including text-only values
+  whose joined text is empty, use one explicit empty text part in `ContentParts`
+  to distinguish them from payload-free placeholders. An untyped nil retains
+  its existing JSON behavior.
+- Return the defined value type. Other results, including `[]byte`, bare
+  `[]model.ContentPart`, and pointers to `model.ToolResultContent`, retain their
+  existing JSON representation. No image detection or URL fetching occurs.
+- The framework copies content into the tool message, including binary data.
+  Do not mutate a returned result or its backing buffers while it is being
+  processed.
+- Streamable tools can return this value in `tool.FinalResultChunk.Result`.
+  Intermediate streaming events retain their existing behavior.
+- In LLMAgent, an explicitly configured result formatter takes precedence and
+  produces text. `ToolResultMessages` runs afterwards and may replace the
+  default message. Tools that implement state updates still receive the raw
+  result's JSON. As before, a callback rewriting `Message.Content` replaces that
+  state input; changing `ContentParts` alone does not.
+- Direct `Tool.Call` consumers receive the original Go value. Other execution
+  paths that construct their own messages must handle that value themselves.
+
+**Model support:** preserving content in the framework does not establish
+support in a model adapter or provider. Use media results only with an adapter
+that supports the corresponding media in tool responses. Chat Completions
+adapters do not automatically move these parts into a user message. This API
+does not change protocol mappings or enable additional media types in adapters.
+
 ## Tool Result Formatting
 
-Function Tools use JSON for model-visible tool result messages by default. Use
+Function Tools use JSON for ordinary model-visible tool results and preserve
+`model.ToolResultContent` as described above. Use
 `function.WithResultFormatter` when a tool needs custom text, such as an
 XML-like observation, without constructing `model.Message` or managing the tool
 call ID.
@@ -559,13 +633,14 @@ The formatter receives the final result after `AfterTool` callbacks. It changes
 only `DefaultToolMessage.Content`; the framework still manages the tool message
 role, name, tool call ID, ordering, events, and session persistence.
 
-- Without a formatter, existing JSON output remains unchanged.
+- Without a formatter, ordinary results retain their existing JSON output;
+  `model.ToolResultContent` uses the structured-content conversion above.
 - A formatting error or panic is reported as an error. The framework does not
   fall back to JSON or run the completed tool again. Formatting is presentation
   only, so a tool that already ran still applies its session state updates.
 - A formatter runs only when the tool declared a result for the call. When it
-  did not, the framework keeps the default JSON: permission results, state-only
-  final stream results, the `CustomResult` a `BeforeTool` callback or plugin
+  did not, the framework uses the default result conversion: permission
+  results, state-only final stream results, the `CustomResult` a `BeforeTool` callback or plugin
   returns to short-circuit the call, and stream content the framework merged
   because a stream ended without `tool.FinalResultChunk` (see below). An
   `AfterTool` callback replacing the result of a tool that did run is a
@@ -575,21 +650,21 @@ role, name, tool call ID, ordering, events, and session persistence.
   intermediate events are unchanged. A streamable tool must declare that final
   result with `tool.FinalResultChunk`. When a stream ends without one, the
   final result is the stream content merged by the framework rather than the
-  tool's declared output type, so the formatter is skipped, the default JSON is
-  kept, and the framework logs a warning. An `AfterTool` callback that replaces
-  the merged content does not make the call eligible for formatting again; emit
+  tool's declared output type, so the formatter is skipped, default result
+  conversion is used, and the framework logs a warning. An `AfterTool` callback
+  that replaces the merged content does not make the call eligible for formatting again; emit
   `tool.FinalResultChunk` to have a streamable result formatted.
-- For tools that update session state, the state update consumes the tool
-  message content the framework would send without a formatter, which is the
-  JSON of the result produced after `AfterTool` callbacks. A formatter is not
+- For tools that update session state, the state update consumes the raw
+  result's JSON after `AfterTool` callbacks, independently of structured-content
+  conversion or formatting. A formatter is not
   part of the state protocol: even if a formatter breaks the read-only contract
   and mutates a pointer or map result in place, the session records the value
   from before that mutation. When
-  `ToolResultMessages` rewrites the tool message content, the rewritten content
+  `ToolResultMessages` rewrites `Message.Content`, the rewritten content
   wins, exactly as it did before formatting existed.
 - The `ToolResultMessages` callback still runs after the default tool result
   message is prepared and may replace it with the messages returned by the
-  callback. Continue using it for multiple messages, multimodal content, or
+  callback. Continue using it for multiple messages, custom content mapping, or
   complete control of the message protocol. Note that a formatter is configured
   per tool while `ToolResultMessages` is registered for the whole agent: for a
   tool with a formatter, the callback receives formatted text in
