@@ -357,7 +357,7 @@ func (r *workspaceRuntime) stageInputsLocked(
 	if err != nil {
 		return err
 	}
-	for _, sp := range specs {
+	for i, sp := range specs {
 		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
 		if mode == "" {
 			mode = "copy"
@@ -369,6 +369,10 @@ func (r *workspaceRuntime) stageInputsLocked(
 		}
 		resolved, ver, err := r.stageInput(ctx, ws, md, sp, mode, to)
 		if err != nil {
+			if i > 0 && codeexecutor.IsWorkspaceRetrySafe(err) {
+				// Retrying StageInputs would replay earlier input writes.
+				return errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+			}
 			return err
 		}
 		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
@@ -1246,6 +1250,10 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 		},
 	)
 	if err != nil {
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			// A new attempt would repeat the completed metadata staging write.
+			return errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+		}
 		return err
 	}
 	if res.ExitCode != 0 {

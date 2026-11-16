@@ -618,6 +618,8 @@ func (c *CodeExecutor) Collect(
 }
 
 // StageInputs maps external inputs into the sandbox workspace.
+// A stale workspace error after writing an input or staging metadata also
+// matches [codeexecutor.ErrWorkspaceRetryUnsafe].
 func (c *CodeExecutor) StageInputs(
 	ctx context.Context, ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,

@@ -797,6 +797,92 @@ func TestAutoRecreateStageInputsWithMissingMetadata(t *testing.T) {
 	assert.Equal(t, 1, stringsCount(counts.executeCodes, "__E2B_SIZE__"))
 }
 
+func TestAutoRecreateStageInputsDoesNotRetryAfterWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		recreateAfter    string
+		includeHostInput bool
+	}{
+		{name: "between inputs", recreateAfter: "cp -a ", includeHostInput: true},
+		{name: "before metadata commit", recreateAfter: "base64 -d > "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newLifeServer(t)
+			executor := srv.executor(t)
+			ws := srv.mustWorkspace(t, executor)
+			first := executor.SandboxID()
+			srv.setInfo(first, http.StatusNotFound, "", "")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			writeSubmitted := make(chan struct{})
+			releaseResponse := make(chan struct{})
+			const trigger = "trigger recreation during staging"
+			srv.setExecute(func(host, code string) (int, string) {
+				if !hostHasSandbox(host, first) {
+					return http.StatusOK, ""
+				}
+				if code == trigger {
+					return http.StatusNotFound, "sandbox deleted"
+				}
+				if strings.Contains(code, tc.recreateAfter) {
+					close(writeSubmitted)
+					select {
+					case <-releaseResponse:
+					case <-ctx.Done():
+						return http.StatusServiceUnavailable, "staging canceled"
+					}
+				}
+				return http.StatusOK, ""
+			})
+
+			inputs := []codeexecutor.InputSpec{
+				{From: "workspace://work/source.txt", To: "work/copied.txt"},
+			}
+			if tc.includeHostInput {
+				inputs = append(inputs, codeexecutor.InputSpec{
+					From: "host://" + t.TempDir(), To: "work/host/input.txt",
+				})
+			}
+			stageErr := make(chan error, 1)
+			go func() { stageErr <- executor.StageInputs(ctx, ws, inputs) }()
+			select {
+			case <-writeSubmitted:
+			case err := <-stageErr:
+				t.Fatalf("staging ended before the write was submitted: %v", err)
+			case <-ctx.Done():
+				t.Fatal("staging did not submit the write")
+			}
+
+			_, err := executor.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+				CodeBlocks: []codeexecutor.CodeBlock{{Code: trigger}},
+			})
+			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+			require.NotEqual(t, first, executor.SandboxID())
+			close(releaseResponse)
+
+			select {
+			case err = <-stageErr:
+			case <-ctx.Done():
+				t.Fatal("staging did not return after recreation")
+			}
+			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+			assert.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+			assert.False(t, codeexecutor.IsWorkspaceRetrySafe(err))
+			counts := srv.counts()
+			assert.Equal(t, 1, stringsCount(counts.executeCodes, tc.recreateAfter))
+			assert.Zero(t, stringsCount(counts.executeCodes, "tar -xzf "))
+			assert.Empty(t, counts.processLines, "old metadata must not be committed on the replacement")
+
+			err = executor.StageInputs(ctx, ws, inputs)
+			assert.True(t, codeexecutor.IsWorkspaceRetrySafe(err), "stale at entry is safe to retry")
+			after := srv.counts()
+			assert.Equal(t, counts.executeCodes, after.executeCodes)
+			assert.Equal(t, counts.processLines, after.processLines)
+		})
+	}
+}
+
 func TestAutoRecreateWorkspaceRebuildAndStaleHandles(t *testing.T) {
 	srv := newLifeServer(t)
 	executor := srv.executor(t, WithWorkspacePersistence(WorkspacePersistencePerSession))
