@@ -197,3 +197,65 @@ func TestLimiterContextScope(t *testing.T) {
 	child := WithLimiter(parent, nil)
 	require.Nil(t, LimiterFromContext(child))
 }
+
+func TestLimiterTryAcquireAndReleaseNotifications(t *testing.T) {
+	l := NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 2,
+		Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"a", "b"}, Limit: 1}}})
+	require.Equal(t, l.QueueKey("a"), l.QueueKey("b"))
+	require.NotEqual(t, l.QueueKey("a"), l.QueueKey("other"))
+	notice := l.Changed()
+	releaseA, ok := l.TryAcquire("a")
+	require.True(t, ok)
+	_, ok = l.TryAcquire("b")
+	require.False(t, ok)
+	releaseOther, ok := l.TryAcquire("other")
+	require.True(t, ok)
+	_, ok = l.TryAcquire("another")
+	require.False(t, ok)
+	releaseA()
+	releaseA()
+	select {
+	case <-notice:
+	default:
+		t.Fatal("release did not notify a scheduler")
+	}
+	secondNotice := l.Changed()
+	select {
+	case <-secondNotice:
+		t.Fatal("new subscription inherited an earlier notification")
+	default:
+	}
+	releaseB, ok := l.TryAcquire("b")
+	require.True(t, ok)
+	releaseB()
+	releaseOther()
+}
+
+func TestLimiterTryAcquireRollsBackGroup(t *testing.T) {
+	l := NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 1,
+		Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"grouped"}, Limit: 1}}})
+	release, err := l.Acquire(context.Background(), "other")
+	require.NoError(t, err)
+	notice := l.Changed()
+	_, ok := l.TryAcquire("grouped")
+	require.False(t, ok)
+	select {
+	case <-notice:
+		t.Fatal("failed probe must not repeatedly wake its own dispatcher")
+	default:
+	}
+	release()
+	<-notice
+	release, ok = l.TryAcquire("grouped")
+	require.True(t, ok, "failed overall acquisition leaked the group permit")
+	release()
+}
+
+func TestNilLimiterDispatchHelpers(t *testing.T) {
+	var l *Limiter
+	require.Zero(t, l.QueueKey("any"))
+	require.Nil(t, l.Changed())
+	release, ok := l.TryAcquire("any")
+	require.True(t, ok)
+	release()
+}

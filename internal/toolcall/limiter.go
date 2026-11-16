@@ -19,8 +19,26 @@ import (
 
 // Limiter enforces overall and disjoint shared-group concurrency limits.
 type Limiter struct {
-	global *semaphore.Weighted
-	groups map[string]*semaphore.Weighted
+	global  *semaphore.Weighted
+	groups  map[string]*concurrencyGroup
+	mu      sync.Mutex
+	changed chan struct{}
+}
+
+type concurrencyGroup struct {
+	*semaphore.Weighted
+	key int
+}
+
+// QueueKey identifies calls that compete for the same group capacity. Zero
+// denotes calls outside any group. Keys are meaningful only for this limiter.
+func (l *Limiter) QueueKey(toolName string) int {
+	if l != nil {
+		if group := l.groups[toolName]; group != nil {
+			return group.key
+		}
+	}
+	return 0
 }
 
 type limiterContextKey struct{}
@@ -95,12 +113,12 @@ func NewLimiter(config tool.ConcurrencyConfig) *Limiter {
 	if config.MaxConcurrency > 0 {
 		global = semaphore.NewWeighted(int64(config.MaxConcurrency))
 	}
-	groups := make(map[string]*semaphore.Weighted)
-	for _, group := range config.Groups {
+	groups := make(map[string]*concurrencyGroup)
+	for i, group := range config.Groups {
 		if group.Limit <= 0 {
 			continue
 		}
-		groupLimiter := semaphore.NewWeighted(int64(group.Limit))
+		groupLimiter := &concurrencyGroup{Weighted: semaphore.NewWeighted(int64(group.Limit)), key: i + 1}
 		for _, name := range group.ToolNames {
 			if name == "" {
 				continue
@@ -139,10 +157,65 @@ func (l *Limiter) Acquire(
 		if err := l.global.Acquire(ctx, 1); err != nil {
 			if group != nil {
 				group.Release(1)
+				l.notifyRelease()
 			}
 			return nil, err
 		}
 	}
+	return l.releaseFunc(group), nil
+}
+
+// TryAcquire reserves group and overall capacity without waiting. On success,
+// the caller owns the returned idempotent release function. A nil limiter is
+// unrestricted. Failed attempts leave both capacities unchanged.
+func (l *Limiter) TryAcquire(toolName string) (release func(), ok bool) {
+	if l == nil {
+		return func() {}, true
+	}
+	// Hide a failed probe's temporary group reservation from other probes
+	// and release notifications. Rolling it back must not wake this same
+	// dispatcher repeatedly while the overall capacity remains exhausted.
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	group := l.groups[toolName]
+	if group != nil && !group.TryAcquire(1) {
+		return nil, false
+	}
+	if l.global != nil && !l.global.TryAcquire(1) {
+		if group != nil {
+			group.Release(1)
+		}
+		return nil, false
+	}
+	return l.releaseFunc(group), true
+}
+
+// Changed returns a channel closed by the next capacity release. Obtain it
+// before trying to acquire capacity to avoid missing a concurrent release.
+// A notification is a reason to retry, not a reservation. Nil receivers return
+// a nil channel because their capacity is always available.
+func (l *Limiter) Changed() <-chan struct{} {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.changed == nil {
+		l.changed = make(chan struct{})
+	}
+	return l.changed
+}
+
+func (l *Limiter) notifyRelease() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.changed != nil {
+		close(l.changed)
+		l.changed = nil
+	}
+}
+
+func (l *Limiter) releaseFunc(group *concurrencyGroup) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -152,6 +225,7 @@ func (l *Limiter) Acquire(
 			if group != nil {
 				group.Release(1)
 			}
+			l.notifyRelease()
 		})
-	}, nil
+	}
 }
