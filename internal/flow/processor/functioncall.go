@@ -2691,8 +2691,8 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
 	}
-	for i, tc := range toolCalls {
-		annotateToolCallArgs(mergedEvent, tc, toolArgsByIndex[i])
+	if err := setMergedToolCallArgs(mergedEvent, toolCalls, toolArgsByIndex); err != nil {
+		log.Warnf("Failed to set tool call args extension: %v", err)
 	}
 	if len(toolCallEvents) > 1 {
 		_, span, startedSpan := itrace.StartSpan(
@@ -2706,6 +2706,43 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		}
 	}
 	return mergedEvent
+}
+
+// setMergedToolCallArgs updates the batch extension in one decode/encode pass.
+// Calling setToolCallArgs per call repeatedly serializes the growing batch.
+func setMergedToolCallArgs(
+	ev *event.Event,
+	toolCalls []model.ToolCall,
+	toolArgsByIndex map[int][]byte,
+) error {
+	if ev == nil {
+		return nil
+	}
+	var args map[string]string
+	for i, tc := range toolCalls {
+		if tc.ID == "" {
+			continue
+		}
+		if args == nil {
+			var err error
+			args, _, err = event.GetExtension[map[string]string](ev, event.ToolCallArgsExtensionKey)
+			if err != nil {
+				return err
+			}
+			if args == nil {
+				args = make(map[string]string, len(toolCalls))
+			}
+		}
+		toolArgs := toolArgsByIndex[i]
+		if toolArgs == nil {
+			toolArgs = tc.Function.Arguments
+		}
+		args[tc.ID] = string(toolArgs)
+	}
+	if args == nil {
+		return nil
+	}
+	return event.SetExtension(ev, event.ToolCallArgsExtensionKey, args)
 }
 
 // executeToolCall executes a single tool call.
