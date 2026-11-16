@@ -250,6 +250,82 @@ func TestParallelDispatchMergedResultsKeepCallOrder(t *testing.T) {
 	}
 }
 
+func TestParallelDispatchCallbackContextPreservesCancellation(t *testing.T) {
+	for _, perCall := range []bool{false, true} {
+		t.Run(fmt.Sprintf("per_call=%t", perCall), func(t *testing.T) {
+			const count = 4
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			limiter := toolcall.NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: count})
+			ctx = toolcall.WithLimiter(ctx, limiter)
+			started := make(chan struct{}, count)
+			probe := &dispatchProbeTool{name: "probe", call: func(ctx context.Context, _ []byte) (any, error) {
+				started <- struct{}{}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}}
+			finishCallbacks := make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(finishCallbacks) }) }
+			callbacks := tool.NewCallbacks()
+			callbacks.RegisterAfterTool(func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+				<-finishCallbacks
+				return &tool.AfterToolResult{Context: context.Background(), CustomResult: "handled"}, nil
+			})
+			p := NewFunctionCallResponseProcessor(true, callbacks)
+			results, wait := p.startParallelToolCalls(ctx, dispatchProbeInvocation(), &model.Response{},
+				dispatchProbeCalls(count, "probe"), map[string]tool.Tool{"probe": probe}, nil, perCall)
+			done := make(chan error, 1)
+			go func() { done <- wait() }()
+			// Drain on failure too, so a broken result-delivery path cannot leak
+			// workers into subsequent tests.
+			t.Cleanup(func() {
+				cancel()
+				unblock()
+				for range results {
+				}
+			})
+			for i := 0; i < count; i++ {
+				select {
+				case <-started:
+				case <-time.After(5 * time.Second):
+					t.Fatal("tool did not start")
+				}
+			}
+			cancel()
+			if perCall {
+				// Per-call mode intentionally drains completed results even after
+				// cancellation, so every result must still be delivered.
+				unblock()
+				collected, err := p.collectParallelToolResults(context.WithoutCancel(ctx), results, count)
+				require.NoError(t, err)
+				require.Len(t, collected, count)
+				for i, result := range collected {
+					require.Equal(t, fmt.Sprintf("call-%d", i), result.event.Choices[0].Message.ToolID)
+					require.Contains(t, result.event.Choices[0].Message.Content, "handled")
+				}
+			} else {
+				// The collector exits before the callbacks finish. No consumer
+				// remains to empty the bounded channel for the workers.
+				_, err := p.collectParallelToolResults(ctx, results, count)
+				require.ErrorIs(t, err, context.Canceled)
+				unblock()
+			}
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("workers blocked delivering results after cancellation")
+			}
+			for i := 0; i < count; i++ {
+				release, ok := limiter.TryAcquire("probe")
+				require.True(t, ok, "worker leaked its capacity reservation")
+				t.Cleanup(release)
+			}
+		})
+	}
+}
+
 func TestParallelDispatchUsesRemappedToolGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

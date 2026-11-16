@@ -1979,11 +1979,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
+	// Callbacks may replace ctx without inheriting the batch cancellation.
+	// Delivery must still stop when the collector stops, except in per-call
+	// mode where the collector intentionally drains results after cancellation.
+	sendCtx := ctx
+	if preserveResultOnCancellation {
+		sendCtx = context.WithoutCancel(sendCtx)
+	}
 	sendResult := func(result toolResult) {
-		sendCtx := ctx
-		if preserveResultOnCancellation {
-			sendCtx = context.WithoutCancel(sendCtx)
-		}
 		p.sendToolResult(sendCtx, resultChan, result)
 	}
 	// Recover from panics to avoid breaking sibling goroutines. Panics are

@@ -251,6 +251,75 @@ func TestLimiterTryAcquireRollsBackGroup(t *testing.T) {
 	release()
 }
 
+type acquireObservedContext struct {
+	context.Context
+	doneCalls chan struct{}
+}
+
+func (c acquireObservedContext) Done() <-chan struct{} {
+	c.doneCalls <- struct{}{}
+	return c.Context.Done()
+}
+
+func TestLimiterCanceledAcquireNotifiesDispatcher(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		config  tool.ConcurrencyConfig
+		holder  string
+		waiting string
+		stages  int
+	}{
+		{name: "group", config: tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"grouped"}, Limit: 1}},
+		}, holder: "grouped", waiting: "grouped", stages: 1},
+		{name: "overall", config: tool.ConcurrencyConfig{MaxConcurrency: 1}, holder: "other", waiting: "other", stages: 1},
+		{name: "group_then_overall", config: tool.ConcurrencyConfig{
+			MaxConcurrency: 1,
+			Groups:         []tool.ConcurrencyGroup{{ToolNames: []string{"grouped"}, Limit: 1}},
+		}, holder: "other", waiting: "grouped", stages: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewLimiter(tc.config)
+			release, err := l.Acquire(context.Background(), tc.holder)
+			require.NoError(t, err)
+			defer release()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			observed := acquireObservedContext{Context: ctx, doneCalls: make(chan struct{}, tc.stages)}
+			done := make(chan error, 1)
+			go func() {
+				releaseWaiting, err := l.Acquire(observed, tc.waiting)
+				if releaseWaiting != nil {
+					releaseWaiting()
+				}
+				done <- err
+			}()
+			for i := 0; i < tc.stages; i++ {
+				select {
+				case <-observed.doneCalls:
+				case <-time.After(time.Second):
+					t.Fatal("acquisition did not reach the expected semaphore")
+				}
+			}
+			notice := l.Changed()
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+			// A canceled semaphore acquisition may roll back a granted permit
+			// internally. Always wake the dispatcher to recheck capacity, even
+			// when no explicit release function was returned to the caller.
+			select {
+			case <-notice:
+			default:
+				t.Fatal("canceled acquisition did not wake the dispatcher")
+			}
+			release()
+			releaseWaiting, ok := l.TryAcquire(tc.waiting)
+			require.True(t, ok, "canceled acquisition leaked capacity")
+			releaseWaiting()
+		})
+	}
+}
+
 func TestNilLimiterDispatchHelpers(t *testing.T) {
 	var l *Limiter
 	require.Zero(t, l.QueueKey("any"))

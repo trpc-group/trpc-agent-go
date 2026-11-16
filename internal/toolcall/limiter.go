@@ -150,6 +150,8 @@ func (l *Limiter) Acquire(
 	group := l.groups[toolName]
 	if group != nil {
 		if err := group.Acquire(ctx, 1); err != nil {
+			// The semaphore may have rolled back a granted permit internally.
+			l.notifyRelease()
 			return nil, err
 		}
 	}
@@ -157,8 +159,8 @@ func (l *Limiter) Acquire(
 		if err := l.global.Acquire(ctx, 1); err != nil {
 			if group != nil {
 				group.Release(1)
-				l.notifyRelease()
 			}
+			l.notifyRelease()
 			return nil, err
 		}
 	}
@@ -190,8 +192,9 @@ func (l *Limiter) TryAcquire(toolName string) (release func(), ok bool) {
 	return l.releaseFunc(group), true
 }
 
-// Changed returns a channel closed by the next capacity release. Obtain it
-// before trying to acquire capacity to avoid missing a concurrent release.
+// Changed returns a channel closed when capacity may have become available,
+// including after a canceled blocking acquisition. Obtain it before trying to
+// acquire capacity to avoid missing a concurrent release.
 // A notification is a reason to retry, not a reservation. Nil receivers return
 // a nil channel because their capacity is always available.
 func (l *Limiter) Changed() <-chan struct{} {
