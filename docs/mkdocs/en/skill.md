@@ -157,6 +157,16 @@ How this relates to `SkillLoadMode` (common pitfall):
   the previous `skill_load` tool result (typically a short `loaded:
   <name>` stub), the framework will not materialize the body/docs again.
 
+Offloading also affects prompt caching in tool-result mode. Only skills
+currently loaded for the agent are materialized; historical tool results do
+not reactivate offloaded skills, even while another skill remains loaded.
+After lifecycle cleanup or `WithMaxLoadedSkills` eviction, the next request
+keeps the original short tool result instead of the skill body/docs. The
+system message stays unchanged by this offload when matching tool results
+remain in history, but the prompt changes at the offloaded tool result: the earlier prefix can still be reused, while the suffix
+cannot reuse the previous request's corresponding cached prefix. This saves
+context tokens without guaranteeing a higher cache-hit rate.
+
 Practical guidance (especially with
 `WithSkillsLoadedContentInToolResults(true)`):
 

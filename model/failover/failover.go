@@ -19,6 +19,7 @@ import (
 	"maps"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -30,6 +31,8 @@ type failoverModel struct {
 }
 
 // New creates a failover model wrapper.
+// If any candidate consumes ProviderData, all candidates must have the same
+// provider data protocol and configured model name; mixed native routing is rejected.
 func New(opts ...Option) (model.Model, error) {
 	options := options{}
 	for _, opt := range opts {
@@ -45,12 +48,20 @@ func New(opts ...Option) (model.Model, error) {
 		}
 		candidates = append(candidates, candidate)
 	}
+	if _, err := providerdata.CandidateInfo(candidates); err != nil {
+		return nil, fmt.Errorf("failover: %w", err)
+	}
 	return &failoverModel{candidates: candidates}, nil
 }
 
 // Info returns the primary candidate model info.
 func (m *failoverModel) Info() model.Info {
 	return m.candidates[0].Info()
+}
+
+// ProjectProviderData forwards native message projection to a candidate model.
+func (m *failoverModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
+	return providerdata.ProjectFromCandidates(m.candidates, data)
 }
 
 // InputTokenBudget returns the smallest advertised candidate budget so a

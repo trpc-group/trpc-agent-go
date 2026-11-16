@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -128,12 +129,18 @@ func TestProcessEventCmd_Empty(t *testing.T) {
 func TestProcessEventCmd_SkipsMalformedJSON(t *testing.T) {
 	_, rdb := setupRedis(t)
 	ctx := context.Background()
+	warnings := 0
+	originalWarn := log.WarnfContext
+	log.WarnfContext = func(context.Context, string, ...any) { warnings++ }
+	t.Cleanup(func() { log.WarnfContext = originalWarn })
 
 	validEvt := &event.Event{ID: "e1", Timestamp: time.Now()}
 	b, _ := json.Marshal(validEvt)
 	rdb.ZAdd(ctx, "events:test",
 		redis.Z{Score: 1, Member: string(b)},
 		redis.Z{Score: 2, Member: "not-valid-json"},
+		redis.Z{Score: 3, Member: `{"choices":[{"message":{"provider_data":{}}}]}`},
+		redis.Z{Score: 4, Member: `{"choices":[{"message":{"provider_data":"invalid"}}]}`},
 	)
 
 	pipe := rdb.Pipeline()
@@ -145,6 +152,16 @@ func TestProcessEventCmd_SkipsMalformedJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, events, 1)
 	assert.Equal(t, "e1", events[0].ID)
+	require.Equal(t, 1, warnings, "multiple malformed events log only once per read")
+
+	_, err = ProcessEventCmd(ctx, cmd)
+	require.NoError(t, err)
+	require.Equal(t, 2, warnings, "a later read must still report malformed events")
+
+	cmd.SetVal([]string{string(b)})
+	_, err = ProcessEventCmd(ctx, cmd)
+	require.NoError(t, err)
+	require.Equal(t, 2, warnings, "valid events do not produce a warning")
 }
 
 // =============================================================================

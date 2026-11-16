@@ -110,6 +110,80 @@ func TestParseContent_Nodes(t *testing.T) {
 	}
 }
 
+func TestParseContent_CompleteCallableSignatures(t *testing.T) {
+	tests := []struct {
+		name        string
+		declaration string
+		want        string
+	}{
+		{
+			name:        "positional only",
+			declaration: "def call(source: str, /) -> str",
+			want:        "def call(source: str, /) -> str",
+		},
+		{
+			name:        "defaults across positional boundary",
+			declaration: "def call(left: int = 1, /, right: int = 2)",
+			want:        "def call(left: int=1, /, right: int=2)",
+		},
+		{
+			name:        "required positional and optional regular",
+			declaration: "def call(source, /, limit: int = 2)",
+			want:        "def call(source, /, limit: int=2)",
+		},
+		{
+			name:        "keyword only",
+			declaration: "def call(*, required: str, limit: int = 2)",
+			want:        "def call(*, required: str, limit: int=2)",
+		},
+		{
+			name:        "variadic",
+			declaration: "def call(*items: int, **options: str)",
+			want:        "def call(*items: int, **options: str)",
+		},
+		{
+			name:        "async mixed parameters",
+			declaration: "async def call(source: str, /, *items: int, limit: int, **options: str) -> list",
+			want:        "async def call(source: str, /, *items: int, limit: int, **options: str) -> list",
+		},
+		{
+			name:        "method receiver and all default kinds",
+			declaration: "def call(self, key: str, /, default: str = 'missing', *, strict: bool = False, **options: int) -> str",
+			want:        "def call(self, key: str, /, default: str='missing', *, strict: bool=False, **options: int) -> str",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := tt.declaration + ":\n    pass\n\nclass Example:\n    " + tt.declaration + ":\n        pass\n"
+			result, err := NewParser().ParseContent("sample.py", content)
+			if err != nil {
+				t.Fatalf("ParseContent() error = %v", err)
+			}
+			nodes := make(map[string]*codeast.Node)
+			for _, node := range result.Nodes {
+				nodes[node.ID] = node
+			}
+			for _, id := range []string{"sample.call", "sample.Example.call"} {
+				node := nodes[id]
+				if node == nil {
+					t.Fatalf("missing node %s", id)
+				}
+				if node.Signature != tt.want {
+					t.Errorf("%s signature = %q, want %q", id, node.Signature, tt.want)
+				}
+			}
+			classNode := nodes["sample.Example"]
+			if classNode == nil {
+				t.Fatal("missing class node")
+			}
+			wantCode := "class Example:\n    " + tt.want + ": ..."
+			if classNode.Code != wantCode {
+				t.Errorf("class skeleton = %q, want %q", classNode.Code, wantCode)
+			}
+		})
+	}
+}
+
 func TestParseContent_Edges(t *testing.T) {
 	parser := NewParser()
 	result, err := parser.ParseFileAt(testdataPath("sample.py"), "sample")

@@ -10,7 +10,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel/trace v1.40.0
 	go.uber.org/multierr v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20251126064502-c8c2594d2519
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

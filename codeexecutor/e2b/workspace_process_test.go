@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 type workspaceProcessInput struct {
@@ -183,6 +184,136 @@ func TestRunProgramDefaultTimeout(t *testing.T) {
 	}
 }
 
+func TestRunProgramMaxTimeout(t *testing.T) {
+	for _, engine := range []bool{false, true} {
+		for _, tc := range []struct {
+			name string
+			max  time.Duration
+			raw  time.Duration
+			want time.Duration
+		}{
+			{"disabled", 0, time.Minute, time.Minute},
+			{"negative", -time.Second, time.Minute, time.Minute},
+			{"shorter", 10 * time.Second, 5 * time.Second, 5 * time.Second},
+			{"equal", 10 * time.Second, 10 * time.Second, 10 * time.Second},
+			{"longer", 10 * time.Second, time.Minute, 10 * time.Second},
+			{"default_capped", 10 * time.Second, 0, 10 * time.Second},
+			{"negative_request", 10 * time.Second, -time.Second, 10 * time.Second},
+			{"default_preserved", time.Minute, 0, 30 * time.Second},
+		} {
+			t.Run(fmt.Sprintf("engine=%t/%s", engine, tc.name), func(t *testing.T) {
+				srv := newMockE2BServer(t, nil)
+				defer srv.close()
+				c := newMockedExecutor(t, srv,
+					WithMaxProgramTimeout(tc.max),
+					WithExecutionTimeout(time.Nanosecond),
+				)
+				var runner codeexecutor.ProgramRunner = c
+				if engine {
+					runner = c.Engine().Runner()
+				}
+				result, err := runner.RunProgram(context.Background(),
+					codeexecutor.Workspace{Path: "/tmp/ws"},
+					codeexecutor.RunProgramSpec{Cmd: "true", Timeout: tc.raw})
+				require.NoError(t, err)
+				assert.False(t, result.TimedOut)
+				srv.process.mu.Lock()
+				defer srv.process.mu.Unlock()
+				require.Len(t, srv.process.headers, 1)
+				ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				assert.InDelta(t, tc.want.Milliseconds(), ms, 1000)
+			})
+		}
+	}
+}
+
+func TestWorkspaceExecMaxProgramTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		max  time.Duration
+		args string
+		want time.Duration
+	}{
+		{"longer", 10 * time.Second, `{"command":"true","timeout_sec":60}`, 10 * time.Second},
+		{"shorter", 10 * time.Second, `{"command":"true","timeout_sec":5}`, 5 * time.Second},
+		{"omitted", 10 * time.Second, `{"command":"true"}`, 10 * time.Second},
+		{"default_preserved", 10 * time.Minute, `{"command":"true"}`, 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(tc.max))
+			_, err := workspaceexec.NewExecTool(c).Call(context.Background(), []byte(tc.args))
+			require.NoError(t, err)
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, 1)
+			ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+			require.NoError(t, err)
+			assert.InDelta(t, tc.want.Milliseconds(), ms, 1000)
+		})
+	}
+}
+
+func TestMaxProgramTimeoutDoesNotLimitWorkspaceMetadata(t *testing.T) {
+	for _, exitCode := range []int32{0, 1} {
+		t.Run(fmt.Sprintf("commit_exit=%d", exitCode), func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			srv.process.exitCode = exitCode
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(10*time.Second))
+			ctx := context.Background()
+			ws := codeexecutor.Workspace{ID: "metadata", Path: "/tmp/ws"}
+			err := c.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+				From: "host://" + t.TempDir(), To: "work/inputs",
+			}})
+			metadataCalls := 1
+			if exitCode == 0 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "metadata commit failed")
+				metadataCalls++
+			}
+			_, err = c.Engine().Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+				Cmd: "true", Timeout: time.Minute,
+			})
+			require.NoError(t, err)
+
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, metadataCalls+1)
+			assert.Contains(t, strings.Join(srv.process.requests[0].Process.Args, " "), "mv -f")
+			if metadataCalls == 2 {
+				assert.Contains(t, strings.Join(srv.process.requests[1].Process.Args, " "), "rm -f")
+			}
+			for i, header := range srv.process.headers {
+				ms, err := strconv.Atoi(header.Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				want := 60 * time.Second
+				if i == metadataCalls {
+					want = 10 * time.Second
+				}
+				assert.InDelta(t, want.Milliseconds(), ms, 1000)
+			}
+		})
+	}
+}
+
+func TestMaxProgramTimeoutDoesNotLimitInterpreter(t *testing.T) {
+	srv := newMockE2BServer(t, func(string) string {
+		return ndjsonLines(stdoutMsg("interpreter output"))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithMaxProgramTimeout(time.Nanosecond))
+	result, err := c.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{Code: "print('interpreter output')", Language: "python"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "interpreter output")
+	assert.Equal(t, 1, srv.execCalls)
+}
+
 // Execute the request's bootstrap locally to test actual argv, environment,
 // directory preparation and exit behavior, rather than matching script text.
 func TestRunProgramBootstrap(t *testing.T) {
@@ -252,8 +383,17 @@ func TestRunProgramInvalidArguments(t *testing.T) {
 }
 
 func TestRunProgramCancellationAndTimeout(t *testing.T) {
-	for _, caller := range []bool{false, true} {
-		t.Run(fmt.Sprintf("caller=%t", caller), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		caller bool
+		max    time.Duration
+	}{
+		{"program", false, 0},
+		{"caller", true, 0},
+		{"program_capped", false, 100 * time.Millisecond},
+		{"caller_capped", true, 5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			srv := newMockE2BServer(t, nil)
 			defer srv.close()
 			rpc := srv.rpc
@@ -276,18 +416,21 @@ func TestRunProgramCancellationAndTimeout(t *testing.T) {
 			}
 			killed := make(chan struct{}, 1)
 			srv.process.signal = func(*process.SendSignalRequest) { killed <- struct{}{} }
-			c := newMockedExecutor(t, srv)
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(tc.max))
 			ctx := context.Background()
 			timeout := 100 * time.Millisecond
-			if caller {
+			if tc.caller {
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithTimeout(ctx, timeout)
 				defer cancel()
 				timeout = time.Minute
 			}
+			if tc.max > 0 {
+				timeout = time.Minute
+			}
 			result, err := c.RunProgram(ctx, codeexecutor.Workspace{Path: "/tmp/ws"},
 				codeexecutor.RunProgramSpec{Cmd: "sleep", Args: []string{"60"}, Timeout: timeout})
-			if caller {
+			if tc.caller {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				assert.False(t, result.TimedOut)
 				select {

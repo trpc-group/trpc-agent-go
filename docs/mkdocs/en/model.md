@@ -404,6 +404,13 @@ func main() {
 }
 ```
 
+For non-streaming OpenAI-compatible calls, an HTTP 200 response whose entire
+JSON body is `null` is reported through `Response.Error` with
+`Type: model.ErrorTypeAPIError` and `Done: true`. This applies to both
+`GenerateContent` and `GenerateContentIter`; the chat response callback is not
+invoked for this invalid completion. A valid completion containing
+`message.content: null`, such as a tool-call response, is unaffected.
+
 ### Structured Output
 
 When calling `model.GenerateContent` directly, use `model.NewRequest` and
@@ -683,8 +690,8 @@ The accumulator state is a complete `model.Usage` value:
 | `CompletionTokens` | Total generated output tokens reported by the provider |
 | `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
 | `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
-| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache, primarily for Anthropic-style caching |
-| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache, primarily for Anthropic-style caching |
+| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache. Populated from `prompt_tokens_details.cache_creation_tokens` when a gateway reports it |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. Populated from `prompt_tokens_details.cache_read_tokens` when a gateway reports it |
 | `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
 | `TimingInfo` | Optional framework timing metadata, not billable token usage |
 | `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
@@ -694,6 +701,18 @@ These fields form a provider-agnostic structure.
 `WithAccumulateChunkTokenUsage` belongs to the OpenAI-compatible adapter, so
 its callback only receives fields that the upstream OpenAI-compatible response
 and adapter mapping support. Other provider-specific fields remain zero.
+
+The OpenAI-compatible adapter also surfaces prompt cache counts that gateways
+report in `prompt_tokens_details`: `cache_read_tokens` maps to
+`PromptTokensDetails.CacheReadTokens`, and `cache_creation_tokens` maps to
+`PromptTokensDetails.CacheCreationTokens`. Providers that follow the OpenAI
+schema strictly leave both counts at `0`.
+
+In streaming responses both counts accumulate across chunks, matching the
+default accumulation of prompt, completion, and total tokens. When a
+`WithAccumulateChunkTokenUsage` callback is configured, its return value
+determines the final cache counts, so providers that report cumulative
+snapshots can keep the latest one.
 
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
@@ -1824,6 +1843,14 @@ when the same estimates are needed.
 
 Token Tailoring is an intelligent message management technique designed to automatically trim messages when they exceed the model's context window limits, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, allowing you to keep the message list within the model's token limits while preserving key context.
 
+Token Tailoring is **disabled by default**. Explicitly set
+`openai.WithEnableTokenTailoring(true)` to enable automatic message trimming
+before provider requests. Setting `openai.WithMaxInputTokens(...)` or
+`openai.WithContextWindow(...)` alone only configures the budget or window; it
+does not enable trimming. These values remain available to other framework
+consumers through `Model.InputTokenBudget` and `Model.Info` even when trimming is
+disabled. Session summaries and context compaction are configured separately.
+
 **Automatic Mode (Recommended)**:
 
 ```go
@@ -2216,6 +2243,126 @@ Typical integration pattern when this flag is enabled:
 If you do not need to inspect tool arguments during streaming, keep
 `WithShowToolCallDelta` disabled to avoid handling partial JSON fragments and
 to preserve the default clean text-streaming behavior.
+
+## OpenAI Responses API
+
+Use `model/openai/sdkv3/responses` to access the OpenAI Responses API for conversations, streaming output, and function calling. Create a model with `responses.New` and pass it to `LLMAgent`.
+
+The adapter is published from the separate
+`model/openai/sdkv3` Go module and requires Go 1.25 or newer. It
+currently pins OpenAI Go SDK `v3.74.0`. The `sdkv3` path identifies the SDK
+generation; the adapter module follows its own `v1.x` release line. This
+module provides Responses only. For Chat Completions, continue using
+`openai.New` from `model/openai`.
+
+### Environment and minimal integration
+
+The OpenAI SDK reads `OPENAI_API_KEY` when `responses.WithAPIKey` is omitted, and `OPENAI_BASE_URL` when `responses.WithBaseURL` is omitted. The default base URL is `https://api.openai.com/v1`.
+
+The example below creates a non-streaming chat agent and prints the assistant's reply. When using Runner, keep reading the event channel until it closes, or cancel the run context.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func main() {
+    ctx := context.Background()
+    userID := "demo-user"
+    sessionID := "demo-session"
+
+    llm := responses.New("gpt-5")
+    agent := llmagent.New(
+        "responses-chat",
+        llmagent.WithModel(llm),
+        llmagent.WithDescription("A concise chat assistant."),
+        llmagent.WithInstruction("Answer the user's questions clearly and concisely."),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: false}),
+    )
+    r := runner.NewRunner("responses-chat-example", agent)
+    defer r.Close()
+
+    events, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("Hello"))
+    if err != nil {
+        log.Printf("run: %v", err)
+        return
+    }
+    for evt := range events {
+        if evt == nil || evt.Response == nil {
+            continue
+        }
+        if evt.Error != nil {
+            log.Printf("event: %s", evt.Error.Message)
+            continue
+        }
+        if len(evt.Response.Choices) == 0 {
+            continue
+        }
+        msg := evt.Response.Choices[0].Message
+        if msg.Role == model.RoleAssistant && msg.Content != "" {
+            fmt.Println(msg.Content)
+        }
+    }
+}
+```
+
+Runner creates an in-memory session when none is supplied and closes that session in `Close`. The examples pass an explicit in-memory session with the same process lifetime. Local tools are wired in [`examples/openairesponses/tools/main.go`](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/openairesponses/tools/main.go).
+
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses) is its own Go 1.25 module. `-model` defaults to `gpt-5`, and `-streaming` defaults to `true`.
+
+```bash
+cd examples/openairesponses
+export OPENAI_API_KEY="your-api-key"
+# Optional. The SDK reads OPENAI_BASE_URL when it is set.
+# export OPENAI_BASE_URL="https://api.openai.com/v1"
+
+go run ./chat
+go run ./chat -streaming=false
+go run ./tools
+go run ./tools -streaming=false
+```
+
+Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Calculate 123 * 456.` and then `Add 789 to that result.` The session retains the first result for the second turn and is discarded when the process exits. The example README shows an illustrative transcript.
+
+### Callbacks and model history
+
+The adapter fills `Message.ProviderData.Protocol` and `Model` with the native
+protocol and the configured model name. To edit native output, preserve these
+fields and decode, edit, and write back `Payload` using the SDK. For message
+edits with the official SDK, use `ResponseOutputMessageParam` to retain the ID,
+status, and phase. Unedited items can keep their original JSON.
+
+After the complete `AfterModel` callback chain, an edited payload rebuilds the
+display fields, reasoning, and `ToolCalls` before event publication, persistence,
+and tool execution. Editing native function arguments therefore updates both
+current execution and subsequent model history. If the payload is unchanged,
+projection-only callback edits retain their existing behavior. When both are
+edited, the payload takes precedence. Ordinary Chat Completions callbacks are
+unchanged.
+
+`BeforeModel` edits the current request's history copy; `BeforeTool` edits only
+current execution and does not rewrite native history. Redacting display fields
+alone leaves the original text in ProviderData. Keep the record when resuming an
+unfinished tool round. See the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)
+for a complete SDK-based callback and model wrapper requirements.
+
+### Notes
+
+- Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
+- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
+- Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
+- Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
+- Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
+- History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).
 
 ## Anthropic Model
 

@@ -384,6 +384,11 @@ agent := llmagent.New(
 
 **注意：** 此选项仅影响发送给模型之前对历史消息的处理方式。当前响应的 `reasoning_content` 始终会被捕获并存储在会话事件中。
 
+框架将 `ProviderData` payload 字节视为不透明数据。对于带有原生 ProviderData 的消息，
+这些模式只修改投影出的 reasoning 字段，不会删除 ProviderData 中的 reasoning 或加密状态，
+匹配的原生适配器仍可能在下一轮发送它们。要改变这部分输入，可以编辑
+`Message.ProviderData.Payload`。需要恢复未完成的工具轮时，保留该轮的 ProviderData。
+
 ### 工具调用记录历史模式
 
 默认情况下，LLMAgent 会在后续请求中继续把历史工具调用及其对应工具结果发送给模型。这是最保守、兼容性最强的行为；但在包含大量已完成工具调用轮次的长会话中，这些历史 tool transcript 可能会占用不必要的上下文。

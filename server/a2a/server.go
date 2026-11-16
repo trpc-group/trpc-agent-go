@@ -138,10 +138,11 @@ func buildProcessor(
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
 		eventToA2AConverter = &defaultEventToA2AMessage{
-			adkCompatibility:          options.adkCompatibility,
-			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
-			streamingEventType:        options.streamingEventType,
-			eventPartMappers:          options.eventPartMappers,
+			adkCompatibility:              options.adkCompatibility,
+			graphEventObjectAllowlist:     options.graphEventObjectAllowlist,
+			streamingEventType:            options.streamingEventType,
+			streamingMessageTextDeltaOnly: options.streamingMessageTextDeltaOnly,
+			eventPartMappers:              options.eventPartMappers,
 		}
 	} else if len(options.eventPartMappers) > 0 {
 		log.Warn("WithEventToA2APartMapper is ignored because WithEventToA2AConverter provided a custom converter")

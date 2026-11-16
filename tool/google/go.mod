@@ -6,7 +6,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 
 require (
 	google.golang.org/api v0.256.0
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

@@ -8,7 +8,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
 require (
 	google.golang.org/genai v1.0.0
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

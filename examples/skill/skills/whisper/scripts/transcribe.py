@@ -12,7 +12,7 @@ import os
 try:
     import whisper
 except ImportError:
-    print("Error: openai-whisper not installed. Run: pip install openai-whisper", file=sys.stderr)
+    print("Error: openai-whisper not installed. Run: pip install \"openai-whisper==20250625\"", file=sys.stderr)
     sys.exit(1)
 
 

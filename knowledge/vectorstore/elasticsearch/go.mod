@@ -12,7 +12,7 @@ replace (
 require (
 	github.com/elastic/go-elasticsearch/v9 v9.1.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0
 )
 

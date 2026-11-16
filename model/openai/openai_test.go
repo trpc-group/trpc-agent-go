@@ -1617,6 +1617,34 @@ func TestModel_convertTools(t *testing.T) {
 	assert.Empty(t, props, "expected empty properties for no-arg tool")
 }
 
+func TestModel_convertTools_PreservesAnyOf(t *testing.T) {
+	schema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"limit": {AnyOf: []*tool.Schema{{Type: "null"}, {Type: "integer"}}, Default: 50},
+			"name":  {Type: "string"},
+		},
+	}
+	params := New("dummy").convertTools(map[string]tool.Tool{
+		"read_records": stubTool{decl: &tool.Declaration{Name: "read_records", InputSchema: schema}},
+	})
+	require.Len(t, params, 1)
+	wire, err := json.Marshal(params)
+	require.NoError(t, err)
+	var functions []struct {
+		Function struct {
+			Parameters map[string]any `json:"parameters"`
+		} `json:"function"`
+	}
+	require.NoError(t, json.Unmarshal(wire, &functions))
+	properties := functions[0].Function.Parameters["properties"].(map[string]any)
+	limit := properties["limit"].(map[string]any)
+	require.NotContains(t, limit, "type")
+	require.Equal(t, []any{map[string]any{"type": "null"}, map[string]any{"type": "integer"}}, limit["anyOf"])
+	require.Equal(t, float64(50), limit["default"])
+	require.Equal(t, map[string]any{"type": "string"}, properties["name"])
+}
+
 // TestModel_convertTools_StrictProxyTopLevelProperties validates the final JSON
 // payload shape expected by strict OpenAI-compatible proxies.
 func TestModel_convertTools_StrictProxyTopLevelProperties(t *testing.T) {
@@ -11022,6 +11050,74 @@ func TestExtractEmbeddedErrorResponse(t *testing.T) {
 			if tt.wantParam != "" {
 				require.NotNil(t, resp.Error.Param, "expected Param field")
 				assert.Equal(t, tt.wantParam, *resp.Error.Param)
+			}
+		})
+	}
+}
+
+func TestModel_GenerateContent_NullCompletion(t *testing.T) {
+	for _, api := range []string{"iterator", "channel"} {
+		t.Run(api, func(t *testing.T) {
+			for _, tc := range []struct {
+				name string
+				body string
+			}{
+				{name: "null", body: "null"},
+				{name: "null_with_whitespace", body: " \n\tnull\r\n "},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, tc.body)
+					}))
+					defer server.Close()
+
+					callbackCalled := false
+					m := New("test-model",
+						WithBaseURL(server.URL),
+						WithAPIKey("test-key"),
+						WithChatResponseCallback(func(
+							_ context.Context,
+							_ *openai.ChatCompletionNewParams,
+							_ *openai.ChatCompletion,
+						) {
+							callbackCalled = true
+						}),
+					)
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					req := &model.Request{
+						Messages:         []model.Message{model.NewUserMessage("hello")},
+						GenerationConfig: model.GenerationConfig{Stream: false},
+					}
+
+					var responses []*model.Response
+					if api == "iterator" {
+						seq, err := m.GenerateContentIter(ctx, req)
+						require.NoError(t, err)
+						seq(func(resp *model.Response) bool {
+							responses = append(responses, resp)
+							return true
+						})
+					} else {
+						ch, err := m.GenerateContent(ctx, req)
+						require.NoError(t, err)
+						for resp := range ch {
+							responses = append(responses, resp)
+						}
+					}
+
+					require.Len(t, responses, 1)
+					resp := responses[0]
+					require.NotNil(t, resp)
+					require.NotNil(t, resp.Error)
+					assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
+					assert.Contains(t, resp.Error.Message, "nil chat completion")
+					assert.True(t, resp.Done)
+					assert.False(t, resp.Timestamp.IsZero())
+					assert.Empty(t, resp.Choices)
+					assert.False(t, callbackCalled, "invalid completions must not invoke the success callback")
+				})
 			}
 		})
 	}

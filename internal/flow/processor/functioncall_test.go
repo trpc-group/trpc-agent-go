@@ -10521,6 +10521,44 @@ func TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled(t *testing
 	require.Equal(t, "{\"a\":2}", toolArgs)
 }
 
+func TestExecuteToolWithCallbacks_LegacyChildOverridesInheritedNativeRepairMarker(t *testing.T) {
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	repairEnabled := true
+	inv := &agent.Invocation{RunOptions: agent.RunOptions{ToolCallArgumentsJSONRepairEnabled: &repairEnabled}}
+	toolArgs := ""
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, args []byte) (any, error) {
+			toolArgs = string(args)
+			return "ok", nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name: "t", Arguments: []byte("{a:2}"),
+		},
+	}
+
+	base := context.Background()
+	parent := withNativeProviderDataToolCallArgs(base, true)
+	legacyChild := withNativeProviderDataToolCallArgs(parent, false)
+	require.False(t, hasNativeProviderDataToolCallArgs(legacyChild))
+	require.Equal(t, base, withNativeProviderDataToolCallArgs(base, false),
+		"legacy calls without an inherited marker keep the original context")
+
+	_, _, _, _, _, err := proc.executeToolWithCallbacks(
+		legacyChild,
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":2}`, toolArgs,
+		"a legacy child must retain its configured argument repair behavior")
+}
+
 func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {
 	p := &hookPlugin{
 		name: "p",

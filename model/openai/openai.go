@@ -2196,6 +2196,7 @@ func (m *Model) accumulateChunk(
 		sanitizedChunk := sanitizeChunkForAccumulator(chunkForAccumulator)
 		if acc.addChunk(sanitizedChunk) {
 			applyOpenAISDKTokenDetailsAccumulationFix(&acc.acc, chunk)
+			acc.addCacheTokens(chunk.Usage)
 		}
 
 		if m.accumulateChunkUsage != nil {
@@ -2832,6 +2833,19 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		emit(&model.Response{
 			Error: &model.ResponseError{
 				Message: err.Error(),
+				Type:    model.ErrorTypeAPIError,
+			},
+			Timestamp: time.Now(),
+			Done:      true,
+		})
+		return
+	}
+	// A successful HTTP response containing JSON null decodes to (nil, nil).
+	// Reject it before invoking the success callback or dereferencing it.
+	if chatCompletion == nil {
+		emit(&model.Response{
+			Error: &model.ResponseError{
+				Message: "openai: received nil chat completion",
 				Type:    model.ErrorTypeAPIError,
 			},
 			Timestamp: time.Now(),

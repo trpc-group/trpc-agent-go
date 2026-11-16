@@ -413,6 +413,13 @@ agent := llmagent.New(
 
 **Note:** This option only affects how historical messages are processed before sending to the model. The current response's `reasoning_content` is always captured and stored in session events.
 
+The framework treats `ProviderData` payload bytes as opaque. For messages with
+native ProviderData, these modes only change the projected reasoning fields;
+they do not remove reasoning or encrypted state from ProviderData, which a
+matching native adapter can still send on the next request. Edit
+`Message.ProviderData.Payload` to change that input. Keep ProviderData for
+unfinished tool rounds that need to be resumed.
+
 ### Tool Transcript History Mode
 
 By default, LLMAgent sends historical tool calls and their matching tool

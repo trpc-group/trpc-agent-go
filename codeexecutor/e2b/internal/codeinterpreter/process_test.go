@@ -87,7 +87,17 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 		for _, tc := range []struct {
 			name, version, refreshedVersion, stdin, authorization, wantAuthorization, wantError string
 			port, refreshedPort                                                                 int
+			domainField, wantHost                                                               string
+			disableSuffix                                                                       bool
 		}{
+			{name: "host missing false", version: "0.5.2", domainField: ``, wantHost: "sandbox-worker.configured.test", disableSuffix: false, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host missing true", version: "0.5.2", domainField: ``, wantHost: "sandbox.configured.test", disableSuffix: true, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host null false", version: "0.5.2", domainField: `,"domain":null`, wantHost: "sandbox-worker.configured.test", disableSuffix: false, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host null true", version: "0.5.2", domainField: `,"domain":null`, wantHost: "sandbox.configured.test", disableSuffix: true, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host empty false", version: "0.5.2", domainField: `,"domain":""`, wantHost: "sandbox-worker.configured.test", disableSuffix: false, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host empty true", version: "0.5.2", domainField: `,"domain":""`, wantHost: "sandbox.configured.test", disableSuffix: true, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host provided false", version: "0.5.2", domainField: `,"domain":"actual.test"`, wantHost: "sandbox.actual.test", disableSuffix: false, wantAuthorization: "Basic cm9vdDo="},
+			{name: "host provided true", version: "0.5.2", domainField: `,"domain":"actual.test"`, wantHost: "sandbox.actual.test", disableSuffix: true, wantAuthorization: "Basic cm9vdDo="},
 			{name: "modern", version: "0.5.2", stdin: "data", port: 49984, wantAuthorization: "Basic cm9vdDo="},
 			{name: "legacy", version: "0.2.10", wantAuthorization: "Basic cm9vdDo="},
 			{name: "custom legacy user", version: "0.2.10", authorization: "Basic dXNlcjo=", wantAuthorization: "Basic dXNlcjo="},
@@ -114,7 +124,11 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 						if port == 0 {
 							port = 49983
 						}
-						assert.Equal(t, fmt.Sprintf("%d-sandbox.actual.test", port), r.Host)
+						host := tc.wantHost
+						if host == "" {
+							host = "sandbox.actual.test"
+						}
+						assert.Equal(t, fmt.Sprintf("%d-%s", port, host), r.Host)
 						assert.Equal(t, "envd-token", r.Header.Get("X-Access-Token"))
 						assert.Equal(t, "traffic-token", r.Header.Get("E2B-Traffic-Access-Token"))
 						assert.Equal(t, "custom", r.Header.Get("X-Custom"))
@@ -135,7 +149,11 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 						port = tc.refreshedPort
 					}
 					w.Header().Set("Content-Type", "application/json")
-					_, _ = fmt.Fprintf(w, `{"sandboxID":"sandbox","clientID":"worker","domain":"actual.test","envdVersion":%q,"envdPort":%d,"envdAccessToken":"envd-token","trafficAccessToken":"traffic-token"}`, version, port)
+					domainField := tc.domainField
+					if tc.wantHost == "" {
+						domainField = `,"domain":"actual.test"`
+					}
+					_, _ = fmt.Fprintf(w, `{"sandboxID":"sandbox","clientID":"worker"%s,"envdVersion":%q,"envdPort":%d,"envdAccessToken":"envd-token","trafficAccessToken":"traffic-token"}`, domainField, version, port)
 				}))
 				defer server.Close()
 				target, err := url.Parse(server.URL)
@@ -146,7 +164,7 @@ func TestRunProcessSandboxConnection(t *testing.T) {
 				if tc.authorization != "" {
 					headers["Authorization"] = tc.authorization
 				}
-				opts := &SandboxOpts{APIKey: "api-key", APIURL: server.URL, Domain: "configured.test", HTTPClient: client, Headers: headers}
+				opts := &SandboxOpts{DisableClientIDHostSuffix: tc.disableSuffix, APIKey: "api-key", APIURL: server.URL, Domain: "configured.test", HTTPClient: client, Headers: headers}
 				var sandbox *Sandbox
 				if connectExisting {
 					sandbox, err = Connect(context.Background(), "sandbox", opts)

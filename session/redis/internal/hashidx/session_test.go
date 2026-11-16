@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -55,6 +56,43 @@ func makeTestEvent(id string, ts time.Time) *event.Event {
 				{Message: model.Message{Role: model.RoleUser, Content: "msg-" + id}},
 			},
 		},
+	}
+}
+
+func TestClient_LoadRecentEventsSkipsMalformedEventsAndWarnsOnceAcrossBatches(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	warnings := 0
+	originalWarn := log.WarnfContext
+	log.WarnfContext = func(context.Context, string, ...any) { warnings++ }
+	t.Cleanup(func() { log.WarnfContext = originalWarn })
+
+	_, err := c.loadRecentEvents(ctx, key, time.Time{}, 0)
+	require.NoError(t, err)
+	require.Zero(t, warnings, "an empty history does not produce a warning")
+
+	rows := make(map[string]any)
+	index := make([]redis.Z, 0, eventLoadBatchSize+2)
+	for i := 0; i <= eventLoadBatchSize; i++ {
+		id := fmt.Sprintf("bad-%d", i)
+		rows[id] = `{"choices":[{"message":{"provider_data":{}}}]}`
+		index = append(index, redis.Z{Score: float64(i), Member: id})
+	}
+	valid, err := json.Marshal(makeTestEvent("valid", time.Now()))
+	require.NoError(t, err)
+	rows["valid"] = string(valid)
+	index = append(index, redis.Z{Score: -1, Member: "valid"})
+	require.NoError(t, rdb.HSet(ctx, c.keys.EventDataKey(key), rows).Err())
+	require.NoError(t, rdb.ZAdd(ctx, c.keys.EventTimeIndexKey(key), index...).Err())
+
+	for read := 1; read <= 2; read++ {
+		events, err := c.loadRecentEvents(ctx, key, time.Time{}, 1)
+		require.NoError(t, err)
+		require.Len(t, events, 1, "malformed rows must not hide valid events in later batches")
+		require.Equal(t, "valid", events[0].ID)
+		require.Equal(t, read, warnings, "warnings are bounded per read, not per batch or process")
 	}
 }
 

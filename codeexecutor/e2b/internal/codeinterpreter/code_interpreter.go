@@ -42,10 +42,18 @@ type RunCodeOpts struct {
 	OnError OnErrorFunc
 	// Envs are extra environment variables exposed to the running code.
 	Envs map[string]string
-	// Timeout is the maximum execution time for this cell (default: 300s).
-	// Pass -1 to disable.
+	// Timeout bounds how long the client reads the response body after headers
+	// arrive. That covers the execution stream and an HTTP error body. Zero
+	// uses DefaultTimeout seconds. A negative value disables this deadline
+	// and does not disable RequestTimeout. Stopping the read does not kill
+	// the remote code or the sandbox. The execute request body does not carry
+	// this value.
 	Timeout time.Duration
-	// RequestTimeout is the HTTP-level request timeout.
+	// RequestTimeout bounds only the wait for HTTP response headers.
+	// Zero inherits the sandbox connection's request timeout. A negative
+	// value disables the header deadline for this call. Once headers arrive
+	// the deadline is cleared, so it does not limit the execution stream or
+	// an HTTP error body.
 	RequestTimeout time.Duration
 }
 
@@ -62,7 +70,23 @@ type CreateCodeContextOpts struct {
 // RunCode executes the supplied code in the sandbox and returns the full
 // Execution result.
 //
-// Streaming output is forwarded to the callbacks on opts in real time.
+// Streaming output is forwarded to the callbacks on opts as each chunk arrives.
+// Chunks received before a failure remain available through those callbacks.
+// A timeout or cancellation returns a nil Execution.
+//
+// RequestTimeout and Timeout are separate client deadlines. RequestTimeout
+// ends the wait for response headers and is cleared when they arrive. Timeout
+// then bounds reading the body, including an HTTP error body. Disabling one
+// deadline leaves the other in place. An earlier caller cancellation or caller
+// deadline is returned as that context error and is not reported as TimeoutError.
+// Ending the client wait does not kill the remote execution or the sandbox.
+// An http.Client.Timeout configured on the sandbox client still covers the
+// whole exchange, including the body, and should be left unset or longer than
+// a stream that must stay open. When that deadline or another transport
+// deadline fires, the error names the source and whether the client was
+// waiting for headers or reading the body. It is not a TimeoutError, and
+// increasing RequestTimeout or Timeout does not extend it. The transport
+// error remains in the unwrap chain.
 func (s *Sandbox) RunCode(ctx context.Context, code string, opts *RunCodeOpts) (*Execution, error) {
 	if opts == nil {
 		opts = &RunCodeOpts{}
@@ -92,21 +116,20 @@ func (s *Sandbox) RunCode(ctx context.Context, code string, opts *RunCodeOpts) (
 		return nil, fmt.Errorf("marshal execute payload: %w", err)
 	}
 
-	// Build request with its own context to honour Timeout/RequestTimeout.
-	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = DefaultTimeout * time.Second
-	}
-
-	reqCtx := ctx
-	var cancel context.CancelFunc
-	if timeout > 0 {
-		reqCtx, cancel = context.WithTimeout(ctx, timeout+s.connection.RequestTimeout)
-		defer cancel()
-	}
+	requestTimeout, requestTimed := resolveRequestTimeout(opts.RequestTimeout, s.connection.RequestTimeout)
+	executionTimeout, executionTimed := resolveExecutionTimeout(opts.Timeout)
+	// streamCtx lives for both the header wait and the body read. Deadlines are
+	// attached with codeExecTimer so the header budget is not added to the
+	// execution budget and is not inherited by the stream.
+	streamCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	timers := newCodeExecTimer(cancel)
+	defer timers.stop()
+	// The timer starts idle, so this first arm cannot lose a race.
+	timers.arm(timeoutPhaseRequest, requestTimeout, requestTimed, errRequestTimeout)
 
 	u := s.jupyterURL() + "/execute"
-	req, err := http.NewRequestWithContext(reqCtx, "POST", u, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(streamCtx, "POST", u, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -114,19 +137,23 @@ func (s *Sandbox) RunCode(ctx context.Context, code string, opts *RunCodeOpts) (
 
 	resp, err := s.connection.HTTPClient.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, formatExecutionTimeoutError()
-		}
-		var ne interface{ Timeout() bool }
-		if errors.As(err, &ne) && ne.Timeout() {
-			return nil, formatRequestTimeoutError()
-		}
-		return nil, err
+		return nil, classifyRunCodeError(ctx, streamCtx, timers, err)
 	}
 	defer resp.Body.Close()
 
+	// Headers have arrived, so the header deadline must not keep running while
+	// the body is read. An error body uses the same post-header budget as the
+	// execution stream. A disabled execution deadline leaves this read to the
+	// caller context.
+	if !timers.arm(timeoutPhaseExecution, executionTimeout, executionTimed, errExecutionTimeout) {
+		return nil, classifyRunCodeError(ctx, streamCtx, timers, context.Cause(streamCtx))
+	}
+
 	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, classifyRunCodeError(ctx, streamCtx, timers, readErr)
+		}
 		return nil, mapHTTPError(resp.StatusCode, string(b))
 	}
 
@@ -145,7 +172,7 @@ func (s *Sandbox) RunCode(ctx context.Context, code string, opts *RunCodeOpts) (
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, classifyRunCodeError(ctx, streamCtx, timers, err)
 	}
 
 	return execution, nil

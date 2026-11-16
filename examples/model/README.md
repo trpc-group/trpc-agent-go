@@ -10,7 +10,7 @@ Make sure you have Go installed and the project dependencies are available.
 
 The example shows how to use the OpenAI-like model implementation with automatic environment variable reading and flexible command line configuration.
 
-See also the focused sub-examples in this directory:
+See also these focused model examples:
 
 - `retry/` for SDK-level retry configuration.
 - `requesty/` for using the OpenAI-compatible Requesty router (`https://router.requesty.ai/v1`).
@@ -18,6 +18,9 @@ See also the focused sub-examples in this directory:
 - `selector/` for per-LLM-call model selection with `runner.Run`.
 - `failover/` for primary/backup model failover before the first non-error chunk.
 - `hedge/` for delayed or failure-triggered hedge requests across multiple candidates.
+- [`../openairesponses/`](../openairesponses/) for the OpenAI Responses API.
+  It is a sibling of this directory because that adapter is a separate Go 1.25
+  module.
 
 ## Key Features
 

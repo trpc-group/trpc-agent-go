@@ -26,6 +26,7 @@ O_WRONLY = "O_WRONLY"
 
 # Allow specific words
 [default.extend-words]
+AGS = "AGS"
 unmarshaling = "unmarshaling" 
 Unarshaling = "Unmarshaling" 
 Indexes = "Indexes"

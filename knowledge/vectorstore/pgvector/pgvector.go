@@ -934,6 +934,8 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 
 // GetMetadata retrieves metadata from the vector store with pagination support.
 // If limit < 0, retrieves all metadata in batches of 5000 records ordered by created_at.
+// Page selection uses the document ID to break creation-time ties. Changes to the
+// set of matching documents between calls can still shift offset-based pages.
 func (vs *VectorStore) GetMetadata(
 	ctx context.Context,
 	opts ...vectorstore.GetMetadataOption,

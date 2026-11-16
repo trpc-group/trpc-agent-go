@@ -15,6 +15,7 @@ permissions:
 env:
   ROOT_GO_VERSION: "1.21"
   EXAMPLES_GO_VERSION: "1.24.6"
+  E2E_GO_VERSION: "1.25.0"
 jobs:
   build:
     name: build
@@ -112,11 +113,13 @@ jobs:
   e2e:
     name: e2e test
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v5
         with:
-          go-version: "${{ env.ROOT_GO_VERSION }}"
+          go-version: "${{ env.E2E_GO_VERSION }}"
           cache-dependency-path: |
             go.mod
             go.sum
@@ -127,11 +130,30 @@ jobs:
         run: |
           set -euo pipefail
           cd test
-          go test ./...
+          go mod tidy -diff
+          go test -coverpkg=trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses -coverprofile=coverage.out ./...
+      - name: Prepare Responses integration coverage
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          module = "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/"
+          profile = Path("test/coverage.out").read_text()
+          Path("coverage-responses-e2e.out").write_text(
+              profile.replace(module, "./model/openai/sdkv3/")
+          )
+          PY
+      - name: Upload Responses integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-responses-e2e
+          path: coverage-responses-e2e.out
+          if-no-files-found: error
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    needs: test-go-modules
+    needs: [test-go-modules, e2e]
     steps:
       - uses: actions/checkout@v3
       - name: Download coverage artifacts
@@ -262,6 +284,9 @@ jobs:
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
           cache: false
+      - name: Verify go mod tidy cache cleanup
+        shell: bash
+        run: bash .github/scripts/verify-check-go-mod-tidy-cache.sh
       - name: Check go.mod and go.sum are tidy
         shell: bash
         run: bash .github/scripts/check-go-mod-tidy.sh
@@ -356,6 +381,31 @@ jobs:
           EXAMPLES_SHARD_INDEX: ${{ matrix.shard_index }}
           EXAMPLES_SHARD_TOTAL: ${{ matrix.shard_total }}
         run: bash .github/scripts/check-examples-build.sh
+  check-openai-responses-example:
+    name: check OpenAI Responses example (Go 1.25)
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            model/openai/sdkv3/go.mod
+            model/openai/sdkv3/go.sum
+            examples/openairesponses/go.mod
+            examples/openairesponses/go.sum
+      - name: Test Responses adapter module
+        working-directory: model/openai/sdkv3
+        run: go test ./...
+      - name: Check example module metadata and build
+        working-directory: examples/openairesponses
+        run: |
+          go mod tidy -diff
+          go build ./...
   check-lfs-excluded:
     name: check git lfs excluded
     runs-on: ubuntu-latest

@@ -10,11 +10,283 @@
 package mcp
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func TestConvertMCPSchema_TypeArrays(t *testing.T) {
+	for _, types := range [][]any{
+		{"null", "integer"},
+		{"integer", "null"},
+		{"null", "string"},
+		{"string", "number"},
+		{"null", "array", "object"},
+		{"null"},
+		{"boolean"},
+		{"null", 1, "integer"},
+	} {
+		t.Run(typeArrayName(types), func(t *testing.T) {
+			input := map[string]any{"type": types, "description": "value"}
+			before, err := json.Marshal(input)
+			require.NoError(t, err)
+			encoded, err := json.Marshal(convertMCPSchemaToSchema(input))
+			require.NoError(t, err)
+			var wire map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &wire))
+			require.NotContains(t, wire, "type")
+			var branches []any
+			for _, value := range types {
+				name, ok := value.(string)
+				if !ok {
+					continue
+				}
+				branches = append(branches, map[string]any{"type": name})
+			}
+			require.Equal(t, branches, wire["anyOf"])
+			require.Equal(t, "value", wire["description"])
+			after, err := json.Marshal(input)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "conversion must not mutate remote schemas")
+		})
+	}
+}
+
+func typeArrayName(types []any) string {
+	name := ""
+	for i, value := range types {
+		if i > 0 {
+			name += "_"
+		}
+		text, ok := value.(string)
+		if !ok {
+			name += "nonstring"
+			continue
+		}
+		name += text
+	}
+	return name
+}
+
+func TestConvertMCPSchema_TypeArraysAtSupportedPositions(t *testing.T) {
+	requireConvertedJSON(t, `{
+		"type": "object",
+		"additionalProperties": false,
+		"default": 1,
+		"enum": ["root"],
+		"items": {"type": ["null", "string"]},
+		"anyOf": [{"type": "integer", "pattern": "^ignored$"}],
+		"required": ["anchor"],
+		"properties": {
+			"anchor": {"type": "string"},
+			"limit": {"type": ["null", "integer"], "default": 50, "enum": [null, 50, 100]},
+			"title": {"type": ["integer", "null"]},
+			"options": {
+				"type": ["object", "null"],
+				"required": ["name"],
+				"properties": {"name": {"type": ["string", "null"], "pattern": "^[a-z]+$"}}
+			},
+			"rows": {
+				"type": ["array", "null"],
+				"items": {
+					"type": ["object", "null"],
+					"default": "lost-on-items",
+					"properties": {"count": {"type": ["null", "integer"]}}
+				}
+			},
+			"reference": {"$ref": "#/$defs/Value"}
+		},
+		"$defs": {
+			"Value": {
+				"type": ["null", "array"],
+				"items": {"type": ["null", "string"]},
+				"default": "lost",
+				"additionalProperties": false
+			}
+		}
+	}`, `{
+		"type": "object",
+		"required": ["anchor"],
+		"properties": {
+			"anchor": {"type": "string"},
+			"limit": {
+				"anyOf": [{"type": "null"}, {"type": "integer"}],
+				"default": 50,
+				"enum": [null, 50, 100]
+			},
+			"options": {
+				"anyOf": [{"type": "object"}, {"type": "null"}],
+				"required": ["name"],
+				"properties": {
+					"name": {
+						"anyOf": [{"type": "string"}, {"type": "null"}],
+						"pattern": "^[a-z]+$"
+					}
+				}
+			},
+			"reference": {"$ref": "#/$defs/Value"},
+			"rows": {
+				"anyOf": [{"type": "array"}, {"type": "null"}],
+				"items": {
+					"anyOf": [{"type": "object"}, {"type": "null"}],
+					"properties": {
+						"count": {"anyOf": [{"type": "null"}, {"type": "integer"}]}
+					}
+				}
+			},
+			"title": {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+		},
+		"$defs": {"Value": {"anyOf": [{"type": "null"}, {"type": "array"}]}}
+	}`)
+}
+
+func TestConvertMCPSchema_BaselineSingleTypeJSON(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "integer", input: `{"type":"integer"}`, want: `{"type":"integer"}`},
+		{name: "string", input: `{"type":"string"}`, want: `{"type":"string"}`},
+		{name: "boolean", input: `{"type":"boolean"}`, want: `{"type":"boolean"}`},
+		{name: "number", input: `{"type":"number"}`, want: `{"type":"number"}`},
+		{name: "object", input: `{"type":"object"}`, want: `{"type":"object"}`},
+		{name: "array", input: `{"type":"array"}`, want: `{"type":"array"}`},
+		{
+			name: "nested properties defaults enums required items refs defs",
+			input: `{
+				"type": "object",
+				"description": "root",
+				"pattern": "^root$",
+				"default": 1,
+				"enum": ["a"],
+				"items": {"type": "string", "default": "lost"},
+				"additionalProperties": false,
+				"anyOf": [{"type": "string", "pattern": "^[a-z]+$"}, {"type": "null"}],
+				"required": ["name", "count"],
+				"$ref": "#/$defs/Root",
+				"$defs": {
+					"Item": {
+						"type": "object",
+						"description": "item def",
+						"default": "nope",
+						"enum": ["x"],
+						"items": {"type": "integer"},
+						"additionalProperties": false,
+						"anyOf": [{"type": "null"}],
+						"properties": {
+							"label": {"type": "string", "default": "n", "enum": ["n", "y"]}
+						},
+						"required": ["label"]
+					}
+				},
+				"properties": {
+					"name": {
+						"type": "string",
+						"description": "name",
+						"pattern": "^[a-z]+$",
+						"default": "ada",
+						"enum": ["ada", "grace"],
+						"anyOf": [{"type": "null"}]
+					},
+					"count": {"type": "integer"},
+					"ok": {"type": "boolean", "default": true},
+					"ratio": {"type": "number"},
+					"meta": {
+						"type": "object",
+						"additionalProperties": {"type": "string", "default": "x"},
+						"required": ["id"],
+						"properties": {"id": {"type": "integer", "default": 7}}
+					},
+					"tags": {
+						"type": "array",
+						"items": {
+							"type": "string",
+							"description": "tag",
+							"default": "lost-on-items",
+							"enum": ["a"],
+							"items": {"type": "number"},
+							"additionalProperties": false,
+							"anyOf": [{"type": "null"}],
+							"pattern": "^[a-z]$"
+						}
+					},
+					"ref": {"$ref": "#/$defs/Item", "type": "object"}
+				}
+			}`,
+			want: `{
+				"type": "object",
+				"description": "root",
+				"pattern": "^root$",
+				"required": ["name", "count"],
+				"properties": {
+					"count": {"type": "integer"},
+					"meta": {
+						"type": "object",
+						"required": ["id"],
+						"properties": {"id": {"type": "integer", "default": 7}},
+						"additionalProperties": {"default": "x", "type": "string"}
+					},
+					"name": {
+						"type": "string",
+						"description": "name",
+						"pattern": "^[a-z]+$",
+						"default": "ada",
+						"enum": ["ada", "grace"]
+					},
+					"ok": {"type": "boolean", "default": true},
+					"ratio": {"type": "number"},
+					"ref": {"type": "object", "$ref": "#/$defs/Item"},
+					"tags": {
+						"type": "array",
+						"items": {
+							"type": "string",
+							"description": "tag",
+							"pattern": "^[a-z]$"
+						}
+					}
+				},
+				"$ref": "#/$defs/Root",
+				"$defs": {
+					"Item": {
+						"type": "object",
+						"description": "item def",
+						"required": ["label"],
+						"properties": {
+							"label": {"type": "string", "default": "n", "enum": ["n", "y"]}
+						}
+					}
+				}
+			}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireConvertedJSON(t, tc.input, tc.want)
+		})
+	}
+}
+
+func requireConvertedJSON(t *testing.T, input, want string) {
+	t.Helper()
+	var decoded any
+	require.NoError(t, json.Unmarshal([]byte(input), &decoded))
+	before, err := json.Marshal(decoded)
+	require.NoError(t, err)
+
+	got, err := json.Marshal(convertMCPSchemaToSchema(decoded))
+	require.NoError(t, err)
+	after, err := json.Marshal(decoded)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "conversion must not mutate remote schemas")
+
+	var compact bytes.Buffer
+	require.NoError(t, json.Compact(&compact, []byte(want)))
+	require.Equal(t, compact.String(), string(got))
+}
 
 func TestConvertMCPSchema_Basic(t *testing.T) {
 	mcpSchema := map[string]any{

@@ -584,6 +584,22 @@ func (r *workspaceRuntime) RunProgram(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	if spec.Timeout <= 0 {
+		spec.Timeout = defaultRunTimeout
+	}
+	if r.ce != nil && r.ce.maxProgramTimeout > 0 && spec.Timeout > r.ce.maxProgramTimeout {
+		spec.Timeout = r.ce.maxProgramTimeout
+	}
+	return r.runProgram(ctx, ws, spec)
+}
+
+// runProgram uses the operation's resolved timeout without the program cap.
+// Metadata commits and cleanup retain their own file-operation deadlines.
+func (r *workspaceRuntime) runProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
 ) (res codeexecutor.RunResult, err error) {
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
@@ -602,10 +618,6 @@ func (r *workspaceRuntime) RunProgram(
 	}()
 
 	timeout := spec.Timeout
-	if timeout <= 0 {
-		timeout = defaultRunTimeout
-	}
-
 	cwd := ws.Path
 	if spec.Cwd != "" {
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
@@ -1187,7 +1199,7 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 	script.WriteString("echo \"metadata path is a directory\" >&2; exit 1; ")
 	script.WriteString("fi; mv -f \"$tmp\" \"$dest\"")
 	script.WriteString("; trap - EXIT")
-	res, err := r.RunProgram(
+	res, err := r.runProgram(
 		ctx,
 		ws,
 		codeexecutor.RunProgramSpec{
@@ -1224,7 +1236,7 @@ func (r *workspaceRuntime) cleanupMetadataTemp(
 		return
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
-	_, _ = r.RunProgram(
+	_, _ = r.runProgram(
 		cleanupCtx,
 		codeexecutor.Workspace{Path: path.Dir(tmpPath)},
 		codeexecutor.RunProgramSpec{

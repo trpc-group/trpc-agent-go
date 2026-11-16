@@ -100,14 +100,14 @@ func ProcessEventCmd(
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
 	events := make([]event.Event, 0, len(eventsBytes))
+	decodeErrorLogged := false
 	for _, eventBytes := range eventsBytes {
 		evt := &event.Event{}
 		if err := json.Unmarshal([]byte(eventBytes), evt); err != nil {
-			log.WarnfContext(
-				ctx,
-				"skip malformed event in redis history: %v",
-				err,
-			)
+			if !decodeErrorLogged {
+				log.WarnfContext(ctx, "skip malformed events in redis history; first error: %v", err)
+				decodeErrorLogged = true
+			}
 			continue
 		}
 		events = append(events, *evt)

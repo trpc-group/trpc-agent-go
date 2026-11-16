@@ -708,6 +708,17 @@ summary.WithChecksAny(
 | `WithPostSummaryHook(h PostSummaryHook)` | Post-summary hook; can modify output summary |
 | `WithSummaryHookAbortOnError(abort bool)` | Whether to abort on hook error; default `false` (ignore errors) |
 
+### Message Content
+
+For regular messages, the summarizer reads `Content` followed by non-empty text
+parts in `ContentParts`, in order. This text is used to determine summary
+eligibility and build standalone summary input. Images, audio, and other
+non-text parts are not transcribed.
+
+Cache-safe forks reuse the selected parent messages with their original content
+and part order, then append the summary instruction. The request budget rules
+described above still apply.
+
 ### Tool Call Formatting
 
 By default, the summarizer includes tool calls and tool results in the conversation text sent to the LLM for summarization. The default format is:

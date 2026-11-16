@@ -20,15 +20,17 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type hedgeModel struct {
-	candidates    []model.Model
-	name          string
-	contextWindow int
-	launchOffsets []time.Duration
+	candidates           []model.Model
+	name                 string
+	contextWindow        int
+	providerDataProtocol string
+	launchOffsets        []time.Duration
 }
 
 type attempt struct {
@@ -62,6 +64,8 @@ type hedgeRun struct {
 }
 
 // New creates a hedge model wrapper.
+// ProviderData requires all candidates and the logical hedge name to share
+// one configured model identity and provider data protocol.
 func New(opt ...Option) (model.Model, error) {
 	opts := newOptions(opt...)
 	if len(opts.candidates) == 0 {
@@ -82,24 +86,38 @@ func New(opt ...Option) (model.Model, error) {
 	if name == "" {
 		name = candidates[0].Info().Name
 	}
+	providerDataInfo, err := providerdata.CandidateInfo(candidates)
+	if err != nil {
+		return nil, fmt.Errorf("hedge: %w", err)
+	}
+	if providerDataInfo.ProviderDataProtocol != "" && name != providerDataInfo.Name {
+		return nil, fmt.Errorf("hedge: provider data requires the logical name to match the configured model name")
+	}
 	contextWindow := opts.contextWindow
 	if contextWindow <= 0 {
 		contextWindow = stableCandidateContextWindow(candidates)
 	}
 	return &hedgeModel{
-		candidates:    candidates,
-		name:          name,
-		contextWindow: contextWindow,
-		launchOffsets: launchOffsets,
+		candidates:           candidates,
+		name:                 name,
+		contextWindow:        contextWindow,
+		providerDataProtocol: providerDataInfo.ProviderDataProtocol,
+		launchOffsets:        launchOffsets,
 	}, nil
 }
 
 // Info returns the logical hedge model info.
 func (m *hedgeModel) Info() model.Info {
 	return model.Info{
-		Name:          m.name,
-		ContextWindow: m.contextWindow,
+		Name:                 m.name,
+		ContextWindow:        m.contextWindow,
+		ProviderDataProtocol: m.providerDataProtocol,
 	}
+}
+
+// ProjectProviderData forwards native message projection to a candidate model.
+func (m *hedgeModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
+	return providerdata.ProjectFromCandidates(m.candidates, data)
 }
 
 // InputTokenBudget returns the smallest advertised candidate budget so every

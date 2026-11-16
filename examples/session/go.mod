@@ -21,7 +21,7 @@ replace (
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.32
-	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v0.0.0-20260107012516-0827a2e089f0
 	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0-20260622021948-09c728f1fb37
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-20251126064502-c8c2594d2519

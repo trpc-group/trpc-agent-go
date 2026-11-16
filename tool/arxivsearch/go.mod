@@ -10,7 +10,7 @@ replace (
 require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20251126064502-c8c2594d2519
 )
 
