@@ -24,9 +24,13 @@ import (
 )
 
 func parallelArgumentsView(n int) (*View, *model.Request) {
+	return parallelArgumentsViewWithArgument(n, strings.Repeat("x", 16<<10))
+}
+
+func parallelArgumentsViewWithArgument(n int, argument string) (*View, *model.Request) {
 	args := make(map[string]string, n)
 	for i := 0; i < n; i++ {
-		args[fmt.Sprintf("call-%d", i)] = strings.Repeat("x", 16<<10)
+		args[fmt.Sprintf("call-%d", i)] = argument
 	}
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -58,9 +62,19 @@ func parallelArgumentsView(n int) (*View, *model.Request) {
 }
 
 func TestStoredViewCopiesSharedExtensionsOnce(t *testing.T) {
-	for _, n := range []int{1, 4, 8} {
-		t.Run(fmt.Sprint(n), func(t *testing.T) {
-			input, req := parallelArgumentsView(n)
+	for _, tc := range []struct {
+		n        int
+		argument string
+	}{
+		{1, strings.Repeat("x", 16<<10)},
+		{4, strings.Repeat("x", 16<<10)},
+		{8, strings.Repeat("x", 16<<10)},
+		{64, "{}"},
+		{256, "{}"},
+		{1024, "{}"},
+	} {
+		t.Run(fmt.Sprintf("tools=%d/argument_bytes=%d", tc.n, len(tc.argument)), func(t *testing.T) {
+			input, req := parallelArgumentsViewWithArgument(tc.n, tc.argument)
 			inv := agent.NewInvocation()
 			AttachProjection(inv, input)
 			check := func() {
@@ -103,6 +117,10 @@ func TestSharedExtensionsRemainIsolatedAtBoundaries(t *testing.T) {
 	input.Items[0].EffectiveEvent.Extensions[event.ToolCallArgsExtensionKey][0] = '!'
 	input.Items[0].EffectiveEvent.Extensions["other"] = json.RawMessage(`false`)
 	Finalize(inv, req, 10)
+	// A transform can duplicate a history item. Its shared extensions must
+	// remain isolated from the source and the older invocation view as well.
+	after := append([]model.Message{req.Messages[0]}, req.Messages...)
+	require.True(t, RebaseAfterTransform(inv, req.Messages, after, []int{0, 0, 1, 2, 3}))
 	view, ok := Snapshot(inv)
 	require.True(t, ok)
 	for _, item := range view.Items {
@@ -174,6 +192,81 @@ func BenchmarkParallelArgumentsView(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				AttachProjection(inv, input)
 				Finalize(inv, req, 10)
+			}
+		})
+	}
+}
+
+// BenchmarkSmallParallelArgumentsView covers large batches whose argument
+// payloads are small but whose full-batch argument map grows with the batch.
+func BenchmarkSmallParallelArgumentsView(b *testing.B) {
+	for _, n := range []int{64, 256, 1024} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			input, req := parallelArgumentsViewWithArgument(n, "{}")
+			inv := agent.NewInvocation()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				AttachProjection(inv, input)
+				Finalize(inv, req, n)
+			}
+		})
+	}
+}
+
+// BenchmarkStoredExtensionSharing measures the cache cost when source buffers
+// are shared, distinct, or mixed. All payloads have equal contents: only their
+// identity differs, so distinct buffers cannot benefit from the copy cache.
+func BenchmarkStoredExtensionSharing(b *testing.B) {
+	for _, payloadBytes := range []int{16, 16 << 10} {
+		for _, sharing := range []string{"shared", "distinct", "mixed"} {
+			b.Run(fmt.Sprintf("%s/payload_bytes=%d", sharing, payloadBytes), func(b *testing.B) {
+				input, req := parallelArgumentsViewWithArgument(256, "{}")
+				raw := json.RawMessage(`"` + strings.Repeat("x", payloadBytes-2) + `"`)
+				for i := range input.Items {
+					payload := raw
+					if sharing == "distinct" || (sharing == "mixed" && i%2 != 0) {
+						payload = append(json.RawMessage(nil), raw...)
+					}
+					input.Items[i].EffectiveEvent.Extensions = map[string]json.RawMessage{"payload": payload}
+				}
+				inv := agent.NewInvocation()
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					AttachProjection(inv, input)
+					Finalize(inv, req, len(input.Items))
+				}
+			})
+		}
+	}
+}
+
+var extensionEventsBenchmarkSink []event.Event
+
+// BenchmarkParallelArgumentsCopyChain includes the mutable-copy boundaries
+// that intentionally retain per-item isolation. It measures this synthetic
+// copy chain, not a complete summarization run or whole-process memory.
+func BenchmarkParallelArgumentsCopyChain(b *testing.B) {
+	for _, n := range []int{1, 4, 8} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			input, req := parallelArgumentsView(n)
+			inv := agent.NewInvocation()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				AttachProjection(inv, input)
+				Finalize(inv, req, 10)
+				view, ok := Snapshot(inv)
+				if !ok {
+					b.Fatal("stored view is missing")
+				}
+				ctx := ContextWithView(context.Background(), view)
+				fromContext, ok := FromContext(ctx)
+				if !ok {
+					b.Fatal("context view is missing")
+				}
+				extensionEventsBenchmarkSink = fromContext.Events()
 			}
 		})
 	}
