@@ -2551,9 +2551,9 @@ func newToolsNodeRuntime(
 
 			responses := make([]toolNodeResponse, 0, len(newMessages))
 			for i, msg := range newMessages {
-				output := toolNodeResponseOutput(msg)
-				if i < len(resultContents) && resultContents[i] != nil {
-					output = json.RawMessage(resultContents[i])
+				output := toolResultContentAt(resultContents, i)
+				if output == nil {
+					output = toolNodeResponseOutput(msg)
 				}
 				responses = append(responses, toolNodeResponse{
 					ToolID:   msg.ToolID,

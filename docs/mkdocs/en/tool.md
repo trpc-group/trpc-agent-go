@@ -522,8 +522,10 @@ message automatically; no `ToolResultMessages` callback is required.
 
 The [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
 supports images in tool results; the adapter version and model provider must
-also support this capability. Chat Completions adapters do not automatically
-move images into a user message.
+also support this capability. For Chat Completions, return text-only tool
+results. Mixed text and image results produce an empty tool response in the
+default flow: neither the text nor the image reaches the model, and no user
+message is injected automatically.
 
 The following tool returns text and an image by ID. The application supplies
 `loadPNG`, which returns raw PNG bytes.
@@ -576,9 +578,11 @@ Usage notes:
   processing the result.
 - **Content order:** text and media parts retain their order. No separators are
   added between text parts.
-- **Custom processing:** an explicitly configured result formatter in LLMAgent
-  converts the result to text. `ToolResultMessages` can still override the
-  default message. See [Tool Result Formatting](#tool-result-formatting).
+- **Custom processing:** in LLMAgent, a configured result formatter applies to
+  results produced by the tool. Results supplied by a `BeforeTool` callback or
+  plugin without running the tool use default conversion. `ToolResultMessages`
+  can still override the default message. See
+  [Tool Result Formatting](#tool-result-formatting).
 
 ## Tool Result Formatting
 

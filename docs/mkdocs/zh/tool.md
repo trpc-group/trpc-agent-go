@@ -503,7 +503,8 @@ LLMAgent 的默认工具调用流程和 Graph ToolsNode 会自动生成工具结
 
 [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
 支持在工具结果中返回图片，需配合支持此能力的适配器版本和模型服务。
-Chat Completions 适配器不会自动将图片转为 user message。
+Chat Completions 请使用纯文本工具结果。默认流程中的图文混合结果会发送空回执，
+其中的文字和图片都不会传给模型，也不会自动转为 user message。
 
 下面的工具按图片 ID 返回文字和图片；`loadPNG` 由业务实现，返回 PNG 原始字节。
 
@@ -550,8 +551,9 @@ readImageTool := function.NewFunctionTool(
   （如 `"png"`）；模型适配器在构造请求时完成所需的 Base64 编码。图片地址使用
   `Image.URL`。框架处理结果期间，请勿修改返回的内容及其字节缓冲区。
 - **内容顺序**：文字和媒体块保留返回顺序，多个文本块之间不自动插入分隔符。
-- **自定义处理**：LLMAgent 中已配置的 result formatter 会将结果转为文本；
-  `ToolResultMessages` 回调可继续覆盖默认消息。详见[工具结果格式化](#工具结果格式化)。
+- **自定义处理**：LLMAgent 对工具执行产生的结果应用已配置的 result formatter。
+  `BeforeTool` 回调或插件短路返回的结果使用默认转换；`ToolResultMessages` 回调仍可
+  覆盖默认消息。详见[工具结果格式化](#工具结果格式化)。
 
 ## 工具结果格式化
 
