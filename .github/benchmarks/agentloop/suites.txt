@@ -1,5 +1,6 @@
 # suite|module directory|package|benchmark regular expression
 agent-loop-core|.|./internal/flow/llmflow|^BenchmarkStreamingResponseProcessorUpdateMetricsState$
+agent-loop-core|.|./internal/flow/processor|^BenchmarkAppendProjectedToolResults$/^tools=800$
 agent-loop-core|.|./internal/flow/processor|^BenchmarkParallelInvocationView$
 
 agent-loop|.|./agent|^BenchmarkCallbacksRunBeforeAgent$
