@@ -501,6 +501,9 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 LLMAgent 默认工具调用流程和 Graph ToolsNode 会将这个值转换为工具消息，无需注册
 `ToolResultMessages` callback。消息角色、工具名和 tool call ID 由框架填写。
 
+下面通过 `NewFunctionTool` 创建工具；自行实现 `tool.CallableTool` 时，也可以从
+`Call` 返回 `model.ToolResultContent` 值。
+
 ```go
 import (
     "context"
@@ -514,25 +517,23 @@ type ReadImageArgs struct {
 }
 
 // loadPNG is supplied by the application and returns raw PNG bytes.
-func newReadImageTool(loadPNG func(context.Context, string) ([]byte, error)) *function.FunctionTool[ReadImageArgs, model.ToolResultContent] {
-    return function.NewFunctionTool(
-        func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
-            data, err := loadPNG(ctx, args.ImageID)
-            if err != nil {
-                return nil, err
-            }
-            text := "Image loaded."
-            return model.ToolResultContent{
-                {Type: model.ContentTypeText, Text: &text},
-                {Type: model.ContentTypeImage, Image: &model.Image{
-                    Data: data, Format: "png",
-                }},
-            }, nil
-        },
-        function.WithName("read_image"),
-        function.WithDescription("Read an image by ID."),
-    )
-}
+readImageTool := function.NewFunctionTool(
+    func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
+        data, err := loadPNG(ctx, args.ImageID)
+        if err != nil {
+            return nil, err
+        }
+        text := "Image loaded."
+        return model.ToolResultContent{
+            {Type: model.ContentTypeText, Text: &text},
+            {Type: model.ContentTypeImage, Image: &model.Image{
+                Data: data, Format: "png",
+            }},
+        }, nil
+    },
+    function.WithName("read_image"),
+    function.WithDescription("Read an image by ID."),
+)
 ```
 
 - 纯文字结果按顺序拼接到 `Message.Content`，不额外插入分隔符。包含媒体的结果将有序

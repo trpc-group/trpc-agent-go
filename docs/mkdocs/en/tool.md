@@ -521,6 +521,9 @@ convert this value into a tool message without requiring a
 `ToolResultMessages` callback. The framework supplies the role, tool name, and
 tool call ID.
 
+The example uses `NewFunctionTool`. A custom `tool.CallableTool` can also return
+a `model.ToolResultContent` value from `Call`.
+
 ```go
 import (
     "context"
@@ -534,25 +537,23 @@ type ReadImageArgs struct {
 }
 
 // loadPNG is supplied by the application and returns raw PNG bytes.
-func newReadImageTool(loadPNG func(context.Context, string) ([]byte, error)) *function.FunctionTool[ReadImageArgs, model.ToolResultContent] {
-    return function.NewFunctionTool(
-        func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
-            data, err := loadPNG(ctx, args.ImageID)
-            if err != nil {
-                return nil, err
-            }
-            text := "Image loaded."
-            return model.ToolResultContent{
-                {Type: model.ContentTypeText, Text: &text},
-                {Type: model.ContentTypeImage, Image: &model.Image{
-                    Data: data, Format: "png",
-                }},
-            }, nil
-        },
-        function.WithName("read_image"),
-        function.WithDescription("Read an image by ID."),
-    )
-}
+readImageTool := function.NewFunctionTool(
+    func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
+        data, err := loadPNG(ctx, args.ImageID)
+        if err != nil {
+            return nil, err
+        }
+        text := "Image loaded."
+        return model.ToolResultContent{
+            {Type: model.ContentTypeText, Text: &text},
+            {Type: model.ContentTypeImage, Image: &model.Image{
+                Data: data, Format: "png",
+            }},
+        }, nil
+    },
+    function.WithName("read_image"),
+    function.WithDescription("Read an image by ID."),
+)
 ```
 
 - A text-only result becomes `Message.Content`, with text parts concatenated
