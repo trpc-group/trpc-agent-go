@@ -156,6 +156,8 @@ func WithSandboxID(sandboxID string) Option {
 // reached the sandbox is unsafe to replay, even if the failure does not confirm
 // sandbox loss. After a successful switch, the triggering error asks the caller
 // to check required files and the runtime environment before continuing.
+// A call that completes recovery before dispatch returns the notice before
+// submitting its operation. A subsequent call can use the replacement.
 // A replacement that loses to Close or Pause is killed. After a replacement
 // is published, the owned sandbox it replaced is killed.
 //

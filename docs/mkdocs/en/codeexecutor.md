@@ -258,7 +258,8 @@ original configuration only if the API confirms the instance is missing or
 terminal. The current call still returns an error without replaying the
 operation. Once the executor switches to the new instance, the error asks the
 agent to check the files and runtime environment it needs before continuing.
-The next call uses the new instance.
+If a later call completes recovery before dispatch, it returns the same notice
+before submitting its operation. A subsequent call can use the new instance.
 
 The executor does not restore sandbox-local files, processes, or interpreter
 state. Files saved to persistent storage may still be available when the

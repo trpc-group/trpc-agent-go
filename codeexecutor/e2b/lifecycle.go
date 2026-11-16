@@ -151,15 +151,22 @@ func (c *CodeExecutor) prepareInstance(ctx context.Context) (sandboxSnap, error)
 		return sandboxSnap{}, err
 	}
 	if c.autoRecreate && snap.owned && c.generationIsDead(snap.generation) {
-		if err := c.recover(ctx, snap.generation); err != nil {
-			return sandboxSnap{}, err
-		}
-		return c.currentSnap()
+		err = c.recover(ctx, snap.generation)
+	} else {
+		err = c.waitPublished(ctx, snap.generation)
 	}
-	if err := c.waitPublished(ctx, snap.generation); err != nil {
+	if err != nil {
 		return sandboxSnap{}, err
 	}
-	return c.currentSnap()
+	current, err := c.currentSnap()
+	if err != nil {
+		return sandboxSnap{}, err
+	}
+	if current.generation != snap.generation {
+		// Surface the replacement before an operation can run against it.
+		return sandboxSnap{}, sandboxRecreatedError(ctx.Err())
+	}
+	return current, nil
 }
 
 func (c *CodeExecutor) instanceID(
@@ -432,22 +439,28 @@ func (c *CodeExecutor) lossResult(
 	confirmedDead bool,
 ) error {
 	// Close or Pause can discard a replacement even after creation succeeds.
-	recreated := c.generationMoved(snap)
-	if !confirmedDead && !recreated {
+	if c.generationMoved(snap) {
+		return sandboxRecreatedError(err)
+	}
+	if !confirmedDead {
 		// Another call can replace this sandbox between tool attempts. The
 		// operation may already have run even when its error doesn't prove loss.
 		return errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
-	}
-	var notice error
-	if recreated {
-		notice = errors.New("e2b: sandbox was recreated. " +
-			"Check the required files and runtime environment before continuing")
 	}
 	return errors.Join(
 		err,
 		codeexecutor.ErrWorkspaceStale,
 		codeexecutor.ErrWorkspaceRetryUnsafe,
-		notice,
+	)
+}
+
+func sandboxRecreatedError(cause error) error {
+	return errors.Join(
+		cause,
+		codeexecutor.ErrWorkspaceStale,
+		codeexecutor.ErrWorkspaceRetryUnsafe,
+		errors.New("e2b: sandbox was recreated. "+
+			"Check the required files and runtime environment before continuing"),
 	)
 }
 
