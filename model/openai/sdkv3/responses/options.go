@@ -88,8 +88,8 @@ func WithOpenAIOptions(opts ...option.RequestOption) Option {
 }
 
 // WithHostedToolSearch enables hosted tool search. Request tools that report
-// tool.ShouldDefer, for example through llmagent.WithDeferredTools or
-// llmagent.WithDeferredToolSet, are declared with defer_loading, and the
+// tool.ShouldDefer, for example through deferred.Tool or deferred.ToolSet
+// in the tool/deferred package, are declared with defer_loading, and the
 // tool_search tool is added. Members of a ToolSet that has deferred members
 // are grouped in one namespace named after the ToolSet, described by
 // tool.ToolSetDescriber when the ToolSet implements it. The API searches and

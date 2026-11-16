@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
@@ -140,20 +141,17 @@ func newSearchAgent(m model.Model, executions *searchExecutions, stream bool, op
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: stream}),
 		llmagent.WithTools([]tool.Tool{
 			executions.tool("weather", "Current weather.", "weather"),
-			executions.tool("eta", "Shipping ETA for an order.", "eta"),
+			deferred.Tool(executions.tool("eta", "Shipping ETA for an order.", "eta"), nil),
 		}),
 		llmagent.WithToolSets([]tool.ToolSet{
-			searchToolSet{name: "crm", description: "CRM tools for customers and orders.", tools: []tool.Tool{
+			deferred.ToolSet(searchToolSet{name: "crm", description: "CRM tools for customers and orders.", tools: []tool.Tool{
 				executions.tool("lookup", "Look up a customer.", "crm.lookup"),
 				executions.tool("orders", "List open orders.", "crm.orders"),
-			}},
-			searchToolSet{name: "billing", tools: []tool.Tool{
+			}}, tool.NewIncludeToolNamesFilter("orders")),
+			deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{
 				executions.tool("lookup", "Look up an invoice.", "billing.lookup"),
-			}},
+			}}, nil),
 		}),
-		llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("eta")),
-		llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("orders")),
-		llmagent.WithDeferredToolSet("billing", nil),
 	}
 	return llmagent.New("search", append(base, opts...)...)
 }
@@ -547,8 +545,7 @@ func TestRunnerToolSearchIsScopedToTheAgent(t *testing.T) {
 	executions := &searchExecutions{}
 	refunds := llmagent.New("refunds",
 		llmagent.WithModel(shared),
-		llmagent.WithTools([]tool.Tool{executions.tool("refund", "Issue a refund.", "refund")}),
-		llmagent.WithDeferredTools(nil),
+		llmagent.WithTools([]tool.Tool{deferred.Tool(executions.tool("refund", "Issue a refund.", "refund"), nil)}),
 	)
 	plain := llmagent.New("plain",
 		llmagent.WithModel(shared),

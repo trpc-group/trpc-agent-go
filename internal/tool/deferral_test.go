@@ -126,6 +126,28 @@ func TestWithDeferralPreservesExecutionModes(t *testing.T) {
 	require.True(t, tool.ShouldDefer(context.Background(), declarationOnly))
 }
 
+type deferredPreferenceTool struct{ streamingDeferralTestTool }
+
+func (deferredPreferenceTool) StreamInner() bool       { return false }
+func (deferredPreferenceTool) SkipSummarization() bool { return true }
+
+func TestWithDeferralPreservesExecutionPreferences(t *testing.T) {
+	base := deferredPreferenceTool{streamingDeferralTestTool{deferralTestTool{name: "agent"}}}
+	for _, original := range []tool.Tool{base, NewUnprefixedNamedTool(base)} {
+		wrapped := WithDeferral(original, &Deferral{})
+		_, streams := wrapped.(tool.StreamableTool)
+		require.True(t, streams, "stream routing preferences do not remove the streaming interface")
+		require.False(t, wrapped.(interface{ StreamInner() bool }).StreamInner())
+		require.True(t, wrapped.(interface{ SkipSummarization() bool }).SkipSummarization())
+	}
+	plain := WithDeferral(deferralTestTool{name: "plain"}, &Deferral{})
+	require.False(t, plain.(interface{ StreamInner() bool }).StreamInner())
+	require.False(t, plain.(interface{ SkipSummarization() bool }).SkipSummarization())
+	decision, err := plain.(tool.PermissionChecker).CheckPermission(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, tool.AllowPermission(), decision)
+}
+
 func TestNamedToolSetDeferralAndIdentity(t *testing.T) {
 	ctx := context.Background()
 	set := deferralTestToolSet{
@@ -145,7 +167,9 @@ func TestNamedToolSetDeferralAndIdentity(t *testing.T) {
 		filtered = append(filtered, tl.Declaration().Name)
 		return tl.Declaration().Name == "lookup"
 	}}
-	named := NewNamedToolSet(set).WithDeferral(deferral)
+	marked := set
+	marked.tools = []tool.Tool{WithDeferral(set.tools[0], deferral), WithDeferral(set.tools[1], deferral)}
+	named := NewNamedToolSet(marked)
 	require.Equal(t, "CRM tools.", named.Description())
 	members := named.Tools(ctx)
 	require.Equal(t, "crm_lookup", members[0].Declaration().Name)
@@ -169,7 +193,7 @@ func TestNamedToolSetDeferralAndIdentity(t *testing.T) {
 
 	overlaid := ApplyDeclarations(members, []tool.Declaration{{Name: "crm_lookup", Description: "patched"}})
 	require.Equal(t, "patched", overlaid[0].Declaration().Description)
-	require.False(t, tool.ShouldDefer(ctx, overlaid[0]), "declaration overlays expose no optional capabilities")
+	require.True(t, tool.ShouldDefer(ctx, overlaid[0]), "declaration overlays preserve the loading decision")
 	_, memberName, _, ok = ToolSetMember(overlaid[0])
 	require.True(t, ok)
 	require.Equal(t, "lookup", memberName)

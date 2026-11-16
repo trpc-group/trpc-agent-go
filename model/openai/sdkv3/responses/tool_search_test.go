@@ -24,6 +24,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 )
 
 type searchTestTool struct {
@@ -61,32 +62,19 @@ func (s searchTestToolSet) Description() string               { return s.descrip
 
 // agentTools registers tools the way an LLM agent does: ToolSet members are
 // exposed with qualified names and an optional deferral decision.
-func agentTools(t *testing.T, standalone []tool.Tool, sets ...struct {
-	set      tool.ToolSet
-	deferral *itool.Deferral
-}) map[string]tool.Tool {
+func agentTools(t *testing.T, standalone []tool.Tool, sets ...tool.ToolSet) map[string]tool.Tool {
 	t.Helper()
 	out := make(map[string]tool.Tool)
 	for _, tl := range standalone {
 		out[tl.Declaration().Name] = tl
 	}
-	for _, entry := range sets {
-		named := itool.NewNamedToolSetWithMode(entry.set, tool.ToolSetToolNameModeQualified).WithDeferral(entry.deferral)
+	for _, set := range sets {
+		named := itool.NewNamedToolSet(set)
 		for _, tl := range named.Tools(context.Background()) {
 			out[tl.Declaration().Name] = tl
 		}
 	}
 	return out
-}
-
-func toolSetEntry(set tool.ToolSet, deferral *itool.Deferral) struct {
-	set      tool.ToolSet
-	deferral *itool.Deferral
-} {
-	return struct {
-		set      tool.ToolSet
-		deferral *itool.Deferral
-	}{set: set, deferral: deferral}
 }
 
 func crmToolSet() searchTestToolSet {
@@ -109,23 +97,19 @@ func billingToolSet() searchTestToolSet {
 	}
 }
 
-func deferNames(names ...string) *itool.Deferral {
-	return &itool.Deferral{Filter: tool.NewIncludeToolNamesFilter(names...)}
-}
-
 func TestToolSearchDisabledKeepsRequestsUnchanged(t *testing.T) {
 	plain := agentTools(t,
 		[]tool.Tool{searchTestTool{name: "weather"}},
-		toolSetEntry(crmToolSet(), nil),
+		crmToolSet(),
 	)
-	deferred := agentTools(t,
-		[]tool.Tool{itool.WithDeferral(searchTestTool{name: "weather"}, &itool.Deferral{}), selfDeferredTool{searchTestTool{name: "self"}}},
-		toolSetEntry(crmToolSet(), &itool.Deferral{}),
+	marked := agentTools(t,
+		[]tool.Tool{deferred.Tool(searchTestTool{name: "weather"}, nil), selfDeferredTool{searchTestTool{name: "self"}}},
+		deferred.ToolSet(crmToolSet(), nil),
 	)
-	delete(deferred, "self")
+	delete(marked, "self")
 	user := []model.Message{model.NewUserMessage("hi")}
 	want := captureRequest(t, &model.Request{Messages: user, Tools: plain})
-	got := captureRequest(t, &model.Request{Messages: user, Tools: deferred})
+	got := captureRequest(t, &model.Request{Messages: user, Tools: marked})
 	require.Equal(t, want.body, got.body, "deferral has no wire effect without tool search")
 
 	searchWithoutDeferral := captureRequest(t, &model.Request{Messages: user, Tools: plain}, WithHostedToolSearch())
@@ -137,10 +121,10 @@ func TestHostedToolSearchDeclaresDeferredToolsAndNamespaces(t *testing.T) {
 	tools := agentTools(t,
 		[]tool.Tool{
 			searchTestTool{name: "weather", description: "Weather."},
-			itool.WithDeferral(searchTestTool{name: "shipping_eta", description: "ETA."}, &itool.Deferral{}),
+			deferred.Tool(searchTestTool{name: "shipping_eta", description: "ETA."}, nil),
 		},
-		toolSetEntry(crmToolSet(), deferNames("orders")),
-		toolSetEntry(billingToolSet(), nil),
+		deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("orders")),
+		billingToolSet(),
 	)
 	got := captureRequest(t, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}, Tools: tools}, WithHostedToolSearch())
 	requireJSONField(t, `[
@@ -160,7 +144,7 @@ func TestHostedToolSearchDeclaresDeferredToolsAndNamespaces(t *testing.T) {
 }
 
 func TestHostedToolSearchNamespaceDescriptionFallback(t *testing.T) {
-	tools := agentTools(t, nil, toolSetEntry(billingToolSet(), &itool.Deferral{}))
+	tools := agentTools(t, nil, deferred.ToolSet(billingToolSet(), nil))
 	got := captureRequest(t, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}, Tools: tools}, WithHostedToolSearch())
 	encoded, err := json.Marshal(got.body["tools"])
 	require.NoError(t, err)
@@ -173,7 +157,7 @@ func TestHostedToolSearchNamespaceDescriptionFallback(t *testing.T) {
 func TestToolSearchRejectsNamespaceFunctionNameConflicts(t *testing.T) {
 	tools := agentTools(t,
 		[]tool.Tool{searchTestTool{name: "crm"}},
-		toolSetEntry(crmToolSet(), deferNames("orders")),
+		deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("orders")),
 	)
 	srv, calls := rejectingServer(t)
 	for _, opt := range []Option{WithHostedToolSearch(), WithClientToolSearch(func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
@@ -191,9 +175,9 @@ func TestToolSearchRejectsNamespaceFunctionNameConflicts(t *testing.T) {
 
 func TestToolSearchMapsNamespacedCallsToRequestTools(t *testing.T) {
 	tools := agentTools(t,
-		[]tool.Tool{itool.WithDeferral(searchTestTool{name: "shipping_eta"}, &itool.Deferral{})},
-		toolSetEntry(crmToolSet(), &itool.Deferral{}),
-		toolSetEntry(billingToolSet(), &itool.Deferral{}),
+		[]tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"}, nil)},
+		deferred.ToolSet(crmToolSet(), nil),
+		deferred.ToolSet(billingToolSet(), nil),
 	)
 	m := New("gpt-5", WithHostedToolSearch())
 	_, plan, err := m.buildParams(context.Background(), &model.Request{Tools: tools})
@@ -226,8 +210,8 @@ func TestToolSearchMapsNamespacedCallsToRequestTools(t *testing.T) {
 
 func TestClientToolSearchRequestOmitsDeferredDefinitions(t *testing.T) {
 	tools := agentTools(t,
-		[]tool.Tool{itool.WithDeferral(searchTestTool{name: "shipping_eta"}, &itool.Deferral{})},
-		toolSetEntry(crmToolSet(), deferNames("orders")),
+		[]tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"}, nil)},
+		deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("orders")),
 	)
 	handler := func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) { return nil, nil }
 	got := captureRequest(t, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}, Tools: tools}, WithClientToolSearch(handler))
@@ -247,15 +231,71 @@ func TestClientToolSearchRequestOmitsDeferredDefinitions(t *testing.T) {
 	require.ErrorContains(t, err, "requires a handler")
 }
 
+func TestToolSearchPreservesDeferralWithDeclarationOverride(t *testing.T) {
+	ctx := context.Background()
+	updated := tool.Declaration{
+		Name:        "find_order",
+		Description: "Find an order by customer email.",
+		InputSchema: &tool.Schema{
+			Type:       "object",
+			Properties: map[string]*tool.Schema{"email": {Type: "string"}},
+			Required:   []string{"email"},
+		},
+	}
+	base := deferred.Tool(searchTestTool{name: "find_order", description: "Original description."}, nil)
+	overlaid := itool.ApplyDeclarations([]tool.Tool{base}, []tool.Declaration{updated})
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("find my order")},
+		Tools:    map[string]tool.Tool{"find_order": overlaid[0]},
+	}
+
+	hosted := captureRequest(t, req, WithHostedToolSearch())
+	requireJSONField(t, `[
+	  {"type":"function","name":"find_order","description":"Find an order by customer email.","strict":false,"defer_loading":true,
+	   "parameters":{"type":"object","properties":{"email":{"type":"string"}},"required":["email"]}},
+	  {"type":"tool_search"}
+	]`, hosted.body["tools"])
+
+	var seen *ToolSearchRequest
+	handler := func(_ context.Context, search *ToolSearchRequest) (*ToolSearchResult, error) {
+		seen = search
+		return &ToolSearchResult{ToolIDs: []string{"find_order"}}, nil
+	}
+	client := captureRequest(t, req, WithClientToolSearch(handler))
+	requireJSONField(t, `[
+	  {"type":"tool_search","execution":"client",
+	   "description":"`+clientToolSearchDescription+`",
+	   "parameters":{"type":"object","properties":{"query":{"type":"string","description":"The capability or task that the needed tools must support."}},
+	     "required":["query"],"additionalProperties":false}}
+	]`, client.body["tools"])
+
+	m := New("gpt-5", WithClientToolSearch(handler))
+	_, plan, err := m.buildParams(ctx, req)
+	require.NoError(t, err)
+	response, err := projectRequestResponse(decodeResponse(t, clientSearchOutput), "gpt-5", plan)
+	require.NoError(t, err)
+	results, err := m.CompleteProviderActions(ctx, req, response)
+	require.NoError(t, err)
+	require.NotNil(t, seen)
+	require.Len(t, seen.Candidates, 1)
+	require.Equal(t, "find_order", seen.Candidates[0].ID)
+	require.Equal(t, updated, seen.Candidates[0].Declaration)
+	require.Len(t, results, 1)
+	require.JSONEq(t, `[{"type":"tool_search_output","execution":"client","call_id":"search_1","status":"completed","tools":[
+	  {"type":"function","name":"find_order","description":"Find an order by customer email.","defer_loading":true,"strict":false,
+	   "parameters":{"type":"object","properties":{"email":{"type":"string"}},"required":["email"]}}]}]`,
+		string(results[0].ProviderData.Payload))
+}
+
 const clientSearchOutput = `{"id":"r1","status":"completed","output":[
   {"type":"reasoning","id":"rs_1","status":"completed","summary":[],"encrypted_content":"opaque"},
   {"type":"tool_search_call","id":"ts_1","execution":"client","call_id":"search_1","status":"completed","arguments":{"query":"orders"}}]}`
 
 func TestClientToolSearchCompletesSearchCalls(t *testing.T) {
 	tools := agentTools(t,
-		[]tool.Tool{itool.WithDeferral(searchTestTool{name: "shipping_eta", description: "ETA."}, &itool.Deferral{})},
-		toolSetEntry(crmToolSet(), deferNames("orders")),
-		toolSetEntry(billingToolSet(), &itool.Deferral{}),
+		[]tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta", description: "ETA."}, nil)},
+		deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("orders")),
+		deferred.ToolSet(billingToolSet(), nil),
 	)
 	var seen *ToolSearchRequest
 	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) (*ToolSearchResult, error) {
@@ -340,7 +380,7 @@ func mustFunctionName(t *testing.T, plan *toolPlan, namespace, name string) stri
 }
 
 func TestClientToolSearchHandlerOutcomes(t *testing.T) {
-	tools := agentTools(t, []tool.Tool{itool.WithDeferral(searchTestTool{name: "shipping_eta"}, &itool.Deferral{})})
+	tools := agentTools(t, []tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"}, nil)})
 	pending := func(t *testing.T, m *Model) (*model.Request, *model.Response) {
 		request := &model.Request{Messages: []model.Message{model.NewUserMessage("eta")}, Tools: tools}
 		_, plan, err := m.buildParams(context.Background(), request)
@@ -435,8 +475,8 @@ func TestClientToolSearchResumeSkipsSavedResults(t *testing.T) {
 	request := &model.Request{
 		Messages: []model.Message{response.Choices[0].Message, saved},
 		Tools: agentTools(t, []tool.Tool{
-			itool.WithDeferral(searchTestTool{name: "first"}, &itool.Deferral{}),
-			itool.WithDeferral(searchTestTool{name: "second"}, &itool.Deferral{}),
+			deferred.Tool(searchTestTool{name: "first"}, nil),
+			deferred.Tool(searchTestTool{name: "second"}, nil),
 		}),
 	}
 	results, err := m.CompleteProviderActions(context.Background(), request, response)
@@ -549,7 +589,7 @@ func TestToolSearchHistoryPairing(t *testing.T) {
 }
 
 func TestStreamingToolSearchProjection(t *testing.T) {
-	tools := agentTools(t, nil, toolSetEntry(crmToolSet(), &itool.Deferral{}))
+	tools := agentTools(t, nil, deferred.ToolSet(crmToolSet(), nil))
 	stream := func(t *testing.T, m *Model, output string) *model.Response {
 		var compact bytes.Buffer
 		require.NoError(t, json.Compact(&compact, []byte(output)))
@@ -596,7 +636,7 @@ func TestNonStreamingClientToolSearchResponseIsNotDone(t *testing.T) {
 	defer srv.Close()
 	handler := func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) { return nil, nil }
 	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithClientToolSearch(handler))
-	tools := agentTools(t, []tool.Tool{itool.WithDeferral(searchTestTool{name: "shipping_eta"}, &itool.Deferral{})})
+	tools := agentTools(t, []tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"}, nil)})
 	ch, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("eta")}, Tools: tools})
 	require.NoError(t, err)
 	got := collect(t, ch)

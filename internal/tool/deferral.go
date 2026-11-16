@@ -15,7 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// Deferral is an explicit agent decision about which tools a provider may
+// Deferral is an explicit decision about which tools a provider may
 // load on demand. Within its scope it replaces the tools' own
 // tool.DeferredTool preference.
 type Deferral struct {
@@ -39,7 +39,6 @@ func WithDeferral(t tool.Tool, d *Deferral) tool.Tool {
 	wrapped := &deferralTool{base: t, deferral: d}
 	callable, hasCallable := t.(tool.CallableTool)
 	streamable, hasStreamable := t.(tool.StreamableTool)
-	hasStreamable = hasStreamable && isReallyStreamable(t)
 	switch {
 	case hasCallable && hasStreamable:
 		return &callableStreamableDeferralTool{
@@ -106,6 +105,28 @@ func (t *deferralTool) IsConcurrencySafe() bool {
 	return tool.MetadataOf(t.base).ConcurrencySafe
 }
 
+// CheckPermission preserves tool-owned checks for callers that inspect the
+// wrapper directly instead of using ResolveSemantic.
+func (t *deferralTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+	if checker, ok := t.base.(tool.PermissionChecker); ok {
+		return checker.CheckPermission(ctx, req)
+	}
+	return tool.AllowPermission(), nil
+}
+
+// SkipSummarization preserves the wrapped tool's completion preference.
+func (t *deferralTool) SkipSummarization() bool {
+	if pref, ok := t.base.(interface{ SkipSummarization() bool }); ok {
+		return pref.SkipSummarization()
+	}
+	return false
+}
+
+// StreamInner keeps stream routing separate from the StreamableTool interface.
+func (t *deferralTool) StreamInner() bool {
+	return isReallyStreamable(t.base)
+}
+
 func (t *deferralTool) originalTool() tool.Tool {
 	return t.base
 }
@@ -115,7 +136,7 @@ func (t *deferralTool) Original() tool.Tool {
 	return t.base
 }
 
-// ShouldDefer applies the agent decision to the wrapped tool.
+// ShouldDefer applies the configured decision to the wrapped tool.
 func (t *deferralTool) ShouldDefer(ctx context.Context) bool {
 	return t.deferral.Defers(ctx, t.base)
 }

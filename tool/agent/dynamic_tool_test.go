@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
@@ -1207,18 +1208,26 @@ func TestNewDynamicTool_Integration_ExcludesSiblingAgentTools(t *testing.T) {
 	recModel := &dynRecordingModel{name: "rec", response: "ok"}
 	at := NewDynamicTool()
 	otherDynamic := NewDynamicTool(WithName("other_dynamic"))
+	deferredDynamic := NewDynamicTool(WithName("deferred_dynamic"))
 	wrappedAgent := llmagent.New(
 		"wrapped_agent",
 		llmagent.WithModel(&dynRecordingModel{name: "wrapped"}),
+	)
+	deferredAgent := llmagent.New(
+		"deferred_agent",
+		llmagent.WithModel(&dynRecordingModel{name: "deferred"}),
 	)
 	main := llmagent.New(
 		"main",
 		llmagent.WithModel(recModel),
 		llmagent.WithTools([]tool.Tool{
 			newDynTestTool("tool_a"),
+			deferred.Tool(newDynTestTool("tool_b"), nil),
 			at,
 			otherDynamic,
 			NewTool(wrappedAgent),
+			deferred.Tool(deferredDynamic, nil),
+			deferred.Tool(NewTool(deferredAgent), nil),
 		}),
 	)
 
@@ -1235,9 +1244,32 @@ func TestNewDynamicTool_Integration_ExcludesSiblingAgentTools(t *testing.T) {
 
 	seen := recModel.snapshot()
 	require.Len(t, seen, 1)
-	require.Equal(t, []string{"tool_a"}, seen[0],
+	require.Equal(t, []string{"tool_a", "tool_b"}, seen[0],
 		"dynamic child surface must exclude all AgentTool entrypoints")
 }
+
+func TestNewDynamicTool_SelectToolsPreservesDeferredBusinessTool(t *testing.T) {
+	at := NewDynamicTool()
+	wrapped := deferred.Tool(newDynTestTool("business"), nil)
+	custom := &dynCustomOriginalTool{original: NewDynamicTool(WithName("inner"))}
+	selected, warnings, err := at.selectDynamicTools(
+		[]tool.Tool{wrapped, custom}, nil, nil, nil, dynamicSpec{},
+	)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+	require.Len(t, selected, 2)
+	require.Same(t, wrapped, selected[0])
+	require.Same(t, custom, selected[1], "user-defined Original methods are not unwrapped")
+	require.True(t, tool.ShouldDefer(context.Background(), selected[0]))
+}
+
+type dynCustomOriginalTool struct{ original tool.Tool }
+
+func (t *dynCustomOriginalTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "custom"}
+}
+
+func (t *dynCustomOriginalTool) Original() tool.Tool { return t.original }
 
 func TestNewDynamicTool_RestoresLiveSessionFromParallelClone(t *testing.T) {
 	const liveOnlyContent = "dynamic-live-only-history"

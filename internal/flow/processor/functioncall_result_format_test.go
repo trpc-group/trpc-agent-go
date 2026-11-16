@@ -28,6 +28,7 @@ import (
 	toolerrorplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolerror"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 )
@@ -946,6 +947,24 @@ func TestExecuteToolCall_ResultFormatterSurvivesFrameworkWrappers(t *testing.T) 
 			),
 		)
 	}
+
+	t.Run("deferred tool", func(t *testing.T) {
+		wrapped := deferred.Tool(newTool(), nil)
+		choices := requireResultFormatToolCall(t,
+			NewFunctionCallResponseProcessor(false, nil), "bash", wrapped)
+		require.Len(t, choices, 1)
+		assert.Equal(t, "formatted:wrapped", choices[0].Message.Content)
+	})
+
+	t.Run("deferred tool set", func(t *testing.T) {
+		wrapped := itool.NewNamedToolSet(deferred.ToolSet(resultFormatToolSet{
+			name: "shell", tool: newTool(),
+		}, nil)).Tools(context.Background())[0]
+		choices := requireResultFormatToolCall(t,
+			NewFunctionCallResponseProcessor(false, nil), "shell_bash", wrapped)
+		require.Len(t, choices, 1)
+		assert.Equal(t, "formatted:wrapped", choices[0].Message.Content)
+	})
 
 	t.Run("declaration overlay", func(t *testing.T) {
 		wrapped := itool.ApplyDeclarations(

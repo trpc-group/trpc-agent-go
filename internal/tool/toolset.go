@@ -21,7 +21,6 @@ import (
 type NamedToolSet struct {
 	toolSet  tool.ToolSet
 	nameMode tool.ToolSetToolNameMode
-	deferral *Deferral
 }
 
 // NewNamedToolSet creates a new named toolset wrapper.
@@ -47,24 +46,12 @@ func NewNamedToolSetWithMode(
 		return &NamedToolSet{
 			toolSet:  t.toolSet,
 			nameMode: mode,
-			deferral: t.deferral,
 		}
 	}
 	return &NamedToolSet{
 		toolSet:  toolSet,
 		nameMode: mode,
 	}
-}
-
-// WithDeferral returns a copy of s whose members use d instead of their own
-// deferral preference. A nil d returns s.
-func (s *NamedToolSet) WithDeferral(d *Deferral) *NamedToolSet {
-	if d == nil {
-		return s
-	}
-	copied := *s
-	copied.deferral = d
-	return &copied
 }
 
 func normalizeToolSetToolNameMode(mode tool.ToolSetToolNameMode) tool.ToolSetToolNameMode {
@@ -92,7 +79,6 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 			original:           t,
 			toolSetName:        toolSetName,
 			toolSetDescription: description,
-			deferral:           s.deferral,
 		}
 		if s.nameMode == tool.ToolSetToolNameModeQualified {
 			namedTool.name = toolSetName
@@ -128,7 +114,6 @@ type NamedTool struct {
 	name               string
 	toolSetName        string
 	toolSetDescription string
-	deferral           *Deferral
 }
 
 // NewUnprefixedNamedTool wraps a tool as a NamedTool without adding any name
@@ -206,6 +191,11 @@ type declarationTool struct {
 
 func (t *declarationTool) Declaration() *tool.Declaration {
 	return &t.decl
+}
+
+// ShouldDefer preserves the loading decision while changing the declaration.
+func (t *declarationTool) ShouldDefer(ctx context.Context) bool {
+	return tool.ShouldDefer(ctx, t.base)
 }
 
 func (t *declarationTool) originalTool() tool.Tool {
@@ -335,12 +325,8 @@ func (t *NamedTool) IsConcurrencySafe() bool {
 	return tool.MetadataOf(t.original).ConcurrencySafe
 }
 
-// ShouldDefer applies the ToolSet's agent deferral decision to the original
-// tool, or delegates to the original tool when no decision is configured.
+// ShouldDefer delegates to the original tool.
 func (t *NamedTool) ShouldDefer(ctx context.Context) bool {
-	if t.deferral != nil {
-		return t.deferral.Defers(ctx, t.original)
-	}
 	return tool.ShouldDefer(ctx, t.original)
 }
 

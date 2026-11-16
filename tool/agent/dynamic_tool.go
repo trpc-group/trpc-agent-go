@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -845,7 +846,7 @@ func (at *Tool) selectDynamicTools(
 	candidates := make([]tool.Tool, 0, len(maxTools))
 	candidateByName := make(map[string]tool.Tool, len(maxTools))
 	for _, t := range maxTools {
-		if _, ok := t.(*Tool); ok {
+		if _, ok := itool.ResolveSemantic(t).(*Tool); ok {
 			continue
 		}
 		name := declarationName(t)

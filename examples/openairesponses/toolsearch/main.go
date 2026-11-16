@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
@@ -56,13 +57,16 @@ func main() {
 		llmagent.WithDescription("A customer support assistant with CRM, billing, and shipping tools."),
 		llmagent.WithInstruction("Answer customer support questions with data from the tools. Load the tools you need before answering."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming}),
-		llmagent.WithTools([]tool.Tool{currentTimeTool(), shippingETATool()}),
-		llmagent.WithToolSets([]tool.ToolSet{crmToolSet(), billingToolSet()}),
 		// Deferral only changes what the model sees up front. Deferred tools
 		// stay registered and run like any other tool once they are loaded.
-		llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
-		llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
-		llmagent.WithDeferredToolSet("billing", nil),
+		llmagent.WithTools([]tool.Tool{
+			currentTimeTool(),
+			deferred.Tool(shippingETATool(), nil),
+		}),
+		llmagent.WithToolSets([]tool.ToolSet{
+			deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("list_orders")),
+			deferred.ToolSet(billingToolSet(), nil),
+		}),
 	)
 	// The in-memory session lives only until this process exits.
 	sessions := sessioninmemory.NewSessionService()

@@ -4584,7 +4584,7 @@ func callToolWithRetry(
 	state State,
 	toolCallIndex int,
 ) (any, error) {
-	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
+	runtimeTool, ok := itool.ResolveSemantic(callableTool).(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {
 		var err error

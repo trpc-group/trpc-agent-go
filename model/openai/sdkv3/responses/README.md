@@ -90,34 +90,49 @@ every definition up front. It is opt-in and requires a model that supports
   tools, and the adapter records a `tool_search_output` with their
   definitions. A nil handler makes `GenerateContent` fail.
 
-The two options are mutually exclusive; the later one wins. Which tools are
-deferred is decided by the agent, not by the adapter:
-`llmagent.WithDeferredTools` covers tools registered with `WithTools`,
-`llmagent.WithDeferredToolSet` covers all or some members of a named ToolSet,
-and other tools keep their own `tool.DeferredTool` preference. Deferred tools
-stay registered, filtered, and executed by the agent; only the request
-changes. Requests without deferred tools and without tool search history are
-unchanged, and adapters without tool search, such as Chat Completions, ignore
-deferral.
+The two options are mutually exclusive; the later one wins. Wrap a tool or
+ToolSet with `tool/deferred` to select what is deferred, then register it with
+the agent as usual. Other tools keep their own `tool.DeferredTool` preference.
+Deferred tools stay registered, filtered, and executed by the agent; only the
+request changes. Requests without deferred tools and without tool search
+history are unchanged, and adapters without tool search, such as Chat
+Completions, ignore deferral.
 
 Tools registered and allowed for the request remain executable even before a
 search loads their definitions. Use the existing tool filters and permission
 callbacks to enforce access restrictions; deferral controls schema exposure.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
 llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
-    llmagent.WithTools([]tool.Tool{currentTime, shippingETA}),
-    llmagent.WithToolSets([]tool.ToolSet{crm, billing}),
-    llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
-    // Defer one CRM member; the other CRM members stay callable up front.
-    llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
-    // Defer the whole billing ToolSet.
-    llmagent.WithDeferredToolSet("billing", nil),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA, nil)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        // Defer one CRM member; the others stay visible up front.
+        deferred.ToolSet(crm, tool.NewIncludeToolNamesFilter("list_orders")),
+        // Defer the whole billing ToolSet.
+        deferred.ToolSet(billing, nil),
+    }),
 )
 ```
+
+The filter receives the original tool at request time; for ToolSets, that is
+the original member before the framework adds a name prefix. It returns true to
+defer the tool and false to keep it eager, overriding the wrapped tool's own
+`tool.DeferredTool` preference in either case. A nil filter defers every wrapped
+tool. The same ToolSet wrapper can be registered with
+`WithActivatableToolSets`, and it applies the filter to members refreshed from
+the original ToolSet, including MCP members. Wrapping does not open a new
+connection; closing the wrapped ToolSet closes the original. A nil original
+returns nil.
+
+Agent and run tool filters receive the registered wrapper. `Declaration()`
+and `tool.MetadataOf` remain available; a filter that needs the original
+concrete type can follow the existing `Original() tool.Tool` convention,
+unwrapping more than once if needed.
 
 ### Namespaces
 
@@ -196,9 +211,8 @@ search error. The handler may be called concurrently for different requests.
 
 - Client search needs a flow that completes provider actions. LLMAgent and
   Runner do. Graph LLM nodes report `model response requests provider
-  actions, which graph LLM nodes do not complete`. Graph LLM nodes do not read
-  LLMAgent options, so hosted search there applies only to tools that
-  implement `tool.DeferredTool` themselves.
+  actions, which graph LLM nodes do not complete`. Hosted search there applies
+  to tools implementing `tool.DeferredTool`, including wrapped tools.
 - Model wrappers that do not forward `model.ProviderActionCompleter`, including
   the current failover and hedge wrappers, cannot complete client searches.
   LLMAgent then stops with `model "..." does not complete provider actions`.
@@ -217,11 +231,10 @@ search error. The handler may be called concurrently for different requests.
   the same name. Top-level tool definitions stay unchanged across the search
   and execution requests.
 - A run-scoped profile that overrides tool declarations, as in prompt
-  iteration, sends the overridden tools eagerly in that run. Declaration
-  overrides carry no optional tool capabilities, including deferral.
-- Do not combine native tool search with `plugin/toolsearch`. That plugin
-  selects tools before the request; native search exposes the agent's
-  deferral policy to the model.
+  iteration, changes the model-facing declaration but preserves the tool's
+  deferral decision.
+- Do not combine native tool search with `plugin/toolsearch`. The plugin has
+  its own deferred-tool registration and does not use `tool.DeferredTool`.
 
 ## Unknown field, event, and item compatibility
 
@@ -467,11 +480,11 @@ cannot be promised.
 This adapter requires a root module version containing `Message.ProviderData` and
 `Info.ProviderDataProtocol`. Tool search additionally requires a root version
 containing `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`,
-`tool.ToolSetDescriber`, and the LLMAgent deferral options. The adapter also uses
-root internal packages, so
-its required root version must be the matching release rather than any later
-root version. Repository-relative `replace` directives support local
-development only; downstream consumers must resolve a compatible root version
+and `tool.ToolSetDescriber`; the examples above also use `tool/deferred`. The
+adapter uses root internal packages, so its required root version must be the
+matching release rather than any later root version. Repository-relative
+`replace` directives support local development only; downstream consumers
+must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited. Publish
 the compatible root module first, update this module's required root version,
 and verify an external consumer without a root-module `replace` before

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -318,7 +319,7 @@ func (a *LLMAgent) applyToolActivation(
 	userToolNames map[string]bool,
 	externalToolNames map[string]bool,
 ) ([]tool.Tool, map[string]bool, map[string]bool) {
-	toolSets, rules, filter, exposure := a.toolActivationInputs()
+	toolSets, rules, filter, toolSetToolNameModes := a.toolActivationInputs()
 	return applyToolActivationRecords(
 		ctx,
 		inv,
@@ -328,7 +329,7 @@ func (a *LLMAgent) applyToolActivation(
 		toolSets,
 		rules,
 		filter,
-		exposure,
+		toolSetToolNameModes,
 	)
 }
 
@@ -336,14 +337,14 @@ func (a *LLMAgent) toolActivationInputs() (
 	[]tool.ToolSet,
 	[]toolActivationRule,
 	func(context.Context, tool.Tool) bool,
-	*toolSetExposure,
+	map[string]tool.ToolSetToolNameMode,
 ) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return append([]tool.ToolSet(nil), a.option.activatableToolSets...),
 		append([]toolActivationRule(nil), a.option.toolActivationRules...),
 		a.option.toolFilter,
-		a.option.toolSetExposure()
+		a.option.toolSetToolNameModes
 }
 
 func (a *LLMAgent) handleToolActivationPostToolResult(
@@ -685,7 +686,7 @@ func applyToolActivationRecords(
 	toolSets []tool.ToolSet,
 	rules []toolActivationRule,
 	filter func(context.Context, tool.Tool) bool,
-	exposure *toolSetExposure,
+	toolSetToolNameModes map[string]tool.ToolSetToolNameMode,
 ) ([]tool.Tool, map[string]bool, map[string]bool) {
 	records := mergeToolActivationRecords(
 		invocationToolActivationRecords(inv),
@@ -707,7 +708,7 @@ func applyToolActivationRecords(
 		activeSets,
 		onlyNames,
 		filter,
-		exposure,
+		toolSetToolNameModes,
 	)
 	if len(activatedTools) == 0 && len(onlyNames) == 0 {
 		return tools, userToolNames, externalToolNames
@@ -805,7 +806,7 @@ func expandActivatedTools(
 	active []tool.ToolSet,
 	only map[string]bool,
 	filter func(context.Context, tool.Tool) bool,
-	exposure *toolSetExposure,
+	toolSetToolNameModes map[string]tool.ToolSetToolNameMode,
 ) []tool.Tool {
 	out := make([]tool.Tool, 0)
 	acceptedToolNames := map[string]bool{}
@@ -819,7 +820,7 @@ func expandActivatedTools(
 			toolSet,
 			acceptedToolNames,
 			filter,
-			exposure,
+			toolSetToolNameModes,
 		)
 		if len(tools) == 0 {
 			log.DebugfContext(
@@ -852,9 +853,12 @@ func expandOneToolActivationSet(
 	toolSet tool.ToolSet,
 	acceptedToolNames map[string]bool,
 	filter func(context.Context, tool.Tool) bool,
-	exposure *toolSetExposure,
+	toolSetToolNameModes map[string]tool.ToolSetToolNameMode,
 ) []tool.Tool {
-	namedToolSet := exposure.namedToolSet(toolSet)
+	namedToolSet := itool.NewNamedToolSetWithMode(
+		toolSet,
+		toolSetToolNameMode(toolSetToolNameModes, toolSet),
+	)
 	tools := namedToolSet.Tools(ctx)
 	if len(tools) == 0 {
 		return nil

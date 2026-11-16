@@ -156,23 +156,25 @@ function in `tools/main.go`.
 | Tool | Registration | Exposure |
 | --- | --- | --- |
 | `current_time` | `WithTools` | Eager |
-| `shipping_eta` | `WithTools` | Deferred by `WithDeferredTools` |
+| `shipping_eta` | `WithTools` | Deferred by `deferred.Tool` |
 | `crm` ToolSet: `lookup_customer`, `list_orders` | `WithToolSets` | Only `list_orders` deferred |
 | `billing` ToolSet: `lookup_invoice`, `list_invoices` | `WithToolSets` | Whole ToolSet deferred |
 
 The program only configures the model, the tools, and the deferral policy:
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
 search := responses.WithHostedToolSearch() // -mode server
 // search := responses.WithClientToolSearch(keywordSearch) // -mode client
 agent := llmagent.New(
     "responses-tool-search-agent",
     llmagent.WithModel(responses.New(modelName, search)),
-    llmagent.WithTools([]tool.Tool{currentTimeTool(), shippingETATool()}),
-    llmagent.WithToolSets([]tool.ToolSet{crmToolSet(), billingToolSet()}),
-    llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
-    llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
-    llmagent.WithDeferredToolSet("billing", nil),
+    llmagent.WithTools([]tool.Tool{currentTimeTool(), deferred.Tool(shippingETATool(), nil)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("list_orders")),
+        deferred.ToolSet(billingToolSet(), nil),
+    }),
 )
 ```
 

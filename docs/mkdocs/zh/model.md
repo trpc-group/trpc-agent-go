@@ -2307,6 +2307,8 @@ go run ./tools -streaming=false
 加载由 Agent 决定。延迟加载的工具仍由 Agent 注册、过滤和执行，变化的只是模型一开始能看到的内容。
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
 // 托管搜索：由 API 在请求中声明的延迟工具里搜索。
 llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 
@@ -2319,19 +2321,22 @@ llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
-    llmagent.WithTools([]tool.Tool{currentTime, shippingETA}),
-    llmagent.WithToolSets([]tool.ToolSet{crm, billing}),
-    llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
-    llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
-    llmagent.WithDeferredToolSet("billing", nil),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA, nil)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crm, tool.NewIncludeToolNamesFilter("list_orders")),
+        deferred.ToolSet(billing, nil),
+    }),
 )
 ```
 
-- `WithDeferredTools` 作用于 `WithTools` 注册的工具，filter 为 nil 时全部延迟。
-- `WithDeferredToolSet` 作用于指定 ToolSet 的成员，按成员原始名称选择；filter 为 nil 时延迟
-  整个 ToolSet。该策略同样适用于可激活 ToolSet，以及从 MCP 刷新得到的成员。
-- 在各自的作用范围内，显式策略取代工具自身的 `tool.DeferredTool` 偏好；不在任何范围内的工具
-  保留自身偏好。Agent 和单次运行的工具过滤器仍然生效。
+- `deferred.Tool` 和 `deferred.ToolSet` 包装工具后，分别通过 `WithTools`、`WithToolSets` 或
+  `WithActivatableToolSets` 注册。filter 为 nil 时全部延迟；否则它在请求时接收原始工具，返回
+  true 表示延迟，false 表示立即暴露。可以按成员原始名称选择，策略也适用于刷新后的成员，包括
+  MCP 工具。
+- 包装策略会覆盖工具自身的 `tool.DeferredTool` 偏好；未包装的工具保留自身偏好。Agent 和单次
+  运行的工具过滤器仍然生效。关闭包装后的 ToolSet 会关闭原 ToolSet，包装本身不会创建新连接。
+- Agent 和单次运行的过滤器看到的是注册时的包装器，仍可使用 `Declaration()` 和
+  `tool.MetadataOf`；需要断言具体类型时，可通过 `Original() tool.Tool` 逐层取得原工具。
 - 含有延迟成员的 ToolSet 会以同名 namespace 发送，描述取自 `tool.ToolSetDescriber`，MCP ToolSet
   使用 `ConnectionConfig.Description`。模型返回的调用会映射回已注册的工具，不同 ToolSet 中的同名
   成员不会互相执行。
@@ -2341,6 +2346,8 @@ agent := llmagent.New(
   运行时完成它。想让模型在没有这些工具的情况下继续，可以返回空结果。
 - Graph 的 LLM 节点遇到客户端搜索会报错。没有延迟工具的请求保持不变，Chat Completions 会忽略
   延迟策略。
+- `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索
+  同时使用。
 
 [`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
 中的 `go run ./toolsearch -mode server` 和 `go run ./toolsearch -mode client` 分别演示两种模式。
@@ -2350,7 +2357,7 @@ agent := llmagent.New(
 ### 说明
 
 - 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
-- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本；使用工具搜索还需要包含 LLMAgent 延迟加载选项、`model.ProviderActionCompleter`、`model.ProviderDataRequestProjector` 和 `tool.ToolSetDescriber` 的根模块版本，并且该版本要先于使用它们的适配器版本发布。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
+- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本；使用工具搜索还需要 `model.ProviderActionCompleter`、`model.ProviderDataRequestProjector` 和 `tool.ToolSetDescriber`，以上示例还使用了 `tool/deferred`。所需的根模块版本要先于适配器版本发布。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
 - 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、工具搜索以外的托管工具、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。

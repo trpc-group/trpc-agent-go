@@ -2364,6 +2364,8 @@ which tools are deferred. Deferred tools stay registered, filtered, and
 executed by the agent; only what the model sees up front changes.
 
 ```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
 // Hosted search: the API searches the deferred definitions in the request.
 llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 
@@ -2376,22 +2378,26 @@ llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
-    llmagent.WithTools([]tool.Tool{currentTime, shippingETA}),
-    llmagent.WithToolSets([]tool.ToolSet{crm, billing}),
-    llmagent.WithDeferredTools(tool.NewIncludeToolNamesFilter("shipping_eta")),
-    llmagent.WithDeferredToolSet("crm", tool.NewIncludeToolNamesFilter("list_orders")),
-    llmagent.WithDeferredToolSet("billing", nil),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA, nil)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crm, tool.NewIncludeToolNamesFilter("list_orders")),
+        deferred.ToolSet(billing, nil),
+    }),
 )
 ```
 
-- `WithDeferredTools` covers tools registered with `WithTools`. A nil filter
-  defers all of them.
-- `WithDeferredToolSet` covers members of one ToolSet, selected by their
-  original names. A nil filter defers the whole ToolSet. The policy also
-  applies to activatable ToolSets and to members refreshed from MCP.
-- Within each scope the explicit policy replaces the tool's own
-  `tool.DeferredTool` preference. Tools outside every scope keep that
-  preference. Agent and run tool filters still apply.
+- `deferred.Tool` and `deferred.ToolSet` wrap tools for registration with
+  `WithTools`, `WithToolSets`, or `WithActivatableToolSets`. A nil filter
+  defers all wrapped tools. Otherwise the filter receives the original tool
+  at request time: true defers it and false keeps it eager. It can select
+  ToolSet members by their original names and applies to refreshed members,
+  including MCP tools.
+- The wrapper overrides the wrapped tool's own `tool.DeferredTool` preference;
+  unwrapped tools keep theirs. Agent and run tool filters still apply. Closing
+  a wrapped ToolSet closes the original; wrapping opens no new connection.
+- Agent and run filters see the registered wrapper. `Declaration()` and
+  `tool.MetadataOf` work as usual; filters that need a concrete type can follow
+  `Original() tool.Tool` to unwrap the original, more than once if needed.
 - A ToolSet with deferred members is sent as a namespace named after the
   ToolSet. Its description comes from `tool.ToolSetDescriber`; MCP ToolSets
   use `ConnectionConfig.Description`. Calls are mapped back to the registered
@@ -2404,6 +2410,8 @@ agent := llmagent.New(
   the model continue without the tools.
 - Graph LLM nodes report an error for a client search. Requests without
   deferred tools are unchanged, and Chat Completions ignores deferral.
+- `plugin/toolsearch` has its own deferred-tool registration and does not use
+  `tool.DeferredTool`; do not combine it with native tool search.
 
 `go run ./toolsearch -mode server` and `go run ./toolsearch -mode client` in
 [`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
@@ -2413,7 +2421,7 @@ the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model
 ### Notes
 
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
-- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`; tool search also needs the root release that adds the LLMAgent deferral options, `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`, and `tool.ToolSetDescriber`, published before the adapter release that uses them. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
+- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`; tool search also needs `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`, and `tool.ToolSetDescriber`, and the examples use `tool/deferred`. Publish the required root release before the adapter release. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
 - Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools other than tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
