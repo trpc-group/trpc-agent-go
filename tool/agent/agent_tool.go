@@ -769,29 +769,38 @@ func (at *Tool) wrapWithCallSemantics(
 	return out
 }
 
+// ensureInvocationEventFields fills empty event fields from inv. It only
+// writes a field when inv has a non-empty value for it, so calling it again on
+// an event that was already filled does not write at all. The streaming path
+// relies on this: wrapWithCallSemantics fills an event, then hands the same
+// pointer downstream while still reading it (pending visible completion and
+// session mirroring), and forwardSubInvocationStream calls this again on it.
 func ensureInvocationEventFields(inv *agent.Invocation, evt *event.Event) {
 	if inv == nil || evt == nil {
 		return
 	}
-	if evt.RequestID == "" {
+	if evt.RequestID == "" && inv.RunOptions.RequestID != "" {
 		evt.RequestID = inv.RunOptions.RequestID
 	}
-	if evt.InvocationID == "" {
+	if evt.InvocationID == "" && inv.InvocationID != "" {
 		evt.InvocationID = inv.InvocationID
 	}
 	if evt.ParentInvocationID == "" {
-		if parent := inv.GetParentInvocation(); parent != nil {
+		if parent := inv.GetParentInvocation(); parent != nil &&
+			parent.InvocationID != "" {
 			evt.ParentInvocationID = parent.InvocationID
 		}
 	}
 	if evt.ParentMetadata == nil && inv.ParentMetadata != nil {
 		evt.ParentMetadata = inv.ParentMetadata
 	}
-	if evt.Branch == "" {
+	if evt.Branch == "" && inv.Branch != "" {
 		evt.Branch = inv.Branch
 	}
 	if evt.FilterKey == "" {
-		evt.FilterKey = inv.GetEventFilterKey()
+		if filterKey := inv.GetEventFilterKey(); filterKey != "" {
+			evt.FilterKey = filterKey
+		}
 	}
 }
 

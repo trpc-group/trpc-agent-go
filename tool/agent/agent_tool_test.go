@@ -5962,3 +5962,30 @@ func TestTool_Call_DoesNotInheritParentMetadataFromParentInvocation(t *testing.T
 			"the AgentTool call is itself the new parent edge, and absent a toolCallId in ctx, "+
 			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }
+
+func TestEnsureInvocationEventFields_RefillDoesNotWrite(t *testing.T) {
+	// No request ID, branch or filter key: those fields stay empty after the
+	// first fill, which is the case where a refill used to write "" again.
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-1"))
+	evt := event.New("", "child")
+	ensureInvocationEventFields(inv, evt)
+	require.Equal(t, "inv-1", evt.InvocationID)
+	require.Empty(t, evt.RequestID)
+	require.Empty(t, evt.Branch)
+
+	// The streaming path refills an event that another goroutine is still
+	// reading, so a refill must not write; -race reports it otherwise.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_ = evt.RequestID + evt.InvocationID + evt.Branch + evt.FilterKey
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		ensureInvocationEventFields(inv, evt)
+	}
+	wg.Wait()
+	require.Equal(t, "inv-1", evt.InvocationID)
+}
