@@ -520,8 +520,10 @@ optionally alongside text.
 LLMAgent's default tool-call flow and Graph ToolsNode generate the tool result
 message automatically; no `ToolResultMessages` callback is required.
 
-The model adapter and provider must support media in tool results. Chat
-Completions adapters do not automatically move images into a user message.
+The [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
+supports images in tool results; the adapter version and model provider must
+also support this capability. Chat Completions adapters do not automatically
+move images into a user message.
 
 The following tool returns text and an image by ID. The application supplies
 `loadPNG`, which returns raw PNG bytes.
@@ -567,9 +569,11 @@ Usage notes:
   `[]model.ContentPart`, and `*model.ToolResultContent` still use JSON handling.
   A nil or empty slice of this type produces an empty tool result; it does not
   suppress the response.
-- **Image data:** use raw bytes in `Image.Data` without Base64 encoding, or an
-  image address in `Image.URL`. Do not modify the returned content or its byte
-  buffers while the framework is processing the result.
+- **Image data:** put raw image file bytes in `Image.Data` and their format
+  (such as `"png"`) in `Image.Format`. The model adapter performs any required
+  Base64 encoding when building the request. Use `Image.URL` for image addresses.
+  Do not modify the returned content or its byte buffers while the framework is
+  processing the result.
 - **Content order:** text and media parts retain their order. No separators are
   added between text parts.
 - **Custom processing:** an explicitly configured result formatter in LLMAgent

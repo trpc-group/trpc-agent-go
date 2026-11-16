@@ -501,8 +501,9 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 LLMAgent 的默认工具调用流程和 Graph ToolsNode 会自动生成工具结果消息，无需配置
 `ToolResultMessages` 回调。
 
-使用前确认模型适配器和服务端支持工具结果中的媒体内容。Chat Completions 适配器
-不会自动将图片转为 user message。
+[Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
+支持在工具结果中返回图片，需配合支持此能力的适配器版本和模型服务。
+Chat Completions 适配器不会自动将图片转为 user message。
 
 下面的工具按图片 ID 返回文字和图片；`loadPNG` 由业务实现，返回 PNG 原始字节。
 
@@ -545,7 +546,8 @@ readImageTool := function.NewFunctionTool(
 - **返回类型**：按值返回 `model.ToolResultContent`。`[]byte`、普通
   `[]model.ContentPart` 和 `*model.ToolResultContent` 仍按 JSON 处理。
   该类型的 nil 或空切片会生成空工具结果，不会省略回执。
-- **图片数据**：`Image.Data` 使用原始字节，无需自行 Base64 编码；图片地址使用
+- **图片数据**：`Image.Data` 接收图片文件的原始字节，`Image.Format` 指定格式
+  （如 `"png"`）；模型适配器在构造请求时完成所需的 Base64 编码。图片地址使用
   `Image.URL`。框架处理结果期间，请勿修改返回的内容及其字节缓冲区。
 - **内容顺序**：文字和媒体块保留返回顺序，多个文本块之间不自动插入分隔符。
 - **自定义处理**：LLMAgent 中已配置的 result formatter 会将结果转为文本；
