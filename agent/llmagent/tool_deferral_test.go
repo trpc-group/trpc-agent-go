@@ -35,7 +35,7 @@ func (metadataDeferralDummyTool) ToolMetadata() tool.ToolMetadata {
 
 func TestLLMAgent_DeferredToolsKeepMetadataForFilters(t *testing.T) {
 	original := metadataDeferralDummyTool{dummyTool{decl: &tool.Declaration{Name: "lookup"}}}
-	agt := New("deferral-agent", WithTools([]tool.Tool{deferred.Tool(original, nil)}),
+	agt := New("deferral-agent", WithTools([]tool.Tool{deferred.Tool(original)}),
 		WithToolFilter(func(_ context.Context, tl tool.Tool) bool {
 			return tool.MetadataOf(tl).ReadOnly
 		}))
@@ -75,19 +75,19 @@ func TestLLMAgent_DeferredToolsAndToolSets(t *testing.T) {
 	agt := New("deferral-agent",
 		WithTools([]tool.Tool{
 			deferralDummyTool("weather"),
-			deferred.Tool(deferralDummyTool("eta"), nil),
+			deferred.Tool(deferralDummyTool("eta")),
 			deferred.Tool(selfDeferredDummyTool{dummyTool{decl: &tool.Declaration{Name: "self"}}},
-				tool.NewIncludeToolNamesFilter("other")),
+				deferred.WithFilter(tool.NewIncludeToolNamesFilter("other"))),
 		}),
 		WithToolSets([]tool.ToolSet{
 			deferred.ToolSet(&dynamicToolSet{name: "crm", tools: []tool.Tool{
 				deferralDummyTool("lookup"), deferralDummyTool("orders"),
-			}}, func(_ context.Context, tl tool.Tool) bool {
+			}}, deferred.WithFilter(func(_ context.Context, tl tool.Tool) bool {
 				seen = append(seen, tl.Declaration().Name)
 				return tl.Declaration().Name == "orders"
-			}),
+			})),
 			&dynamicToolSet{name: "billing", tools: []tool.Tool{deferralDummyTool("lookup")}},
-			deferred.ToolSet(&dynamicToolSet{name: "docs", tools: []tool.Tool{deferralDummyTool("read")}}, nil),
+			deferred.ToolSet(&dynamicToolSet{name: "docs", tools: []tool.Tool{deferralDummyTool("read")}}),
 		}),
 		WithToolSetToolNameMode("docs", tool.ToolSetToolNameModeOriginal),
 	)
@@ -118,8 +118,8 @@ func TestLLMAgent_SharedToolsHaveAgentSpecificDeferral(t *testing.T) {
 		WithRefreshToolSetsOnRun(true),
 	)
 	lazy := New("lazy",
-		WithTools([]tool.Tool{deferred.Tool(sharedTool, nil)}),
-		WithToolSets([]tool.ToolSet{deferred.ToolSet(sharedSet, nil)}),
+		WithTools([]tool.Tool{deferred.Tool(sharedTool)}),
+		WithToolSets([]tool.ToolSet{deferred.ToolSet(sharedSet)}),
 		WithRefreshToolSetsOnRun(true),
 	)
 	require.Equal(t, map[string]bool{"weather": true, "crm_lookup": true}, deferredByName(lazy.Tools()))
@@ -137,7 +137,7 @@ func TestLLMAgent_DeferredToolSetFollowsRefreshedMembers(t *testing.T) {
 	}}
 	agt := New("deferral-agent",
 		WithModel(mockModel),
-		WithToolSets([]tool.ToolSet{deferred.ToolSet(set, tool.NewExcludeToolNamesFilter("list"))}),
+		WithToolSets([]tool.ToolSet{deferred.ToolSet(set, deferred.WithFilter(tool.NewExcludeToolNamesFilter("list")))}),
 		WithRefreshToolSetsOnRun(true),
 	)
 	require.Equal(t, map[string]bool{"mcp_list": false}, deferredByName(agt.Tools()))
@@ -166,7 +166,7 @@ func TestLLMAgent_DeferredToolSetFollowsRefreshedMembers(t *testing.T) {
 	require.True(t, tool.ShouldDefer(context.Background(), requests[1].Tools["mcp_export"]))
 
 	filtered := New("deferral-agent",
-		WithToolSets([]tool.ToolSet{deferred.ToolSet(set, nil)}),
+		WithToolSets([]tool.ToolSet{deferred.ToolSet(set)}),
 		WithRefreshToolSetsOnRun(true),
 		WithToolFilter(tool.NewExcludeToolNamesFilter("mcp_export")),
 	)
@@ -186,7 +186,7 @@ func TestLLMAgent_DeferredActivatableToolSet(t *testing.T) {
 		WithModel(mockModel),
 		WithSkills(repo),
 		WithActivatableToolSets([]tool.ToolSet{
-			deferred.ToolSet(set, tool.NewIncludeToolNamesFilter("issues")),
+			deferred.ToolSet(set, deferred.WithFilter(tool.NewIncludeToolNamesFilter("issues"))),
 		}),
 		WithToolActivationOnSkillLoad("research", []string{"github"}),
 	)
@@ -218,7 +218,7 @@ func TestLLMAgent_DeferredAdditionalTool(t *testing.T) {
 		Session:      session.NewSession("app", "user", "session"),
 		Message:      model.NewUserMessage("use extra tool"),
 		RunOptions: agent.RunOptions{
-			AdditionalTools: []tool.Tool{deferred.Tool(deferralDummyTool("runtime"), nil)},
+			AdditionalTools: []tool.Tool{deferred.Tool(deferralDummyTool("runtime"))},
 		},
 	}
 	events, err := agt.Run(context.Background(), inv)
@@ -236,6 +236,6 @@ func TestLLMAgent_DeferredAdditionalTool(t *testing.T) {
 func TestLLMAgent_AddDeferredToolSet(t *testing.T) {
 	agt := New("agent")
 	set := &dynamicToolSet{name: "runtime", tools: []tool.Tool{deferralDummyTool("lookup")}}
-	agt.AddToolSet(deferred.ToolSet(set, nil))
+	agt.AddToolSet(deferred.ToolSet(set))
 	require.Equal(t, map[string]bool{"runtime_lookup": true}, deferredByName(agt.Tools()))
 }

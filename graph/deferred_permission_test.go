@@ -66,10 +66,10 @@ func TestDeferredToolPermissionIsEnforcedByToolsNode(t *testing.T) {
 			original := &deferredPermissionTestTool{}
 			var node NodeFunc
 			if tc.inToolSet {
-				set := deferred.ToolSet(&deferredPermissionTestToolSet{member: original}, nil)
+				set := deferred.ToolSet(&deferredPermissionTestToolSet{member: original})
 				node = NewToolsNodeFunc(nil, WithToolSets([]tool.ToolSet{set}))
 			} else {
-				node = NewToolsNodeFunc(map[string]tool.Tool{tc.toolName: deferred.Tool(original, nil)})
+				node = NewToolsNodeFunc(map[string]tool.Tool{tc.toolName: deferred.Tool(original)})
 			}
 
 			const callID = "call-delete"

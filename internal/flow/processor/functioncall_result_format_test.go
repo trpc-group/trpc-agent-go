@@ -949,7 +949,7 @@ func TestExecuteToolCall_ResultFormatterSurvivesFrameworkWrappers(t *testing.T) 
 	}
 
 	t.Run("deferred tool", func(t *testing.T) {
-		wrapped := deferred.Tool(newTool(), nil)
+		wrapped := deferred.Tool(newTool())
 		choices := requireResultFormatToolCall(t,
 			NewFunctionCallResponseProcessor(false, nil), "bash", wrapped)
 		require.Len(t, choices, 1)
@@ -959,7 +959,7 @@ func TestExecuteToolCall_ResultFormatterSurvivesFrameworkWrappers(t *testing.T) 
 	t.Run("deferred tool set", func(t *testing.T) {
 		wrapped := itool.NewNamedToolSet(deferred.ToolSet(resultFormatToolSet{
 			name: "shell", tool: newTool(),
-		}, nil)).Tools(context.Background())[0]
+		})).Tools(context.Background())[0]
 		choices := requireResultFormatToolCall(t,
 			NewFunctionCallResponseProcessor(false, nil), "shell_bash", wrapped)
 		require.Len(t, choices, 1)

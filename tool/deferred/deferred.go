@@ -20,21 +20,47 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// Tool returns a wrapper whose ShouldDefer decision is given by filter. A nil
-// filter always defers the tool; a non-nil filter replaces the tool's own
-// preference, with false keeping it eager. The filter receives the original
-// tool and the context passed to ShouldDefer, and may be called concurrently.
+// Option configures deferred loading for Tool or ToolSet. Nil options are ignored.
+type Option func(*options)
+
+type options struct {
+	filter tool.FilterFunc
+}
+
+// WithFilter selects which tools to defer, replacing their own preferences.
+// Returning true defers the tool; returning false keeps it immediately available.
+// The filter does not remove tools. A nil filter defers every tool. If specified
+// more than once, the last filter wins.
+//
+// The filter receives the original tool and the context passed to ShouldDefer,
+// and may be called concurrently.
+func WithFilter(filter tool.FilterFunc) Option {
+	return func(o *options) { o.filter = filter }
+}
+
+func newDeferral(opts []Option) *itool.Deferral {
+	var o options
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return &itool.Deferral{Filter: o.filter}
+}
+
+// Tool returns a wrapper that marks t as deferred by default. Use WithFilter
+// to change the decision.
 //
 // The wrapper preserves the declaration, callable and streaming capabilities,
 // and framework execution semantics. It does not modify or copy the underlying
 // tool. A nil tool returns nil.
-func Tool(t tool.Tool, filter tool.FilterFunc) tool.Tool {
-	return itool.WithDeferral(t, &itool.Deferral{Filter: filter})
+func Tool(t tool.Tool, opts ...Option) tool.Tool {
+	return itool.WithDeferral(t, newDeferral(opts))
 }
 
-// ToolSet returns a wrapper that applies filter to each member's ShouldDefer
-// decision, as described by Tool. A nil filter defers every member. Filters see
-// original member declarations, before the Agent qualifies their names.
+// ToolSet returns a wrapper that marks all members as deferred by default.
+// Use WithFilter to select deferred members by their original declarations,
+// before the Agent qualifies their names.
 //
 // Each Tools call fetches the current members from the original ToolSet and
 // wraps them without changing its slice or members. This also covers members
@@ -42,16 +68,16 @@ func Tool(t tool.Tool, filter tool.FilterFunc) tool.Tool {
 // ToolSet's name and optional description. Close delegates to the original
 // ToolSet; the wrapper creates no resources or independent lifetime. A nil
 // ToolSet returns nil.
-func ToolSet(ts tool.ToolSet, filter tool.FilterFunc) tool.ToolSet {
+func ToolSet(ts tool.ToolSet, opts ...Option) tool.ToolSet {
 	if ts == nil {
 		return nil
 	}
-	return &deferredToolSet{original: ts, filter: filter}
+	return &deferredToolSet{original: ts, deferral: newDeferral(opts)}
 }
 
 type deferredToolSet struct {
 	original tool.ToolSet
-	filter   tool.FilterFunc
+	deferral *itool.Deferral
 }
 
 func (s *deferredToolSet) Tools(ctx context.Context) []tool.Tool {
@@ -61,7 +87,7 @@ func (s *deferredToolSet) Tools(ctx context.Context) []tool.Tool {
 	}
 	wrapped := make([]tool.Tool, len(members))
 	for i, member := range members {
-		wrapped[i] = Tool(member, s.filter)
+		wrapped[i] = itool.WithDeferral(member, s.deferral)
 	}
 	return wrapped
 }

@@ -64,7 +64,7 @@ func TestDeferredAgentToolGraphInterruptResume(t *testing.T) {
 		AddField("result", graph.StateField{Type: reflect.TypeOf("")})
 	parentGraph := graph.NewStateGraph(parentSchema)
 	parentGraph.AddToolsNode(toolsNode, map[string]tool.Tool{
-		childName: deferred.Tool(agenttool.NewTool(child), nil),
+		childName: deferred.Tool(agenttool.NewTool(child)),
 	})
 	parentGraph.AddNode("after", func(_ context.Context, state graph.State) (any, error) {
 		afterRuns++
@@ -186,7 +186,7 @@ func (t *deferredUserWrapper) Call(context.Context, []byte) (any, error) {
 func TestDeferredToolKeepsUserWrapperCall(t *testing.T) {
 	inner := &deferredRuntimeTarget{}
 	outer := &deferredUserWrapper{original: inner}
-	node := graph.NewToolsNodeFunc(map[string]tool.Tool{"outer": deferred.Tool(outer, nil)})
+	node := graph.NewToolsNodeFunc(map[string]tool.Tool{"outer": deferred.Tool(outer)})
 	state := graph.State{
 		graph.StateKeyCurrentNodeID: "tools",
 		graph.StateKeyMessages: []model.Message{{

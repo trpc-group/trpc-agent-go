@@ -65,9 +65,9 @@ type ToolSearchRequest struct {
 // ToolSearchCandidate describes one deferred tool that a client-executed tool
 // search can load.
 type ToolSearchCandidate struct {
-	// ID identifies the tool in ToolSearchResult.ToolIDs. It is the name under
-	// which the agent registered and executes the tool, so it is unique in
-	// the request even when tools in different namespaces share a Name.
+	// ID selects this candidate in ToolSearchResult.ToolIDs. It is the tool's
+	// key in the current request's registry. Return it unchanged rather than
+	// constructing or parsing it from Namespace and Name.
 	ID string
 	// Namespace is the name of the ToolSet that provides the tool, or empty
 	// for a standalone tool.
@@ -86,9 +86,9 @@ type ToolSearchCandidate struct {
 
 // ToolSearchResult lists the tools loaded by one client-executed tool search.
 type ToolSearchResult struct {
-	// ToolIDs selects candidates by ToolSearchCandidate.ID. Unknown or
-	// duplicate IDs are errors. Loaded tools are grouped by namespace in the
-	// order of their first selection.
+	// ToolIDs selects candidates by ToolSearchCandidate.ID from the current
+	// request. Unknown or duplicate IDs are errors. Loaded tools are grouped
+	// by namespace in the order of their first selection.
 	ToolIDs []string
 }
 

@@ -109,21 +109,24 @@ llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
-    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA, nil)}),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
     llmagent.WithToolSets([]tool.ToolSet{
         // Defer one CRM member; the others stay visible up front.
-        deferred.ToolSet(crm, tool.NewIncludeToolNamesFilter("list_orders")),
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
         // Defer the whole billing ToolSet.
-        deferred.ToolSet(billing, nil),
+        deferred.ToolSet(billing),
     }),
 )
 ```
 
-The filter receives the original tool at request time; for ToolSets, that is
-the original member before the framework adds a name prefix. It returns true to
+With no options, every wrapped tool is deferred. `deferred.WithFilter` selects
+which tools to defer. The filter receives the original tool at request time;
+for ToolSets, that is the original member before the framework adds a name
+prefix. It returns true to
 defer the tool and false to keep it eager, overriding the wrapped tool's own
-`tool.DeferredTool` preference in either case. A nil filter defers every wrapped
-tool. The same ToolSet wrapper can be registered with
+`tool.DeferredTool` preference in either case. `deferred.WithFilter(nil)` restores
+the default of deferring every wrapped tool. If set more than once, the last
+filter wins. The same ToolSet wrapper can be registered with
 `WithActivatableToolSets`, and it applies the filter to members refreshed from
 the original ToolSet, including MCP members. Wrapping does not open a new
 connection; closing the wrapped ToolSet closes the original. A nil original
@@ -144,11 +147,48 @@ Without one, the description is `Tools from the <name> tool set.` ToolSets
 without deferred members, and standalone tools, keep their ordinary top-level
 function names.
 
+For a custom ToolSet, keep the description in the instance and implement the
+optional `Description()` method. The following application-defined type can
+be used for the `billing` value registered above; `lookupInvoice` and
+`listInvoices` are existing `tool.Tool` values:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// In the agent setup, before registering the ToolSet:
+billing := staticToolSet{
+    name:        "billing",
+    description: "Look up invoices, payments, and refunds.",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+The deferred wrapper forwards `Description()`, and the adapter uses its value
+as `namespace.description` and `ToolSearchCandidate.NamespaceDescription`.
+
 A function call returned with a namespace is mapped back to the tool that the
 agent registered for that member, for example `crm_lookup` for `lookup` in
-`crm`, so members with the same name in different namespaces never run each
-other. The native item keeps its namespace for the next request. An unknown
-namespaced call becomes a not-found tool call named `<namespace>.<name>` and
+`crm`. The mapping uses the stored namespace and member name, without parsing
+the registered name. Registered names must remain unique across ToolSets and
+standalone tools; namespace grouping does not resolve collisions in the
+agent's name-keyed tool registry. The native item keeps its namespace for the
+next request. An unknown namespaced call becomes a not-found tool call named
+`<namespace>.<name>` and
 never falls back to a tool with the bare name. A namespace name that equals a
 top-level function name fails the request. After an `AfterModel` payload edit,
 the flow uses `ProjectProviderDataWithRequest` to resolve namespaced calls
@@ -165,9 +205,11 @@ The handler receives a `ToolSearchRequest`:
   searches in the history have not loaded, sorted by `ID`.
 
 Candidates come from the request tools, so agent and run tool filters apply.
-`ID` is the registered tool name and is unique even when members of different
-namespaces share a `Name`. `Namespace`, `NamespaceDescription`, `Name`, and
-`Declaration` describe what the model will see.
+`ID` is the candidate's key in the current request's tool registry, currently
+the registered tool name. Select candidates using their metadata and return
+`candidate.ID` unchanged; do not construct or parse it from namespace and name.
+`Namespace`, `NamespaceDescription`, `Name`, and `Declaration` describe what
+the model will see.
 
 `ToolSearchResult.ToolIDs` selects candidates; unknown or duplicate IDs are
 errors. A nil or empty result loads nothing, and the model sees a search that

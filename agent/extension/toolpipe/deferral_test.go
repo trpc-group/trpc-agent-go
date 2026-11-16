@@ -44,7 +44,7 @@ func TestToolPipePreservesDeferral(t *testing.T) {
 	filter := tool.NewIncludeToolNamesFilter("deferred")
 	req := &model.Request{Tools: make(map[string]tool.Tool)}
 	for _, tl := range []tool.Tool{eager, marked} {
-		req.Tools[tl.Declaration().Name] = deferred.Tool(tl, filter)
+		req.Tools[tl.Declaration().Name] = deferred.Tool(tl, deferred.WithFilter(filter))
 	}
 	tp := New(WithToolScope(func(tool.Tool) bool { return true }))
 	_, err := tp.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
@@ -65,7 +65,7 @@ func TestToolPipePreservesDeferredSkipSummarization(t *testing.T) {
 				function.WithName("lookup"),
 				function.WithSkipSummarization(skip),
 			)
-			marked := deferred.Tool(original, nil)
+			marked := deferred.Tool(original)
 			req := &model.Request{Tools: map[string]tool.Tool{"lookup": marked}}
 			tp := New(WithToolScope(func(tool.Tool) bool { return true }))
 			_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
@@ -89,7 +89,7 @@ func TestToolPipePreservesToolSetIdentity(t *testing.T) {
 	}}
 	for _, mode := range []tool.ToolSetToolNameMode{tool.ToolSetToolNameModeQualified, tool.ToolSetToolNameModeOriginal} {
 		members := itool.NewNamedToolSetWithMode(
-			deferred.ToolSet(set, tool.NewIncludeToolNamesFilter("orders")), mode).Tools(ctx)
+			deferred.ToolSet(set, deferred.WithFilter(tool.NewIncludeToolNamesFilter("orders"))), mode).Tools(ctx)
 		for _, member := range members {
 			tp := New(WithToolScope(func(tool.Tool) bool { return true }))
 			name := member.Declaration().Name
@@ -115,7 +115,7 @@ func TestToolPipePreservesDeferredFrameworkTools(t *testing.T) {
 		"agent streaming":        &mockFrameworkTool{pipeTestTool("state")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			marked := deferred.Tool(original, nil)
+			marked := deferred.Tool(original)
 			req := &model.Request{Tools: map[string]tool.Tool{"state": marked}}
 			tp := New(WithToolScope(func(tool.Tool) bool { return true }))
 			_, err := tp.beforeModel(context.Background(), &model.BeforeModelArgs{Request: req})

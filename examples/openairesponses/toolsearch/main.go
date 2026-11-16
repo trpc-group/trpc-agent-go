@@ -61,11 +61,11 @@ func main() {
 		// stay registered and run like any other tool once they are loaded.
 		llmagent.WithTools([]tool.Tool{
 			currentTimeTool(),
-			deferred.Tool(shippingETATool(), nil),
+			deferred.Tool(shippingETATool()),
 		}),
 		llmagent.WithToolSets([]tool.ToolSet{
-			deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("list_orders")),
-			deferred.ToolSet(billingToolSet(), nil),
+			deferred.ToolSet(crmToolSet(), deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+			deferred.ToolSet(billingToolSet()),
 		}),
 	)
 	// The in-memory session lives only until this process exits.

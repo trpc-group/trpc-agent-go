@@ -2321,33 +2321,67 @@ llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
-    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA, nil)}),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
     llmagent.WithToolSets([]tool.ToolSet{
-        deferred.ToolSet(crm, tool.NewIncludeToolNamesFilter("list_orders")),
-        deferred.ToolSet(billing, nil),
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billing),
     }),
 )
 ```
 
 - `deferred.Tool` 和 `deferred.ToolSet` 包装工具后，分别通过 `WithTools`、`WithToolSets` 或
-  `WithActivatableToolSets` 注册。filter 为 nil 时全部延迟；否则它在请求时接收原始工具，返回
-  true 表示延迟，false 表示立即暴露。可以按成员原始名称选择，策略也适用于刷新后的成员，包括
-  MCP 工具。
+  `WithActivatableToolSets` 注册。不传选项时全部延迟；需要选择成员时使用 `deferred.WithFilter`。
+  filter 在请求时接收原始工具，返回 true 表示延迟，false 表示立即暴露。可以按成员原始名称选择，
+  策略也适用于刷新后的成员，包括 MCP 工具。`WithFilter(nil)` 恢复全部延迟，多次设置时以最后一次为准。
 - 包装策略会覆盖工具自身的 `tool.DeferredTool` 偏好；未包装的工具保留自身偏好。Agent 和单次
   运行的工具过滤器仍然生效。关闭包装后的 ToolSet 会关闭原 ToolSet，包装本身不会创建新连接。
 - Agent 和单次运行的过滤器看到的是注册时的包装器，仍可使用 `Declaration()` 和
   `tool.MetadataOf`；需要断言具体类型时，可通过 `Original() tool.Tool` 逐层取得原工具。
 - 含有延迟成员的 ToolSet 会以同名 namespace 发送，描述取自 `tool.ToolSetDescriber`，MCP ToolSet
-  使用 `ConnectionConfig.Description`。模型返回的调用会映射回已注册的工具，不同 ToolSet 中的同名
-  成员不会互相执行。
+  使用 `ConnectionConfig.Description`。模型返回的调用通过保存的 namespace 和成员名称映射回已注册
+  的工具，不通过拆分注册名确定身份。执行注册名仍需在当前请求中唯一；namespace 分组不会解决注册目录中的重名。
 - 客户端模式下，发起搜索的响应不是最终响应。`LLMAgent` 会调用 handler，并在下一次模型调用前把
-  `tool_search_output` 作为工具消息保存。已加载的工具定义保留在历史中。
+  `tool_search_output` 作为工具消息保存。handler 从 `req.Candidates` 中选择候选，直接将其 `ID` 放入
+  `ToolSearchResult.ToolIDs`，不需要自行拼接或解析 ID。已加载的工具定义保留在历史中。
 - handler 返回错误会结束本次运行，该搜索保持未应答状态，直到某次以 `agent.WithResume(true)`
   运行时完成它。想让模型在没有这些工具的情况下继续，可以返回空结果。
 - Graph 的 LLM 节点遇到客户端搜索会报错。没有延迟工具的请求保持不变，Chat Completions 会忽略
   延迟策略。
 - `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索
   同时使用。
+
+非 MCP 的自定义 ToolSet 可以把描述作为实例字段，并实现可选的 `Description()` 方法。下面是业务
+自己定义的类型；`lookupInvoice` 和 `listInvoices` 是已创建的 `tool.Tool`，生成的 `billing` 可用于
+上面的注册代码：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// 在 Agent 初始化时，注册工具组之前构造：
+billing := staticToolSet{
+    name:        "billing",
+    description: "查询发票、支付和退款状态",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+`deferred.ToolSet` 会保留这段描述，适配器将它写入 `namespace.description`；客户端搜索的
+`Candidate.NamespaceDescription` 也使用这段描述。
 
 [`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
 中的 `go run ./toolsearch -mode server` 和 `go run ./toolsearch -mode client` 分别演示两种模式。

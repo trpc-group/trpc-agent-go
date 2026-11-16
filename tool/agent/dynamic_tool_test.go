@@ -1222,12 +1222,12 @@ func TestNewDynamicTool_Integration_ExcludesSiblingAgentTools(t *testing.T) {
 		llmagent.WithModel(recModel),
 		llmagent.WithTools([]tool.Tool{
 			newDynTestTool("tool_a"),
-			deferred.Tool(newDynTestTool("tool_b"), nil),
+			deferred.Tool(newDynTestTool("tool_b")),
 			at,
 			otherDynamic,
 			NewTool(wrappedAgent),
-			deferred.Tool(deferredDynamic, nil),
-			deferred.Tool(NewTool(deferredAgent), nil),
+			deferred.Tool(deferredDynamic),
+			deferred.Tool(NewTool(deferredAgent)),
 		}),
 	)
 
@@ -1250,7 +1250,7 @@ func TestNewDynamicTool_Integration_ExcludesSiblingAgentTools(t *testing.T) {
 
 func TestNewDynamicTool_SelectToolsPreservesDeferredBusinessTool(t *testing.T) {
 	at := NewDynamicTool()
-	wrapped := deferred.Tool(newDynTestTool("business"), nil)
+	wrapped := deferred.Tool(newDynTestTool("business"))
 	custom := &dynCustomOriginalTool{original: NewDynamicTool(WithName("inner"))}
 	selected, warnings, err := at.selectDynamicTools(
 		[]tool.Tool{wrapped, custom}, nil, nil, nil, dynamicSpec{},

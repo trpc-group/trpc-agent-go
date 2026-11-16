@@ -21,33 +21,33 @@ import (
 )
 
 type testTool struct {
-	name string
+	name     string
+	deferred bool
 }
 
 func (t *testTool) Declaration() *tool.Declaration          { return &tool.Declaration{Name: t.name} }
 func (*testTool) Call(context.Context, []byte) (any, error) { return "done", nil }
-func (*testTool) ShouldDefer(context.Context) bool          { return true }
+func (t *testTool) ShouldDefer(context.Context) bool        { return t.deferred }
 
 type requestKey struct{}
 
 func TestToolUsesRequestContextWithoutMutatingOriginal(t *testing.T) {
-	base := &testTool{name: "lookup"}
+	base := &testTool{name: "lookup", deferred: true}
 	filter := func(ctx context.Context, candidate tool.Tool) bool {
 		require.Same(t, base, candidate)
 		return ctx.Value(requestKey{}) == "defer"
 	}
-	wrapped := deferred.Tool(base, filter)
+	wrapped := deferred.Tool(base, deferred.WithFilter(filter))
 	require.False(t, tool.ShouldDefer(context.Background(), wrapped))
 	require.True(t, tool.ShouldDefer(context.WithValue(context.Background(), requestKey{}, "defer"), wrapped))
 	require.True(t, tool.ShouldDefer(context.Background(), base), "the original preference remains intact")
-	require.True(t, tool.ShouldDefer(context.Background(), deferred.Tool(base, nil)))
 	require.Same(t, base, itool.ResolveSemantic(wrapped))
 	result, err := wrapped.(tool.CallableTool).Call(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, "done", result)
 	_, streamable := wrapped.(tool.StreamableTool)
 	require.False(t, streamable)
-	require.Nil(t, deferred.Tool(nil, nil))
+	require.Nil(t, deferred.Tool(nil))
 }
 
 type testToolSet struct {
@@ -71,13 +71,40 @@ type describedToolSet struct{ *testToolSet }
 
 func (*describedToolSet) Description() string { return "Look up customer records." }
 
+func TestDeferralOptions(t *testing.T) {
+	ctx := context.Background()
+	base := &testTool{name: "lookup"}
+	set := &testToolSet{members: []tool.Tool{base}}
+	keepAvailable := deferred.WithFilter(tool.NewExcludeToolNamesFilter("lookup"))
+	deferLookup := deferred.WithFilter(tool.NewIncludeToolNamesFilter("lookup"))
+	for _, tc := range []struct {
+		name string
+		opts []deferred.Option
+		want bool
+	}{
+		{name: "default defers an eager tool", want: true},
+		{name: "nil option keeps the default", opts: []deferred.Option{nil}, want: true},
+		{name: "last filter wins", opts: []deferred.Option{deferLookup, keepAvailable}},
+		{name: "nil option keeps the filter", opts: []deferred.Option{keepAvailable, nil}},
+		{name: "nil filter restores the default", opts: []deferred.Option{keepAvailable, deferred.WithFilter(nil)}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tool.ShouldDefer(ctx, deferred.Tool(base, tc.opts...)), "Tool")
+			members := deferred.ToolSet(set, tc.opts...).Tools(ctx)
+			require.Len(t, members, 1, "ToolSet retains members regardless of deferral")
+			require.Equal(t, tc.want, tool.ShouldDefer(ctx, members[0]), "ToolSet member")
+			require.False(t, tool.ShouldDefer(ctx, base), "the original preference remains intact")
+		})
+	}
+}
+
 func TestToolSetKeepsLiveMembershipAndIdentity(t *testing.T) {
-	lookup := &testTool{name: "lookup_invoice"}
+	lookup := &testTool{name: "lookup_invoice", deferred: true}
 	set := &describedToolSet{&testToolSet{members: []tool.Tool{lookup}}}
 	filter := func(ctx context.Context, candidate tool.Tool) bool {
 		return candidate.Declaration().Name == ctx.Value(requestKey{})
 	}
-	wrapped := deferred.ToolSet(set, filter)
+	wrapped := deferred.ToolSet(set, deferred.WithFilter(filter))
 	require.Nil(t, set.ctx, "wrapping does not fetch tools or initialize resources")
 	require.Equal(t, "customer_records", wrapped.Name())
 	require.Equal(t, set.Description(), wrapped.(tool.ToolSetDescriber).Description())
@@ -88,7 +115,7 @@ func TestToolSetKeepsLiveMembershipAndIdentity(t *testing.T) {
 	require.True(t, tool.ShouldDefer(ctx, members[0]))
 	require.False(t, tool.ShouldDefer(context.Background(), members[0]), "the decision uses the current request, not the Tools context")
 
-	set.members = append(set.members, &testTool{name: "list_orders"})
+	set.members = append(set.members, &testTool{name: "list_orders", deferred: true})
 	named := itool.NewNamedToolSet(wrapped).Tools(ctx)
 	require.Len(t, named, 2)
 	require.True(t, tool.ShouldDefer(ctx, named[0]))
@@ -101,7 +128,7 @@ func TestToolSetKeepsLiveMembershipAndIdentity(t *testing.T) {
 	require.Equal(t, set.Description(), description)
 	require.Equal(t, "customer_records_lookup_invoice", named[0].Declaration().Name)
 
-	all := deferred.ToolSet(set, nil).Tools(context.Background())
+	all := deferred.ToolSet(set).Tools(context.Background())
 	for _, member := range all {
 		require.True(t, tool.ShouldDefer(context.Background(), member))
 	}
@@ -111,8 +138,8 @@ func TestToolSetKeepsLiveMembershipAndIdentity(t *testing.T) {
 }
 
 func TestToolSetWithNoDescriptionOrMembers(t *testing.T) {
-	require.Nil(t, deferred.ToolSet(nil, nil))
-	wrapped := deferred.ToolSet(&testToolSet{}, nil)
+	require.Nil(t, deferred.ToolSet(nil))
+	wrapped := deferred.ToolSet(&testToolSet{})
 	require.Empty(t, wrapped.(tool.ToolSetDescriber).Description())
 	require.Nil(t, wrapped.Tools(context.Background()))
 	require.NoError(t, wrapped.Close())

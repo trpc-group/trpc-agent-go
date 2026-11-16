@@ -2378,20 +2378,21 @@ llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
-    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA, nil)}),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
     llmagent.WithToolSets([]tool.ToolSet{
-        deferred.ToolSet(crm, tool.NewIncludeToolNamesFilter("list_orders")),
-        deferred.ToolSet(billing, nil),
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billing),
     }),
 )
 ```
 
 - `deferred.Tool` and `deferred.ToolSet` wrap tools for registration with
-  `WithTools`, `WithToolSets`, or `WithActivatableToolSets`. A nil filter
-  defers all wrapped tools. Otherwise the filter receives the original tool
-  at request time: true defers it and false keeps it eager. It can select
-  ToolSet members by their original names and applies to refreshed members,
-  including MCP tools.
+  `WithTools`, `WithToolSets`, or `WithActivatableToolSets`. Without options,
+  every wrapped tool is deferred. Use `deferred.WithFilter` to select members:
+  the filter receives the original tool at request time, returning true to
+  defer it and false to keep it eager. It can select members by their original
+  names and applies to refreshed members, including MCP tools. `WithFilter(nil)`
+  restores the default of deferring all tools; the last filter option wins.
 - The wrapper overrides the wrapped tool's own `tool.DeferredTool` preference;
   unwrapped tools keep theirs. Agent and run tool filters still apply. Closing
   a wrapped ToolSet closes the original; wrapping opens no new connection.
@@ -2400,11 +2401,15 @@ agent := llmagent.New(
   `Original() tool.Tool` to unwrap the original, more than once if needed.
 - A ToolSet with deferred members is sent as a namespace named after the
   ToolSet. Its description comes from `tool.ToolSetDescriber`; MCP ToolSets
-  use `ConnectionConfig.Description`. Calls are mapped back to the registered
-  tools, so same-name members of different ToolSets stay separate.
+  use `ConnectionConfig.Description`. Calls are mapped back using the stored
+  namespace and member name, without parsing registered names. Registered
+  names must remain unique in the request; namespaces do not resolve naming
+  collisions in the tool registry.
 - In client mode, a search response is not final. `LLMAgent` runs the handler
   and stores the `tool_search_output` as a tool message before the next model
-  step. The loaded definitions stay in history.
+  step. The handler selects from `req.Candidates` and returns each selected
+  `candidate.ID` in `ToolSearchResult.ToolIDs`, without constructing or parsing
+  the ID. The loaded definitions stay in history.
 - A handler error ends the run, and the search stays unanswered until a run
   with `agent.WithResume(true)` completes it. Return an empty result to let
   the model continue without the tools.
@@ -2412,6 +2417,40 @@ agent := llmagent.New(
   deferred tools are unchanged, and Chat Completions ignores deferral.
 - `plugin/toolsearch` has its own deferred-tool registration and does not use
   `tool.DeferredTool`; do not combine it with native tool search.
+
+For a custom non-MCP ToolSet, store the description in the instance and
+implement the optional `Description()` method. The following type belongs to
+the application. `lookupInvoice` and `listInvoices` are existing `tool.Tool`
+values, and `billing` can be used in the registration above:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// In the agent setup, before registering the ToolSet:
+billing := staticToolSet{
+    name:        "billing",
+    description: "Look up invoices, payments, and refunds.",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+`deferred.ToolSet` forwards this description to the adapter, which uses it as
+`namespace.description` and the client search candidate's `NamespaceDescription`.
 
 `go run ./toolsearch -mode server` and `go run ./toolsearch -mode client` in
 [`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)

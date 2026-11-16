@@ -522,7 +522,7 @@ func TestNewRenamedTool_StreamInnerFalse(t *testing.T) {
 	// A tool that implements StreamableTool but StreamInner returns false.
 	noStream := &fakeNoStreamTool{name: "nostream", desc: "no stream inner"}
 	for name, original := range map[string]tool.Tool{
-		"plain": noStream, "deferred": deferred.Tool(noStream, nil),
+		"plain": noStream, "deferred": deferred.Tool(noStream),
 	} {
 		t.Run(name, func(t *testing.T) {
 			renamed := newRenamedTool(original, "server")
@@ -543,7 +543,7 @@ func TestNewRenamedTool_DeferredNamedCallable(t *testing.T) {
 		function.WithName("lookup"),
 	)
 	named := itool.NewUnprefixedNamedTool(original)
-	renamed := newRenamedTool(deferred.Tool(named, nil), "server")
+	renamed := newRenamedTool(deferred.Tool(named), "server")
 	_, streams := renamed.(tool.StreamableTool)
 	require.False(t, streams, "a NamedTool method must not make a callable-only tool stream")
 	result, err := renamed.(tool.CallableTool).Call(context.Background(), []byte(`{}`))

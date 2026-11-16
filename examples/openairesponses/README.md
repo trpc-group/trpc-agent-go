@@ -170,21 +170,26 @@ search := responses.WithHostedToolSearch() // -mode server
 agent := llmagent.New(
     "responses-tool-search-agent",
     llmagent.WithModel(responses.New(modelName, search)),
-    llmagent.WithTools([]tool.Tool{currentTimeTool(), deferred.Tool(shippingETATool(), nil)}),
+    llmagent.WithTools([]tool.Tool{currentTimeTool(), deferred.Tool(shippingETATool())}),
     llmagent.WithToolSets([]tool.ToolSet{
-        deferred.ToolSet(crmToolSet(), tool.NewIncludeToolNamesFilter("list_orders")),
-        deferred.ToolSet(billingToolSet(), nil),
+        deferred.ToolSet(crmToolSet(), deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billingToolSet()),
     }),
 )
 ```
 
-The `crm` and `billing` ToolSets are sent as namespaces, described by their
-ToolSet descriptions. `lookup_customer` and `current_time` are callable from
-the first request. In server mode, the API searches the deferred definitions
+Without options, `deferred.Tool` and `deferred.ToolSet` defer every wrapped
+tool. Use `deferred.WithFilter` for selective deferral.
+
+The `crm` and `billing` ToolSets are sent as namespaces. They are application
+`staticToolSet` values: their `description` field is returned by `Description()`
+and becomes the namespace description. `lookup_customer` and `current_time`
+are callable from the first request. In server mode, the API searches the deferred definitions
 and loads the matching ones inside the same response, so only the loaded
 tool calls are printed. In client mode, the deferred definitions are not sent.
 `keywordSearch` picks candidates whose namespace, name, or description shares
-a word with the model's query. The search result is printed as a
+a word with the model's query and returns each selected `candidate.ID` without
+constructing or parsing the ID. The search result is printed as a
 `tool_search` tool result, and the loaded tools run as ordinary tool calls:
 
 ```text
