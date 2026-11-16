@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"connectrpc.com/connect"
@@ -36,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
@@ -105,6 +107,7 @@ func TestAutoRecreateDefaultLeavesDeadSandboxInPlace(t *testing.T) {
 		})
 		require.Error(t, err)
 		assert.False(t, errors.Is(err, codeexecutor.ErrWorkspaceStale))
+		assert.NotErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
 	}
 	counts := srv.counts()
 	assert.Equal(t, []string{first}, counts.ids)
@@ -651,6 +654,69 @@ func TestAutoRecreateReportsReplacementInWorkspaceToolResult(t *testing.T) {
 	assert.Len(t, srv.counts().processLines, 1, "the original command must not be replayed")
 }
 
+func TestAutoRecreateDoesNotRetryAfterTruncatedResponse(t *testing.T) {
+	srv := newLifeServer(t)
+	base := srv.client().Transport
+	var interrupted atomic.Bool
+	client := &http.Client{Transport: hostnameTransport(func(req *http.Request) (*http.Response, error) {
+		resp, err := base.RoundTrip(req)
+		if err == nil && req.URL.Path == "/execute" && resp.StatusCode == http.StatusOK && !interrupted.Swap(true) {
+			// The sandbox accepted the command before the response stream broke.
+			resp.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(resp.Body, iotest.ErrReader(io.ErrUnexpectedEOF)), resp.Body}
+		}
+		return resp, err
+	})}
+	executor := srv.executor(t, WithHTTPClient(client))
+	first := executor.SandboxID()
+	srv.setInfo(first, http.StatusNotFound, "", "")
+	srv.setExecute(func(host, code string) (int, string) {
+		if code == "trigger recreation" && hostHasSandbox(host, first) {
+			return http.StatusNotFound, "sandbox deleted"
+		}
+		return http.StatusOK, ndjsonLines(stdoutMsg("executed\n"))
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recreate := func(ctx context.Context) {
+		_, err := executor.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{Code: "trigger recreation"}},
+		})
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.NotEqual(t, first, executor.SandboxID())
+	}
+
+	outcome := toolretry.Execute(ctx, toolretry.ExecuteInput{
+		Policy: &tool.RetryPolicy{
+			MaxAttempts: 2,
+			RetryOn: func(ctx context.Context, info *tool.RetryInfo) (bool, error) {
+				retry, err := tool.DefaultRetryOn(ctx, info)
+				if retry {
+					// Reproduce another call replacing the instance before the retry.
+					recreate(ctx)
+				}
+				return retry, err
+			},
+		},
+		Call: func(ctx context.Context, _ []byte) (any, error) {
+			return executor.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+				CodeBlocks: []codeexecutor.CodeBlock{{Code: "side effect"}},
+			})
+		},
+	})
+	require.ErrorIs(t, outcome.Error, io.ErrUnexpectedEOF)
+	assert.ErrorIs(t, outcome.Error, codeexecutor.ErrWorkspaceRetryUnsafe)
+	assert.NotErrorIs(t, outcome.Error, codeexecutor.ErrWorkspaceStale)
+	assert.NotContains(t, outcome.Error.Error(), "sandbox was recreated")
+	assert.Equal(t, first, executor.SandboxID())
+	assert.Empty(t, srv.counts().infoCalls)
+
+	recreate(ctx)
+	assert.Equal(t, []string{"side effect", "trigger recreation"}, srv.counts().executeCodes)
+}
+
 func TestAutoRecreateWhenCreatingWorkspace(t *testing.T) {
 	srv := newLifeServer(t)
 	executor := srv.executor(t)
@@ -1170,9 +1236,11 @@ func TestAutoRecreateCloseDropsUnpublishedSandbox(t *testing.T) {
 	srv.setExecute(func(string, string) (int, string) {
 		return http.StatusNotFound, "sandbox deleted"
 	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := executor.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		_, err := executor.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
 			CodeBlocks: []codeexecutor.CodeBlock{{Code: "close-race"}},
 		})
 		errCh <- err
@@ -1182,9 +1250,10 @@ func TestAutoRecreateCloseDropsUnpublishedSandbox(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("recovery create did not start")
 	}
-	require.NoError(t, executor.Close())
+	closeErr := executor.Close()
 	close(release)
 	err := <-errCh
+	require.NoError(t, closeErr)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errExecutorClosed)
 	assert.NotContains(t, err.Error(), "sandbox was recreated")
@@ -1389,9 +1458,15 @@ func (s *lifeServer) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pause"):
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
+		id := sandboxIDFromPath(r.URL.Path)
 		s.mu.Lock()
-		s.kills = append(s.kills, sandboxIDFromPath(r.URL.Path))
+		s.kills = append(s.kills, id)
+		script := s.scripts[id]
 		s.mu.Unlock()
+		if script == nil || script.status == http.StatusNotFound {
+			http.Error(w, "sandbox not found", http.StatusNotFound)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
 		s.handleInfo(w, r)

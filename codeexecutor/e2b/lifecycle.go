@@ -372,9 +372,14 @@ func (c *CodeExecutor) beginClose() (
 
 func (c *CodeExecutor) finishClose(
 	attempt *closeAttempt, sbx *ci.Sandbox, owned bool, err error,
-) {
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var notFound *ci.NotFoundError
+	if c.deadGeneration != 0 && c.deadGeneration == c.generation && errors.As(err, &notFound) {
+		// A pending replacement must not publish just because the old sandbox is gone.
+		err = nil
+	}
 	if err != nil {
 		c.closed = false
 		if c.sbx == nil {
@@ -388,6 +393,7 @@ func (c *CodeExecutor) finishClose(
 		c.closing = nil
 	}
 	close(attempt.done)
+	return err
 }
 
 func (c *CodeExecutor) observeLoss(
@@ -395,13 +401,16 @@ func (c *CodeExecutor) observeLoss(
 	snap sandboxSnap,
 	err error,
 ) error {
+	if !c.autoRecreate || err == nil {
+		return err
+	}
 	if !c.shouldConfirmLoss(snap, err) {
 		return c.lossResult(snap, err, false)
 	}
 	dead, confirmErr := confirmSandboxDead(ctx, snap.sbx)
 	if confirmErr != nil || !dead {
-		if ctx.Err() != nil {
-			return errors.Join(err, ctx.Err())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = errors.Join(err, ctxErr)
 		}
 		return c.lossResult(snap, err, false)
 	}
@@ -425,7 +434,9 @@ func (c *CodeExecutor) lossResult(
 	// Close or Pause can discard a replacement even after creation succeeds.
 	recreated := c.generationMoved(snap)
 	if !confirmedDead && !recreated {
-		return err
+		// Another call can replace this sandbox between tool attempts. The
+		// operation may already have run even when its error doesn't prove loss.
+		return errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
 	}
 	var notice error
 	if recreated {
@@ -450,7 +461,7 @@ func (c *CodeExecutor) generationMoved(snap sandboxSnap) bool {
 }
 
 func (c *CodeExecutor) shouldConfirmLoss(snap sandboxSnap, err error) bool {
-	if err == nil || !c.autoRecreate || snap.sbx == nil || !lossCandidate(err) {
+	if snap.sbx == nil || !lossCandidate(err) {
 		return false
 	}
 	return c.stillOwned(snap.generation)

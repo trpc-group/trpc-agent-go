@@ -227,6 +227,7 @@ executor, err := e2b.New(
 如果自行管理工作区，用旧句柄调用 `RunProgram` 等操作会收到 `codeexecutor.ErrWorkspaceStale`。
 请重新调用 `CreateWorkspace`，并准备所需的输入文件。
 触发恢复的操作可能已产生副作用，返回的错误可能同时匹配 `ErrWorkspaceStale` 和 `ErrWorkspaceRetryUnsafe`。
+开启重建后，如果失败的操作可能已发到沙箱，例如响应流断开，即使还不能确认沙箱失效，框架的工具重试策略也不会自动重跑该操作。
 只有 `codeexecutor.IsWorkspaceRetrySafe(err)` 返回 true 时，才可以自动重试原操作。
 
 调用 `Sandbox()` 或直接操作它返回的实例，都不会触发重建。

@@ -152,10 +152,10 @@ func WithSandboxID(sandboxID string) Option {
 // unique to this executor, so two executors in one process do not share it.
 // There is no background probe and no retry loop.
 // Callers of one dead generation share a single creation attempt. A failed
-// attempt stays retryable by a later call. The call that already reached the
-// data plane is not replayed, and ExecuteCode does not run earlier blocks
-// again. After a successful switch, the triggering error asks the caller to
-// check required files and the runtime environment before continuing.
+// attempt stays retryable by a later call. A failed operation that may have
+// reached the sandbox is unsafe to replay, even if the failure does not confirm
+// sandbox loss. After a successful switch, the triggering error asks the caller
+// to check required files and the runtime environment before continuing.
 // A replacement that loses to Close or Pause is killed. After a replacement
 // is published, the owned sandbox it replaced is killed.
 //
@@ -694,9 +694,9 @@ func (c *CodeExecutor) Pause(ctx context.Context) error {
 }
 
 // Close releases the executor. When this executor owns the published sandbox,
-// Close kills it. A failed kill leaves that sandbox published so Close can be
-// retried. Concurrent callers share that one attempt and its result, so one
-// caller cannot observe success while a failed attempt restores the sandbox.
+// Close kills it. A not-found response for a sandbox already confirmed dead
+// counts as a successful kill. Other kill errors leave that sandbox published
+// so Close can be retried. Concurrent callers share the same attempt and result.
 // After Close has released the executor, recreation cannot publish a
 // replacement; an instance created while Close is in progress is killed
 // instead. A Close after a successful Close is a no-op.
@@ -713,6 +713,5 @@ func (c *CodeExecutor) Close() error {
 	if sbx != nil && owned {
 		err = sbx.Kill(context.Background())
 	}
-	c.finishClose(attempt, sbx, owned, err)
-	return err
+	return c.finishClose(attempt, sbx, owned, err)
 }

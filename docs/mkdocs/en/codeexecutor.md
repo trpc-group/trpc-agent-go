@@ -268,6 +268,9 @@ such as `RunProgram` return `codeexecutor.ErrWorkspaceStale` for an old handle.
 Call `CreateWorkspace` again and stage any required inputs.
 An operation that triggers recovery can return both `ErrWorkspaceStale` and
 `ErrWorkspaceRetryUnsafe` because it may already have produced side effects.
+With recreation enabled, a failed operation that may have reached the sandbox
+is unsafe to retry even when sandbox loss is unconfirmed, for example after a
+broken response stream. The framework's tool retry policy also respects this.
 Retry automatically only if `codeexecutor.IsWorkspaceRetrySafe(err)` returns true.
 
 Calling `Sandbox()` or using the returned instance directly does not trigger
