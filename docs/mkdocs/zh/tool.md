@@ -497,12 +497,14 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 
 ## 结构化工具结果
 
-工具直接产生文字、图片等模型内容时，可以返回 `model.ToolResultContent`。
-LLMAgent 默认工具调用流程和 Graph ToolsNode 会将这个值转换为工具消息，无需注册
-`ToolResultMessages` callback。消息角色、工具名和 tool call ID 由框架填写。
+工具需要向模型返回图片等媒体时，使用 `model.ToolResultContent`，可同时返回文字。
+LLMAgent 的默认工具调用流程和 Graph ToolsNode 会自动生成工具结果消息，无需配置
+`ToolResultMessages` 回调。
 
-下面通过 `NewFunctionTool` 创建工具；自行实现 `tool.CallableTool` 时，也可以从
-`Call` 返回 `model.ToolResultContent` 值。
+使用前确认模型适配器和服务端支持工具结果中的媒体内容。Chat Completions 适配器
+不会自动将图片转为 user message。
+
+下面的工具按图片 ID 返回文字和图片；`loadPNG` 由业务实现，返回 PNG 原始字节。
 
 ```go
 import (
@@ -516,7 +518,6 @@ type ReadImageArgs struct {
     ImageID string `json:"image_id"`
 }
 
-// loadPNG is supplied by the application and returns raw PNG bytes.
 readImageTool := function.NewFunctionTool(
     func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
         data, err := loadPNG(ctx, args.ImageID)
@@ -536,29 +537,19 @@ readImageTool := function.NewFunctionTool(
 )
 ```
 
-- 纯文字结果按顺序拼接到 `Message.Content`，不额外插入分隔符。包含媒体的结果将有序
-  内容块保存在 `Message.ContentParts`，不会再把文字重复写入 `Content`。
-  包含外部内容引用的内容块也保留在 `ContentParts` 中。
-- nil 或空的 `model.ToolResultContent` 表示内容为空的工具回执，不表示省略回执。
-  空结果（包括拼接后为空的纯文字结果）在 `ContentParts` 中保留一个显式的空文本块，
-  用于区别于没有内容的占位消息。未指定类型的 nil 保持原有 JSON 行为。
-- 应直接返回这个定义类型的值。其他结果，包括 `[]byte`、普通
-  `[]model.ContentPart` 和 `*model.ToolResultContent`，保持原有 JSON 表示。
-  框架不会猜测图片类型或下载 URL。
-- 框架会复制内容块及二进制数据。处理返回值期间，不要修改结果及其底层缓冲区。
-- 流式工具可以把这个值放在 `tool.FinalResultChunk.Result` 中返回，中间流式事件
-  保持原有行为。
-- LLMAgent 显式配置的 result formatter 优先，并将结果转换为文本。
-  `ToolResultMessages` 随后执行，仍可覆盖默认消息。实现状态更新的工具继续收到原始
-  返回值的 JSON。按照既有规则，callback 改写 `Message.Content` 时会替换状态输入；
-  只修改 `ContentParts` 不会改变状态输入。
-- 直接调用 `Tool.Call` 会得到原始 Go 返回值；自行构造工具消息的其他执行链路需要
-  自行处理该类型。
+自行实现 `tool.CallableTool` 时，`Call` 保持 `(any, error)` 签名，直接返回
+`model.ToolResultContent` 值即可。流式工具将该值放入 `tool.FinalResultChunk.Result`。
 
-**模型支持范围：** 框架保留内容块，不代表模型适配器或服务端已经支持这些内容。
-仅在所选适配器支持相应工具媒体输出时使用媒体结果。Chat Completions 适配器不会
-自动把这些内容块转换为 user message。本 API 不修改协议映射，也不扩展适配器支持
-的媒体类型。
+使用时注意：
+
+- **返回类型**：按值返回 `model.ToolResultContent`。`[]byte`、普通
+  `[]model.ContentPart` 和 `*model.ToolResultContent` 仍按 JSON 处理。
+  该类型的 nil 或空切片会生成空工具结果，不会省略回执。
+- **图片数据**：`Image.Data` 使用原始字节，无需自行 Base64 编码；图片地址使用
+  `Image.URL`。框架处理结果期间，请勿修改返回的内容及其字节缓冲区。
+- **内容顺序**：文字和媒体块保留返回顺序，多个文本块之间不自动插入分隔符。
+- **自定义处理**：LLMAgent 中已配置的 result formatter 会将结果转为文本；
+  `ToolResultMessages` 回调可继续覆盖默认消息。详见[工具结果格式化](#工具结果格式化)。
 
 ## 工具结果格式化
 

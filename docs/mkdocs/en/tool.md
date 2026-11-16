@@ -515,14 +515,16 @@ existing context values you still need.
 
 ## Structured Tool Results
 
-Return `model.ToolResultContent` when a tool produces model content directly,
-such as text and an image. LLMAgent's default tool-call flow and Graph ToolsNode
-convert this value into a tool message without requiring a
-`ToolResultMessages` callback. The framework supplies the role, tool name, and
-tool call ID.
+Use `model.ToolResultContent` to return images or other media to the model,
+optionally alongside text.
+LLMAgent's default tool-call flow and Graph ToolsNode generate the tool result
+message automatically; no `ToolResultMessages` callback is required.
 
-The example uses `NewFunctionTool`. A custom `tool.CallableTool` can also return
-a `model.ToolResultContent` value from `Call`.
+The model adapter and provider must support media in tool results. Chat
+Completions adapters do not automatically move images into a user message.
+
+The following tool returns text and an image by ID. The application supplies
+`loadPNG`, which returns raw PNG bytes.
 
 ```go
 import (
@@ -536,7 +538,6 @@ type ReadImageArgs struct {
     ImageID string `json:"image_id"`
 }
 
-// loadPNG is supplied by the application and returns raw PNG bytes.
 readImageTool := function.NewFunctionTool(
     func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
         data, err := loadPNG(ctx, args.ImageID)
@@ -556,36 +557,24 @@ readImageTool := function.NewFunctionTool(
 )
 ```
 
-- A text-only result becomes `Message.Content`, with text parts concatenated
-  in order without inserted separators. A result containing media keeps its
-  ordered parts in `Message.ContentParts`; text is not duplicated in `Content`.
-  Parts containing externalized content references also remain in `ContentParts`.
-- A nil or empty `model.ToolResultContent` represents an empty tool response.
-  It does not suppress the response. Empty results, including text-only values
-  whose joined text is empty, use one explicit empty text part in `ContentParts`
-  to distinguish them from payload-free placeholders. An untyped nil retains
-  its existing JSON behavior.
-- Return the defined value type. Other results, including `[]byte`, bare
-  `[]model.ContentPart`, and pointers to `model.ToolResultContent`, retain their
-  existing JSON representation. No image detection or URL fetching occurs.
-- The framework copies content into the tool message, including binary data.
-  Do not mutate a returned result or its backing buffers while it is being
-  processed.
-- Streamable tools can return this value in `tool.FinalResultChunk.Result`.
-  Intermediate streaming events retain their existing behavior.
-- In LLMAgent, an explicitly configured result formatter takes precedence and
-  produces text. `ToolResultMessages` runs afterwards and may replace the
-  default message. Tools that implement state updates still receive the raw
-  result's JSON. As before, a callback rewriting `Message.Content` replaces that
-  state input; changing `ContentParts` alone does not.
-- Direct `Tool.Call` consumers receive the original Go value. Other execution
-  paths that construct their own messages must handle that value themselves.
+For a custom `tool.CallableTool`, keep the `(any, error)` return signature of
+`Call` and return a `model.ToolResultContent` value. Streamable tools return the
+value in `tool.FinalResultChunk.Result`.
 
-**Model support:** preserving content in the framework does not establish
-support in a model adapter or provider. Use media results only with an adapter
-that supports the corresponding media in tool responses. Chat Completions
-adapters do not automatically move these parts into a user message. This API
-does not change protocol mappings or enable additional media types in adapters.
+Usage notes:
+
+- **Return type:** return `model.ToolResultContent` by value. `[]byte`, bare
+  `[]model.ContentPart`, and `*model.ToolResultContent` still use JSON handling.
+  A nil or empty slice of this type produces an empty tool result; it does not
+  suppress the response.
+- **Image data:** use raw bytes in `Image.Data` without Base64 encoding, or an
+  image address in `Image.URL`. Do not modify the returned content or its byte
+  buffers while the framework is processing the result.
+- **Content order:** text and media parts retain their order. No separators are
+  added between text parts.
+- **Custom processing:** an explicitly configured result formatter in LLMAgent
+  converts the result to text. `ToolResultMessages` can still override the
+  default message. See [Tool Result Formatting](#tool-result-formatting).
 
 ## Tool Result Formatting
 
