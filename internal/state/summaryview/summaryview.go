@@ -185,9 +185,11 @@ func RebaseAfterTransform(
 		len(before),
 	)
 	if !boundBefore {
-		next := cloneView(state.view)
+		// A published view is immutable. This failure changes only binding
+		// metadata and the request length, so its read-only items can be shared.
+		next := *state.view
 		next.ContentRequestLength = len(after)
-		storeInvalidated(inv, next, BindingReasonTransformMismatch)
+		storeInvalidated(inv, &next, BindingReasonTransformMismatch)
 		return false
 	}
 	transformed, ok := rebaseItems(
@@ -197,9 +199,9 @@ func RebaseAfterTransform(
 		len(before),
 	)
 	if !ok {
-		next := cloneView(state.view)
+		next := *state.view
 		next.ContentRequestLength = len(after)
-		storeInvalidated(inv, next, BindingReasonRebaseFailed)
+		storeInvalidated(inv, &next, BindingReasonRebaseFailed)
 		return false
 	}
 	next := *state.view

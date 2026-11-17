@@ -87,6 +87,57 @@ func BenchmarkRebaseAfterTransform(b *testing.B) {
 	}
 }
 
+func BenchmarkRebaseAfterTransformFailure(b *testing.B) {
+	const historySize = 64
+	for _, stateDeltaBytes := range []int{0, 1024, 64 * 1024} {
+		invocation, request := summaryViewBenchmarkInput(
+			historySize,
+			stateDeltaBytes,
+		)
+		originalState, ok := agent.GetStateValue[*invocationState](
+			invocation,
+			stateKey,
+		)
+		if !ok {
+			b.Fatal("summary view state is missing")
+		}
+		after := request.Messages[:len(request.Messages)-1]
+		identitySources := make([]int, len(after))
+		for i := range identitySources {
+			identitySources[i] = i
+		}
+		cases := []struct {
+			name          string
+			sourceIndexes []int
+		}{
+			{name: "transform_mismatch"},
+			{name: "rebase_failed", sourceIndexes: identitySources},
+		}
+		for _, benchCase := range cases {
+			b.Run(fmt.Sprintf(
+				"%s/history=%d/state_delta_bytes=%d",
+				benchCase.name,
+				historySize,
+				stateDeltaBytes,
+			), func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					// A failure is sticky. Restore the original immutable holder so
+					// every iteration exercises the full failure path.
+					invocation.SetState(stateKey, originalState)
+					summaryViewBoolBenchmarkSink = RebaseAfterTransform(
+						invocation,
+						request.Messages,
+						after,
+						benchCase.sourceIndexes,
+					)
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkRebaseItems(b *testing.B) {
 	for _, historySize := range []int{16, 256, 1024} {
 		b.Run(fmt.Sprintf("split/history=%d/state_delta_bytes=1024", historySize), func(b *testing.B) {
