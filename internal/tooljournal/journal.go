@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,7 @@ type Record struct {
 
 // Recorder owns writes for one run. Its append function outlives output closure.
 type Recorder struct {
+	active atomic.Int64
 	append func(context.Context, *event.Event) error
 }
 
@@ -140,7 +142,13 @@ func fromContext(ctx context.Context) *Round { r, _ := ctx.Value(roundKey{}).(*R
 
 // Dispatch records conservative admission before any callback or tool work.
 func Dispatch(ctx context.Context, id string) error {
-	return update(ctx, id, func(c *Call) { c.Status = "dispatched" })
+	err := update(ctx, id, func(c *Call) { c.Status = "dispatched" })
+	if err == nil {
+		if r := fromContext(ctx); r != nil {
+			r.recorder.active.Add(1)
+		}
+	}
+	return err
 }
 
 // Attempt records each raw call admission, including retries, before calling it.
@@ -167,6 +175,9 @@ func update(ctx context.Context, id string, apply func(*Call)) error {
 // Finish preserves rendered outcomes even when the execution context is cancelled.
 // Cancellation errors and rendering failures remain unknown, never safe to replay.
 func Finish(ctx context.Context, id string, choices []model.Choice, callErr error) error {
+	if r := fromContext(ctx); r != nil {
+		defer r.recorder.active.Add(-1)
+	}
 	return update(ctx, id, func(c *Call) {
 		c.Status = "completed"
 		c.Choices = choices
@@ -220,4 +231,13 @@ func Records(sess *session.Session) ([]Record, error) {
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+// Active reports logical tool executions admitted but not yet finalized.
+func Active(inv *agent.Invocation) int {
+	r, _ := agent.GetStateValue[*Recorder](inv, recorderKey)
+	if r == nil {
+		return 0
+	}
+	return int(r.active.Load())
 }
