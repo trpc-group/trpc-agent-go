@@ -69,7 +69,7 @@ func (o *executionObservation) complete(input, output, cancelled bool) {
 	o.inputClosed = o.inputClosed || input
 	o.status.OutputClosed = o.status.OutputClosed || output
 	o.status.CancellationRequested = o.status.CancellationRequested || cancelled
-	if o.inputClosed && o.status.OutputClosed && !o.status.ExecutionSettled {
+	if o.inputClosed && o.status.OutputClosed && !o.status.ExecutionSettled && tooljournal.Active(o.invocation) == 0 && tooljournal.Flows(o.invocation) == 0 {
 		o.status.ExecutionSettled = true
 		o.completedAt = time.Now()
 		close(o.done)
@@ -165,7 +165,7 @@ func (r *runner) WaitExecution(ctx context.Context, requestID string) (Execution
 }
 
 // observeExecution keeps draining upstream after public output closes. LLMAgent
-// closes upstream only after its managed tools and callbacks have returned.
+// also holds a tracked flow lease until its managed work has returned.
 func observeExecution(ctx context.Context, inv *agent.Invocation, in <-chan *event.Event, o *executionObservation) <-chan *event.Event {
 	if o == nil {
 		return in
@@ -173,6 +173,7 @@ func observeExecution(ctx context.Context, inv *agent.Invocation, in <-chan *eve
 	o.mu.Lock()
 	o.invocation = inv
 	o.mu.Unlock()
+	tooljournal.OnChange(inv, func() { o.complete(false, false, false) })
 	out := make(chan *event.Event, cap(in))
 	go func() {
 		defer close(out)
