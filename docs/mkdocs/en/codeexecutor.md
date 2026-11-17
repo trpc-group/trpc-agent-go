@@ -245,6 +245,15 @@ account through `WithHeaders` using Basic authentication, for example
 the local server's account. Kernel-local environment changes are not inherited
 by native processes; check HOME/PATH when migrating custom templates.
 
+### E2B workspace persistence
+
+`WithWorkspacePersistence` defaults to `WorkspacePersistencePerTurn`. Agent
+tools share the workspace within an invocation and acquire a fresh directory
+on the next invocation, including when the `LLMAgent` is reused. Configure
+`WorkspacePersistencePerSession` to keep the directory for the same session
+across turns while the sandbox remains alive. Both modes use directories
+inside the executor's sandbox and share its Code Interpreter kernel.
+
 ### E2B sandbox recreation
 
 `WithAutoRecreate` is off by default. Enable it for sandboxes created by the

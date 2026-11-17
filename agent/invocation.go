@@ -202,6 +202,9 @@ type Invocation struct {
 	state   map[string]any
 	stateMu sync.RWMutex
 
+	// Views share the workspace cache for this invocation.
+	workspaceRegistries *invocationWorkspaceRegistries
+
 	// MaxLLMCalls is an optional upper bound on the number of LLM calls
 	// allowed for this invocation. When the value is:
 	//   - > 0: the limit is enforced for this invocation.
@@ -1622,6 +1625,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 	}
 	traceCapture, traceNodeID := inv.executionTraceFields()
 	view := &Invocation{
+		workspaceRegistries:  inv.workspaceRegistryState(),
 		Agent:                inv.Agent,
 		AgentName:            inv.AgentName,
 		InvocationID:         inv.InvocationID,
