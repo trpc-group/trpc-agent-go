@@ -898,6 +898,14 @@ func (r *runner) attachSessionAppender(
 		coordinator := finalization.Attach(invocation, appendEvent)
 		appender.Attach(invocation, coordinator.Append)
 		tooljournal.Attach(invocation, coordinator.Append)
+		persistence := r.cancellationPersistence()
+		tooljournal.ConfigureRecovery(invocation, &persistence.claims, func(ctx context.Context) (*session.Session, error) {
+			if err := persistence.lock(ctx); err != nil {
+				return nil, err
+			}
+			defer persistence.unlock()
+			return r.sessionService.GetSession(ctx, session.Key{AppName: defaultSession.AppName, UserID: defaultSession.UserID, SessionID: defaultSession.ID})
+		})
 	} else {
 		appender.Attach(invocation, appendEvent)
 	}
@@ -3867,8 +3875,8 @@ func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
 }
 
 func baselineFinalResponseID(sess *session.Session, runtimeState map[string]any) string {
-	if sess != nil && len(sess.State) > 0 {
-		if responseID := finalResponseIDFromStateDelta(map[string][]byte(sess.State)); responseID != "" {
+	if sess != nil {
+		if responseID := finalResponseIDFromStateDelta(map[string][]byte(sess.SnapshotState())); responseID != "" {
 			return responseID
 		}
 	}
@@ -3876,7 +3884,12 @@ func baselineFinalResponseID(sess *session.Session, runtimeState map[string]any)
 }
 
 func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{} {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if len(sess.Events) == 0 {
 		return nil
 	}
 	var responseIDs map[string]struct{}
@@ -4546,9 +4559,17 @@ func (r *runner) defaultIngestOptions(
 // LLMAgent tools. It defaults to false. Each admission waits for SessionService
 // acknowledgement; a failed append prevents dispatch. Records contain tool
 // arguments/results and live in session state for the session's lifetime.
-// Custom agents and Graph checkpoint execution are not tracked by this option.
+// AppendEvent must synchronously apply state updates; disable asynchronous
+// backend persistence before relying on records for crash recovery. Custom agents
+// and Graph checkpoint execution are not tracked by this option.
 func WithToolExecutionTracking(enabled bool) Option {
 	return func(o *Options) { o.toolExecutionTracking = enabled }
+}
+
+func (h *runHandle) completeFailedStart(ctx context.Context) {
+	if h.observation != nil {
+		h.observation.complete(true, true, ctx.Err() != nil)
+	}
 }
 
 func (r *runner) appendRunEvent(ctx context.Context, inv *agent.Invocation, sess *session.Session, e *event.Event) error {
@@ -4556,10 +4577,4 @@ func (r *runner) appendRunEvent(ctx context.Context, inv *agent.Invocation, sess
 		return err
 	}
 	return r.sessionService.AppendEvent(ctx, sess, e)
-}
-
-func (h *runHandle) completeFailedStart(ctx context.Context) {
-	if h.observation != nil {
-		h.observation.complete(true, true, ctx.Err() != nil)
-	}
 }

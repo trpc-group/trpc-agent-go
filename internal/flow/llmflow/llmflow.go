@@ -208,6 +208,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer releaseExecution()
+		defer tooljournal.ReleaseResume(invocation)
 		ctx, runSpan, runStarted := startLatencySpan(
 			ctx,
 			invocation,
@@ -233,7 +234,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		// Optionally resume from pending tool calls before starting a new
 		// LLM cycle. This covers scenarios where the previous run stopped
 		// after an assistant tool_call response but before tools executed.
-		pendingResume := pendingToolCallResponse(invocation)
+		pendingResume, resumeErr := preparePendingToolCalls(ctx, invocation)
+		if resumeErr != nil {
+			runErr = resumeErr
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(invocation.InvocationID, invocation.AgentName, "tool_resume", resumeErr.Error()))
+			return
+		}
 		// Native records are resumed by selectModelAndResumeTools after the
 		// first model selection and provider data validation, before the model request.
 		// Records without ProviderData retain the existing resume timing here.
@@ -525,6 +531,10 @@ func (f *Flow) resumePendingToolCalls(
 		return
 	}
 	resumed = true
+	if sourceID, ok := agent.GetStateValue[string](invocation, resumeSourceKey); ok {
+		ctx = tooljournal.WithSource(ctx, sourceID)
+		invocation.DeleteState(resumeSourceKey)
+	}
 
 	req := &model.Request{
 		Tools: make(map[string]tool.Tool),
