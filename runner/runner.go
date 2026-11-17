@@ -763,9 +763,7 @@ func (r *runner) Run(
 		ro,
 	); err != nil {
 		finishRunnerLatencySpan(persistSpan, persistStarted, err)
-		if handle.observation != nil {
-			handle.observation.complete(true, true, execCtx.Err() != nil)
-		}
+		handle.completeFailedStart(execCtx)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -799,9 +797,7 @@ func (r *runner) Run(
 	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
 	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
-		if handle.observation != nil {
-			handle.observation.complete(true, true, execCtx.Err() != nil)
-		}
+		handle.completeFailedStart(execCtx)
 		r.persistAgentRunError(execCtx, currentTurnSession, invocation, ag, err)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
@@ -4560,4 +4556,10 @@ func (r *runner) appendRunEvent(ctx context.Context, inv *agent.Invocation, sess
 		return err
 	}
 	return r.sessionService.AppendEvent(ctx, sess, e)
+}
+
+func (h *runHandle) completeFailedStart(ctx context.Context) {
+	if h.observation != nil {
+		h.observation.complete(true, true, ctx.Err() != nil)
+	}
 }
