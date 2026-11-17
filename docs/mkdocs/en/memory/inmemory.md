@@ -13,7 +13,9 @@ memoryService := memoryinmemory.NewMemoryService()
 
 **Configuration options**:
 
-- `WithMemoryLimit(limit int)`: Set memory limit per user
+- `WithMemoryLimit(limit int)`: Set memory limit per user. At the limit,
+  `AddMemory` still accepts an existing memory ID, including topic updates;
+  only new IDs require available capacity.
 - `WithMinSearchScore(score float64)`: Filter keyword-search scores below the
   configured threshold (default 0.3)
 - `WithMaxResults(maxResults int)`: Limit keyword-search results (default 10;
