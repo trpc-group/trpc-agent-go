@@ -87,3 +87,26 @@ func TestCancellationPersistence_FailedAckStopsModelContinuation(t *testing.T) {
 	records := executionRecords(t, svc)
 	require.Equal(t, "completed", records[0].Calls[0].Status, "real outcome is still retained independently")
 }
+
+func TestCancellationPersistence_StateOnlyLateDeltaIsRetained(t *testing.T) {
+	svc := inmemory.NewSessionService()
+	defer svc.Close()
+	r := &runner{sessionService: svc, toolExecutionTracking: true}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess, generation, err := r.restoreWithGeneration(context.Background(), agent.RunOptions{}, key)
+	require.NoError(t, err)
+	_, _, err = r.restoreWithGeneration(context.Background(), agent.RunOptions{}, key)
+	require.NoError(t, err)
+	late := event.New("old", "agent")
+	late.StateDelta = map[string][]byte{"value": []byte(`"late"`)}
+	require.NoError(t, r.appendWithGeneration(context.Background(), sess, late, generation))
+	restored, err := svc.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	_, applied := restored.GetState("value")
+	require.False(t, applied)
+	audit, ok := restored.GetState(staleStatePrefix + late.ID)
+	require.True(t, ok)
+	var values map[string][]byte
+	require.NoError(t, json.Unmarshal(audit, &values))
+	require.Equal(t, late.StateDelta, values)
+}

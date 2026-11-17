@@ -2810,10 +2810,7 @@ func (r *runner) handleEventPersistence(
 		runnerLatencySpanPersistEvent,
 		runnerEventAttrs(persistEvent)...,
 	)
-	coordinated, appendErr := finalization.Append(appendCtx, invocation, persistEvent)
-	if !coordinated {
-		appendErr = r.sessionService.AppendEvent(appendCtx, persistSession, persistEvent)
-	}
+	appendErr := r.appendRunEvent(appendCtx, invocation, persistSession, persistEvent)
 	if err := appendErr; err != nil {
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		log.Errorf("Failed to append event to session: %v", err)
@@ -4535,4 +4532,11 @@ func (r *runner) defaultIngestOptions(
 // Custom agents and Graph checkpoint execution are not tracked by this option.
 func WithToolExecutionTracking(enabled bool) Option {
 	return func(o *Options) { o.toolExecutionTracking = enabled }
+}
+
+func (r *runner) appendRunEvent(ctx context.Context, inv *agent.Invocation, sess *session.Session, e *event.Event) error {
+	if coordinated, err := finalization.Append(ctx, inv, e); coordinated {
+		return err
+	}
+	return r.sessionService.AppendEvent(ctx, sess, e)
 }

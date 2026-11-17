@@ -21,6 +21,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const staleStatePrefix = "__tool_stale_state_v1/"
+
 // The gate covers session restoration and framework appends on this Runner.
 // It is not a distributed store transaction or a lock on user-owned objects.
 type cancellationPersistence struct {
@@ -99,6 +101,7 @@ func (r *runner) appendWithGeneration(ctx context.Context, sess *session.Session
 				clone.Extensions = make(map[string]json.RawMessage)
 			}
 			clone.Extensions["trpc_agent.stale_state_delta.v1"] = data
+			clone.StateDelta[staleStatePrefix+e.ID] = data
 		}
 		e = clone
 	}

@@ -71,4 +71,18 @@ func TestAppendWaitCanBeCancelled(t *testing.T) {
 	require.ErrorIs(t, c.Append(ctx, event.New("i", "a")), context.Canceled)
 	close(release)
 	<-done
+	require.ErrorIs(t, c.Err(), context.Canceled)
+}
+
+func TestCancelledSubmissionCanBeAcknowledgedByFallback(t *testing.T) {
+	c := Attach(agent.NewInvocation(), func(context.Context, *event.Event) error { return nil })
+	e := event.New("i", "a")
+	c.gate <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, c.Append(ctx, e), context.Canceled)
+	<-c.gate
+	require.NoError(t, c.Append(context.Background(), e))
+	require.NoError(t, c.Err())
+	require.ErrorContains(t, c.Append(context.Background(), &event.Event{}), "requires an id")
 }

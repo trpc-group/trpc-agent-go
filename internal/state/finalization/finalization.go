@@ -23,16 +23,17 @@ const stateKey = "__run_finalization__"
 // Coordinator serializes event appends and retains their acknowledged outcome.
 // Failed/uncertain writes are not automatically retried, even after cancellation.
 type Coordinator struct {
-	gate       chan struct{}
-	mu         sync.Mutex
-	results    map[string]error
-	append     func(context.Context, *event.Event) error
-	firstError error
+	unsubmitted map[string]error
+	gate        chan struct{}
+	mu          sync.Mutex
+	results     map[string]error
+	append      func(context.Context, *event.Event) error
+	firstError  error
 }
 
 // Attach installs a coordinator inherited by invocation clones.
 func Attach(inv *agent.Invocation, appendEvent func(context.Context, *event.Event) error) *Coordinator {
-	c := &Coordinator{gate: make(chan struct{}, 1), results: make(map[string]error), append: appendEvent}
+	c := &Coordinator{gate: make(chan struct{}, 1), results: make(map[string]error), unsubmitted: make(map[string]error), append: appendEvent}
 	inv.SetState(stateKey, c)
 	return c
 }
@@ -46,9 +47,19 @@ func FromInvocation(inv *agent.Invocation) *Coordinator {
 // Append serializes competing normal/fallback paths. The first append's error
 // remains authoritative: an error may mean the store committed before timing out.
 func (c *Coordinator) Append(ctx context.Context, e *event.Event) error {
+	if e == nil {
+		return nil
+	}
+	if e.ID == "" {
+		return errors.New("tracked event requires an id")
+	}
+
 	select {
 	case c.gate <- struct{}{}:
 	case <-ctx.Done():
+		c.mu.Lock()
+		c.unsubmitted[e.ID] = ctx.Err()
+		c.mu.Unlock()
 		return ctx.Err()
 	}
 	defer func() { <-c.gate }()
@@ -83,7 +94,15 @@ func (c *Coordinator) Err() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.firstError
+	if c.firstError != nil {
+		return c.firstError
+	}
+	for id, err := range c.unsubmitted {
+		if _, acknowledged := c.results[id]; !acknowledged {
+			return err
+		}
+	}
+	return nil
 }
 
 // Append uses the optional coordinator without widening SessionService.
