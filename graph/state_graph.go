@@ -6282,9 +6282,13 @@ func successfulToolResultMessage(result any, callErr error, call model.ToolCall)
 	if !ok {
 		return nil
 	}
-	message.ToolID = call.ID
-	message.ToolName = call.Function.Name
-	return &message
+	// Allocate only after conversion succeeds so ordinary results do not pay
+	// for a message that will be discarded.
+	resultMessage := new(model.Message)
+	*resultMessage = message
+	resultMessage.ToolID = call.ID
+	resultMessage.ToolName = call.Function.Name
+	return resultMessage
 }
 
 func setToolResultContent(contents [][]byte, index int, content []byte) {
