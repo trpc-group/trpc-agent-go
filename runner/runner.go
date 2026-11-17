@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/finalization"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
@@ -329,6 +330,8 @@ type RunStatus struct {
 
 // runner runs agents.
 type runner struct {
+	persistenceOnce                    sync.Once
+	persistence                        *cancellationPersistence
 	appName                            string
 	defaultAgentName                   string
 	agents                             map[string]agent.Agent
@@ -623,7 +626,7 @@ func (r *runner) Run(
 		sessionCtx,
 		sessionRestoreFilterKey(effectiveAppName, ro),
 	)
-	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
+	sess, generation, err := r.restoreWithGeneration(sessionCtx, ro, sessionKey)
 	if sessionStarted && sess != nil {
 		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
 	}
@@ -773,7 +776,7 @@ func (r *runner) Run(
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
 	flush.Attach(execCtx, invocation, flushChan)
-	r.attachSessionAppender(invocation, sess)
+	r.attachSessionAppender(invocation, sess, generation)
 	// Expose the live session pointer so that downstream components (such
 	// as AgentTool sub-agents) can restore it after the function-call
 	// processor clones the session for state-delta isolation.
@@ -862,7 +865,12 @@ func sessionRestoreFilterKey(effectiveAppName string, ro agent.RunOptions) strin
 func (r *runner) attachSessionAppender(
 	invocation *agent.Invocation,
 	defaultSession *session.Session,
+	generations ...string,
 ) {
+	generation := ""
+	if len(generations) > 0 {
+		generation = generations[0]
+	}
 	appendEvent := func(ctx context.Context, e *event.Event) error {
 		if e == nil {
 			return nil
@@ -877,13 +885,16 @@ func (r *runner) attachSessionAppender(
 			runnerLatencySpanPersistEvent,
 			runnerEventAttrs(e)...,
 		)
-		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
+		err := r.appendWithGeneration(appendCtx, persistSession, e, generation)
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		return err
 	}
-	appender.Attach(invocation, appendEvent)
 	if r.toolExecutionTracking {
-		tooljournal.Attach(invocation, appendEvent)
+		coordinator := finalization.Attach(invocation, appendEvent)
+		appender.Attach(invocation, coordinator.Append)
+		tooljournal.Attach(invocation, coordinator.Append)
+	} else {
+		appender.Attach(invocation, appendEvent)
 	}
 }
 
@@ -2799,11 +2810,11 @@ func (r *runner) handleEventPersistence(
 		runnerLatencySpanPersistEvent,
 		runnerEventAttrs(persistEvent)...,
 	)
-	if err := r.sessionService.AppendEvent(
-		appendCtx,
-		persistSession,
-		persistEvent,
-	); err != nil {
+	coordinated, appendErr := finalization.Append(appendCtx, invocation, persistEvent)
+	if !coordinated {
+		appendErr = r.sessionService.AppendEvent(appendCtx, persistSession, persistEvent)
+	}
+	if err := appendErr; err != nil {
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		log.Errorf("Failed to append event to session: %v", err)
 		return false
