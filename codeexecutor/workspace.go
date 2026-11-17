@@ -77,9 +77,10 @@ type Workspace struct {
 // ordinary errors or join ErrWorkspaceRetryUnsafe.
 var ErrWorkspaceStale = errors.New("codeexecutor: workspace is stale")
 
-// ErrWorkspaceRetryUnsafe marks a stale operation that may have produced side
-// effects and therefore must not be replayed automatically. The enclosing error
-// should also match [ErrWorkspaceStale] so callers can invalidate its handle.
+// ErrWorkspaceRetryUnsafe marks an operation that may have produced side
+// effects and therefore must not be replayed automatically. If the workspace
+// handle is also known to be stale, the error should match [ErrWorkspaceStale]
+// so callers can invalidate it.
 var ErrWorkspaceRetryUnsafe = errors.New(
 	"codeexecutor: workspace operation is unsafe to retry",
 )
