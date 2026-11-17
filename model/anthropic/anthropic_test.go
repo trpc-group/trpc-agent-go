@@ -3683,3 +3683,55 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 		})
 	}
 }
+
+func TestModel_GenerateContent_NullMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "null", body: "null"},
+		{name: "null_with_whitespace", body: " \n\tnull\r\n "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+
+			callbackCalled := false
+			m := New("claude-test",
+				WithAPIKey("test-key"),
+				WithBaseURL(server.URL),
+				WithChatResponseCallback(func(
+					_ context.Context,
+					_ *anthropic.MessageNewParams,
+					_ *anthropic.Message,
+				) {
+					callbackCalled = true
+				}),
+			)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			ch, err := m.GenerateContent(ctx, &model.Request{
+				Messages:         []model.Message{model.NewUserMessage("hello")},
+				GenerationConfig: model.GenerationConfig{Stream: false},
+			})
+			require.NoError(t, err)
+			var responses []*model.Response
+			for resp := range ch {
+				responses = append(responses, resp)
+			}
+
+			require.Len(t, responses, 1)
+			resp := responses[0]
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
+			assert.Contains(t, resp.Error.Message, "nil message")
+			assert.True(t, resp.Done)
+			assert.Empty(t, resp.Choices)
+			assert.False(t, callbackCalled, "invalid responses must not invoke the success callback")
+		})
+	}
+}
