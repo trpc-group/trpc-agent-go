@@ -95,7 +95,11 @@ after provider callbacks, extra fields, and SDK JSON options, including when no
 tools remain. Deprecated `functions` and `function_call` fields continue to be
 omitted during finalization.
 Model wrappers must forward `PreservesToolsWhenDisabled() bool` to retain this
-optimization; wrappers without that capability use tool omission.
+optimization. Without forwarding, the flow clears `Request.Tools` and the tool
+control fields in `Request.ExtraFields`. This does not disable the option on the
+inner OpenAI model: it still forces `tool_choice: "none"` and keeps tool
+definitions supplied by model-level extra fields, SDK JSON options, and provider
+callbacks.
 
 Verify the endpoint and model before enabling this option. Some compatible
 gateways reject or ignore `"none"`. API errors follow the existing error path,

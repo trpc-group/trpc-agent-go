@@ -1216,7 +1216,9 @@ func (p *streamingResponseProcessor) repairToolCallTextAndStats(
 func (p *streamingResponseProcessor) repairToolCallText(
 	response *model.Response,
 ) bool {
-	if p.currentInvocation == nil || calllimit.Active(p.currentInvocation) {
+	// Callbacks can replace the context invocation without its finalization state.
+	if p.currentInvocation == nil || calllimit.Active(p.invocation) ||
+		calllimit.Active(p.currentInvocation) {
 		return false
 	}
 	if !isToolCallTextRepairEnabled(p.currentInvocation) {
@@ -1229,7 +1231,8 @@ func (p *streamingResponseProcessor) shouldBufferToolCallTextPartial(
 	response *model.Response,
 ) bool {
 	return response != nil && response.IsPartial &&
-		p.currentInvocation != nil && !calllimit.Active(p.currentInvocation) &&
+		p.currentInvocation != nil && !calllimit.Active(p.invocation) &&
+		!calllimit.Active(p.currentInvocation) &&
 		isToolCallTextRepairEnabled(p.currentInvocation) &&
 		p.llmRequest != nil && len(p.llmRequest.Tools) > 0 &&
 		responseMayContainTextToolCall(response)
@@ -1428,7 +1431,9 @@ func (f *Flow) createLLMResponseEvent(
 		response,
 		optionsInvocation,
 	)
-	if !calllimit.Active(optionsInvocation) && len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+	// The event invocation retains finalization state across callback replacement.
+	if !calllimit.Active(eventInvocation) && !calllimit.Active(optionsInvocation) &&
+		len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
 	}
 	return llmResponseEvent
@@ -2851,7 +2856,7 @@ func isCallLimitFinalizationMessage(
 }
 
 // disabledToolPreserver is an optional, instance-specific model capability.
-// Wrappers that do not forward it keep the default tool-omission behavior.
+// Wrappers must forward it to preserve framework request tool definitions.
 type disabledToolPreserver interface {
 	PreservesToolsWhenDisabled() bool
 }

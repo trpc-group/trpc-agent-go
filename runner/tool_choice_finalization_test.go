@@ -210,3 +210,88 @@ func TestRunner_CallLimitFinalizationHonorsBeforeModelToolFilter(t *testing.T) {
 	require.Equal(t, "none", captured[1]["tool_choice"])
 	require.Equal(t, captured[0]["tools"], captured[1]["tools"])
 }
+
+func TestRunner_CallLimitFinalizationWithReplacedInvocation(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, stage := range []string{"before", "after"} {
+			for _, finalResponse := range []string{"tool_call", "text"} {
+				t.Run(fmt.Sprintf("enabled=%v/stage=%s/final=%s", enabled, stage, finalResponse), func(t *testing.T) {
+					const content = "<tool_call>lookup</tool_call>"
+					var calls, executions int
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						var body map[string]any
+						require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+						calls++
+						if enabled {
+							require.Len(t, body["tools"], 1)
+							require.Equal(t, "none", body["tool_choice"])
+						} else {
+							require.NotContains(t, body, "tools")
+							require.NotContains(t, body, "tool_choice")
+						}
+						w.Header().Set("Content-Type", "application/json")
+						if finalResponse == "tool_call" {
+							fmt.Fprint(w, `{"id":"unexpected","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"lookup-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+						} else {
+							fmt.Fprintf(w, `{"id":"text","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, content)
+						}
+					}))
+					defer server.Close()
+					m := openai.New("test", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
+						openai.WithToolChoiceNoneWhenToolsDisabled(enabled),
+						openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
+					lookup := function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
+						executions++
+						return "unexpected execution", nil
+					}, function.WithName("lookup"), function.WithLongRunning(true))
+					callbacks := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, _ *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+						if stage != "before" {
+							return nil, nil
+						}
+						inv, ok := agent.InvocationFromContext(ctx)
+						require.True(t, ok)
+						return &model.BeforeModelResult{Context: agent.NewInvocationContext(ctx, inv.Clone())}, nil
+					}).RegisterAfterModel(func(ctx context.Context, _ *model.AfterModelArgs) (*model.AfterModelResult, error) {
+						if stage != "after" {
+							return nil, nil
+						}
+						inv, ok := agent.InvocationFromContext(ctx)
+						require.True(t, ok)
+						return &model.AfterModelResult{Context: agent.NewInvocationContext(ctx, inv.Clone())}, nil
+					})
+					a := llmagent.New("assistant", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{lookup}),
+						llmagent.WithModelCallbacks(callbacks), llmagent.WithMaxLLMCalls(1),
+						llmagent.WithLLMCallLimitFinalization("finish"))
+					r := runner.NewRunner("finalization", a)
+					defer r.Close()
+					ch, err := r.Run(context.Background(), "user", "session", model.NewUserMessage("question"),
+						agent.WithToolCallTextRepairEnabled(true))
+					require.NoError(t, err)
+					var errors []string
+					var answer string
+					for e := range ch {
+						require.Empty(t, e.LongRunningToolIDs, "rejected tool calls must not be marked pending")
+						if e.Response == nil {
+							continue
+						}
+						if e.Error != nil {
+							errors = append(errors, e.Error.Message)
+						}
+						for _, c := range e.Choices {
+							answer += c.Message.Content
+						}
+					}
+					require.Equal(t, 1, calls)
+					require.Zero(t, executions)
+					if finalResponse == "tool_call" {
+						require.Len(t, errors, 1)
+						require.Contains(t, errors[0], "tool calls are disabled during call limit finalization")
+					} else {
+						require.Empty(t, errors)
+						require.Equal(t, content, answer)
+					}
+				})
+			}
+		}
+	}
+}

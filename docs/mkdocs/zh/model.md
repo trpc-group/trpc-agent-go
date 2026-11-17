@@ -35,7 +35,9 @@ a := llmagent.New("assistant",
 工具构建、callback 修改、额外字段和 SDK JSON options 沿用普通请求的优先级，收尾不会额外过滤或恢复工具定义。
 adapter 在 provider callback、额外字段和 SDK JSON options 之后强制设置 `tool_choice: "none"`，即使没有工具也一样。
 已废弃的 `functions` 和 `function_call` 字段在收尾时继续省略。
-包装 model 需要转发 `PreservesToolsWhenDisabled() bool` 才能保留该优化；未转发的包装 model 沿用移除工具定义的行为。
+包装 model 需要转发 `PreservesToolsWhenDisabled() bool` 才能保留该优化。
+未转发时，flow 会清空 `Request.Tools` 和 `Request.ExtraFields` 中的工具控制字段，但不会关闭内层 OpenAI model 的选项：
+内层仍强制设置 `tool_choice: "none"`，并保留由 model 级额外字段、SDK JSON options 和 provider callback 提供的工具定义。
 
 请先验证具体端点和模型。一些兼容网关会拒绝或忽略 `"none"`。
 API 错误沿用既有错误路径；收尾阶段返回的工具调用会被拒绝且不会执行。

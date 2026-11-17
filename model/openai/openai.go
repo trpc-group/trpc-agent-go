@@ -574,6 +574,8 @@ func baseURLMatchesHost(raw string, hosts ...string) bool {
 // definitions when disabling tool calls. The definitions remain visible to
 // callbacks, token budgeting, and telemetry; GenerateContent enforces "none".
 // Model wrappers must forward this capability to retain this optimization.
+// When enabled, this model still enforces "none" and retains tools from its own
+// configuration and callbacks even if a wrapper does not forward the capability.
 func (m *Model) PreservesToolsWhenDisabled() bool {
 	return m.toolChoiceNoneWhenDisabled
 }

@@ -150,45 +150,81 @@ func TestCallLimitFinalization_RetryCallbackToolChanges(t *testing.T) {
 }
 
 func TestCallLimitFinalization_DoesNotMarkLongRunningToolPending(t *testing.T) {
-	inv := agent.NewInvocation()
-	instruction := "finish"
-	calllimit.Configure(inv, &instruction, nil)
-	_, active := calllimit.ActivateForLLM(inv, true)
-	require.True(t, active)
-	req := &model.Request{Tools: map[string]tool.Tool{
-		"lookup": &mockLongRunnerTool{name: "lookup", long: true},
-	}}
-	response := &model.Response{Choices: []model.Choice{{Message: model.Message{
-		Role: model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{
-			ID: "lookup-1", Type: "function", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte("{}")},
-		}},
-	}}}}
-	f := New(nil, nil, Options{})
-	evt := f.createLLMResponseEvent(agent.NewInvocation(), inv, response, req)
-	require.Empty(t, evt.LongRunningToolIDs)
-	require.Equal(t, response, evt.Response)
-	require.Contains(t, req.Tools, "lookup")
+	for _, source := range []string{"shared", "flow", "context"} {
+		t.Run(source, func(t *testing.T) {
+			inv := agent.NewInvocation()
+			instruction := "finish"
+			calllimit.Configure(inv, &instruction, nil)
+			_, active := calllimit.ActivateForLLM(inv, true)
+			require.True(t, active)
+			eventInvocation, optionsInvocation := inv, inv
+			switch source {
+			case "flow":
+				optionsInvocation = inv.Clone()
+			case "context":
+				eventInvocation = inv.Clone()
+			}
+			req := &model.Request{Tools: map[string]tool.Tool{
+				"lookup": &mockLongRunnerTool{name: "lookup", long: true},
+			}}
+			response := &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "lookup-1", Type: "function", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte("{}")},
+				}},
+			}}}}
+			f := New(nil, nil, Options{})
+			evt := f.createLLMResponseEvent(eventInvocation, optionsInvocation, response, req)
+			require.Empty(t, evt.LongRunningToolIDs)
+			require.Equal(t, response, evt.Response)
+			require.Contains(t, req.Tools, "lookup")
+
+			calllimit.Finish(inv)
+			evt = f.createLLMResponseEvent(eventInvocation, optionsInvocation, response, req)
+			require.Contains(t, evt.LongRunningToolIDs, "lookup-1")
+		})
+	}
 }
 
 func TestCallLimitFinalization_DoesNotRepairOrBufferToolText(t *testing.T) {
-	enabled := true
-	instruction := "finish"
-	inv := agent.NewInvocation()
-	inv.RunOptions.ToolCallTextRepairEnabled = &enabled
-	calllimit.Configure(inv, &instruction, nil)
-	_, active := calllimit.ActivateForLLM(inv, true)
-	require.True(t, active)
-	p := &streamingResponseProcessor{
-		ctx:               context.Background(),
-		currentInvocation: inv,
-		llmRequest:        &model.Request{Tools: map[string]tool.Tool{"lookup": &mockLongRunnerTool{name: "lookup"}}},
+	for _, source := range []string{"shared", "flow", "context"} {
+		t.Run(source, func(t *testing.T) {
+			inv := agent.NewInvocation(agent.WithInvocationRunOptions(
+				agent.NewRunOptions(agent.WithToolCallTextRepairEnabled(true)),
+			))
+			instruction := "finish"
+			calllimit.Configure(inv, &instruction, nil)
+			_, active := calllimit.ActivateForLLM(inv, true)
+			require.True(t, active)
+			p := &streamingResponseProcessor{
+				ctx:               context.Background(),
+				invocation:        inv,
+				currentInvocation: inv,
+				llmRequest:        &model.Request{Tools: map[string]tool.Tool{"lookup": &mockLongRunnerTool{name: "lookup"}}},
+			}
+			switch source {
+			case "flow":
+				p.currentInvocation = inv.Clone()
+			case "context":
+				p.invocation = inv.Clone()
+			}
+			const content = "<tool_call>lookup</tool_call>"
+			response := &model.Response{Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(content),
+			}}}
+			require.False(t, p.repairToolCallText(response))
+			require.Empty(t, response.Choices[0].Message.ToolCalls)
+			require.Equal(t, content, response.Choices[0].Message.Content)
+			response.IsPartial = true
+			require.False(t, p.shouldBufferToolCallTextPartial(response))
+
+			// The same valid tool text is buffered and repaired outside finalization.
+			calllimit.Finish(inv)
+			require.True(t, p.shouldBufferToolCallTextPartial(response))
+			response.IsPartial = false
+			require.True(t, p.repairToolCallText(response))
+			require.Len(t, response.Choices[0].Message.ToolCalls, 1)
+			require.Equal(t, "lookup", response.Choices[0].Message.ToolCalls[0].Function.Name)
+		})
 	}
-	response := &model.Response{Choices: []model.Choice{{
-		Message: model.NewAssistantMessage(`<tool_call>{"name":"lookup","arguments":{}}</tool_call>`),
-	}}}
-	require.False(t, p.repairToolCallText(response))
-	require.Empty(t, response.Choices[0].Message.ToolCalls)
-	response.IsPartial = true
-	require.False(t, p.shouldBufferToolCallTextPartial(response))
 }
