@@ -166,14 +166,14 @@ type Option func(*options)
 // WithToolChoiceNoneWhenToolsDisabled preserves tool definitions and forces
 // tool_choice to "none" when the framework disables tools, including during
 // call-limit finalization. The default is false, which omits tool definitions.
-// Callbacks may remove existing tools or edit their schemas; newly added or
-// renamed tools are filtered out. Provider callbacks retain the tools that
-// remain after BeforeModel callbacks. Tool-control extra fields and SDK options
-// cannot override this policy.
+// Tool definitions follow the usual conversion, callbacks, extra fields, and
+// SDK JSON options. The final tool_choice cannot be overridden by those fields
+// or JSON options.
+// The deprecated functions and function_call fields are omitted.
 // Enable this only for endpoints verified to honor "none". Cache reuse depends
-// on the provider. With no tool definitions, both tools and tool_choice are
-// omitted. API errors and unexpected tool calls follow the existing
-// finalization error behavior without an additional fallback request.
+// on the provider. The tool_choice is set even when there are no tools.
+// API errors and unexpected tool calls follow the existing finalization error
+// behavior without an additional fallback request.
 // This option does not change tool choice for ordinary model calls.
 func WithToolChoiceNoneWhenToolsDisabled(enabled bool) Option {
 	return func(opts *options) {

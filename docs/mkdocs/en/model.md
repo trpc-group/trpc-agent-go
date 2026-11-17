@@ -88,12 +88,12 @@ a := llmagent.New("assistant",
 The default is false and omits tools as before. This setting applies to both
 LLM-call and tool-iteration finalization, and leaves ordinary calls unchanged.
 When enabled, `BeforeModel` callbacks, input-token budgeting, and telemetry see
-the retained tool definitions. Callbacks can remove existing tools and modify
-their schemas (including descriptions, parameters, and `strict`). Removed tools
-are not restored; new or renamed tools are filtered out. The adapter retains
-the resulting tool order and forces `tool_choice: "none"` after provider
-callbacks, extra fields, and SDK options. If no tools remain, both `tools` and
-`tool_choice` are omitted.
+the tool definitions. Tool construction, callback edits, extra fields, and SDK
+JSON options follow the same precedence as ordinary requests. Finalization does
+not filter or restore tool definitions. The adapter forces `tool_choice: "none"`
+after provider callbacks, extra fields, and SDK JSON options, including when no
+tools remain. Deprecated `functions` and `function_call` fields continue to be
+omitted during finalization.
 Model wrappers must forward `PreservesToolsWhenDisabled() bool` to retain this
 optimization; wrappers without that capability use tool omission.
 

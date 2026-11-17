@@ -32,9 +32,9 @@ a := llmagent.New("assistant",
 
 此选项默认为 false，沿用移除工具定义的行为。它同时适用于 LLM 调用次数上限和工具迭代上限触发的收尾，普通调用不受影响。
 开启后，`BeforeModel` callback、输入 token 预算和 telemetry 都能看到保留的工具定义。
-callback 可以删除已有工具，或修改其声明（包括描述、参数和 `strict`）。删除的工具不会被恢复，新增或重命名的工具会被过滤。
-adapter 保留处理后的工具顺序，并在 provider callback、额外字段和 SDK options 之后强制设置 `tool_choice: "none"`。
-如果工具全部被删除，则同时省略 `tools` 和 `tool_choice`。
+工具构建、callback 修改、额外字段和 SDK JSON options 沿用普通请求的优先级，收尾不会额外过滤或恢复工具定义。
+adapter 在 provider callback、额外字段和 SDK JSON options 之后强制设置 `tool_choice: "none"`，即使没有工具也一样。
+已废弃的 `functions` 和 `function_call` 字段在收尾时继续省略。
 包装 model 需要转发 `PreservesToolsWhenDisabled() bool` 才能保留该优化；未转发的包装 model 沿用移除工具定义的行为。
 
 请先验证具体端点和模型。一些兼容网关会拒绝或忽略 `"none"`。

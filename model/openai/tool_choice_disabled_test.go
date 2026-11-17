@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,78 +28,222 @@ import (
 )
 
 func TestToolsDisabledWithNone_WireContract(t *testing.T) {
+	makeTool := func(name string) map[string]any {
+		return map[string]any{
+			"type":          "function",
+			"function":      map[string]any{"name": name, "vendor_schema": "preserved"},
+			"cache_control": map[string]any{"type": "ephemeral"},
+		}
+	}
+	cases := []struct {
+		name          string
+		noTools       bool
+		callback      func(*openaigo.ChatCompletionNewParams)
+		modelFields   map[string]any
+		requestFields map[string]any
+		sdkOptions    []openaiopt.RequestOption
+		wantNames     []string
+		wantAbsent    bool
+		wantValue     any
+		check         func(*testing.T, []any)
+	}{
+		{
+			name: "callback_add_rename_duplicate",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.Tools[0].Function.Name = "renamed"
+				req.Tools[0].SetExtraFields(map[string]any{
+					"cache_control": map[string]any{"type": "ephemeral"},
+				})
+				req.Tools = append(req.Tools, req.Tools[0], openaigo.ChatCompletionToolParam{
+					Function: openaigo.FunctionDefinitionParam{Name: "added"},
+				})
+			},
+			wantNames: []string{"renamed", "omega", "renamed", "added"},
+			check: func(t *testing.T, tools []any) {
+				require.Equal(t, map[string]any{"type": "ephemeral"}, tools[0].(map[string]any)["cache_control"])
+				require.Equal(t, tools[0], tools[2])
+			},
+		},
+		{
+			name:       "callback_remove",
+			callback:   func(req *openaigo.ChatCompletionNewParams) { req.Tools = nil },
+			wantAbsent: true,
+		},
+		{
+			name: "callback_nested_fields",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.Tools[0].Function.SetExtraFields(map[string]any{
+					"name": "nested_rename", "vendor_schema": "preserved",
+				})
+			},
+			wantNames: []string{"nested_rename", "omega"},
+			check: func(t *testing.T, tools []any) {
+				fn := tools[0].(map[string]any)["function"].(map[string]any)
+				require.Equal(t, "preserved", fn["vendor_schema"])
+			},
+		},
+		{
+			name: "callback_nested_override",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.Tools[0] = openaiparam.Override[openaigo.ChatCompletionToolParam](
+					json.RawMessage(`{"type":"function","function":{"name":"nested_override","custom":true},"vendor":"kept"}`),
+				)
+			},
+			wantNames: []string{"nested_override", "omega"},
+			check: func(t *testing.T, tools []any) {
+				require.Equal(t, "kept", tools[0].(map[string]any)["vendor"])
+			},
+		},
+		{
+			name: "callback_extra_fields",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.SetExtraFields(map[string]any{
+					"tools":       []any{makeTool("extra"), makeTool("extra")},
+					"tool_choice": "required", "function_call": "auto",
+					"functions":      []any{map[string]any{"name": "legacy"}},
+					"callback_field": "kept",
+				})
+			},
+			wantNames: []string{"extra", "extra"},
+			check: func(t *testing.T, tools []any) {
+				require.Equal(t, makeTool("extra"), tools[0])
+			},
+		},
+		{
+			name: "callback_omit_tools",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.SetExtraFields(map[string]any{"tools": openaiparam.Omit, "tool_choice": "required"})
+			},
+			wantAbsent: true,
+		},
+		{
+			name: "callback_whole_override",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				*req = openaiparam.Override[openaigo.ChatCompletionNewParams](map[string]any{
+					"model": "test", "messages": []any{map[string]any{"role": "user", "content": "test"}},
+					"tools":       []any{makeTool("whole"), makeTool("whole")},
+					"tool_choice": "required", "function_call": "auto",
+					"functions":      []any{map[string]any{"name": "legacy"}},
+					"callback_field": "kept",
+				})
+			},
+			wantNames: []string{"whole", "whole"},
+			check: func(t *testing.T, tools []any) {
+				require.Equal(t, makeTool("whole"), tools[0])
+			},
+		},
+		{
+			name: "model_extra_fields",
+			modelFields: map[string]any{
+				"tools": []any{makeTool("model")}, "tool_choice": "required",
+				"functions": []any{map[string]any{"name": "model"}}, "function_call": "auto",
+			},
+			wantNames: []string{"model"},
+			check:     func(t *testing.T, tools []any) { require.Equal(t, makeTool("model"), tools[0]) },
+		},
+		{
+			name:        "request_extra_fields_override_model",
+			modelFields: map[string]any{"tools": []any{makeTool("model")}, "tool_choice": "required"},
+			requestFields: map[string]any{
+				"tools": []any{makeTool("request")}, "tool_choice": "required",
+				"functions": []any{map[string]any{"name": "request"}}, "function_call": "auto",
+			},
+			wantNames: []string{"request"},
+			check:     func(t *testing.T, tools []any) { require.Equal(t, makeTool("request"), tools[0]) },
+		},
+		{
+			name: "sdk_tools_and_nested_override",
+			sdkOptions: []openaiopt.RequestOption{
+				openaiopt.WithJSONSet("tools", []any{makeTool("sdk"), makeTool("sdk")}),
+				openaiopt.WithJSONSet("tools.0.function.name", "sdk_nested"),
+			},
+			wantNames: []string{"sdk_nested", "sdk"},
+			check: func(t *testing.T, tools []any) {
+				tool := tools[0].(map[string]any)
+				require.Equal(t, map[string]any{"type": "ephemeral"}, tool["cache_control"])
+				require.Equal(t, "preserved", tool["function"].(map[string]any)["vendor_schema"])
+			},
+		},
+		{
+			name:    "callback_adds_to_empty",
+			noTools: true,
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.Tools = []openaigo.ChatCompletionToolParam{{Function: openaigo.FunctionDefinitionParam{Name: "added"}}}
+			},
+			wantNames: []string{"added"},
+		},
+		{name: "no_tools", noTools: true, wantAbsent: true},
+		{
+			name: "tools_are_not_validated",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.SetExtraFields(map[string]any{"tools": 42})
+			},
+			wantValue: float64(42),
+		},
+		{
+			name: "provider_specific_tool",
+			callback: func(req *openaigo.ChatCompletionNewParams) {
+				req.SetExtraFields(map[string]any{"tools": []any{
+					map[string]any{"type": "web_search", "vendor_option": "kept"},
+				}})
+			},
+			wantValue: []any{map[string]any{"type": "web_search", "vendor_option": "kept"}},
+		},
+	}
+
 	for _, iter := range []bool{false, true} {
 		for _, stream := range []bool{false, true} {
-			for _, callbackMode := range []string{"typed", "fields", "override", "remove", "omit", "rename", "nested_rename"} {
-				for _, hasTools := range []bool{false, true} {
-					t.Run(fmt.Sprintf("iter=%v/stream=%v/override=%v/tools=%v", iter, stream, callbackMode, hasTools), func(t *testing.T) {
-						var captured map[string]any
-						server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-							require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
-							if stream {
-								w.Header().Set("Content-Type", "text/event-stream")
-								fmt.Fprint(w, "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
-								return
+			for _, tc := range cases {
+				t.Run(fmt.Sprintf("iter=%v/stream=%v/%s", iter, stream, tc.name), func(t *testing.T) {
+					captured := make(chan []byte, 2)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							http.Error(w, err.Error(), http.StatusBadRequest)
+							return
+						}
+						captured <- body
+						if stream {
+							w.Header().Set("Content-Type", "text/event-stream")
+							fmt.Fprint(w, "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+							return
+						}
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, `{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+					}))
+					defer server.Close()
+					sdkOptions := []openaiopt.RequestOption{
+						openaiopt.WithMaxRetries(0),
+						openaiopt.WithJSONSet("tool_choice", "required"),
+						openaiopt.WithJSONSet("function_call", "auto"),
+						openaiopt.WithJSONSet("functions", []any{map[string]any{"name": "legacy"}}),
+						openaiopt.WithJSONSet("parallel_tool_calls", true),
+					}
+					sdkOptions = append(sdkOptions, tc.sdkOptions...)
+					m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"),
+						WithToolChoiceNoneWhenToolsDisabled(true), WithOpenAIOptions(sdkOptions...),
+						WithExtraFields(tc.modelFields),
+						WithChatRequestCallback(func(_ context.Context, req *openaigo.ChatCompletionNewParams) {
+							req.ToolChoice = openaigo.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openaigo.String("required")}
+							req.FunctionCall = openaigo.ChatCompletionNewParamsFunctionCallUnion{OfFunctionCallMode: openaigo.String("auto")}
+							if tc.callback != nil {
+								tc.callback(req)
 							}
-							w.Header().Set("Content-Type", "application/json")
-							fmt.Fprint(w, `{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
-						}))
-						defer server.Close()
-						controls := map[string]any{"tools": []any{}, "tool_choice": "required", "parallel_tool_calls": true, "function_call": "auto", "functions": []any{}}
-						m := New("test",
-							WithBaseURL(server.URL), WithAPIKey("test-key"),
-							WithToolChoiceNoneWhenToolsDisabled(true),
-							WithOpenAIOptions(openaiopt.WithJSONSet("tools", []any{}), openaiopt.WithJSONSet("tool_choice", "required"), openaiopt.WithMaxRetries(0)),
-							WithExtraFields(controls),
-							WithChatRequestCallback(func(_ context.Context, req *openaigo.ChatCompletionNewParams) {
-								// Filter z, normalize a, and attempt to add a new tool.
-								normalized := openaigo.ChatCompletionToolParam{Function: openaigo.FunctionDefinitionParam{
-									Name: "a", Strict: openaigo.Bool(true), Description: openaigo.String("normalized"),
-									Parameters: openaigo.FunctionParameters{"type": "object", "additionalProperties": false},
-								}}
-								normalized.SetExtraFields(map[string]any{"cache_control": map[string]any{"type": "ephemeral"}})
-								candidates := []openaigo.ChatCompletionToolParam{normalized, {Function: openaigo.FunctionDefinitionParam{Name: "injected"}}}
-								fields := map[string]any{"tool_choice": "required", "parallel_tool_calls": true,
-									"function_call": "auto", "functions": []any{}, "callback_field": "kept"}
-								req.ToolChoice = openaigo.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openaigo.String("required")}
-								switch callbackMode {
-								case "typed":
-									req.Tools = candidates
-								case "fields":
-									fields["tools"] = candidates
-								case "override":
-									fields["model"] = "test"
-									fields["messages"] = []any{map[string]any{"role": "user", "content": "test"}}
-									fields["stream"] = stream
-									fields["tools"] = candidates
-									*req = openaiparam.Override[openaigo.ChatCompletionNewParams](fields)
-									return
-								case "remove":
-									req.Tools = nil
-								case "omit":
-									fields["tools"] = openaiparam.Omit
-								case "rename":
-									for i := range req.Tools {
-										req.Tools[i].Function.Name = "renamed"
-									}
-								case "nested_rename":
-									for i := range req.Tools {
-										req.Tools[i].Function.SetExtraFields(map[string]any{"name": "renamed"})
-									}
-								}
-								req.SetExtraFields(fields)
-							}),
-						)
-						req := &model.Request{
-							Messages:         []model.Message{model.NewUserMessage("test")},
-							GenerationConfig: model.GenerationConfig{Stream: stream},
-							ExtraFields:      controls,
+						}),
+					)
+					req := &model.Request{
+						Messages:         []model.Message{model.NewUserMessage("test")},
+						GenerationConfig: model.GenerationConfig{Stream: stream},
+						ExtraFields:      tc.requestFields,
+					}
+					if !tc.noTools {
+						req.Tools = map[string]tool.Tool{
+							"alpha": stubTool{decl: &tool.Declaration{Name: "alpha"}},
+							"omega": stubTool{decl: &tool.Declaration{Name: "omega"}},
 						}
-						if hasTools {
-							req.Tools = map[string]tool.Tool{"z": stubTool{decl: &tool.Declaration{Name: "z"}}, "a": stubTool{decl: &tool.Declaration{Name: "a"}}}
-						}
-						wantTools := `[{"type":"function","function":{"name":"a","strict":true,"description":"normalized","parameters":{"type":"object","additionalProperties":false}},"cache_control":{"type":"ephemeral"}}]`
-						ctx := imodelrequest.WithToolsDisabled(context.Background())
+					}
+					var bodies []map[string]any
+					for _, ctx := range []context.Context{context.Background(), imodelrequest.WithToolsDisabled(context.Background())} {
 						if iter {
 							seq, err := m.GenerateContentIter(ctx, req)
 							require.NoError(t, err)
@@ -110,21 +255,34 @@ func TestToolsDisabledWithNone_WireContract(t *testing.T) {
 								require.Nil(t, resp.Error)
 							}
 						}
-						if hasTools && (callbackMode == "typed" || callbackMode == "fields" || callbackMode == "override") {
-							require.Equal(t, "none", captured["tool_choice"])
-							got, err := json.Marshal(captured["tools"])
-							require.NoError(t, err)
-							require.JSONEq(t, wantTools, string(got))
-						} else {
-							require.NotContains(t, captured, "tools")
-							require.NotContains(t, captured, "tool_choice")
+						var body map[string]any
+						require.NoError(t, json.Unmarshal(<-captured, &body))
+						bodies = append(bodies, body)
+					}
+					require.Equal(t, "required", bodies[0]["tool_choice"])
+					require.Equal(t, "none", bodies[1]["tool_choice"])
+					require.Equal(t, bodies[0]["tools"], bodies[1]["tools"])
+					require.Equal(t, bodies[0]["parallel_tool_calls"], bodies[1]["parallel_tool_calls"])
+					require.NotContains(t, bodies[1], "functions")
+					require.NotContains(t, bodies[1], "function_call")
+					if tc.wantAbsent {
+						require.NotContains(t, bodies[0], "tools")
+						require.NotContains(t, bodies[1], "tools")
+					} else if tc.wantValue != nil {
+						require.Equal(t, tc.wantValue, bodies[1]["tools"])
+					} else {
+						tools, ok := bodies[1]["tools"].([]any)
+						require.True(t, ok)
+						require.Len(t, tools, len(tc.wantNames))
+						for i, name := range tc.wantNames {
+							fn := tools[i].(map[string]any)["function"].(map[string]any)
+							require.Equal(t, name, fn["name"])
 						}
-						for _, field := range []string{"parallel_tool_calls", "function_call", "functions"} {
-							require.NotContains(t, captured, field)
+						if tc.check != nil {
+							tc.check(t, tools)
 						}
-						require.Equal(t, "kept", captured["callback_field"])
-					})
-				}
+					}
+				})
 			}
 		}
 	}
@@ -137,7 +295,7 @@ func TestToolsDisabledWithNone_OrdinaryCallsAndBudget(t *testing.T) {
 	}
 	var captured map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		_ = json.NewDecoder(r.Body).Decode(&captured)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
 	}))
@@ -159,33 +317,25 @@ func TestToolsDisabledWithNone_OrdinaryCallsAndBudget(t *testing.T) {
 	require.Less(t, m.InputTokenBudget(context.Background(), req), m.InputTokenBudget(context.Background(), &withoutTools))
 }
 
-func TestToolsDisabledWithNone_InvalidCallbackRequest(t *testing.T) {
+func TestToolsDisabledWithNone_InvalidSchemaUsesNormalCallback(t *testing.T) {
 	for _, iter := range []bool{false, true} {
 		for _, stream := range []bool{false, true} {
-			for _, invalid := range []string{"tools", "schema", "request"} {
-				t.Run(fmt.Sprintf("iter=%v/stream=%v/invalid=%s", iter, stream, invalid), func(t *testing.T) {
-					var calls, completions int
+			for _, disabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("iter=%v/stream=%v/disabled=%v", iter, stream, disabled), func(t *testing.T) {
+					var jsonCallbacks int
+					var jsonErr error
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-						calls++
-						w.WriteHeader(http.StatusBadRequest)
+						w.WriteHeader(http.StatusInternalServerError)
 					}))
 					defer server.Close()
 					m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"),
 						WithToolChoiceNoneWhenToolsDisabled(true), WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
-						WithChatStreamCompleteCallback(func(_ context.Context, _ *openaigo.ChatCompletionNewParams, acc *openaigo.ChatCompletionAccumulator, err error) {
-							completions++
-							require.Nil(t, acc)
-							require.Error(t, err)
-						}),
 						WithChatRequestCallback(func(_ context.Context, req *openaigo.ChatCompletionNewParams) {
-							switch invalid {
-							case "tools":
-								req.SetExtraFields(map[string]any{"tools": 42})
-							case "schema":
-								req.Tools[0].Function.Parameters = openaigo.FunctionParameters{"invalid": make(chan int)}
-							case "request":
-								*req = openaiparam.Override[openaigo.ChatCompletionNewParams]([]string{"invalid"})
-							}
+							req.Tools[0].Function.Parameters = openaigo.FunctionParameters{"invalid": make(chan int)}
+						}),
+						WithChatRequestJSONCallback(func(_ context.Context, _ []byte, err error) {
+							jsonCallbacks++
+							jsonErr = err
 						}),
 					)
 					req := &model.Request{
@@ -193,64 +343,32 @@ func TestToolsDisabledWithNone_InvalidCallbackRequest(t *testing.T) {
 						Tools:            map[string]tool.Tool{"lookup": stubTool{decl: &tool.Declaration{Name: "lookup"}}},
 						GenerationConfig: model.GenerationConfig{Stream: stream},
 					}
-					ctx := imodelrequest.WithToolsDisabled(context.Background())
+					ctx := context.Background()
+					if disabled {
+						ctx = imodelrequest.WithToolsDisabled(ctx)
+					}
 					var responses []*model.Response
 					if iter {
 						seq, err := m.GenerateContentIter(ctx, req)
 						require.NoError(t, err)
-						seq(func(resp *model.Response) bool { responses = append(responses, resp); return true })
+						seq(func(response *model.Response) bool {
+							responses = append(responses, response)
+							return true
+						})
 					} else {
 						ch, err := m.GenerateContent(ctx, req)
 						require.NoError(t, err)
-						for resp := range ch {
-							responses = append(responses, resp)
+						for response := range ch {
+							responses = append(responses, response)
 						}
 					}
-					require.Zero(t, calls)
-					require.Equal(t, map[bool]int{false: 0, true: 1}[stream], completions)
+					require.Equal(t, 1, jsonCallbacks)
+					require.Error(t, jsonErr)
 					require.Len(t, responses, 1)
-					require.True(t, responses[0].Done)
 					require.NotNil(t, responses[0].Error)
-					require.Equal(t, model.ErrorTypeAPIError, responses[0].Error.Type)
-					require.Contains(t, responses[0].Error.Message, "invalid tools-disabled request")
+					require.NotContains(t, responses[0].Error.Message, "invalid tools-disabled request")
 				})
 			}
 		}
 	}
-}
-
-func TestToolsDisabledWithNone_KeepsCallbackToolSchema(t *testing.T) {
-	var captured []map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		captured = append(captured, body)
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
-	}))
-	defer server.Close()
-	m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"),
-		WithToolChoiceNoneWhenToolsDisabled(true),
-		WithChatRequestCallback(func(_ context.Context, req *openaigo.ChatCompletionNewParams) {
-			// An endpoint-wide, deterministic schema normalization applied on every request.
-			for i := range req.Tools {
-				req.Tools[i].Function.Strict = openaigo.Bool(true)
-			}
-		}),
-	)
-	req := &model.Request{
-		Messages: []model.Message{model.NewUserMessage("test")},
-		Tools:    map[string]tool.Tool{"lookup": stubTool{decl: &tool.Declaration{Name: "lookup"}}},
-	}
-	for _, ctx := range []context.Context{context.Background(), imodelrequest.WithToolsDisabled(context.Background())} {
-		ch, err := m.GenerateContent(ctx, req)
-		require.NoError(t, err)
-		for response := range ch {
-			require.Nil(t, response.Error)
-		}
-	}
-	require.Len(t, captured, 2)
-	require.Equal(t, "none", captured[1]["tool_choice"])
-	// Turning off calls should preserve the exact schemas used by the preceding request.
-	require.Equal(t, captured[0]["tools"], captured[1]["tools"])
 }

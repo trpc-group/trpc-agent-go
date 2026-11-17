@@ -30,49 +30,66 @@ type finalizationDeclarationTool struct{ decl *tool.Declaration }
 func (t *finalizationDeclarationTool) Declaration() *tool.Declaration { return t.decl }
 
 func TestCallLimitFinalization_CallbackToolChanges(t *testing.T) {
-	for _, change := range []string{"filter", "schema", "replace", "rename", "clear"} {
+	for _, change := range []string{"filter", "schema", "replace", "rename", "clear", "readd", "shared"} {
 		t.Run(change, func(t *testing.T) {
-			m := &preservingFinalizationModel{&mockModel{}}
-			inv := agent.NewInvocation(agent.WithInvocationModel(m))
-			instruction := "finish"
-			calllimit.Configure(inv, &instruction, nil)
-			_, active := calllimit.ActivateForLLM(inv, true)
-			require.True(t, active)
-			lookup := &finalizationDeclarationTool{&tool.Declaration{Name: "lookup"}}
-			req := &model.Request{Tools: map[string]tool.Tool{
-				"lookup": lookup, "restricted": &finalizationDeclarationTool{&tool.Declaration{Name: "restricted"}},
-			}}
-			callbacks := model.NewCallbacks().RegisterBeforeModel(func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-				delete(args.Request.Tools, "restricted")
-				args.Request.Tools["injected"] = &finalizationDeclarationTool{&tool.Declaration{Name: "injected"}}
-				switch change {
-				case "schema":
-					lookup.decl.Description = "normalized"
-				case "replace":
-					args.Request.Tools["lookup"] = &finalizationDeclarationTool{&tool.Declaration{Name: "lookup", Description: "normalized"}}
-				case "rename":
-					lookup.decl.Name = "renamed"
-				case "clear":
-					args.Request.Tools = nil
+			run := func(finalizing bool) *model.Request {
+				m := &preservingFinalizationModel{&mockModel{}}
+				inv := agent.NewInvocation(agent.WithInvocationModel(m))
+				if finalizing {
+					instruction := "finish"
+					calllimit.Configure(inv, &instruction, nil)
+					_, active := calllimit.ActivateForLLM(inv, true)
+					require.True(t, active)
 				}
-				return &model.BeforeModelResult{Context: context.Background()}, nil
-			}).RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-				require.True(t, imodelrequest.ToolsDisabled(ctx))
-				require.NotContains(t, args.Request.Tools, "restricted")
-				require.NotContains(t, args.Request.Tools, "injected")
-				if change == "rename" || change == "clear" {
-					require.Empty(t, args.Request.Tools)
-				} else {
-					require.Len(t, args.Request.Tools, 1)
-					if change != "filter" {
-						require.Equal(t, "normalized", args.Request.Tools["lookup"].Declaration().Description)
+				lookup := &finalizationDeclarationTool{&tool.Declaration{Name: "lookup"}}
+				injected := &finalizationDeclarationTool{&tool.Declaration{Name: "injected"}}
+				sharedTools := map[string]tool.Tool{"lookup": lookup, "injected": injected}
+				sharedExtra := map[string]any{"tool_choice": "required", "tools": "callback-value"}
+				req := &model.Request{Tools: map[string]tool.Tool{
+					"lookup": lookup, "restricted": &finalizationDeclarationTool{&tool.Declaration{Name: "restricted"}},
+				}}
+				callbacks := model.NewCallbacks().RegisterBeforeModel(func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+					delete(args.Request.Tools, "restricted")
+					args.Request.Tools["injected"] = injected
+					args.Request.ExtraFields = sharedExtra
+					switch change {
+					case "schema":
+						lookup.decl.Description = "normalized"
+					case "replace":
+						args.Request.Tools["lookup"] = &finalizationDeclarationTool{&tool.Declaration{Name: "lookup", Description: "normalized"}}
+					case "rename":
+						lookup.decl.Name = "renamed"
+					case "clear":
+						args.Request.Tools = nil
+					case "readd":
+						delete(args.Request.Tools, "lookup")
+					case "shared":
+						args.Request.Tools = sharedTools
 					}
-				}
-				return nil, nil
-			})
-			f := New(nil, nil, Options{ModelCallbacks: callbacks})
-			_, _, err := f.runBeforeModelCallbacks(context.Background(), inv, req, m)
-			require.NoError(t, err)
+					return &model.BeforeModelResult{Context: context.Background()}, nil
+				}).RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+					require.Equal(t, finalizing, imodelrequest.ToolsDisabled(ctx))
+					require.NotContains(t, args.Request.Tools, "restricted")
+					if change == "clear" {
+						require.Nil(t, args.Request.Tools)
+					} else {
+						require.Contains(t, args.Request.Tools, "injected")
+						if change == "readd" {
+							require.NotContains(t, args.Request.Tools, "lookup")
+							args.Request.Tools["lookup"] = lookup
+						}
+					}
+					return nil, nil
+				})
+				f := New(nil, nil, Options{ModelCallbacks: callbacks})
+				_, _, err := f.runBeforeModelCallbacks(context.Background(), inv, req, m)
+				require.NoError(t, err)
+				require.Len(t, sharedTools, 2)
+				require.Equal(t, map[string]any{"tool_choice": "required", "tools": "callback-value"}, sharedExtra)
+				return req
+			}
+			// Finalization changes tool choice in the adapter, not callback semantics.
+			require.Equal(t, run(false), run(true))
 		})
 	}
 }
@@ -102,6 +119,56 @@ func TestCallLimitFinalization_UsesResolvedModelCapability(t *testing.T) {
 			require.Len(t, req.Tools, map[bool]int{false: 0, true: 1}[preserve])
 		})
 	}
+}
+
+type preservingRetryModel struct{ modelRetryTestBinder }
+
+func (preservingRetryModel) PreservesToolsWhenDisabled() bool { return true }
+
+func TestCallLimitFinalization_RetryCallbackToolChanges(t *testing.T) {
+	inv := agent.NewInvocation()
+	instruction := "finish"
+	calllimit.Configure(inv, &instruction, nil)
+	_, active := calllimit.ActivateForLLM(inv, true)
+	require.True(t, active)
+	lookup := &finalizationDeclarationTool{&tool.Declaration{Name: "lookup"}}
+	added := &finalizationDeclarationTool{&tool.Declaration{Name: "added"}}
+	req := &model.Request{Tools: map[string]tool.Tool{"lookup": lookup}}
+	callbacks := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+		require.True(t, imodelrequest.ToolsDisabled(ctx))
+		require.Same(t, lookup, args.Request.Tools["lookup"])
+		args.Request.Tools["added"] = added
+		return &model.BeforeModelResult{Context: context.Background()}, nil
+	})
+	ctx := contextWithModelRetryCallbacks(context.Background(), New(nil, nil, Options{ModelCallbacks: callbacks}), inv, preservingRetryModel{})
+	bound := ctx.Value(modelRetryTestCallbacksKey{}).(modelRetryTestCallbacks)
+	ctx, response, err := bound.before(ctx, req)
+	require.NoError(t, err)
+	require.Nil(t, response)
+	require.True(t, imodelrequest.ToolsDisabled(ctx))
+	require.Equal(t, map[string]tool.Tool{"lookup": lookup, "added": added}, req.Tools)
+}
+
+func TestCallLimitFinalization_DoesNotMarkLongRunningToolPending(t *testing.T) {
+	inv := agent.NewInvocation()
+	instruction := "finish"
+	calllimit.Configure(inv, &instruction, nil)
+	_, active := calllimit.ActivateForLLM(inv, true)
+	require.True(t, active)
+	req := &model.Request{Tools: map[string]tool.Tool{
+		"lookup": &mockLongRunnerTool{name: "lookup", long: true},
+	}}
+	response := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID: "lookup-1", Type: "function", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte("{}")},
+		}},
+	}}}}
+	f := New(nil, nil, Options{})
+	evt := f.createLLMResponseEvent(agent.NewInvocation(), inv, response, req)
+	require.Empty(t, evt.LongRunningToolIDs)
+	require.Equal(t, response, evt.Response)
+	require.Contains(t, req.Tools, "lookup")
 }
 
 func TestCallLimitFinalization_DoesNotRepairOrBufferToolText(t *testing.T) {

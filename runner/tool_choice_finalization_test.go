@@ -46,7 +46,14 @@ func TestRunner_CallLimitFinalizationToolChoice(t *testing.T) {
 							firstTools = body["tools"]
 						} else {
 							if enabled {
-								require.Equal(t, firstTools, body["tools"])
+								finalTools := body["tools"].([]any)
+								require.Len(t, finalTools, 2)
+								require.Contains(t, finalTools, firstTools.([]any)[0])
+								var names []string
+								for _, entry := range finalTools {
+									names = append(names, entry.(map[string]any)["function"].(map[string]any)["name"].(string))
+								}
+								require.ElementsMatch(t, []string{"lookup", "injected"}, names)
 								require.Equal(t, "none", body["tool_choice"])
 							} else {
 								require.NotContains(t, body, "tools")
@@ -80,6 +87,10 @@ func TestRunner_CallLimitFinalizationToolChoice(t *testing.T) {
 						executions++
 						return "ORCHID-91", nil
 					}, function.WithName("lookup"))
+					injected := function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
+						executions++
+						return "unexpected execution", nil
+					}, function.WithName("injected"))
 					modelCallbacks := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
 						callbacks++
 						require.Equal(t, callbacks, calls+1)
@@ -89,7 +100,7 @@ func TestRunner_CallLimitFinalizationToolChoice(t *testing.T) {
 							if args.Request.Tools == nil {
 								args.Request.Tools = make(map[string]tool.Tool)
 							}
-							args.Request.Tools["injected"] = lookup
+							args.Request.Tools["injected"] = injected
 							args.Request.ExtraFields = map[string]any{"tool_choice": "required"}
 							return &model.BeforeModelResult{Context: context.Background()}, nil
 						}
@@ -98,11 +109,12 @@ func TestRunner_CallLimitFinalizationToolChoice(t *testing.T) {
 						if callbacks == 2 {
 							if enabled {
 								require.Contains(t, args.Request.Tools, "lookup")
+								require.Contains(t, args.Request.Tools, "injected")
+								require.Equal(t, "required", args.Request.ExtraFields["tool_choice"])
 							} else {
 								require.Empty(t, args.Request.Tools)
+								require.NotContains(t, args.Request.ExtraFields, "tool_choice")
 							}
-							require.NotContains(t, args.Request.Tools, "injected")
-							require.NotContains(t, args.Request.ExtraFields, "tool_choice")
 							inv, ok := agent.InvocationFromContext(ctx)
 							require.True(t, ok)
 							// Summary forks are attached after callbacks and keep the same tools.
@@ -115,7 +127,7 @@ func TestRunner_CallLimitFinalizationToolChoice(t *testing.T) {
 							require.True(t, ok)
 							fork, ok := summaryfork.Request(inv)
 							require.True(t, ok)
-							require.Len(t, fork.Tools, map[bool]int{false: 0, true: 1}[enabled])
+							require.Len(t, fork.Tools, map[bool]int{false: 0, true: 2}[enabled])
 						}
 						return nil, nil
 					})
