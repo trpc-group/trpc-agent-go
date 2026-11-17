@@ -368,7 +368,7 @@ func TestRunnerToolResultContentParallelKeepsEmptyReceipts(t *testing.T) {
 			)
 			r := runner.NewRunner("parallel-tool-result-content-app", ag)
 			t.Cleanup(func() { _ = r.Close() })
-			var opts []agent.RunOption
+			opts := []agent.RunOption{agent.WithExecutionTraceEnabled(true)}
 			if perToolEvent {
 				opts = append(opts, agent.WithToolResultEventPerCallEnabled(true))
 			}
@@ -405,6 +405,29 @@ func TestRunnerToolResultContentParallelKeepsEmptyReceipts(t *testing.T) {
 			} else {
 				require.Len(t, resultEvents, 1)
 				require.Len(t, resultEvents[0].Response.Choices, 2)
+			}
+			var recordedResults map[string]any
+			for _, evt := range events {
+				if evt.ExecutionTrace == nil {
+					continue
+				}
+				recordedResults = make(map[string]any)
+				for _, step := range evt.ExecutionTrace.Steps {
+					for _, recorded := range step.Tools {
+						recordedResults[recorded.ID] = recorded.Result
+					}
+				}
+			}
+			require.Len(t, recordedResults, 2)
+			for id, want := range map[string][]model.ContentPart{
+				"call-image": imageResultParts(imageData),
+				"call-empty": {textPart("")},
+			} {
+				encoded, err := json.Marshal(recordedResults[id])
+				require.NoError(t, err)
+				var parts []model.ContentPart
+				require.NoError(t, json.Unmarshal(encoded, &parts))
+				require.Equal(t, want, parts)
 			}
 		})
 	}

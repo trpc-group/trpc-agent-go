@@ -151,10 +151,11 @@ func WithDisableOutputSchemaGen() Option {
 // persistence. When formatter is nil, the framework preserves a returned
 // model.ToolResultContent as content and uses JSON for other results. An explicit
 // formatter takes precedence over this structured-content conversion.
-// A formatter runs only when the tool declared a result for the call: when a before-tool callback or plugin short-circuits the call with
-// its own result, the tool never runs and the framework uses its default
-// result conversion. An after-tool callback replacing the result of a tool
-// that did run is a different case: the replacement is formatted, so it has to be a value the
+// A formatter runs only when the tool declared a result for the call: when a
+// before-tool callback or plugin short-circuits the call with its own result,
+// the tool never runs and the framework uses its default result conversion.
+// An after-tool callback replacing the result of a tool that did run is a
+// different case: the replacement is formatted, so it has to be a value the
 // formatter accepts. A streamable tool must declare its final result with
 // tool.FinalResultChunk to be formatted; see
 // StreamableFunctionTool.ResultFormatter. Repeated configuration is
@@ -425,7 +426,7 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 // formatted; intermediate events are not. The tool must declare that result
 // with tool.FinalResultChunk. When a stream ends without one, the final result
 // is the stream content merged by the framework rather than O, so the
-// framework keeps its default JSON representation instead of formatting it,
+// framework uses its default result conversion instead of formatting it,
 // and an after-tool callback replacing that content does not make the call
 // eligible for formatting again.
 func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {

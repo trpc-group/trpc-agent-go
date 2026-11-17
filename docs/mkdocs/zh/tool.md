@@ -624,7 +624,8 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
   formatter 是按工具配置的，而 `ToolResultMessages` 是整个 Agent 全局的：对配置了
   formatter 的工具，回调拿到的 `DefaultToolMessage.Content` 是格式化后的文本而不是
   JSON。回调如果需要结构化数据，请读取 `ToolResultMessagesInput.Result`，不要解析
-  `DefaultToolMessage.Content`。
+  `DefaultToolMessage.Content`。重建消息时，应保留 `DefaultToolMessage.ContentParts` 中的
+  媒体和内容引用。
 
 Formatter 返回的文本会直接写入默认工具结果消息，可以在格式化函数中按业务协议处理
 转义、截断和格式校验。Formatter 必须把入参结果视为只读：同一个结果对象随后会作为

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -33,6 +34,61 @@ func imageToolResultContent() model.ToolResultContent {
 		{Type: model.ContentTypeImage, Image: &model.Image{
 			Data: []byte{1, 2, 3}, Format: "png",
 		}},
+	}
+}
+
+func TestExecutionTraceToolResultContent(t *testing.T) {
+	empty := ""
+	for _, tt := range []struct {
+		name    string
+		content string
+		parts   []model.ContentPart
+		want    string
+	}{
+		{
+			name:  "mixed content",
+			parts: []model.ContentPart(imageToolResultContent()),
+			want:  `[{"type":"text","text":"image <one>"},{"type":"image","image":{"url":"","data":"AQID","format":"png"}}]`,
+		},
+		{
+			name: "externalized content",
+			parts: []model.ContentPart{{Type: model.ContentTypeImage, ContentRef: &model.ContentRef{
+				ArtifactRef: "artifact://image.png@0", MimeType: "image/png",
+			}}},
+			want: `[{"type":"image","content_ref":{"artifact_ref":"artifact://image.png@0","artifact_version":0,"mime_type":"image/png"}}]`,
+		},
+		{
+			name:  "empty receipt",
+			parts: []model.ContentPart{{Type: model.ContentTypeText, Text: &empty}},
+			want:  `[{"type":"text","text":""}]`,
+		},
+		{
+			name: "legacy content takes precedence", content: "legacy",
+			parts: []model.ContentPart(imageToolResultContent()), want: `"legacy"`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			inv, ctx := newExecutionTraceProcessorInvocation(t)
+			recordExecutionTraceToolResult(ctx, inv, toolResult{
+				event: &event.Event{Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleTool, ToolID: "call-read", ToolName: "read",
+						Content: tt.content, ContentParts: tt.parts,
+					},
+				}}}},
+				toolArgs: []byte(`{}`),
+			})
+			executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+			require.NotNil(t, executionTrace)
+			require.Len(t, executionTrace.Steps, 1)
+			require.Len(t, executionTrace.Steps[0].Tools, 1)
+			recorded := executionTrace.Steps[0].Tools[0]
+			require.Equal(t, "call-read", recorded.ID)
+			require.Equal(t, "read", recorded.Name)
+			encoded, err := json.Marshal(recorded.Result)
+			require.NoError(t, err)
+			require.JSONEq(t, tt.want, string(encoded))
+		})
 	}
 }
 

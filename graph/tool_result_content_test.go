@@ -13,13 +13,82 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func TestExecuteSingleToolCall_ToolResultContentEvent(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "success"},
+		{name: "error", err: errors.New("read failed")},
+		{name: "interrupt", err: &InterruptError{Value: "confirm"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			text := "image"
+			result := model.ToolResultContent{
+				{Type: model.ContentTypeText, Text: &text},
+				{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte{1, 2, 3}, Format: "png"}},
+			}
+			ctx := context.Background()
+			events := make(chan *event.Event, 2)
+			message, err := executeSingleToolCall(ctx, singleToolCallConfig{
+				ToolCall: resultToolCall("call-result", "result"),
+				Tools: map[string]tool.Tool{"result": &toolResultContentTestTool{
+					name: "result", callFn: func(context.Context, []byte) (any, error) {
+						return result, tt.err
+					},
+				}},
+				EventChan: events, InvocationID: "inv-result", Span: oteltrace.SpanFromContext(ctx),
+			})
+			require.Len(t, events, 2)
+			<-events // Tool start.
+			completed := <-events
+			var metadata ToolExecutionMetadata
+			require.NoError(t, json.Unmarshal(completed.StateDelta[MetadataKeyTool], &metadata))
+			require.Equal(t, ToolExecutionPhaseComplete, metadata.Phase)
+			require.NotNil(t, completed.Response)
+			require.Len(t, completed.Choices, 1)
+			eventMessage := completed.Choices[0].Message
+			if tt.err != nil {
+				require.ErrorIs(t, err, tt.err)
+				require.Empty(t, eventMessage.ContentParts)
+				if tt.name == "interrupt" {
+					require.Nil(t, completed.Error, "interrupts remain pause events")
+					require.JSONEq(t, mustJSON(t, result), eventMessage.Content)
+				} else {
+					require.NotNil(t, completed.Error)
+					require.Equal(t, "tool result call failed: read failed", completed.Error.Message)
+					require.Empty(t, eventMessage.Content)
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.Nil(t, completed.Error)
+			require.Equal(t, message, eventMessage)
+			require.Empty(t, eventMessage.Content)
+			require.Equal(t, []model.ContentPart(result), eventMessage.ContentParts)
+			require.JSONEq(t, mustJSON(t, result), metadata.Output)
+			// A consumer can change the event without rewriting graph state or
+			// the tool's source buffers.
+			*eventMessage.ContentParts[0].Text = "changed"
+			eventMessage.ContentParts[1].Image.Data[0] = 9
+			require.Equal(t, "image", *message.ContentParts[0].Text)
+			require.Equal(t, []byte{1, 2, 3}, message.ContentParts[1].Image.Data)
+			require.Equal(t, "image", text)
+			require.Equal(t, []byte{1, 2, 3}, result[1].Image.Data)
+		})
+	}
+}
 
 func TestToolsNode_ToolResultContent(t *testing.T) {
 	t.Run("text-only result", func(t *testing.T) {

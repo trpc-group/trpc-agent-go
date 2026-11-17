@@ -668,7 +668,8 @@ role, name, tool call ID, ordering, events, and session persistence.
   tool with a formatter, the callback receives formatted text in
   `DefaultToolMessage.Content` rather than JSON. A callback that needs
   structured data should read `ToolResultMessagesInput.Result` instead of
-  parsing `DefaultToolMessage.Content`.
+  parsing `DefaultToolMessage.Content`. When rebuilding a message, preserve
+  `DefaultToolMessage.ContentParts` to retain media and content references.
 
 The formatter's return value becomes the default tool result message. The
 formatting function can apply any escaping, truncation, or validation required

@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/statecopy"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -6165,18 +6166,20 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 			}
 		}
 	}
+	resultMessage := successfulToolResultMessage(result, err, config.ToolCall)
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(finalCtx, eventInvocation, toolCompleteEventConfig{
-		EventChan:    config.EventChan,
-		InvocationID: eventInvocationID,
-		ToolName:     name,
-		ToolID:       id,
-		NodeID:       nodeID,
-		StartTime:    startTime,
-		Result:       result,
-		Error:        eventErr,
-		Arguments:    modifiedArgs,
-		ResponseID:   responseID,
+		EventChan:     config.EventChan,
+		InvocationID:  eventInvocationID,
+		ToolName:      name,
+		ToolID:        id,
+		NodeID:        nodeID,
+		StartTime:     startTime,
+		Result:        result,
+		Error:         eventErr,
+		Arguments:     modifiedArgs,
+		ResponseID:    responseID,
+		resultMessage: resultMessage,
 	})
 	if startedSpan {
 		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
@@ -6264,13 +6267,24 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		content,
 		nil,
 	)
-	if message, ok := itool.ResultMessage(result); ok {
+	if resultMessage != nil {
 		setToolResultContent(config.resultContents, config.ToolCallIndex, content)
-		message.ToolID = id
-		message.ToolName = name
-		return message, nil
+		return *resultMessage, nil
 	}
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func successfulToolResultMessage(result any, callErr error, call model.ToolCall) *model.Message {
+	if callErr != nil {
+		return nil
+	}
+	message, ok := itool.ResultMessage(result)
+	if !ok {
+		return nil
+	}
+	message.ToolID = call.ID
+	message.ToolName = call.Function.Name
+	return &message
 }
 
 func setToolResultContent(contents [][]byte, index int, content []byte) {
@@ -6384,16 +6398,17 @@ func emitToolStartEvent(
 
 // toolCompleteEventConfig contains configuration for tool complete events.
 type toolCompleteEventConfig struct {
-	EventChan    chan<- *event.Event
-	InvocationID string
-	ToolName     string
-	ToolID       string
-	NodeID       string
-	ResponseID   string
-	StartTime    time.Time
-	Result       any
-	Error        error
-	Arguments    []byte
+	EventChan     chan<- *event.Event
+	InvocationID  string
+	ToolName      string
+	ToolID        string
+	NodeID        string
+	ResponseID    string
+	StartTime     time.Time
+	Result        any
+	Error         error
+	Arguments     []byte
+	resultMessage *model.Message
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
@@ -6430,6 +6445,11 @@ func emitToolCompleteEvent(
 		WithToolEventError(config.Error),
 		WithToolEventIncludeResponse(true),
 	)
+	if config.Error == nil && config.resultMessage != nil {
+		// Events can be persisted and consumed independently of graph state.
+		// Keep their model-visible payload consistent without sharing media buffers.
+		toolCompleteEvent.Response.Choices[0].Message = statecopy.Message(*config.resultMessage)
+	}
 	agent.EmitEvent(ctx, invocation, config.EventChan, toolCompleteEvent)
 	return toolCompleteEvent
 }
