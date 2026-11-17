@@ -10,6 +10,7 @@ package processor
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,7 +91,8 @@ func TestCancellationDispatch_QueuedToolDoesNotStart(t *testing.T) {
 	release, err := limiter.Acquire(context.Background(), "write")
 	require.NoError(t, err)
 	defer release()
-	ctx = toolcall.WithLimiter(ctx, limiter)
+	waiting := &dispatchWaitContext{Context: ctx, entered: make(chan struct{})}
+	ctx = toolcall.WithLimiter(waiting, limiter)
 	var calls atomic.Int32
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "write"},
 		callFn: func(context.Context, []byte) (any, error) { calls.Add(1); return "written", nil }}
@@ -101,6 +103,11 @@ func TestCancellationDispatch_QueuedToolDoesNotStart(t *testing.T) {
 			map[string]tool.Tool{"write": tl}, 0, nil)
 		done <- err
 	}()
+	select {
+	case <-waiting.entered:
+	case <-time.After(time.Second):
+		t.Fatal("dispatch never reached the occupied concurrency gate")
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -133,4 +140,30 @@ func TestCancellationDispatch_SequentialStopsBeforeNextTool(t *testing.T) {
 		}), tools, make(chan *event.Event, 4))
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []string{"first"}, executed)
+}
+
+type dispatchWaitContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *dispatchWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
+func TestCancellationDispatch_ReplacedContextCannotReviveTool(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		cancel()
+		return &tool.BeforeToolResult{Context: context.Background()}, nil
+	})
+	calls := 0
+	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "write"}, callFn: func(context.Context, []byte) (any, error) { calls++; return "written", nil }}
+	_, _, _, _, _, err := NewFunctionCallResponseProcessor(false, callbacks).executeToolWithCallbacks(ctx, agent.NewInvocation(), model.ToolCall{ID: "call", Function: model.FunctionDefinitionParam{Name: "write"}}, tl, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, calls)
 }

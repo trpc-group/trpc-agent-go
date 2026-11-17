@@ -2775,22 +2775,11 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	if err != nil || tl == nil {
 		return execution, err
 	}
-	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil {
-		release, err := limiter.Acquire(
-			ctx,
-			toolCall.Function.Name,
-		)
-		if err != nil {
-			return execution, fmt.Errorf(
-				"wait for tool concurrency: %w",
-				err,
-			)
-		}
-		defer release()
-	}
-	if err := ctx.Err(); err != nil {
+	release, err := acquireToolCapacity(ctx, toolCall.Function.Name)
+	if err != nil {
 		return execution, err
 	}
+	defer release()
 
 	log.DebugfContext(
 		ctx,
@@ -3614,10 +3603,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	// callbacks so resources allocated by before-tool callbacks can be released.
 	var toolResult any
 	var suppressDefaultToolMessage bool
-	toolErr := dispatchCtx.Err()
-	if toolErr == nil {
-		toolErr = ctx.Err()
-	}
+	toolErr := toolDispatchError(dispatchCtx, ctx)
 	if toolErr == nil {
 		ctx, toolResult, suppressDefaultToolMessage, toolErr = p.executeTool(
 			ctx, invocation, toolCall, tl, eventChan,
@@ -4964,4 +4950,27 @@ func flushPendingGraphToolError(
 	err := streamToolEventError(state.pendingGraphToolErrorEvent)
 	state.pendingGraphToolErrorEvent = nil
 	return err
+}
+
+func acquireToolCapacity(ctx context.Context, name string) (func(), error) {
+	release := func() {}
+	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil {
+		var err error
+		release, err = limiter.Acquire(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("wait for tool concurrency: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+func toolDispatchError(original, current context.Context) error {
+	if err := original.Err(); err != nil {
+		return err
+	}
+	return current.Err()
 }

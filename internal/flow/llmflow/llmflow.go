@@ -727,6 +727,11 @@ func (f *Flow) runOneStepWithResume(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	return f.runModelStep(ctx, invocation, eventChan, pendingResume)
+}
+
+func (f *Flow) runModelStep(ctx context.Context, invocation *agent.Invocation, eventChan chan<- *event.Event, pendingResume *model.Response) (lastEvent *event.Event, err error) {
+
 	ctx, stepSpan, stepStarted := startLatencySpan(
 		ctx,
 		invocation,
