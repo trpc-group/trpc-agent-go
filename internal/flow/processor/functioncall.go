@@ -2765,6 +2765,10 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		ctx:          ctx,
 		modifiedArgs: toolCall.Function.Arguments,
 	}
+	// Reject cancelled work before resolving targets or waiting for capacity.
+	if err := ctx.Err(); err != nil {
+		return execution, err
+	}
 	toolCall, tl, shouldIgnoreError, err := p.resolveToolCallTarget(ctx, invocation, toolCall, tools)
 	execution.modifiedArgs = toolCall.Function.Arguments
 	execution.shouldIgnoreError = shouldIgnoreError
@@ -2783,6 +2787,9 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			)
 		}
 		defer release()
+	}
+	if err := ctx.Err(); err != nil {
+		return execution, err
 	}
 
 	log.DebugfContext(
@@ -3539,6 +3546,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (context.Context, any, []byte, bool, bool, error) {
+	dispatchCtx := ctx
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
@@ -3601,14 +3609,20 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, *permissionResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
-	// Execute the actual tool.
-	ctx, toolResult, suppressDefaultToolMessage, toolErr := p.executeTool(
-		ctx,
-		invocation,
-		toolCall,
-		tl,
-		eventChan,
-	)
+	// Hooks and permission checks may have waited or replaced the context.
+	// Check the original dispatch context as well, then still run after-tool
+	// callbacks so resources allocated by before-tool callbacks can be released.
+	var toolResult any
+	var suppressDefaultToolMessage bool
+	toolErr := dispatchCtx.Err()
+	if toolErr == nil {
+		toolErr = ctx.Err()
+	}
+	if toolErr == nil {
+		ctx, toolResult, suppressDefaultToolMessage, toolErr = p.executeTool(
+			ctx, invocation, toolCall, tl, eventChan,
+		)
+	}
 	if toolErr != nil {
 		log.WarnfContext(
 			ctx,
@@ -3824,6 +3838,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	toolCall model.ToolCall,
 	tl tool.CallableTool,
 ) (context.Context, any, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, err
+	}
 	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
 	if p.toolRetryPolicy == nil {
 		result, err := tl.Call(callCtx, toolCall.Function.Arguments)
@@ -4028,6 +4045,9 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	tl tool.StreamableTool,
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, false, err
+	}
 	reader, err := tl.StreamableCall(
 		streamableToolCallContext(
 			tool.WithoutToolResultAttachmentBudget(ctx),

@@ -2157,7 +2157,7 @@ func TestNewToolsNodeFunc_RetryOnResultError(t *testing.T) {
 	require.Contains(t, msgs[0].Content, `"value":"second"`)
 }
 
-func TestRunToolWithEventContexts_NoRetryPolicyCallsToolOnCanceledContext(t *testing.T) {
+func TestRunToolWithEventContexts_NoRetryPolicyRejectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var toolCalls int
@@ -2185,9 +2185,9 @@ func TestRunToolWithEventContexts_NoRetryPolicyCallsToolOnCanceledContext(t *tes
 		nil,
 		0,
 	)
-	require.NoError(t, err)
-	require.Equal(t, 1, toolCalls)
-	require.Equal(t, map[string]any{"ok": true}, result)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, toolCalls)
+	require.Nil(t, result)
 	require.Equal(t, toolCall.Function.Arguments, modifiedArgs)
 }
 

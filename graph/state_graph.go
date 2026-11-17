@@ -4436,6 +4436,11 @@ func runToolWithEventContexts(
 	toolCallIndex int,
 	skipArgumentRepair ...bool,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
+	if err := ctx.Err(); err != nil {
+		inv := invocationFromContextOrFallback(ctx, nil)
+		return ctx, inv, ctx, inv, nil, toolCall.Function.Arguments, err
+	}
+	dispatchCtx := ctx
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	repairToolCallArguments(ctx, &toolCall, skipArgumentRepair)
 	decl := t.Declaration()
@@ -4488,15 +4493,13 @@ func runToolWithEventContexts(
 	if err != nil {
 		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
 	}
-	result, toolErr := callToolWithRetry(
-		ctx,
-		toolCall,
-		callableTool,
-		retryPolicy,
-		startInvocation,
-		state,
-		toolCallIndex,
-	)
+	var result any
+	toolErr := dispatchCtx.Err()
+	if toolErr == nil {
+		result, toolErr = callToolWithRetry(
+			ctx, toolCall, callableTool, retryPolicy, startInvocation, state, toolCallIndex,
+		)
+	}
 	completeInvocation := startInvocation
 
 	ctx, customResult, err = runAfterToolPluginCallbacks(
@@ -4595,6 +4598,9 @@ func callToolWithRetry(
 	state State,
 	toolCallIndex int,
 ) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {

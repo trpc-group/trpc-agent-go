@@ -724,6 +724,9 @@ func (f *Flow) runOneStepWithResume(
 	eventChan chan<- *event.Event,
 	pendingResume *model.Response,
 ) (lastEvent *event.Event, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ctx, stepSpan, stepStarted := startLatencySpan(
 		ctx,
 		invocation,
@@ -3142,6 +3145,9 @@ func (f *Flow) generateContentSeq(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
 	}

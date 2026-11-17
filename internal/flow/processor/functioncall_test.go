@@ -3601,6 +3601,7 @@ func TestPerToolCallResultEventsParallelStopErrorWinsAfterToolMessagesError(
 	defer cancel()
 
 	hookErr := errors.New("after-tool hook failed")
+	stopStarted := make(chan struct{})
 	tools := map[string]tool.Tool{
 		"fast": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "fast"},
@@ -3611,6 +3612,7 @@ func TestPerToolCallResultEventsParallelStopErrorWinsAfterToolMessagesError(
 		"stop": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "stop"},
 			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				close(stopStarted)
 				<-ctx.Done()
 				return nil, agent.NewStopError("late stop")
 			},
@@ -3625,6 +3627,7 @@ func TestPerToolCallResultEventsParallelStopErrorWinsAfterToolMessagesError(
 			context.Context,
 			*plugin.AfterToolMessagesArgs,
 		) (*plugin.AfterToolMessagesResult, error) {
+			<-stopStarted
 			return nil, hookErr
 		},
 	})
@@ -5092,7 +5095,7 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 	type contextKey struct{}
 
 	baseCtx := context.WithValue(context.Background(), contextKey{}, "value")
-	ctx, cancel := context.WithDeadline(baseCtx, time.Now().Add(-time.Second))
+	ctx, cancel := context.WithTimeout(baseCtx, 100*time.Millisecond)
 	defer cancel()
 
 	p := NewFunctionCallResponseProcessor(false, nil)
@@ -5125,6 +5128,7 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 		toolName: &mockCallableTool{
 			declaration: &tool.Declaration{Name: toolName},
 			callFn: func(context.Context, []byte) (any, error) {
+				<-ctx.Done()
 				return "late evidence", nil
 			},
 		},
@@ -7430,7 +7434,7 @@ func TestExecuteCallableTool_ErrorWrapDropsPartialResult(t *testing.T) {
 	require.Contains(t, err.Error(), ErrorCallableToolExecution)
 }
 
-func TestExecuteCallableTool_NoRetryPolicyCallsToolOnCanceledContext(t *testing.T) {
+func TestExecuteCallableTool_NoRetryPolicyRejectsCanceledContext(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(false, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -7448,9 +7452,9 @@ func TestExecuteCallableTool_NoRetryPolicyCallsToolOnCanceledContext(t *testing.
 			Name: "t",
 		}}, tl,
 	)
-	require.NoError(t, err)
-	require.Equal(t, 1, toolCalls)
-	require.Equal(t, "ok", result)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, toolCalls)
+	require.Nil(t, result)
 }
 
 func TestConvertToolArguments_InvalidJSON(t *testing.T) {
