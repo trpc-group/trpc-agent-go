@@ -2815,16 +2815,11 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	}
 	defer release()
 
-	if err := tooljournal.Dispatch(ctx, toolCall.ID); err != nil {
+	finish, err := beginToolExecution(ctx, toolCall.ID)
+	defer finish(&execution, &returnErr)
+	if err != nil {
 		return execution, err
 	}
-	journalCtx := ctx
-	defer func() {
-		if err := tooljournal.Finish(journalCtx, toolCall.ID, execution.choices, returnErr); err != nil {
-			execution.shouldIgnoreError = false
-			returnErr = errors.Join(returnErr, err)
-		}
-	}()
 
 	log.DebugfContext(
 		ctx,
@@ -5043,4 +5038,17 @@ func acquireToolCapacity(ctx context.Context, name string) (func(), error) {
 func toolCallCanceledBeforeStart(started bool, err error) bool {
 	return !started && (errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded))
+}
+
+func beginToolExecution(ctx context.Context, id string) (func(*toolCallExecution, *error), error) {
+	if err := tooljournal.Dispatch(ctx, id); err != nil {
+		return func(*toolCallExecution, *error) {}, err
+	}
+	finish := func(execution *toolCallExecution, returnErr *error) {
+		if err := tooljournal.Finish(ctx, id, execution.choices, *returnErr); err != nil {
+			execution.shouldIgnoreError = false
+			*returnErr = errors.Join(*returnErr, err)
+		}
+	}
+	return finish, ctx.Err()
 }
