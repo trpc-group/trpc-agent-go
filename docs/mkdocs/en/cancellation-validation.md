@@ -12,6 +12,7 @@ automatic module toolchains (Go 1.25 for E2E), and golangci-lint 1.64.8.
 | Library test script | All 73 selected modules covered across script runs |
 | Examples tidy/build script | All 29 selected modules passed |
 | Repository lint, gofmt/`any`, goimports | Passed |
+| Each intermediate PR: repository lint and affected-package tests | Passed |
 | Combined cancellation regression suite with `-race -count=10` | Passed |
 | Non-cooperative execution observation and recovery concurrency | Repeated race checks passed |
 | Occupied concurrency gate / callback context replacement | 20 race-enabled repetitions passed |
@@ -27,6 +28,11 @@ No system package or repository dependency version was changed for these fixes.
 Broad Runner race testing exposed existing chain-invocation and summary mock
 races, reproduced on unchanged baseline. Those broad race tests are not claimed
 as passing. The new cancellation suites passed race detection separately.
+
+After redistributing helpers and regression fixes into their owning PRs, each
+intermediate branch passed lint and affected-package tests independently. The
+restacked final source tree was verified identical to the fully tested snapshot;
+only this validation report was updated afterward.
 
 ## Live provider checks
 
