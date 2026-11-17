@@ -258,3 +258,34 @@ The probes use only a local counter as a tool side effect. They check that a
 cancelled effective context prevents the tool and AfterTool from running, and
 that cancelling a streamed response closes output. They do not prove remote
 termination, rollback, or billing behavior. Keep credentials out of test logs.
+
+## Durable tool execution evidence
+
+`runner.WithToolExecutionTracking(true)` opts LLMAgent tools into synchronous
+admission/outcome recording, independently of batch or per-call result events.
+The default is disabled. The SessionService interface is unchanged. Framework
+state keys under `__tool_execution_v1/` contain versioned round snapshots linked
+to the exact source event, request, invocation and call IDs. They include the
+original response, arguments, rendered results and admitted raw attempt count.
+Reused call IDs in different rounds do not overwrite each other.
+
+The existing contentless state-update protocol persists these snapshots even
+when a backend excludes such events from its conversation event list. Therefore
+records do not become model messages, trigger summaries or alter the legacy
+last-event Resume boundary. Keep this namespace when backing up session state;
+its retention and sensitivity follow the session, including tool arguments and
+results. This is a recovery snapshot, not an append-only audit log.
+
+Before callbacks or tool dispatch, admission must be acknowledged by storage.
+Each callable retry/stream admission is also recorded. A failed write prevents
+that dispatch. A persisted intent with no complete result means the operation
+**may have executed**. Callback short circuits count as admitted work because
+callbacks can have side effects. Rendering failure, cancellation errors and
+long-running tools without a final result remain unknown. Successful results
+can be recorded after output closure with an independent one-second context.
+Stores must honor context deadlines; the framework cannot interrupt a backend
+that ignores them. Absence of evidence does not prove absence of execution.
+
+This option covers LLMAgent's standard tool processor, not custom agent tasks
+or Graph checkpoint recovery. Tracking adds synchronous storage operations to
+tool dispatch; it does not provide external exactly-once execution.
