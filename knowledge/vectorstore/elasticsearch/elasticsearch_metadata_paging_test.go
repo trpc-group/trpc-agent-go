@@ -12,6 +12,7 @@ package elasticsearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
@@ -30,6 +31,8 @@ type pagingClient struct {
 	invalid         map[string]bool
 	maxResultWindow int
 	requests        []map[string]any
+	searchErr       error
+	omitSort        bool
 }
 
 func newPagingClient(n int) *pagingClient {
@@ -53,6 +56,9 @@ func (c *pagingClient) Search(_ context.Context, _ string, body []byte) ([]byte,
 		return nil, err
 	}
 	c.requests = append(c.requests, req)
+	if c.searchErr != nil {
+		return nil, c.searchErr
+	}
 
 	size, from := 10, 0
 	if v, ok := req["size"].(float64); ok {
@@ -91,7 +97,11 @@ func (c *pagingClient) Search(_ context.Context, _ string, body []byte) ([]byte,
 		if c.invalid[id] {
 			source = map[string]any{"id": id, "content": "c"}
 		}
-		hits = append(hits, map[string]any{"_id": id, "_source": source, "sort": []any{id}})
+		hit := map[string]any{"_id": id, "_source": source, "sort": []any{id}}
+		if c.omitSort {
+			delete(hit, "sort")
+		}
+		hits = append(hits, hit)
 	}
 	return json.Marshal(map[string]any{"hits": map[string]any{"hits": hits}})
 }
@@ -148,4 +158,29 @@ func TestGetMetadataPagesAreOrderedByID(t *testing.T) {
 	}
 	assert.Len(t, seen, 30)
 	assert.Equal(t, []any{map[string]any{"id": map[string]any{"order": "asc"}}}, c.requests[0]["sort"])
+}
+
+func TestGetMetadataReturnsSearchErrors(t *testing.T) {
+	c := newPagingClient(10)
+	c.searchErr = errors.New("boom")
+	vs := newPagingVectorStore(t, c)
+
+	_, err := vs.GetMetadata(context.Background())
+	require.ErrorContains(t, err, "boom")
+
+	_, err = vs.GetMetadata(
+		context.Background(),
+		vectorstore.WithGetMetadataLimit(5),
+		vectorstore.WithGetMetadataOffset(0),
+	)
+	require.ErrorContains(t, err, "boom")
+}
+
+func TestGetMetadataRejectsHitsWithoutSortValues(t *testing.T) {
+	c := newPagingClient(metadataBatchSize)
+	c.omitSort = true
+	vs := newPagingVectorStore(t, c)
+
+	_, err := vs.GetMetadata(context.Background())
+	require.ErrorContains(t, err, "no sort values")
 }
