@@ -13,7 +13,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -1579,4 +1581,111 @@ func TestToolCallbacks_Before_ToolCallID_Multiple(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{expectedToolCallID2, expectedToolCallID2}, capturedToolCallIDs)
 	require.Nil(t, result)
+}
+
+func TestBeforeToolCallbacks_PreserveExplicitContext(t *testing.T) {
+	for _, name := range []string{"nil", "empty", "legacy", "custom", "replacement", "arguments"} {
+		t.Run(name, func(t *testing.T) {
+			type contextKey struct{}
+			deadline := time.Now().Add(time.Hour)
+			replacement, cancel := context.WithDeadline(context.WithValue(context.Background(), contextKey{}, "value"), deadline)
+			cancel()
+			first := &tool.BeforeToolResult{Context: replacement}
+			var later *tool.BeforeToolResult
+			switch name {
+			case "empty":
+				later = &tool.BeforeToolResult{}
+			case "custom":
+				later = &tool.BeforeToolResult{CustomResult: "cached"}
+			case "replacement":
+				later = &tool.BeforeToolResult{Context: context.Background()}
+			case "arguments":
+				later = &tool.BeforeToolResult{ModifiedArguments: []byte(`{"updated":true}`)}
+			}
+			callbacks := tool.NewCallbacks().RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				return first, nil
+			})
+			checkContext := func(ctx context.Context) {
+				require.Same(t, replacement, ctx)
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+			}
+			if name == "legacy" {
+				callbacks.RegisterBeforeTool(func(ctx context.Context, _ string, _ *tool.Declaration, _ *[]byte) (any, error) {
+					checkContext(ctx)
+					return nil, nil
+				})
+			} else {
+				callbacks.RegisterBeforeTool(func(ctx context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+					checkContext(ctx)
+					return later, nil
+				})
+			}
+			if name == "replacement" {
+				callbacks.RegisterBeforeTool(func(ctx context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+					require.Equal(t, later.Context, ctx)
+					return &tool.BeforeToolResult{}, nil
+				})
+			}
+			got, err := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{})
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			if name == "replacement" {
+				require.Equal(t, later.Context, got.Context)
+				require.NoError(t, got.Context.Err())
+				_, ok := got.Context.Deadline()
+				require.False(t, ok)
+			} else {
+				require.Same(t, replacement, got.Context)
+				require.ErrorIs(t, got.Context.Err(), context.Canceled)
+				require.Equal(t, "value", got.Context.Value(contextKey{}))
+				gotDeadline, ok := got.Context.Deadline()
+				require.True(t, ok)
+				require.Equal(t, deadline, gotDeadline)
+				if later != nil {
+					require.Nil(t, later.Context, "callback-owned results must not be mutated")
+				}
+			}
+			require.Same(t, replacement, first.Context)
+			if name == "custom" {
+				require.Equal(t, later.CustomResult, got.CustomResult)
+			}
+			if name == "arguments" {
+				require.Equal(t, later.ModifiedArguments, got.ModifiedArguments)
+			}
+		})
+	}
+}
+
+func TestBeforeToolCallbacks_PreserveContextWithCallbackOptions(t *testing.T) {
+	for _, continueOnResponse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continue_on_response=%t", continueOnResponse), func(t *testing.T) {
+			replacement, cancel := context.WithCancel(context.Background())
+			cancel()
+			callbackErr := errors.New("callback failed")
+			callbacks := tool.NewCallbacks(tool.WithContinueOnError(true), tool.WithContinueOnResponse(continueOnResponse))
+			callbacks.RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				return &tool.BeforeToolResult{Context: replacement}, callbackErr
+			})
+			callbacks.RegisterBeforeTool(func(ctx context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				require.Same(t, replacement, ctx)
+				return &tool.BeforeToolResult{CustomResult: "cached"}, nil
+			})
+			tailCalls := 0
+			callbacks.RegisterBeforeTool(func(ctx context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				tailCalls++
+				require.Same(t, replacement, ctx)
+				return nil, nil
+			})
+			got, err := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{})
+			require.ErrorIs(t, err, callbackErr)
+			require.NotNil(t, got)
+			require.Same(t, replacement, got.Context)
+			require.Equal(t, "cached", got.CustomResult)
+			if continueOnResponse {
+				require.Equal(t, 1, tailCalls)
+			} else {
+				require.Zero(t, tailCalls)
+			}
+		})
+	}
 }

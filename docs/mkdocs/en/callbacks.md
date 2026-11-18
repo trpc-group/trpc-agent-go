@@ -62,6 +62,14 @@ Key points:
 - Before can return a non-nil response to skip the model call.
 - After receives the original request, useful for content restoration and post-processing.
 
+In `BeforeModel` and `BeforeTool` chains, the returned result retains the latest
+non-nil `Context` when later callbacks omit it, including legacy callbacks.
+A later explicit replacement takes precedence. Derive replacements from the
+callback input to preserve cancellation, deadlines, and values;
+`context.Background()` or `context.WithoutCancel(ctx)` deliberately detaches
+cancellation. Error handling, response overrides, and argument handling keep
+their existing rules.
+
 ### Callback Execution Control
 
 By default, callback execution stops immediately when:
