@@ -1742,6 +1742,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#images-returned-by-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Images returned by tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#callbacks-and-model-history" class="md-nav__link">
     <span class="md-ellipsis">
       Callbacks and model history
@@ -5472,6 +5481,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#images-returned-by-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Images returned by tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#callbacks-and-model-history" class="md-nav__link">
     <span class="md-ellipsis">
       Callbacks and model history
@@ -9190,6 +9208,16 @@ module provides Responses only. For Chat Completions, continue using
 </span><span id="__span-69-9"><a id="__codelineno-69-9" name="__codelineno-69-9"></a>go<span class="w"> </span>run<span class="w"> </span>./tools<span class="w"> </span>-streaming<span class="o">=</span><span class="nb">false</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Type <code>/exit</code> to quit. In <code>tools</code>, use two turns in the same process, such as <code>Calculate 123 * 456.</code> and then <code>Add 789 to that result.</code> The session retains the first result for the second turn and is discarded when the process exits. The example README shows an illustrative transcript.</p>
+<h3 id="images-returned-by-tools">Images returned by tools</h3>
+<p>For a custom ReadImage tool, use <code>ToolResultMessages</code> to return one <code>RoleTool</code>
+message with the original <code>ToolID</code> and image <code>ContentParts</code>. The Responses
+adapter sends native <code>function_call_output.output</code> content blocks associated
+with that tool call. Text-only results retain their string format,
+and ordinary JSON text is not reinterpreted as image blocks. Use raw bytes with
+<code>AddImageData</code> or a URL/data URL with <code>AddImageURL</code>.</p>
+<p>See the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses#readimage-tool">ReadImage example</a>
+and <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#images-returned-by-local-tools">tool image documentation</a>.
+The selected model and gateway must support images in function outputs.</p>
 <h3 id="callbacks-and-model-history">Callbacks and model history</h3>
 <p>The adapter fills <code>Message.ProviderData.Protocol</code> and <code>Model</code> with the native
 protocol and the configured model name. To edit native output, preserve these
@@ -10545,7 +10573,7 @@ for a complete SDK-based callback and model wrapper requirements.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 6, 2026 09:49:29 UTC">2026-11-06 09:49:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 18, 2026 09:50:55 UTC">2026-11-18 09:50:55</span>
   </span>
 
     
