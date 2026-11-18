@@ -221,7 +221,7 @@ func TestToolsDisabledWithNone_WireContract(t *testing.T) {
 					}
 					sdkOptions = append(sdkOptions, tc.sdkOptions...)
 					m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"),
-						WithToolChoiceNoneWhenToolsDisabled(true), WithOpenAIOptions(sdkOptions...),
+						WithPreserveToolsWhenDisabled(true), WithOpenAIOptions(sdkOptions...),
 						WithExtraFields(tc.modelFields),
 						WithChatRequestCallback(func(_ context.Context, req *openaigo.ChatCompletionNewParams) {
 							req.ToolChoice = openaigo.ChatCompletionToolChoiceOptionUnionParam{OfAuto: openaigo.String("required")}
@@ -300,7 +300,7 @@ func TestToolsDisabledWithNone_OrdinaryCallsAndBudget(t *testing.T) {
 		fmt.Fprint(w, `{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
 	}))
 	defer server.Close()
-	m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"), WithContextWindow(4096), WithToolChoiceNoneWhenToolsDisabled(true), WithExtraFields(map[string]any{"tool_choice": "required"}))
+	m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"), WithContextWindow(4096), WithPreserveToolsWhenDisabled(true), WithExtraFields(map[string]any{"tool_choice": "required"}))
 	ch, err := m.GenerateContent(context.Background(), req)
 	require.NoError(t, err)
 	for resp := range ch {
@@ -310,7 +310,7 @@ func TestToolsDisabledWithNone_OrdinaryCallsAndBudget(t *testing.T) {
 	require.Len(t, captured["tools"], 1)
 	require.True(t, m.PreservesToolsWhenDisabled())
 	require.False(t, New("test").PreservesToolsWhenDisabled())
-	require.False(t, New("test", WithToolChoiceNoneWhenToolsDisabled(true), WithToolChoiceNoneWhenToolsDisabled(false)).PreservesToolsWhenDisabled())
+	require.False(t, New("test", WithPreserveToolsWhenDisabled(true), WithPreserveToolsWhenDisabled(false)).PreservesToolsWhenDisabled())
 
 	withoutTools := *req
 	withoutTools.Tools = nil
@@ -329,7 +329,7 @@ func TestToolsDisabledWithNone_InvalidSchemaUsesNormalCallback(t *testing.T) {
 					}))
 					defer server.Close()
 					m := New("test", WithBaseURL(server.URL), WithAPIKey("test-key"),
-						WithToolChoiceNoneWhenToolsDisabled(true), WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+						WithPreserveToolsWhenDisabled(true), WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
 						WithChatRequestCallback(func(_ context.Context, req *openaigo.ChatCompletionNewParams) {
 							req.Tools[0].Function.Parameters = openaigo.FunctionParameters{"invalid": make(chan int)}
 						}),

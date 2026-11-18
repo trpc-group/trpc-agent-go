@@ -12,15 +12,22 @@ Model 模块具有以下核心特性：
 - **完整错误处理**：提供双层错误处理机制，区分系统错误和 API 错误
 - **可扩展配置**：支持丰富的自定义配置项，满足不同场景需求
 
+<a id="preserving-tools-during-call-limit-finalization"></a>
+
 ### 在调用上限收尾时保留工具定义
 
-对于已验证支持 `tool_choice: "none"` 的 OpenAI 兼容端点，可以在收尾时保留工具定义，争取复用 prompt cache：
+下面的 Agent 最多执行 5 轮工具调用。达到上限进入收尾时，Agent 会再请模型基于已有结果回答。如果模型仍提出工具调用，框架会拒绝执行。
+
+- 默认情况下，收尾请求不发送工具定义（`tools`）。
+- 开启此选项后，收尾请求按平时的规则生成 `tools`，并发送 `tool_choice: "none"`。保留工具定义有机会复用前面请求的提示词缓存。
+
+请先验证模型和网关支持 `tool_choice: "none"`，再启用这个选项。
 
 ```go
 m := openai.New(modelName,
     openai.WithBaseURL(baseURL),
     openai.WithAPIKey(apiKey),
-    openai.WithToolChoiceNoneWhenToolsDisabled(true),
+    openai.WithPreserveToolsWhenDisabled(true),
 )
 a := llmagent.New("assistant",
     llmagent.WithModel(m),
@@ -30,18 +37,14 @@ a := llmagent.New("assistant",
 )
 ```
 
-此选项默认为 false，沿用移除工具定义的行为。它同时适用于 LLM 调用次数上限和工具迭代上限触发的收尾，普通调用不受影响。
-开启后，`BeforeModel` callback、输入 token 预算和 telemetry 都能看到保留的工具定义。
-工具构建、callback 修改、额外字段和 SDK JSON options 沿用普通请求的优先级，收尾不会额外过滤或恢复工具定义。
-adapter 在 provider callback、额外字段和 SDK JSON options 之后强制设置 `tool_choice: "none"`，即使没有工具也一样。
-已废弃的 `functions` 和 `function_call` 字段在收尾时继续省略。
-包装 model 需要转发 `PreservesToolsWhenDisabled() bool` 才能保留该优化。
-未转发时，flow 会清空 `Request.Tools` 和 `Request.ExtraFields` 中的工具控制字段，但不会关闭内层 OpenAI model 的选项：
-内层仍强制设置 `tool_choice: "none"`，并保留由 model 级额外字段、SDK JSON options 和 provider callback 提供的工具定义。
+这个选项也适用于 LLM 调用次数上限触发的收尾。收尾请求计入 `MaxLLMCalls`。如果端点报错，框架会直接返回错误。
 
-请先验证具体端点和模型。一些兼容网关会拒绝或忽略 `"none"`。
-API 错误沿用既有错误路径；收尾阶段返回的工具调用会被拒绝且不会执行。
-框架不会为此额外发起降级请求，收尾调用仍计入 `MaxLLMCalls`。缓存收益取决于 provider，并非保证命中。
+<details>
+<summary>使用模型包装器时</summary>
+<p>外层需要转发 <code>PreservesToolsWhenDisabled() bool</code>，框架才会保留传给模型的工具定义。
+未转发时，框架会移除请求中的工具定义和工具控制字段。
+内层 OpenAI 模型如果开启了此选项，仍会发送 <code>tool_choice: "none"</code>，也可以发送由内层配置或回调提供的工具定义。</p>
+</details>
 
 
 ## 快速开始

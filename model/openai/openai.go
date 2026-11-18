@@ -433,10 +433,10 @@ type Model struct {
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 
-	accumulateChunkUsage       AccumulateChunkUsage
-	optimizeForCache           bool // Optimize message structure for prompt caching
-	omitFileContentParts       bool
-	toolChoiceNoneWhenDisabled bool
+	accumulateChunkUsage      AccumulateChunkUsage
+	optimizeForCache          bool // Optimize message structure for prompt caching
+	omitFileContentParts      bool
+	preserveToolsWhenDisabled bool
 }
 
 // New creates a new OpenAI-like model.
@@ -524,7 +524,7 @@ func New(name string, opts ...Option) *Model {
 		accumulateChunkUsage:       o.accumulateChunkUsage,
 		optimizeForCache:           o.OptimizeForCache,
 		omitFileContentParts:       o.OmitFileContentParts,
-		toolChoiceNoneWhenDisabled: o.toolChoiceNoneWhenDisabled,
+		preserveToolsWhenDisabled:  o.preserveToolsWhenDisabled,
 	}
 }
 
@@ -577,7 +577,7 @@ func baseURLMatchesHost(raw string, hosts ...string) bool {
 // When enabled, this model still enforces "none" and retains tools from its own
 // configuration and callbacks even if a wrapper does not forward the capability.
 func (m *Model) PreservesToolsWhenDisabled() bool {
-	return m.toolChoiceNoneWhenDisabled
+	return m.preserveToolsWhenDisabled
 }
 
 // Info implements the model.Model interface.
@@ -665,7 +665,7 @@ func (m *Model) prepareChatRequest(
 	m.applyTokenTailoring(ctx, request)
 	chatRequest, opts := m.buildChatRequestWithToolControl(
 		request,
-		imodelrequest.ToolsDisabled(ctx) && !m.toolChoiceNoneWhenDisabled,
+		imodelrequest.ToolsDisabled(ctx) && !m.preserveToolsWhenDisabled,
 	)
 	return chatRequest, opts, nil
 }
@@ -1073,7 +1073,7 @@ func (m *Model) enforceDisabledTools(
 	request *openai.ChatCompletionNewParams,
 	opts []openaiopt.RequestOption,
 ) []openaiopt.RequestOption {
-	if !m.toolChoiceNoneWhenDisabled {
+	if !m.preserveToolsWhenDisabled {
 		disableChatRequestTools(request)
 		return opts
 	}

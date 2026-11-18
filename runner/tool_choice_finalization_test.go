@@ -81,7 +81,7 @@ func TestRunner_CallLimitFinalizationToolChoice(t *testing.T) {
 					}))
 					defer server.Close()
 					m := openai.New("test", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
-						openai.WithToolChoiceNoneWhenToolsDisabled(enabled),
+						openai.WithPreserveToolsWhenDisabled(enabled),
 						openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
 					lookup := function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
 						executions++
@@ -187,7 +187,7 @@ func TestRunner_CallLimitFinalizationHonorsBeforeModelToolFilter(t *testing.T) {
 	}))
 	defer server.Close()
 	m := openai.New("test", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
-		openai.WithToolChoiceNoneWhenToolsDisabled(true), openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
+		openai.WithPreserveToolsWhenDisabled(true), openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
 	lookup := function.NewFunctionTool(func(context.Context, struct{}) (string, error) { return "ok", nil }, function.WithName("lookup"))
 	restricted := function.NewFunctionTool(func(context.Context, struct{}) (string, error) { return "restricted", nil }, function.WithName("restricted"))
 	callbacks := model.NewCallbacks().RegisterBeforeModel(func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
@@ -238,7 +238,7 @@ func TestRunner_CallLimitFinalizationWithReplacedInvocation(t *testing.T) {
 					}))
 					defer server.Close()
 					m := openai.New("test", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
-						openai.WithToolChoiceNoneWhenToolsDisabled(enabled),
+						openai.WithPreserveToolsWhenDisabled(enabled),
 						openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
 					lookup := function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
 						executions++

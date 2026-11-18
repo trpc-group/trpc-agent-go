@@ -68,14 +68,24 @@ Example code is located at [examples/runner](https://github.com/trpc-group/trpc-
 
 ### Preserving tools during call-limit finalization
 
-OpenAI-compatible endpoints that honor `tool_choice: "none"` can keep tool
-definitions during finalization to improve prompt-cache reuse:
+Suppose an agent is limited to five tool rounds and has finalization enabled.
+When the agent reaches the limit and enters finalization, it asks the model for
+an answer based on the results so far. If the model still returns a tool call,
+the framework rejects it.
+
+- By default, the final request omits tool definitions (`tools`).
+- With this option enabled, the final request builds `tools` as usual and sends
+  `tool_choice: "none"`. Keeping the definitions can help reuse the prompt cache
+  from earlier requests.
+
+Verify that your model and endpoint honor `tool_choice: "none"` before enabling
+the option.
 
 ```go
 m := openai.New(modelName,
     openai.WithBaseURL(baseURL),
     openai.WithAPIKey(apiKey),
-    openai.WithToolChoiceNoneWhenToolsDisabled(true),
+    openai.WithPreserveToolsWhenDisabled(true),
 )
 a := llmagent.New("assistant",
     llmagent.WithModel(m),
@@ -85,27 +95,19 @@ a := llmagent.New("assistant",
 )
 ```
 
-The default is false and omits tools as before. This setting applies to both
-LLM-call and tool-iteration finalization, and leaves ordinary calls unchanged.
-When enabled, `BeforeModel` callbacks, input-token budgeting, and telemetry see
-the tool definitions. Tool construction, callback edits, extra fields, and SDK
-JSON options follow the same precedence as ordinary requests. Finalization does
-not filter or restore tool definitions. The adapter forces `tool_choice: "none"`
-after provider callbacks, extra fields, and SDK JSON options, including when no
-tools remain. Deprecated `functions` and `function_call` fields continue to be
-omitted during finalization.
-Model wrappers must forward `PreservesToolsWhenDisabled() bool` to retain this
-optimization. Without forwarding, the flow clears `Request.Tools` and the tool
-control fields in `Request.ExtraFields`. This does not disable the option on the
-inner OpenAI model: it still forces `tool_choice: "none"` and keeps tool
-definitions supplied by model-level extra fields, SDK JSON options, and provider
-callbacks.
+The option also applies to finalization at the LLM call limit. The final request
+counts toward `MaxLLMCalls`. If the endpoint returns an error, the framework
+returns it to the caller.
 
-Verify the endpoint and model before enabling this option. Some compatible
-gateways reject or ignore `"none"`. API errors follow the existing error path,
-and tool calls returned during finalization are rejected without execution.
-There is no additional fallback request; finalization still counts toward
-`MaxLLMCalls`. Cache reuse depends on the provider and is not guaranteed.
+<details>
+<summary>Using a model wrapper</summary>
+<p>A wrapper must forward <code>PreservesToolsWhenDisabled() bool</code> for the
+framework to retain the tool definitions it passes to the model. Without
+forwarding, the framework removes tool definitions and tool control fields from
+its request. If the option is enabled on the inner OpenAI model, that model still
+sends <code>tool_choice: "none"</code> and can send tool definitions from its own
+configuration or callbacks.</p>
+</details>
 
 ### Usage Methods and Platform Integration Guide
 
