@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -162,6 +163,38 @@ func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}, nil
 		}
 
+	case "HEAD":
+		// Object metadata
+		objectKey := strings.TrimPrefix(req.URL.Path, "/")
+		if data, exists := m.objects[objectKey]; exists {
+			header := make(http.Header)
+
+			// Set stored headers
+			if headers, hasHeaders := m.headers[objectKey]; hasHeaders {
+				for k, v := range headers {
+					header.Set(k, v)
+				}
+			}
+			// Set default content type if not set
+			if header.Get("Content-Type") == "" {
+				header.Set("Content-Type", "application/octet-stream")
+			}
+			header.Set("Content-Length", strconv.Itoa(len(data)))
+
+			return &http.Response{
+				StatusCode: 200,
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}
+
+		// Object not found
+		return &http.Response{
+			StatusCode: 404,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code></Error>`)),
+		}, nil
+
 	case "DELETE":
 		// Object deletion
 		objectKey := strings.TrimPrefix(req.URL.Path, "/")
@@ -186,8 +219,14 @@ func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func createMockService() (*Service, *MockTransport) {
 	mockTransport := NewMockTransport()
 
-	mockClient := &http.Client{
+	authTransport := &cos.AuthorizationTransport{
+		SecretID:  "AKID_TEST",
+		SecretKey: "SECRET_TEST",
 		Transport: mockTransport,
+	}
+
+	mockClient := &http.Client{
+		Transport: authTransport,
 	}
 
 	// Create a mock COS client with the mock transport
@@ -201,10 +240,13 @@ func createMockService() (*Service, *MockTransport) {
 }
 
 type stubClient struct {
-	getBucketFn    func(context.Context, string) (*cos.BucketGetResult, error)
-	putObjectFn    func(context.Context, string, io.Reader, cos.ObjectPutOptions) error
-	getObjectFn    func(context.Context, string) (io.ReadCloser, http.Header, error)
-	deleteObjectFn func(context.Context, string) error
+	getBucketFn     func(context.Context, string) (*cos.BucketGetResult, error)
+	putObjectFn     func(context.Context, string, io.Reader, cos.ObjectPutOptions) error
+	getObjectFn     func(context.Context, string) (io.ReadCloser, http.Header, error)
+	headObjectFn    func(context.Context, string) (http.Header, int64, error)
+	objectURLFn     func(string) string
+	presignGetURLFn func(context.Context, string, time.Duration) (string, error)
+	deleteObjectFn  func(context.Context, string) error
 }
 
 func (c *stubClient) GetBucket(
@@ -239,6 +281,30 @@ func (c *stubClient) GetObject(
 	return c.getObjectFn(ctx, name)
 }
 
+func (c *stubClient) HeadObject(
+	ctx context.Context,
+	name string,
+) (http.Header, int64, error) {
+	if c.headObjectFn == nil {
+		return nil, 0, nil
+	}
+	return c.headObjectFn(ctx, name)
+}
+
+func (c *stubClient) ObjectURL(name string) string {
+	if c.objectURLFn == nil {
+		return ""
+	}
+	return c.objectURLFn(name)
+}
+
+func (c *stubClient) PresignedGetURL(ctx context.Context, name string, expires time.Duration) (string, error) {
+	if c.presignGetURLFn == nil {
+		return "", nil
+	}
+	return c.presignGetURLFn(ctx, name, expires)
+}
+
 func (c *stubClient) DeleteObject(
 	ctx context.Context,
 	name string,
@@ -255,6 +321,105 @@ func newNotFoundError() error {
 			StatusCode: http.StatusNotFound,
 		},
 	}
+}
+
+func TestHeadArtifact(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user1",
+		SessionID: "session1",
+	}
+	key := "test.txt"
+
+	// Not found.
+	got, err := s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+	})
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	// Save two versions.
+	v0, err := s.SaveArtifact(ctx, sessionInfo, key, &artifact.Artifact{
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, v0)
+
+	v1, err := s.SaveArtifact(ctx, sessionInfo, key, &artifact.Artifact{
+		Data:     []byte("world!"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, v1)
+
+	// Head latest.
+	got, err = s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+	}, artifact.WithIncludeURL(true))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, key, got.Filename)
+	assert.Equal(t, 1, got.Version)
+	assert.Equal(t, int64(len([]byte("world!"))), got.Size)
+	assert.Equal(t, "text/plain", got.MimeType)
+	assert.Contains(t, got.URL, "https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com/")
+	assert.Contains(t, got.URL, "/artifact/testapp/user1/session1/test.txt/1")
+
+	// Version not found.
+	v999 := 999
+	got, err = s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+		Version:     &v999,
+	})
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	// Invalid version.
+	neg := -1
+	_, err = s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+		Version:     &neg,
+	})
+	require.Error(t, err)
+}
+
+func TestHeadArtifact_WithPresignedURL(t *testing.T) {
+	t.Setenv("COS_SECRETID", "AKID_TEST")
+	t.Setenv("COS_SECRETKEY", "SECRET_TEST")
+
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user1",
+		SessionID: "session1",
+	}
+	key := "test.txt"
+
+	ver, err := s.SaveArtifact(ctx, sessionInfo, key, &artifact.Artifact{
+		Data:     []byte("hello"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+
+	got, err := s.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: sessionInfo,
+		Filename:    key,
+	}, artifact.WithPresignedURL(5*time.Minute))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotEmpty(t, got.URL)
+	require.Contains(t, got.URL, "/artifact/testapp/user1/session1/test.txt/"+strconv.Itoa(ver))
+	require.Contains(t, got.URL, "q-sign-algorithm=")
 }
 
 func TestArtifact_SessionScope(t *testing.T) {
