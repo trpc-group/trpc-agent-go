@@ -61,11 +61,18 @@ type AfterModelCallbackStructured  func(ctx context.Context, args *model.AfterMo
 - Before 可返回非空响应以跳过模型调用
 - After 可获取原始请求 `req`，便于内容还原与后处理
 
-在 `BeforeModel` 和 `BeforeTool` 回调链中，如果后续回调未提供 `Context`（包括旧签名回调），
+在 `BeforeModel` 和 `BeforeTool` 回调链中，除非执行因回调错误而提前停止，
+如果后续回调未提供 `Context`（包括旧签名回调），
 最终返回结果会保留最近一次非空的 `Context`；后续显式提供的新上下文则覆盖它。
 推荐从回调输入的 ctx 派生，以保留取消传播、截止时间和上下文值；
 `context.Background()` 或 `context.WithoutCancel(ctx)` 会主动解除取消传播。
-错误处理、响应覆盖和参数处理仍遵循原有规则。
+错误处理、响应覆盖和参数处理仍遵循原有规则。默认遇到错误停止时，
+`RunBeforeModel` 不返回结果，`RunBeforeTool` 返回出错回调的原始结果，不合并先前的上下文。
+启用 `ContinueOnError` 后，回调链可以同时返回保留的上下文和第一个错误。
+
+并行工具在默认合并结果模式下使用替换后的上下文执行工具，结果发布则遵循 worker 的生命周期：
+仅取消回调替换的上下文不会丢弃缓存结果；解除该上下文的取消传播，也不会让结果
+发布在 worker 取消后继续等待。
 
 ### 回调执行控制
 

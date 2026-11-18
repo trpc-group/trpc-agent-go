@@ -62,13 +62,22 @@ Key points:
 - Before can return a non-nil response to skip the model call.
 - After receives the original request, useful for content restoration and post-processing.
 
-In `BeforeModel` and `BeforeTool` chains, the returned result retains the latest
-non-nil `Context` when later callbacks omit it, including legacy callbacks.
+In `BeforeModel` and `BeforeTool` chains, unless execution stops on a callback
+error, the returned result retains the latest non-nil `Context` when later
+callbacks omit it, including legacy callbacks.
 A later explicit replacement takes precedence. Derive replacements from the
 callback input to preserve cancellation, deadlines, and values;
 `context.Background()` or `context.WithoutCancel(ctx)` deliberately detaches
 cancellation. Error handling, response overrides, and argument handling keep
-their existing rules.
+their existing rules. On the default error stop, `RunBeforeModel` returns no
+result, while `RunBeforeTool` returns the failing callback's raw result without
+merging an earlier context. With `ContinueOnError`, the chain can return the
+retained context alongside the first error.
+
+In the default merged-result mode for parallel tools, the replacement context
+controls tool execution. Publication follows the worker's lifetime: cancelling only the
+callback's replacement context does not discard a cached result, and detaching
+that context does not keep publication alive after the worker is cancelled.
 
 ### Callback Execution Control
 
