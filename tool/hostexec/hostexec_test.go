@@ -618,6 +618,7 @@ func TestRunForeground_ContextCancel(t *testing.T) {
 		5*time.Second,
 		nil,
 		defaultMaxLines,
+		nil,
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, output)
@@ -835,6 +836,7 @@ func TestToolSet_MetadataAndOptions(t *testing.T) {
 		WithMaxLines(7),
 		WithJobTTL(time.Second),
 		WithBaseEnv(baseEnv),
+		WithPreStartHook(func(context.Context, *exec.Cmd) error { return nil }),
 	)
 	require.NoError(t, err)
 	defer set.Close()
@@ -844,6 +846,7 @@ func TestToolSet_MetadataAndOptions(t *testing.T) {
 	require.Len(t, typed.Tools(context.Background()), 3)
 	require.Equal(t, 7, typed.mgr.maxLines)
 	require.Equal(t, time.Second, typed.mgr.jobTTL)
+	require.NotNil(t, typed.mgr.preStartHook)
 	require.Equal(
 		t,
 		map[string]string{"HOSTEXEC_ONE": "1"},
@@ -1074,6 +1077,7 @@ func TestManager_ExecValidationAndStartErrors(t *testing.T) {
 	}
 
 	_, err = mgr.startBackground(
+		context.Background(),
 		execParams{
 			Command: "echo hi",
 			Workdir: filepath.Join(t.TempDir(), "missing"),
@@ -1207,12 +1211,20 @@ func TestStartPTY_ErrorBranches(t *testing.T) {
 		t.Skip("pty is not supported on windows")
 	}
 
-	_, _, err := startPTY(nil)
+	_, _, err := startPTY(context.Background(), nil, nil)
 	require.EqualError(t, err, "nil command")
 
 	cmd := exec.Command("definitely-missing-binary")
-	_, _, err = startPTY(cmd)
+	_, _, err = startPTY(context.Background(), cmd, nil)
 	require.Error(t, err)
+
+	hookErr := errors.New("hook refused")
+	_, _, err = startPTY(
+		context.Background(),
+		cmd,
+		func(context.Context, *exec.Cmd) error { return hookErr },
+	)
+	require.ErrorIs(t, err, hookErr)
 }
 
 type testWriteCloser struct {

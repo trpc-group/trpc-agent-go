@@ -48,26 +48,46 @@ const (
 // registered with the manager and remains addressable — write_stdin can answer
 // its prompts, and the caller can see it waiting and kill it — so it keeps the
 // terminal it has always had.
+//
+// Both attributes are assigned rather than merely set, so calling this again
+// after the pre-start hook restores the exact state the mode needs even when
+// the hook replaced SysProcAttr or enabled the counterpart.
 func preparePipeCommand(cmd *exec.Cmd, detach bool) {
 	if cmd == nil {
 		return
 	}
 
 	attrs := ensureSysProcAttr(cmd)
-	if detach {
-		attrs.Setsid = true
-	} else {
-		attrs.Setpgid = true
-	}
+	attrs.Setsid = detach
+	attrs.Setpgid = !detach
+	// A pipe child has no terminal to take: stdin is a pipe or the null device,
+	// so Setctty would make the exec fail. It is cleared here so a hook that
+	// copied PTY attributes cannot stop the command from starting.
+	attrs.Setctty = false
+	attrs.Ctty = 0
 	applyParentDeathSignal(attrs)
 }
 
+// preparePTYCommand establishes the attributes a PTY child starts with: a new
+// session with the PTY as its controlling terminal, which is exactly what
+// pty.Start sets before it calls cmd.Start. Setting them here rather than
+// leaving them to pty.Start lets the pre-start hook observe the attributes
+// the command will start with, and restores them afterwards when the hook
+// replaced SysProcAttr. Setpgid is cleared because setsid and setpgid cannot
+// be combined; see preparePipeCommand.
 func preparePTYCommand(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
 
-	applyParentDeathSignal(ensureSysProcAttr(cmd))
+	attrs := ensureSysProcAttr(cmd)
+	attrs.Setsid = true
+	attrs.Setctty = true
+	// Ctty is the child's file descriptor of the terminal; pty.Start wires the
+	// terminal to stdin, so descriptor 0 is the only valid value.
+	attrs.Ctty = 0
+	attrs.Setpgid = false
+	applyParentDeathSignal(attrs)
 }
 
 func ensureSysProcAttr(cmd *exec.Cmd) *syscall.SysProcAttr {
