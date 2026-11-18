@@ -61,8 +61,10 @@ PNG image in the final assistant response.
    - For OpenAI‑style function calling, most implementations expect that an
      `assistant(tool_calls)` message is followed by one or more `role: "tool"`
      messages with matching `tool_call_id`.
-   - In this example we keep the framework‑supplied `DefaultToolMessage` as the
-     tool result and append an extra `RoleUser` message that carries the image.
+   - Keep `DefaultToolMessage` first, then return the image in a `RoleUser`
+     message. If that message sets `ToolID`, use the same `in.ToolCallID`.
+     The framework sends the image after the round's tool receipts, including
+     when several tools run in parallel. No `BeforeModel` callback is needed.
 
 4. **Do not base64‑encode the image twice**  
    - The tool implementation should return real binary image data (PNG bytes in
