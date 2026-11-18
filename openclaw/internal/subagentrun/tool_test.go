@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const testParentAgentName = "parent"
@@ -143,6 +144,66 @@ func TestSpawnToolSyncAndReviewModesWait(t *testing.T) {
 	require.Empty(t, text)
 
 	route, ok := agent.CurrentAwaitUserReplyRoute(reviewInv)
+	require.True(t, ok)
+	require.Equal(t, testParentAgentName, route.AgentName)
+}
+
+// The objection keeps a review-mode spawn's resume route on the invocation the
+// flow reads back.
+//
+// The first half runs the spawn against the view a parallel worker would hand it
+// and shows the route landing there rather than on the base; views are never
+// synced back, so it would be discarded while the spawn reported success. The
+// second half shows both registrations objecting, which is what keeps the batch
+// sequential so Call receives the base invocation.
+func TestSpawnToolKeepsReviewModeOffTheParallelPath(t *testing.T) {
+	t.Parallel()
+
+	router := outbound.NewRouter()
+	router.RegisterSender(&stubSender{})
+
+	svc, err := NewService(t.TempDir(), &captureRunner{reply: "review result"}, router)
+	require.NoError(t, err)
+	svc.Start(context.Background())
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	tools := NewTools(svc)
+	runtimeState := map[string]any{
+		"openclaw.delivery.channel": "telegram",
+		"openclaw.delivery.target":  "987",
+	}
+
+	base := newInvocation("telegram:user", "telegram:dm:987", runtimeState)
+	view := base.View()
+	_, err = tools.spawn.Call(
+		agent.NewInvocationContext(context.Background(), view),
+		[]byte(`{"task":"review","mode":"review"}`),
+	)
+	require.NoError(t, err)
+
+	_, staged := agent.CurrentAwaitUserReplyRoute(view)
+	require.True(t, staged,
+		"precondition: the route is staged on whatever invocation Call is given")
+	_, leaked := agent.CurrentAwaitUserReplyRoute(base)
+	require.False(t, leaked,
+		"precondition: a parallel worker's view never reaches the base invocation")
+
+	// Both registrations are *spawnTool, so the alias is covered too.
+	require.False(t, tool.IsConcurrencySafe(tools.spawn),
+		"a spawn must not be admitted to the parallel path")
+	require.False(t, tool.IsConcurrencySafe(tools.spawnAlias),
+		"the compatibility alias must object too")
+
+	// Sequential execution puts the route where the flow reads it back.
+	sequential := newInvocation("telegram:user", "telegram:dm:988", runtimeState)
+	_, err = tools.spawn.Call(
+		agent.NewInvocationContext(context.Background(), sequential),
+		[]byte(`{"task":"review","mode":"review"}`),
+	)
+	require.NoError(t, err)
+	route, ok := agent.CurrentAwaitUserReplyRoute(sequential)
 	require.True(t, ok)
 	require.Equal(t, testParentAgentName, route.AgentName)
 }

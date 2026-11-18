@@ -18,12 +18,15 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // declaredCallableTool is a request-local tool wrapper that returns
 // an augmented Declaration while delegating Call and optional interfaces
-// (SkipSummarization) to the original.
+// (SkipSummarization, ToolMetadata) to the original, and exposing the
+// original through Original() for the capabilities the framework resolves
+// rather than delegates.
 // It is NOT a persistent wrapper — it only lives within one
 // BeforeModel callback's Request.Tools replacement. The original
 // tool object is never mutated.
@@ -116,6 +119,30 @@ func (t *declaredCallableTool) SkipSummarization() bool {
 		return s.SkipSummarization()
 	}
 	return false
+}
+
+// Original exposes the inner tool for the framework's wrapper resolution.
+//
+// The parallel paths ask itool.IsConcurrencySafe of whatever sits in
+// Request.Tools, which is this wrapper once BeforeModel has run, and that helper
+// resolves Original() chains before consulting tool.ConcurrencyAware. Without
+// the exposure, a tool that declined to share its turn would be readmitted to
+// the parallel path purely because ToolPipe augmented its schema.
+//
+// The wrapper does not answer IsConcurrencySafe itself: the interface has three
+// states, and a wrapper answering with a bool would turn "nothing declared"
+// into a guarantee the inner tool never made.
+func (t *declaredCallableTool) Original() tool.Tool {
+	return t.inner
+}
+
+// ToolMetadata delegates the inner tool's descriptive metadata, resolving the
+// wrappers between here and the semantic tool: a declaration overlay applied
+// by a host surface exposes no metadata itself. Without the delegation the
+// wrapper would drop ReadOnly, Destructive, and OpenWorld, and permission
+// policies read metadata off this wrapper.
+func (t *declaredCallableTool) ToolMetadata() tool.ToolMetadata {
+	return tool.MetadataOf(itool.ResolveSemantic(t.inner))
 }
 
 // StreamableCall implements tool.StreamableTool — only on the streamable wrapper.
@@ -436,9 +463,10 @@ func resultToString(result any) string {
 
 // Compile-time interface checks.
 var (
-	_ tool.Tool           = (*declaredCallableTool)(nil)
-	_ tool.CallableTool   = (*declaredCallableTool)(nil)
-	_ tool.Tool           = (*declaredStreamableCallableTool)(nil)
-	_ tool.CallableTool   = (*declaredStreamableCallableTool)(nil)
-	_ tool.StreamableTool = (*declaredStreamableCallableTool)(nil)
+	_ tool.Tool             = (*declaredCallableTool)(nil)
+	_ tool.CallableTool     = (*declaredCallableTool)(nil)
+	_ tool.MetadataProvider = (*declaredCallableTool)(nil)
+	_ tool.Tool             = (*declaredStreamableCallableTool)(nil)
+	_ tool.CallableTool     = (*declaredStreamableCallableTool)(nil)
+	_ tool.StreamableTool   = (*declaredStreamableCallableTool)(nil)
 )
