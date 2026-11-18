@@ -10,6 +10,8 @@
 // Package responses adapts OpenAI Responses to model.Model using client-managed
 // history and local function tools. Complete native output items are retained
 // as an indivisible Message.ProviderData record; text and tool calls are projections.
+// Tool messages with image content parts use native function output arrays;
+// text-only tool messages retain their string output format.
 // A response is committed only after a valid completed response, never on EOF.
 // An empty completed stream is an error when earlier events already showed
 // output; those events stay previews and are not turned into native items or

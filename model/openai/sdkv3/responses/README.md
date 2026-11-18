@@ -55,6 +55,8 @@ recovery contract.
 - Text, reasoning summaries, refusals, and ordered local function calls.
 - Input text, images, and files; JSON schema output and supported generation
   parameters. Tool declarations are sent as non-strict function schemas.
+- Local function outputs containing text and images through explicit
+  `RoleTool.ContentParts`; text-only tool outputs keep their string format.
 - Streaming text, refusal, and reasoning previews, followed by one
   authoritative completed response. Tool calls are exposed only in that
   completed response. A completed response whose output array is empty is
@@ -71,6 +73,60 @@ Unknown output types fail explicitly, including hosted-tool calls. Audio/video
 input, hosted tools, tool search, background execution, approval interactions,
 `conversation`, `previous_response_id`, and provider compaction are outside this
 initial contract. Unsupported Chat-specific parameters fail validation.
+
+## Images returned by local tools
+
+Use `ToolResultMessages` to return text and images in one `RoleTool` message.
+Keep the `ToolID` from `DefaultToolMessage`. The adapter sends the parts as
+`function_call_output.output`, associated with the original `call_id`.
+
+```go
+type imageResult struct {
+    Data   []byte `json:"-"` // Raw bytes, omitted from default JSON text.
+    Format string `json:"format"`
+}
+
+callbacks := tool.NewCallbacks().RegisterToolResultMessages(
+    func(_ context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+        if in.ToolName != "read_image" {
+            return nil, nil
+        }
+        result, ok := in.Result.(*imageResult)
+        if !ok || result == nil {
+            return nil, nil
+        }
+        msg, ok := in.DefaultToolMessage.(model.Message)
+        if !ok {
+            return nil, fmt.Errorf("unexpected default tool message type %T", in.DefaultToolMessage)
+        }
+        msg.Content = "Image returned by read_image."
+        msg.AddImageData(result.Data, "auto", result.Format)
+        return msg, nil
+    },
+)
+// Set llmagent.WithToolCallbacks(callbacks) on the Responses agent.
+```
+
+This snippet uses `context`, `fmt`, and the framework's `model` and `tool`
+packages. The [runnable ReadImage example](../../../../examples/openairesponses/imagetool)
+resolves an image ID to a configured local file. Implement image-ID resolution,
+authenticated downloads, and image size limits in the application as needed.
+
+- With at least one image part, non-empty `Content` becomes the first
+  `input_text` block, followed by `ContentParts` in order. Text-only results keep
+  the existing string format, including concatenated text parts.
+- `AddImageData` accepts raw bytes and a format such as `png` or `image/png`.
+  The adapter base64-encodes the bytes once. Use `AddImageURL` for a URL or an
+  already encoded `data:image/...;base64,...` URL. As for user images, a
+  non-empty image URL takes precedence over data; absent format defaults to PNG.
+- JSON arrays and base64 strings in `Content` remain ordinary text. Convert
+  application-specific result formats explicitly in the callback. Files,
+  audio, and video in tool outputs remain unsupported.
+- Keep binary data out of default JSON text and use a concise `Content`
+  description to avoid also sending the image as text. History retention and
+  compaction policies still apply; retained image bytes are persisted as part
+  of the message.
+- The model and gateway must support images in Responses function outputs.
 
 ## Unknown field, event, and item compatibility
 

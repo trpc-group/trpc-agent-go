@@ -2283,6 +2283,18 @@ go run ./tools -streaming=false
 
 输入 `/exit` 结束对话。在 `tools` 中，于同一进程里分两轮提问，例如先说 `Calculate 123 * 456.`，再说 `Add 789 to that result.`。同一会话会保留第一轮结果供第二轮使用，进程退出后即丢弃。示例 README 给出了示意交互。
 
+### 工具返回图片
+
+自定义 ReadImage 工具可以通过 `ToolResultMessages` 返回一条 `RoleTool` 消息，
+保留原 `ToolID`，把图片放入 `ContentParts`。Responses 适配器会生成原生的
+`function_call_output.output` 内容块，并关联到对应的工具调用。纯文本工具结果仍使用原来的
+字符串格式，普通 JSON 文本不会被自动解释为图片块。原始字节使用 `AddImageData`，
+图片 URL 或已编码的 data URL 使用 `AddImageURL`。
+
+可参考 [ReadImage 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses#readimage-tool)
+和[工具返回图片说明](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#images-returned-by-local-tools)。
+所选模型和网关需要支持工具输出中的图片。
+
 ### 回调与模型历史
 
 适配器填写 `Message.ProviderData` 的 `Protocol` 和 `Model`，分别记录原生协议和配置的模型名。

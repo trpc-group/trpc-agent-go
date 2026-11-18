@@ -2333,6 +2333,19 @@ go run ./tools -streaming=false
 
 Type `/exit` to quit. In `tools`, use two turns in the same process, such as `Calculate 123 * 456.` and then `Add 789 to that result.` The session retains the first result for the second turn and is discarded when the process exits. The example README shows an illustrative transcript.
 
+### Images returned by tools
+
+For a custom ReadImage tool, use `ToolResultMessages` to return one `RoleTool`
+message with the original `ToolID` and image `ContentParts`. The Responses
+adapter sends native `function_call_output.output` content blocks associated
+with that tool call. Text-only results retain their string format,
+and ordinary JSON text is not reinterpreted as image blocks. Use raw bytes with
+`AddImageData` or a URL/data URL with `AddImageURL`.
+
+See the [ReadImage example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses#readimage-tool)
+and [tool image documentation](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#images-returned-by-local-tools).
+The selected model and gateway must support images in function outputs.
+
 ### Callbacks and model history
 
 The adapter fills `Message.ProviderData.Protocol` and `Model` with the native

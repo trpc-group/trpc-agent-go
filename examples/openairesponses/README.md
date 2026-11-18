@@ -8,10 +8,12 @@ This independent module shows how to use the OpenAI Responses adapter with
 - `chat` is a multi-turn conversation without tools.
 - `tools` registers a local calculator and keeps one in-memory session across
   user messages.
+- `imagetool` uses `ToolResultMessages` to return a local image directly to
+  the main model in a native function output.
 
 Every request sends the full client-managed conversation. The adapter defaults
-to `store=false`, and both programs set that explicitly. In ordinary Runner
-use, application code does not read or edit `Message.ProviderData`.
+to `store=false`. In ordinary Runner use, application code does not read or edit
+`Message.ProviderData`.
 
 ## Prerequisites
 
@@ -115,6 +117,31 @@ You: Hello
 Assistant: Hello.
 You: /exit
 ```
+
+## ReadImage tool
+
+Use a model and gateway that accept image blocks in Responses function outputs:
+
+```bash
+go run ./imagetool -model your-vision-model -image /path/to/image.png \
+  -prompt "Read the visible text and describe the image."
+```
+
+The example instructs the model to call `read_image` with image ID `sample`.
+The tool resolves that ID to the configured file. On a successful call,
+`ToolResultMessages` places the raw bytes in `RoleTool.ContentParts`. The
+adapter includes the image in the next request as an `input_image` block in
+`function_call_output.output`, paired with the original call ID.
+
+This example uses non-streaming responses. Use PNG, JPEG, static GIF, or WebP
+images supported by your provider; the example checks the MIME type and limits
+the file to 10 MiB. The result's byte field is excluded from default
+JSON text. Replace the local lookup with your application's image-ID resolver
+or authenticated download as needed; pass raw bytes rather than encoding them
+again. For an existing image URL or data URL, use `Message.AddImageURL` instead.
+
+The [tool image documentation](../../model/openai/sdkv3/responses/README.md#images-returned-by-local-tools)
+describes ordering, text compatibility, and history behavior.
 
 ## Core API
 
