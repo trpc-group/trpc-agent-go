@@ -860,17 +860,19 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 
 	toolResults := make([]toolResult, 0, len(toolCalls))
 	var callErr error
+	var rejectedResult toolResult
 	for i, tc := range toolCalls {
 		result, err := p.executeSingleToolCallSequentialResult(
 			ctx, invocation, llmResponse, tools, eventChan, i, tc,
 		)
 		if err != nil {
-			recordExecutionTraceToolResult(ctx, invocation, result)
 			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) ||
 				len(toolResults) == 0 {
+				recordExecutionTraceToolResult(ctx, invocation, result)
 				return nil, err
 			}
 			callErr = err
+			rejectedResult = result
 			break
 		}
 		toolResults = append(toolResults, result)
@@ -881,6 +883,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		toolResults,
 	)
 	if callErr != nil && len(toolCallResponsesEvents) == 0 {
+		recordExecutionTraceToolResult(ctx, invocation, rejectedResult)
 		return nil, callErr
 	}
 
@@ -899,6 +902,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	)
 	if callErr != nil {
 		recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
+		recordExecutionTraceToolResult(ctx, invocation, rejectedResult)
 		return mergedEvent, callErr
 	}
 	if err := p.applyAfterToolMessagesHooks(

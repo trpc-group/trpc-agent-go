@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -46,15 +47,13 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 			name = "append fails"
 		}
 		t.Run(name, func(t *testing.T) {
-			watchdog, stopWatchdog := context.WithTimeout(context.Background(), 5*time.Second)
+			inv, traceCtx := newExecutionTraceProcessorInvocation(t)
+			watchdog, stopWatchdog := context.WithTimeout(traceCtx, 5*time.Second)
 			defer stopWatchdog()
 			parent, expire := context.WithCancel(watchdog)
 			defer expire()
 			ctx := controlledDeadlineContext{parent}
-			inv := agent.NewInvocation(
-				agent.WithInvocationSession(&session.Session{ID: "test-session"}),
-				agent.WithInvocationAgent(&mockAgentWithTools{name: "tester"}),
-			)
+			inv.Session = &session.Session{ID: "test-session"}
 			var persisted []*event.Event
 			appender.Attach(inv, func(appendCtx context.Context, evt *event.Event) error {
 				require.NoError(t, appendCtx.Err())
@@ -108,6 +107,14 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 			require.Equal(t, []byte("first"), persisted[0].StateDelta["completed"])
 			require.True(t, persisted[0].RequiresCompletion)
 			require.Empty(t, eventChan)
+			executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+			require.NotNil(t, executionTrace)
+			require.Len(t, executionTrace.Steps, 1)
+			require.Len(t, executionTrace.Steps[0].Tools, 2)
+			require.Equal(t, "call-first", executionTrace.Steps[0].Tools[0].ID)
+			require.Equal(t, "committed", executionTrace.Steps[0].Tools[0].Result)
+			require.Equal(t, "call-second", executionTrace.Steps[0].Tools[1].ID)
+			require.Contains(t, executionTrace.Steps[0].Tools[1].Error, context.DeadlineExceeded.Error())
 		})
 	}
 }
