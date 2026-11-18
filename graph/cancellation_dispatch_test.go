@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -238,4 +239,57 @@ func (m *cancellationIterModel) GenerateContentIter(ctx context.Context, req *mo
 	return func(yield func(*model.Response) bool) {
 		yield(&model.Response{Done: true, Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}})
 	}, nil
+}
+
+type cancellationPreparationModel struct {
+	cancel       context.CancelFunc
+	infoCalls    int
+	channelCalls int
+}
+
+func (m *cancellationPreparationModel) Info() model.Info {
+	m.infoCalls++
+	m.cancel()
+	return model.Info{Name: "probe", ProviderDataProtocol: "test.native"}
+}
+
+func (m *cancellationPreparationModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
+	m.channelCalls++
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+type cancellationPreparationIterModel struct {
+	*cancellationPreparationModel
+	iterCalls int
+}
+
+func (m *cancellationPreparationIterModel) GenerateContentIter(context.Context, *model.Request) (model.Seq[*model.Response], error) {
+	m.iterCalls++
+	return func(func(*model.Response) bool) {}, nil
+}
+
+func TestCancellationDispatch_ModelPreparation(t *testing.T) {
+	for _, iter := range []bool{false, true} {
+		t.Run(fmt.Sprintf("iter=%t", iter), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			channelModel := &cancellationPreparationModel{cancel: cancel}
+			iterModel := &cancellationPreparationIterModel{cancellationPreparationModel: channelModel}
+			var m model.Model = channelModel
+			if iter {
+				m = iterModel
+			}
+			request := &model.Request{Messages: []model.Message{{
+				Role:         model.RoleAssistant,
+				ProviderData: &model.ProviderData{Protocol: "test.native", Model: "probe", Payload: []byte("{}")},
+			}}}
+			_, err := generateModelStream(ctx, m, request, trace.SpanFromContext(ctx))
+			require.ErrorIs(t, err, context.Canceled)
+			require.Positive(t, channelModel.infoCalls)
+			require.Zero(t, channelModel.channelCalls)
+			require.Zero(t, iterModel.iterCalls)
+		})
+	}
 }

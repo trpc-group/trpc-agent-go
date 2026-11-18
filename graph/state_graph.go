@@ -2305,6 +2305,11 @@ func generateModelStream(
 			return modelResponseStream{}, err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return modelResponseStream{}, err
+	}
 	// Generate content.
 	if iterModel, ok := llmModel.(model.IterModel); ok {
 		seq, err := iterModel.GenerateContentIter(ctx, request)

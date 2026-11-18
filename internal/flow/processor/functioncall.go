@@ -4041,13 +4041,14 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	if err := ctx.Err(); err != nil {
 		return ctx, nil, false, false, err
 	}
-	reader, err := tl.StreamableCall(
-		streamableToolCallContext(
-			tool.WithoutToolResultAttachmentBudget(ctx),
-			tl,
-		),
-		toolCall.Function.Arguments,
+	callCtx := streamableToolCallContext(
+		tool.WithoutToolResultAttachmentBudget(ctx),
+		tl,
 	)
+	if err := callCtx.Err(); err != nil {
+		return ctx, nil, false, false, err
+	}
+	reader, err := tl.StreamableCall(callCtx, toolCall.Function.Arguments)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

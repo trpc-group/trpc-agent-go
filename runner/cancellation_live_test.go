@@ -74,8 +74,7 @@ func TestCancellationLive_BeforeTool(t *testing.T) {
 	defer r.Close()
 	events, err := r.Run(ctx, "user", "before-tool", model.NewUserMessage("Call cancel_probe exactly once with no arguments."))
 	require.NoError(t, err)
-	for range events {
-	}
+	waitForCancellationOutputClose(t, events, 95*time.Second)
 	require.Positive(t, beforeCalls.Load(), "provider must reach the before-tool callback")
 	require.Zero(t, calls.Load())
 	require.Zero(t, afterCalls.Load())
@@ -92,13 +91,6 @@ func TestCancellationLive_ModelStream(t *testing.T) {
 	defer r.Close()
 	events, err := r.Run(ctx, "user", "stream", model.NewUserMessage("Explain how a database transaction works in 30 numbered detailed steps."))
 	require.NoError(t, err)
-	var cancelledAt time.Time
-	for ev := range events {
-		if ev.Response != nil && ev.IsPartial && cancelledAt.IsZero() {
-			cancelledAt = time.Now()
-			cancel()
-		}
-	}
-	require.False(t, cancelledAt.IsZero(), "provider must actually emit a partial response")
-	t.Logf("live stream cancelled; runner output closed in %s (not a remote-termination assertion)", time.Since(cancelledAt))
+	closedAfter := cancelModelStreamOnPartial(t, events, cancel, 90*time.Second)
+	t.Logf("live stream cancelled; runner output closed in %s (not a remote-termination assertion)", closedAfter)
 }

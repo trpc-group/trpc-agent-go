@@ -5127,8 +5127,9 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 	tools := map[string]tool.Tool{
 		toolName: &mockCallableTool{
 			declaration: &tool.Declaration{Name: toolName},
-			callFn: func(context.Context, []byte) (any, error) {
-				<-ctx.Done()
+			callFn: func(callCtx context.Context, _ []byte) (any, error) {
+				require.NoError(t, callCtx.Err())
+				<-callCtx.Done()
 				return "late evidence", nil
 			},
 		},
@@ -5177,12 +5178,16 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 	}
 
 	persistErr := errors.New("deadline persistence failed")
+	var failedAppendCalls atomic.Int32
 	appender.Attach(inv, func(context.Context, *event.Event) error {
+		failedAppendCalls.Add(1)
 		return persistErr
 	})
 	failedEventChan := make(chan *event.Event, 1)
+	failedCtx, failedCancel := context.WithTimeout(baseCtx, 100*time.Millisecond)
+	defer failedCancel()
 	got, err = p.handleFunctionCallsAndSendEvent(
-		ctx,
+		failedCtx,
 		inv,
 		rsp,
 		tools,
@@ -5190,6 +5195,7 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 	)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Nil(t, got)
+	require.Equal(t, int32(1), failedAppendCalls.Load())
 	select {
 	case <-failedEventChan:
 		t.Fatalf("failed persistence emitted tool.response after deadline")

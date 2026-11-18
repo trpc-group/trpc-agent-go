@@ -3179,6 +3179,9 @@ func (f *Flow) generateContentSeq(
 		}
 		finishLatencySpan(span, started, err)
 	}()
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 	if iterModel, ok := callModel.(model.IterModel); ok {
 		seq, genErr := iterModel.GenerateContentIter(ctx, llmRequest)
 		err = genErr

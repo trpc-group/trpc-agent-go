@@ -148,3 +148,45 @@ func TestCancellationDispatch_ToolCallbacks(t *testing.T) {
 		}
 	}
 }
+
+type cancellationPreparationStreamTool struct {
+	cancel          context.CancelFunc
+	capabilityCalls int
+	calls           int
+}
+
+func (*cancellationPreparationStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "probe"}
+}
+
+func (t *cancellationPreparationStreamTool) TRPCAgentGoStructuredStreamErrorsOptIn() bool {
+	t.capabilityCalls++
+	t.cancel()
+	return true
+}
+
+func (t *cancellationPreparationStreamTool) StreamableCall(context.Context, []byte) (*tool.StreamReader, error) {
+	t.calls++
+	stream := tool.NewStream(0)
+	stream.Writer.Close()
+	return stream.Reader, nil
+}
+
+func TestCancellationDispatch_StreamPreparation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tl := &cancellationPreparationStreamTool{cancel: cancel}
+	afterCalls := 0
+	callbacks := tool.NewCallbacks().RegisterAfterTool(func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		afterCalls++
+		return nil, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	_, _, _, _, _, err := p.executeToolWithCallbacks(ctx, agent.NewInvocation(), model.ToolCall{
+		Function: model.FunctionDefinitionParam{Name: "probe"},
+	}, tl, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, tl.capabilityCalls)
+	require.Zero(t, tl.calls)
+	require.Zero(t, afterCalls)
+}
