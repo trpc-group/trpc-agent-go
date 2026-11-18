@@ -241,18 +241,31 @@ func isStringFieldType(fieldType reflect.Type) bool {
 }
 
 // appendEnumValue parses and appends a typed enum value to the schema.
+// For arrays and slices, enum tags constrain the innermost item schema.
 func appendEnumValue(fieldType reflect.Type, value string, schema *tool.Schema) error {
+	switch fieldType.Kind() {
+	case reflect.Ptr:
+		return appendEnumValue(fieldType.Elem(), value, schema)
+	case reflect.Array, reflect.Slice:
+		return appendEnumValue(fieldType.Elem(), value, schema.Items)
+	}
+
 	if schema.Enum == nil {
 		schema.Enum = make([]any, 0)
 	}
 	switch fieldType.Kind() {
 	case reflect.String:
 		schema.Enum = append(schema.Enum, value)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		v, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return fmt.Errorf("parse enum value %v to int64 failed: %w", value, err)
+		}
+		schema.Enum = append(schema.Enum, v)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v, err := strconv.ParseUint(value, 10, fieldType.Bits())
+		if err != nil {
+			return fmt.Errorf("parse enum value %v to %v failed: %w", value, fieldType, err)
 		}
 		schema.Enum = append(schema.Enum, v)
 	case reflect.Float32, reflect.Float64:
