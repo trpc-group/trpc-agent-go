@@ -12,12 +12,15 @@
 package mongodb
 
 import (
+	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -177,4 +180,83 @@ func TestIntegrationCleanupCandidateScanCost(t *testing.T) {
 	count, err := coll.CountDocuments(ctx, bson.M{})
 	require.NoError(t, err)
 	require.EqualValues(t, 40000, count)
+}
+
+// delayedCleanupClient adds a cancellable round-trip delay to cleanup calls.
+type delayedCleanupClient struct {
+	mongoClient
+	delay time.Duration
+	calls atomic.Int64
+}
+
+func (c *delayedCleanupClient) wait(ctx context.Context) error {
+	c.calls.Add(1)
+	timer := time.NewTimer(c.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (c *delayedCleanupClient) Aggregate(ctx context.Context, db, coll string, pipeline any,
+	opts ...*options.AggregateOptions) (*mongo.Cursor, error) {
+	if err := c.wait(ctx); err != nil {
+		return nil, err
+	}
+	return c.mongoClient.Aggregate(ctx, db, coll, pipeline, opts...)
+}
+
+func (c *delayedCleanupClient) FindOne(ctx context.Context, db, coll string, filter any,
+	opts ...*options.FindOneOptions) *mongo.SingleResult {
+	if err := c.wait(ctx); err != nil {
+		return mongo.NewSingleResultFromDocument(bson.M{}, err, nil)
+	}
+	return c.mongoClient.FindOne(ctx, db, coll, filter, opts...)
+}
+
+func (c *delayedCleanupClient) DeleteMany(ctx context.Context, db, coll string, filter any,
+	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
+	if err := c.wait(ctx); err != nil {
+		return nil, err
+	}
+	return c.mongoClient.DeleteMany(ctx, db, coll, filter, opts...)
+}
+
+func TestIntegrationCleanupProgressWithManyActiveCandidates(t *testing.T) {
+	ctx, svc, db := newIntegrationService(t, WithSoftDelete(false))
+	// Enable TTL after initialization to avoid starting a background worker.
+	svc.opts.sessionTTL = time.Hour
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	const activeGroups = 3200
+	docs := make([]any, 0, 2*activeGroups+1)
+	for i := 0; i < activeGroups; i++ {
+		for _, updated := range []time.Time{now.Add(-2 * time.Hour), now} {
+			docs = append(docs, bson.M{"app_name": "app", "user_id": "user",
+				"session_id": fmt.Sprint(i), "updated_at": updated})
+		}
+	}
+	expired := bson.M{"app_name": "app", "user_id": "user",
+		"session_id": "expired", "updated_at": now.Add(-2 * time.Hour)}
+	docs = append(docs, expired)
+	_, err := db.Collection(svc.collSessionEvents).InsertMany(ctx, docs)
+	require.NoError(t, err)
+	_, err = db.Collection(svc.collSessionTracks).InsertOne(ctx, expired)
+	require.NoError(t, err)
+	delayed := &delayedCleanupClient{mongoClient: svc.client, delay: 10 * time.Millisecond}
+	svc.client = delayed
+	started := time.Now()
+	svc.cleanupExpired(ctx)
+	t.Logf("cleanup of %d active candidates completed in %s with %d database calls",
+		activeGroups, time.Since(started), delayed.calls.Load())
+	for _, name := range []string{svc.collSessionEvents, svc.collSessionTracks} {
+		count, err := db.Collection(name).CountDocuments(ctx, bson.M{"session_id": "expired"})
+		require.NoError(t, err)
+		require.Zero(t, count, "expired group must be cleaned from %s", name)
+	}
+	count, err := db.Collection(svc.collSessionEvents).CountDocuments(ctx, bson.M{})
+	require.NoError(t, err)
+	require.EqualValues(t, 2*activeGroups, count, "active histories must remain intact")
 }

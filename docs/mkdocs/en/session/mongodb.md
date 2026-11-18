@@ -156,8 +156,8 @@ MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
 Cleanup first selects session groups containing non-deleted rows whose
 `updated_at` is at or before the TTL cutoff. It then checks each candidate for
 a non-deleted row newer than the cutoff, using the existing session-leading
-cleanup index. A group with any newer row is retained, including its older
-rows. Track groups still span all tracks in the same session.
+cleanup index with at most eight concurrent probes. A group with any newer
+row is retained, including its older rows. Track groups still span all tracks in the same session.
 
 Initialization adds a non-unique partial `cleanup_candidates` index to both
 event collections. Existing documents, cleanup indexes, TTL settings and
@@ -180,6 +180,14 @@ is already old, candidate enumeration can still be large; measure query counts
 and latency as well as scanned documents. Missing indexes affect performance,
 not correctness, and older service versions can continue using the same data.
 Prebuild indexes on large collections to avoid startup-time index build load.
+
+Candidates are processed in batches of at most 500. Each completed batch
+commits its expired groups, even if fewer than 500 have expired; a failure in a
+later batch does not discard earlier deletions. Event and track cleanup run
+sequentially with separate 30-second budgets (up to 60 seconds combined), so
+an event cleanup timeout does not consume the track cleanup budget. A shorter
+parent deadline or service shutdown still cancels both, and cleanup waits for
+all probe workers to exit.
 
 Cleanup keeps the existing scan-then-delete concurrency model: the candidate
 probe and subsequent deletion are not atomic with concurrent event appends.
