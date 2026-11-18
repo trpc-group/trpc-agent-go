@@ -2114,9 +2114,9 @@ func TestCleanupExpiredTracks_UsesSessionGroupCleanup(t *testing.T) {
 	mc := &mockClient{
 		aggregateFn: func(pipeline any) (*mongo.Cursor, error) {
 			stages := pipeline.(bson.A)
-			require.Len(t, stages, 3)
+			require.Len(t, stages, 2)
 			group := stages[1].(bson.M)["$group"].(bson.M)
-			assert.Contains(t, group, "max_updated_at")
+			assert.Contains(t, group, "_id")
 			return docsCursor([]any{
 				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": "s"}},
 			})
@@ -2127,11 +2127,11 @@ func TestCleanupExpiredTracks_UsesSessionGroupCleanup(t *testing.T) {
 	require.NoError(t, s.cleanupExpiredTracks(context.Background(), now))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 3)
 	assert.Equal(t, "Aggregate", ops[0].name)
 	assert.Equal(t, "session_tracks", ops[0].coll)
-	assert.Equal(t, "UpdateMany", ops[1].name)
-	assert.Equal(t, "session_tracks", ops[1].coll)
+	assert.Equal(t, "UpdateMany", ops[2].name)
+	assert.Equal(t, "session_tracks", ops[2].coll)
 }
 
 // -- WindowService ----------------------------------------------------------
@@ -2445,11 +2445,11 @@ func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
 	mc := &mockClient{
 		aggregateFn: func(pipeline any) (*mongo.Cursor, error) {
 			stages := pipeline.(bson.A)
-			require.Len(t, stages, 3)
+			require.Len(t, stages, 2)
 			match := stages[0].(bson.M)["$match"].(bson.M)
 			assert.Equal(t, nil, match["deleted_at"])
 			group := stages[1].(bson.M)["$group"].(bson.M)
-			assert.Contains(t, group, "max_updated_at")
+			assert.Contains(t, group, "_id")
 			return docsCursor([]any{
 				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u1", "session_id": "s1"}},
 				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u2", "session_id": "s2"}},
@@ -2461,17 +2461,17 @@ func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), now))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 4)
 	assert.Equal(t, "Aggregate", ops[0].name)
-	assert.Equal(t, "UpdateMany", ops[1].name)
-	filter := ops[1].filter.(bson.M)
+	assert.Equal(t, "UpdateMany", ops[3].name)
+	filter := ops[3].filter.(bson.M)
 	or := filter["$or"].(bson.A)
 	require.Len(t, or, 2)
 	assert.Contains(t, or, bson.M{"app_name": "app", "user_id": "u1", "session_id": "s1"})
 	assert.Contains(t, or, bson.M{"app_name": "app", "user_id": "u2", "session_id": "s2"})
 	assert.Equal(t, nil, filter["deleted_at"])
 	assert.NotContains(t, filter, "updated_at")
-	upd := ops[1].update.(bson.M)
+	upd := ops[3].update.(bson.M)
 	set := upd["$set"].(bson.M)
 	assert.Equal(t, now, set["deleted_at"])
 }
@@ -2537,10 +2537,10 @@ func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 2)
+	require.Len(t, ops, 3)
 	assert.Equal(t, "Aggregate", ops[0].name)
-	assert.Equal(t, "DeleteMany", ops[1].name)
-	assert.Equal(t, "session_events", ops[1].coll)
+	assert.Equal(t, "DeleteMany", ops[2].name)
+	assert.Equal(t, "session_events", ops[2].coll)
 }
 
 func TestCleanupExpiredEvents_FlushesInBatches(t *testing.T) {

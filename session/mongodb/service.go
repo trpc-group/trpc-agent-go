@@ -1257,17 +1257,20 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 		return nil
 	}
 	cutoff := now.Add(-ttl)
+	// Only sessions containing an old row can expire. The time-leading index
+	// avoids scanning every recent row just to discover these candidates.
 	pipeline := bson.A{
-		bson.M{"$match": bson.M{"deleted_at": nil}},
+		bson.M{"$match": bson.M{
+			"deleted_at": nil,
+			"updated_at": bson.M{"$lte": cutoff},
+		}},
 		bson.M{"$group": bson.M{
 			"_id": bson.M{
 				"app_name":   "$app_name",
 				"user_id":    "$user_id",
 				"session_id": "$session_id",
 			},
-			"max_updated_at": bson.M{"$max": "$updated_at"},
 		}},
-		bson.M{"$match": bson.M{"max_updated_at": bson.M{"$lte": cutoff}}},
 	}
 
 	cursor, err := s.client.Aggregate(ctx, s.database, collection, pipeline)
@@ -1309,6 +1312,23 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 		}
 		if err := cursor.Decode(&row); err != nil {
 			return fmt.Errorf("decode aggregate row: %w", err)
+		}
+		// A candidate may also contain recent rows. Probe the existing
+		// session-leading cleanup index before considering the whole group
+		// expired. FindOne stops at the first recent row and works with older
+		// sharded deployments that cannot perform a self-$lookup.
+		recent := bson.M{
+			"app_name": row.ID.AppName, "user_id": row.ID.UserID,
+			"session_id": row.ID.SessionID, "deleted_at": nil,
+			"updated_at": bson.M{"$gt": cutoff},
+		}
+		err := s.client.FindOne(ctx, s.database, collection, recent,
+			options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return fmt.Errorf("check recent %s: %w", label, err)
 		}
 		or = append(or, bson.M{
 			"app_name":   row.ID.AppName,

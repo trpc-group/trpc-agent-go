@@ -40,6 +40,21 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 		}
 	}
 
+	cleanupCandidateIndex := func(tableName string) mongo.IndexModel {
+		return mongo.IndexModel{
+			Keys: bson.D{
+				{Key: "updated_at", Value: 1},
+				{Key: "app_name", Value: 1},
+				{Key: "user_id", Value: 1},
+				{Key: "session_id", Value: 1},
+			},
+			Options: options.Index().
+				SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+					tableName, "cleanup_candidates")).
+				SetPartialFilterExpression(notDeleted),
+		}
+	}
+
 	plan := []struct {
 		coll   string
 		models []mongo.IndexModel
@@ -117,6 +132,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 							sqldb.TableNameSessionEvents, "ordered_lookup")).
 						SetPartialFilterExpression(notDeleted),
 				},
+				cleanupCandidateIndex(sqldb.TableNameSessionEvents),
 			},
 		},
 		{
@@ -147,6 +163,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 							collectionNameSessionTracks, "cleanup")).
 						SetPartialFilterExpression(notDeleted),
 				},
+				cleanupCandidateIndex(collectionNameSessionTracks),
 			},
 		},
 		{
