@@ -2410,9 +2410,10 @@ agent := llmagent.New(
   step. The handler selects from `req.Candidates` and returns each selected
   `candidate.ID` in `ToolSearchResult.ToolIDs`, without constructing or parsing
   the ID. The loaded definitions stay in history.
-- A handler error ends the run, and the search stays unanswered until a run
-  with `agent.WithResume(true)` completes it. Return an empty result to let
-  the model continue without the tools.
+- A handler error ends the run before ordinary functions in the same response
+  execute. Before sending another user message, resume the same session with
+  `model.Message{}` and `agent.WithResume(true)` to retry the search and run
+  the pending functions. An empty search result lets the model continue.
 - Graph LLM nodes report an error for a client search. Requests without
   deferred tools are unchanged, and Chat Completions ignores deferral.
 - `plugin/toolsearch` has its own deferred-tool registration and does not use

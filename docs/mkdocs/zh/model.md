@@ -2343,8 +2343,9 @@ agent := llmagent.New(
 - 客户端模式下，发起搜索的响应不是最终响应。`LLMAgent` 会调用 handler，并在下一次模型调用前把
   `tool_search_output` 作为工具消息保存。handler 从 `req.Candidates` 中选择候选，直接将其 `ID` 放入
   `ToolSearchResult.ToolIDs`，不需要自行拼接或解析 ID。已加载的工具定义保留在历史中。
-- handler 返回错误会结束本次运行，该搜索保持未应答状态，直到某次以 `agent.WithResume(true)`
-  运行时完成它。想让模型在没有这些工具的情况下继续，可以返回空结果。
+- handler 报错时，本次运行结束，同一响应中的普通函数调用保持待执行。在发送下一条用户消息前，
+  用 `model.Message{}` 和 `agent.WithResume(true)` 恢复同一会话。搜索重试成功后，框架执行待处理的函数。
+  搜索没有命中时，handler 可以返回空结果，让模型继续。
 - Graph 的 LLM 节点遇到客户端搜索会报错。没有延迟工具的请求保持不变，Chat Completions 会忽略
   延迟策略。
 - `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索

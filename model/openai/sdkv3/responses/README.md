@@ -235,15 +235,15 @@ its `tool_search_output` remains in the request history. A history limit or
 summary that drops the output unloads the tool, and it becomes a candidate
 again.
 
-A handler error ends the run with an error event and records no output. The
-search call stays unanswered:
+If the handler fails, LLMAgent emits an error and ends the run. Both the
+unanswered search and any ordinary function calls in that response stay
+pending. Before sending another user message, resume the same session with
+`model.Message{}` and `agent.WithResume(true)`. Once the search succeeds,
+LLMAgent executes the pending functions and sends their results and the
+search output in the next model request.
 
-- A run with `agent.WithResume(true)` retries unanswered searches. If only
-  some search results were persisted before interruption, saved results and
-  their loaded definitions are reused; their handlers do not run again.
-- Other requests that replay the session fail with
-  `client tool_search_call ... has no tool_search_output` until the call is
-  answered.
+If some search results were persisted before an interruption, resume reuses
+their loaded definitions and retries only the unanswered searches.
 
 To let the model continue without the tools, return an empty result instead
 of an error. Canceling the run context stops the search without an output or a

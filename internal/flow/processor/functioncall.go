@@ -302,6 +302,10 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
 		return
 	}
+	if invocation.EndInvocation && providerdata.ResponseRequestsActions(rsp) {
+		// Leave these functions pending until resume completes the provider action.
+		return
+	}
 	if calllimit.Active(invocation) {
 		invocation.EndInvocation = true
 		emitToolIterationLimitError(

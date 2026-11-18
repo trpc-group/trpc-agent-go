@@ -751,16 +751,19 @@ func TestRunnerClientToolSearchFailureAndResume(t *testing.T) {
 	}
 }
 
+const (
+	clientSearchItem = `{"type":"tool_search_call","id":"ts_mixed","execution":"client","call_id":"search_1","status":"completed","arguments":{"query":"invoice status"}}`
+	weatherCallItem  = `{"type":"function_call","id":"fc_weather","status":"completed","call_id":"weather_1","name":"weather","arguments":"{\"id\":\"city\"}"}`
+)
+
 func TestRunnerMixedClientSearchAndFunctionCall(t *testing.T) {
-	search := `{"type":"tool_search_call","id":"ts_mixed","execution":"client","call_id":"search_1","status":"completed","arguments":{"query":"invoice status"}}`
-	function := `{"type":"function_call","id":"fc_weather","status":"completed","call_id":"weather_1","name":"weather","arguments":"{\"id\":\"city\"}"}`
 	for _, searchFirst := range []bool{false, true} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("searchFirst=%v/stream=%v", searchFirst, stream), func(t *testing.T) {
-				output := "[" + function + "," + search + "]"
+				output := "[" + weatherCallItem + "," + clientSearchItem + "]"
 				callTypes := []string{"function_call", "tool_search_call"}
 				if searchFirst {
-					output = "[" + search + "," + function + "]"
+					output = "[" + clientSearchItem + "," + weatherCallItem + "]"
 					callTypes = []string{"tool_search_call", "function_call"}
 				}
 				server, srv := newSearchServer(t, output, loadedBillingCall, messageOutput("msg_done", "done"))
@@ -791,5 +794,49 @@ func TestRunnerMixedClientSearchAndFunctionCall(t *testing.T) {
 				require.Equal(t, second, third[:len(second)], "the complete mixed round survives later history preparation")
 			})
 		}
+	}
+}
+
+func TestRunnerMixedClientSearchFailureAndResume(t *testing.T) {
+	const output = "[" + weatherCallItem + "," + clientSearchItem + "]"
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			server, srv := newSearchServer(t, output, messageOutput("msg_done", "done"))
+			executions := &searchExecutions{}
+			var searches int
+			handler := func(context.Context, *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+				searches++
+				if searches == 1 {
+					return nil, errors.New("search index unavailable")
+				}
+				return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
+			}
+			m := newSearchModel(srv, responses.WithClientToolSearch(handler))
+			path := filepath.Join(t.TempDir(), "mixed.db")
+			run := func(msg model.Message, opts ...agent.RunOption) ([]*event.Event, []string) {
+				svc := openNativeRoutingSQLite(t, path)
+				defer svc.Close()
+				r := runner.NewRunner("search", newSearchAgent(m, executions, stream), runner.WithSessionService(svc))
+				defer r.Close()
+				return runSearch(t, r, msg, opts...)
+			}
+
+			_, failures := run(model.NewUserMessage("weather and invoice status"))
+			require.Len(t, failures, 1)
+			require.Contains(t, failures[0], "search index unavailable")
+			require.Empty(t, executions.executed(), "a failed search must leave the ordinary function unexecuted")
+			require.Equal(t, 1, searches)
+			require.Len(t, server.requests(), 1)
+
+			events, failures := run(model.Message{}, agent.WithResume(true))
+			require.Empty(t, failures)
+			require.Equal(t, "done", finalText(events))
+			require.Equal(t, 2, searches)
+			require.Equal(t, []string{"weather"}, executions.executed())
+			requests := server.requests()
+			require.Len(t, requests, 2)
+			require.Equal(t, []string{"message:user", "function_call", "tool_search_call", "tool_search_output", "function_call_output"},
+				inputTypes(conversationItems(t, requests[1]["input"])))
+		})
 	}
 }

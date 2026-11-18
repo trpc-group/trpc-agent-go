@@ -215,11 +215,11 @@ Support boundaries and fallback semantics:
   option, the same agent sends every tool up front.
 - A loaded tool stays loaded for the rest of the in-memory session. Restarting
   the process starts over.
-- In client mode, a handler error ends the turn with an error, and the search
-  stays unanswered. Later turns in that session fail until a run with
-  `agent.WithResume(true)` answers it. `keywordSearch` never returns an error:
-  when nothing matches, it loads nothing, and the model continues without the
-  tools.
+- In client mode, a handler error ends the run before ordinary functions in
+  the same response execute. Resume the same session with `model.Message{}`
+  and `agent.WithResume(true)` before sending another user message. The
+  example's `keywordSearch` returns an empty result when nothing matches, so
+  the model can continue.
 - Client search runs through `LLMAgent` and `Runner`. Graph LLM nodes report an
   error for a client search.
 
