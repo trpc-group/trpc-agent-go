@@ -520,6 +520,10 @@ optionally alongside text.
 LLMAgent's default tool-call flow and Graph ToolsNode generate the tool result
 message automatically; no `ToolResultMessages` callback is required.
 
+When a Graph tool returns `InterruptError`, its `complete` event carries any
+JSON-serializable pause payload in `Message.Content` while the call waits to
+resume.
+
 The [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
 supports images in tool results; the adapter version and model provider must
 also support this capability. For Chat Completions, return text-only tool

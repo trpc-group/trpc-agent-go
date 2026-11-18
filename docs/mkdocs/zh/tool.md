@@ -501,6 +501,9 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 LLMAgent 的默认工具调用流程和 Graph ToolsNode 会自动生成工具结果消息，无需配置
 `ToolResultMessages` 回调。
 
+Graph 工具返回 `InterruptError` 时，调用暂停等待恢复，`complete` 事件将可序列化的
+暂停载荷以 JSON 写入 `Message.Content`。
+
 [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
 支持在工具结果中返回图片，需配合支持此能力的适配器版本和模型服务。
 Chat Completions 请使用纯文本工具结果。默认流程中的图文混合结果会发送空回执，
