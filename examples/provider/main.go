@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	providerName        = flag.String("provider", "openai", "Name of the provider to use, openai/anthropic/ollama/hunyuan")
+	providerName        = flag.String("provider", "openai", "Name of the provider to use, openai/anthropic/ollama/hunyuan/orcarouter")
 	modelName           = flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	isStream            = flag.Bool("stream", true, "Whether to stream the response")
 	apiKey              = flag.String("api-key", "", "Override the provider API key")
