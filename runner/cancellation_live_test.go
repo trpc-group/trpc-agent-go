@@ -50,16 +50,16 @@ func TestCancellationLive_BeforeTool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	var calls atomic.Int32
-	cleaned := make(chan struct{}, 1)
+	var beforeCalls, afterCalls atomic.Int32
 	callbacks := tool.NewCallbacks()
-	callbacks.RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-		cancel()
-		return nil, nil
+	callbacks.RegisterBeforeTool(func(ctx context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		beforeCalls.Add(1)
+		toolCtx, stop := context.WithCancel(ctx)
+		stop()
+		return &tool.BeforeToolResult{Context: toolCtx}, nil
 	})
 	callbacks.RegisterAfterTool(func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-		if args.Error == context.Canceled {
-			cleaned <- struct{}{}
-		}
+		afterCalls.Add(1)
 		return nil, nil
 	})
 	probe := function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
@@ -67,7 +67,7 @@ func TestCancellationLive_BeforeTool(t *testing.T) {
 		return "local counter incremented", nil
 	}, function.WithName("cancel_probe"), function.WithDescription("Increment a local test counter once."))
 	maxTokens := 2048
-	ag := llmagent.New("cancel-live", llmagent.WithModel(m),
+	ag := llmagent.New("cancel-live", llmagent.WithModel(m), llmagent.WithMaxLLMCalls(1),
 		llmagent.WithTools([]tool.Tool{probe}), llmagent.WithToolCallbacks(callbacks),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true, MaxTokens: &maxTokens}))
 	r := runner.NewRunner("cancel-live", ag)
@@ -76,13 +76,10 @@ func TestCancellationLive_BeforeTool(t *testing.T) {
 	require.NoError(t, err)
 	for range events {
 	}
-	select {
-	case <-cleaned:
-	case <-time.After(time.Second):
-		t.Fatal("provider did not reach the tool cancellation/cleanup boundary")
-	}
+	require.Positive(t, beforeCalls.Load(), "provider must reach the before-tool callback")
 	require.Zero(t, calls.Load())
-	t.Log("live provider produced tool call; cancellation at before-tool boundary prevented side effect and ran cleanup")
+	require.Zero(t, afterCalls.Load())
+	t.Log("live provider produced tool call; cancelled effective context prevented tool execution and after-tool callbacks")
 }
 
 func TestCancellationLive_ModelStream(t *testing.T) {

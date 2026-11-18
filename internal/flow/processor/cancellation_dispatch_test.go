@@ -38,50 +38,36 @@ func TestCancellationDispatch_PreCanceled(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
-type cancellationStreamTool struct{ calls int }
+type cancellationStreamTool struct {
+	calls        int
+	call         func(context.Context) error
+	selectStream func() bool
+}
 
 func (*cancellationStreamTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: "stream"}
 }
 
-func (t *cancellationStreamTool) StreamableCall(context.Context, []byte) (*tool.StreamReader, error) {
+func (t *cancellationStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
 	t.calls++
-	return nil, nil
+	if t.call != nil {
+		if err := t.call(ctx); err != nil {
+			return nil, err
+		}
+	}
+	stream := tool.NewStream(0)
+	stream.Writer.Close()
+	return stream.Reader, nil
 }
 
 func TestCancellationDispatch_StreamRejectsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	tl := &cancellationStreamTool{}
-	_, _, _, err := NewFunctionCallResponseProcessor(false, nil).executeStreamableTool(
+	_, _, _, _, err := NewFunctionCallResponseProcessor(false, nil).executeStreamableTool(
 		ctx, agent.NewInvocation(), model.ToolCall{}, tl, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, tl.calls)
-}
-
-func TestCancellationDispatch_BeforeHookStillRunsCleanup(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	callbacks := tool.NewCallbacks()
-	callbacks.RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-		cancel()
-		return nil, nil
-	})
-	cleaned := false
-	callbacks.RegisterAfterTool(func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-		cleaned = true
-		require.ErrorIs(t, args.Error, context.Canceled)
-		return nil, nil
-	})
-	called := false
-	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "write"},
-		callFn: func(context.Context, []byte) (any, error) { called = true; return "written", nil }}
-	p := NewFunctionCallResponseProcessor(false, callbacks)
-	_, _, _, _, _, err := p.executeToolWithCallbacks(ctx, agent.NewInvocation(),
-		model.ToolCall{ID: "a", Function: model.FunctionDefinitionParam{Name: "write"}}, tl, nil)
-	require.ErrorIs(t, err, context.Canceled)
-	require.False(t, called)
-	require.True(t, cleaned)
 }
 
 func TestCancellationDispatch_QueuedToolDoesNotStart(t *testing.T) {
@@ -153,17 +139,25 @@ func (c *dispatchWaitContext) Done() <-chan struct{} {
 	return c.Context.Done()
 }
 
-func TestCancellationDispatch_ReplacedContextCannotReviveTool(t *testing.T) {
+func (t *cancellationStreamTool) StreamInner() bool {
+	if t.selectStream != nil {
+		return t.selectStream()
+	}
+	return true
+}
+
+func TestCancellationDispatch_CancelDuringToolSelection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	callbacks := tool.NewCallbacks()
-	callbacks.RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-		cancel()
-		return &tool.BeforeToolResult{Context: context.Background()}, nil
+	after := 0
+	callbacks := tool.NewCallbacks().RegisterAfterTool(func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		after++
+		return nil, nil
 	})
-	calls := 0
-	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "write"}, callFn: func(context.Context, []byte) (any, error) { calls++; return "written", nil }}
-	_, _, _, _, _, err := NewFunctionCallResponseProcessor(false, callbacks).executeToolWithCallbacks(ctx, agent.NewInvocation(), model.ToolCall{ID: "call", Function: model.FunctionDefinitionParam{Name: "write"}}, tl, nil)
+	tl := &cancellationStreamTool{selectStream: func() bool { cancel(); return true }}
+	_, _, _, _, _, err := NewFunctionCallResponseProcessor(false, callbacks).executeToolWithCallbacks(
+		ctx, agent.NewInvocation(), model.ToolCall{Function: model.FunctionDefinitionParam{Name: "stream"}}, tl, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Zero(t, calls)
+	require.Zero(t, tl.calls)
+	require.Zero(t, after)
 }

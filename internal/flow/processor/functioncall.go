@@ -3535,7 +3535,9 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (context.Context, any, []byte, bool, bool, error) {
-	dispatchCtx := ctx
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, toolCall.Function.Arguments, false, false, err
+	}
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
@@ -3598,16 +3600,13 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, *permissionResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
-	// Hooks and permission checks may have waited or replaced the context.
-	// Check the original dispatch context as well, then still run after-tool
-	// callbacks so resources allocated by before-tool callbacks can be released.
-	var toolResult any
-	var suppressDefaultToolMessage bool
-	toolErr := toolDispatchError(dispatchCtx, ctx)
-	if toolErr == nil {
-		ctx, toolResult, suppressDefaultToolMessage, toolErr = p.executeTool(
-			ctx, invocation, toolCall, tl, eventChan,
-		)
+	// Callbacks may replace the context. Only the effective context controls
+	// admission, and rejection before execution does not invoke after callbacks.
+	ctx, toolResult, suppressDefaultToolMessage, started, toolErr := p.executeTool(
+		ctx, invocation, toolCall, tl, eventChan,
+	)
+	if toolCallCanceledBeforeStart(started, toolErr) {
+		return ctx, nil, toolCall.Function.Arguments, false, false, toolErr
 	}
 	if toolErr != nil {
 		log.WarnfContext(
@@ -3651,9 +3650,10 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		toolResult,
 		toolErr,
 	)
+	skipSummarization = skipSummarization || localSkip
 	if err != nil {
 		return ctx, toolResult, toolCall.Function.Arguments,
-			suppressDefaultToolMessage, skipSummarization || localSkip, err
+			suppressDefaultToolMessage, skipSummarization, err
 	}
 	if toolResult != nil {
 		suppressDefaultToolMessage = false
@@ -3666,7 +3666,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		toolErr = nil
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
-		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+		suppressDefaultToolMessage, skipSummarization, toolErr
 }
 
 func llmResponseHasNativeProviderData(response *model.Response) bool {
@@ -3796,14 +3796,18 @@ func streamableTool(t tool.Tool) (tool.StreamableTool, bool) {
 	return streamable, true
 }
 
-// executeTool executes the tool based on its capabilities.
+// executeTool executes the tool based on its capabilities. The last boolean
+// reports whether a tool-call attempt started, independently of its error.
 func (f *FunctionCallResponseProcessor) executeTool(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
-) (context.Context, any, bool, error) {
+) (context.Context, any, bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, false, false, err
+	}
 	// Prefer streaming execution if the tool supports it.
 	if streamable, ok := streamableTool(tl); ok {
 		return f.executeStreamableTool(
@@ -3812,20 +3816,20 @@ func (f *FunctionCallResponseProcessor) executeTool(
 	}
 	// Fallback to callable tool execution if supported.
 	if callable, ok := tl.(tool.CallableTool); ok {
-		ctx, result, err := f.executeCallableTool(ctx, toolCall, callable)
-		return ctx, result, false, err
+		ctx, result, started, err := f.executeCallableTool(ctx, toolCall, callable)
+		return ctx, result, false, started, err
 	}
-	return ctx, nil, false, fmt.Errorf("unsupported tool type: %T", tl)
+	return ctx, nil, false, false, fmt.Errorf("unsupported tool type: %T", tl)
 }
 
-// executeCallableTool executes a callable tool.
+// executeCallableTool executes a callable tool and reports whether any attempt started.
 func (p *FunctionCallResponseProcessor) executeCallableTool(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	tl tool.CallableTool,
-) (context.Context, any, error) {
+) (context.Context, any, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return ctx, nil, err
+		return ctx, nil, false, err
 	}
 	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
 	if p.toolRetryPolicy == nil {
@@ -3837,16 +3841,18 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 				toolCall.Function.Name,
 				err,
 			)
-			return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
+			return ctx, nil, true, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
 		}
-		return ctx, result, nil
+		return ctx, result, true, nil
 	}
+	started := false
 	runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
 		ToolName:   toolCall.Function.Name,
 		ToolCallID: toolCall.ID,
 		Arguments:  toolCall.Function.Arguments,
 		Policy:     p.toolRetryPolicy,
 		Call: func(_ context.Context, args []byte) (any, error) {
+			started = true
 			return tl.Call(callCtx, args)
 		},
 		ResultError: func(result any) bool {
@@ -3864,9 +3870,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 			toolCall.Function.Name,
 			runResult.Error,
 		)
-		return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, runResult.Error)
+		return ctx, nil, started, fmt.Errorf("%s: %w", ErrorCallableToolExecution, runResult.Error)
 	}
-	return ctx, runResult.Result, nil
+	return ctx, runResult.Result, started, nil
 }
 
 func extractResultError(result any) bool {
@@ -4023,16 +4029,17 @@ func innerTextModeForTool(tl tool.StreamableTool) tool.InnerTextMode {
 	return pref.InnerTextMode()
 }
 
-// executeStreamableTool executes a streamable tool.
+// executeStreamableTool executes a streamable tool. The last boolean reports
+// whether StreamableCall started, including when stream consumption fails.
 func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tl tool.StreamableTool,
 	eventChan chan<- *event.Event,
-) (context.Context, any, bool, error) {
+) (context.Context, any, bool, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return ctx, nil, false, err
+		return ctx, nil, false, false, err
 	}
 	reader, err := tl.StreamableCall(
 		streamableToolCallContext(
@@ -4048,7 +4055,7 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 			toolCall.Function.Name,
 			err,
 		)
-		return ctx, nil, false, fmt.Errorf("%s: %w", ErrorStreamableToolExecution, err)
+		return ctx, nil, false, true, fmt.Errorf("%s: %w", ErrorStreamableToolExecution, err)
 	}
 	defer reader.Close()
 
@@ -4065,10 +4072,10 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 		shouldRequestStructuredStreamErrors(tl),
 	)
 	if err != nil {
-		return ctx, nil, false, err
+		return ctx, nil, false, true, err
 	}
 	if finalResult.seen {
-		return ctx, finalResult.value, finalResult.value == nil, nil
+		return ctx, finalResult.value, finalResult.value == nil, true, nil
 	}
 	// If we forwarded inner events, still return the merged content as the tool
 	// result so it can be recorded in the tool response message for the next LLM
@@ -4076,7 +4083,7 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	// suppresses printing these aggregated strings to avoid duplication; they are
 	// primarily for model consumption.
 	return withUndeclaredToolResult(ctx, undeclaredReasonMergedStream),
-		tool.Merge(contents), false, nil
+		tool.Merge(contents), false, true, nil
 }
 
 type streamFinalResult struct {
@@ -4968,9 +4975,9 @@ func acquireToolCapacity(ctx context.Context, name string) (func(), error) {
 	return release, nil
 }
 
-func toolDispatchError(original, current context.Context) error {
-	if err := original.Err(); err != nil {
-		return err
-	}
-	return current.Err()
+// toolCallCanceledBeforeStart distinguishes admission rejection from a tool
+// returning the same cancellation error after an attempt has already run.
+func toolCallCanceledBeforeStart(started bool, err error) bool {
+	return !started && (errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded))
 }

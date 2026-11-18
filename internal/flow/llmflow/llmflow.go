@@ -2585,6 +2585,9 @@ func (f *Flow) callLLM(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (context.Context, model.Seq[*model.Response], bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, false, err
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,

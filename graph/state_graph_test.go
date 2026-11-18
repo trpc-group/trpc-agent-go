@@ -1921,7 +1921,7 @@ func TestCallToolWithRetry_UsesAgentToolGraphRuntimeWhenAvailable(t *testing.T) 
 	}
 	invocation := agent.NewInvocation(agent.WithInvocationID("parent"))
 
-	result, err := callToolWithRetry(
+	result, _, err := callToolWithRetry(
 		context.Background(),
 		toolCall,
 		runtimeTool,
@@ -1943,7 +1943,7 @@ func TestCallToolWithRetry_UsesAgentToolGraphRuntimeWhenAvailable(t *testing.T) 
 		callResult:    "call",
 		runtimeResult: "runtime",
 	}
-	result, err = callToolWithRetry(
+	result, _, err = callToolWithRetry(
 		context.Background(),
 		toolCall,
 		fallbackTool,
