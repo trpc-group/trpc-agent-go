@@ -142,6 +142,13 @@ func wrapAfterAgentCallbacks(
 	runCtx := CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(out)
+		if src == nil {
+			return
+		}
+		defer func() {
+			for range src {
+			}
+		}()
 
 		var fullRespEvent *event.Event
 		for evt := range src {
