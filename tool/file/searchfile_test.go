@@ -422,7 +422,7 @@ func TestMatchWorkspacePaths_EmptyPattern(t *testing.T) {
 	inv := agent.NewInvocation()
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	files, dirs, err := matchWorkspacePaths(ctx, "", " ", true)
+	files, dirs, err := matchWorkspacePaths(ctx, "", " ", true, 0)
 	assert.NoError(t, err)
 	assert.Nil(t, files)
 	assert.Nil(t, dirs)
@@ -435,7 +435,7 @@ func TestMatchWorkspacePaths_DirSlashPattern(t *testing.T) {
 		{Name: "a/b.txt", Content: "b", MIMEType: "text/plain"},
 	})
 
-	files, dirs, err := matchWorkspacePaths(ctx, "", "a/", true)
+	files, dirs, err := matchWorkspacePaths(ctx, "", "a/", true, 0)
 	assert.NoError(t, err)
 	assert.Empty(t, files)
 	assert.Equal(t, []string{"workspace://a"}, dirs)
