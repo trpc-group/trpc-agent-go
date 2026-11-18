@@ -176,3 +176,32 @@ db.session_events.createIndex(
 Reads remain correct without this index, but may need a blocking sort. Keeping
 both indexes adds storage and write overhead. This index alone does not limit
 the number of events loaded by a context-window read.
+
+## Context-window read costs
+
+For a single session with a positive event limit, MongoDB reads newest events
+first in small cursor batches and closes the cursor once the window and its
+required user message are available. The returned order and filtering remain
+the same. If the window has no user message, the reader searches older history
+for the nearest user message; a history without any user message still requires
+a full scan. Empty payloads do not consume an event slot.
+
+Time filtering uses the event payload timestamp, which can differ from the
+document's `created_at`. If the oldest event in the candidate window satisfies
+the time cutoff, the window is safe to use. Otherwise, the reader falls back to
+the original full-history filtering to preserve the first-matching-timestamp
+behavior even when timestamps are out of order. Unlimited and multi-session
+reads retain the existing full-history path. Pagination is unchanged. The
+ordered lookup index avoids a blocking sort; the optimization does not force
+an index hint, so externally managed indexes remain supported.
+
+An optional live-model smoke test verifies a three-turn conversation, event
+window truncation and history reloading after recreating the service. It sends
+synthetic prompts to the configured endpoint and is skipped by default:
+
+```bash
+# Configure OPENAI_API_KEY, OPENAI_BASE_URL and MODEL_NAME in your environment.
+cd test
+MONGODB_LIVE_MODEL_TEST=1 MONGO_TEST_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -run '^TestMongoDBHistoryLiveModel$' -count=1 -v .
+```
