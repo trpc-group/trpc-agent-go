@@ -290,17 +290,18 @@ func NewFunctionCallResponseProcessor(
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
-// It checks for transfer requests and handles agent handoffs by actually calling
-// the target agent's Run method.
+// It dispatches any pending tool calls, emits the corresponding events, and
+// returns the original response unchanged (tool-call dispatch does not replace
+// the published LLM response).
 func (p *FunctionCallResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
-) {
+) *model.Response {
 	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
-		return
+		return rsp
 	}
 	if calllimit.Active(invocation) {
 		invocation.EndInvocation = true
@@ -310,7 +311,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 			ch,
 			"tool calls are disabled during call limit finalization",
 		)
-		return
+		return rsp
 	}
 
 	// Enforce optional per-invocation tool iteration limit. A "tool iteration"
@@ -333,7 +334,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 				invocation.MaxToolIterations,
 			),
 		)
-		return
+		return rsp
 	}
 	toolLimitReached := calllimit.RecordToolIteration(
 		invocation,
@@ -348,7 +349,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	)
 	if deferred && !executable && !unknown {
 		invocation.EndInvocation = true
-		return
+		return rsp
 	}
 
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEventWithRequest(ctx, invocation, req, rsp, ch)
@@ -365,7 +366,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	// Allow users to intervene in error handling through callbacks.
 	if _, ok := agent.AsStopError(err); ok {
 		invocation.EndInvocation = true
-		return
+		return rsp
 	}
 
 	if deferred {
@@ -373,19 +374,20 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	}
 
 	if err != nil || functioncallResponseEvent == nil {
-		return
+		return rsp
 	}
 
 	if invocation.EndInvocation {
-		return
+		return rsp
 	}
 
 	// If the tool indicates skipping outer summarization, mark the invocation to end
 	// after this tool response so the flow does not perform an extra LLM call.
 	if functioncallResponseEvent.Actions != nil && functioncallResponseEvent.Actions.SkipSummarization {
 		invocation.EndInvocation = true
-		return
+		return rsp
 	}
+	return rsp
 }
 
 func emitToolIterationLimitError(
