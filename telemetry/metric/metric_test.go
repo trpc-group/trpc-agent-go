@@ -401,6 +401,15 @@ func TestInitMeterProvider(t *testing.T) {
 	if itelemetry.ExecuteToolMetricGenAIClientOperationDuration == nil {
 		t.Error("ExecuteToolMetricGenAIClientOperationDuration was not created")
 	}
+	if itelemetry.InvokeSkillMeter == nil {
+		t.Error("InvokeSkillMeter was not created")
+	}
+	if itelemetry.InvokeSkillMetricGenAIRequestCnt == nil {
+		t.Error("InvokeSkillMetricGenAIRequestCnt was not created")
+	}
+	if itelemetry.InvokeSkillMetricGenAIClientOperationDuration == nil {
+		t.Error("InvokeSkillMetricGenAIClientOperationDuration was not created")
+	}
 	if itelemetry.WorkflowMeter == nil {
 		t.Error("WorkflowMeter was not created")
 	}
@@ -492,6 +501,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 	origInvokeTTFT := itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
 	origInvokeTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
 	origInvokeOpDur := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
+	origInvokeSkillOpDur := itelemetry.InvokeSkillMetricGenAIClientOperationDuration
 	origWorkflowOpDur := itelemetry.WorkflowMetricGenAIClientOperationDuration
 	origWorkflowElapsed := itelemetry.WorkflowMetricGenAIWorkflowElapsedTime
 	defer func() {
@@ -506,6 +516,7 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = origInvokeTTFT
 		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = origInvokeTokenUsage
 		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = origInvokeOpDur
+		itelemetry.InvokeSkillMetricGenAIClientOperationDuration = origInvokeSkillOpDur
 		itelemetry.WorkflowMetricGenAIClientOperationDuration = origWorkflowOpDur
 		itelemetry.WorkflowMetricGenAIWorkflowElapsedTime = origWorkflowElapsed
 	}()
@@ -557,6 +568,16 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 				itelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
 			case metrics.MetricGenAIClientOperationDuration:
 				itelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
+			}
+		}
+	}
+
+	nilInvokeSkillMetric := func(metricName string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			switch metricName {
+			case metrics.MetricGenAIClientOperationDuration:
+				itelemetry.InvokeSkillMetricGenAIClientOperationDuration = nil
 			}
 		}
 	}
@@ -645,6 +666,13 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName: metrics.MetricGenAIClientOperationDuration,
 			boundaries: []float64{0.1, 1, 10},
 		},
+		// --- Invoke-skill success ---
+		{
+			name:       "invoke-skill: operation duration",
+			meterName:  metrics.MeterNameInvokeSkill,
+			metricName: metrics.MetricGenAIClientOperationDuration,
+			boundaries: []float64{0.1, 1, 10},
+		},
 		// --- Execute-workflow success ---
 		{
 			name:       "workflow: operation duration",
@@ -691,6 +719,14 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			boundaries:  []float64{1},
 			wantErr:     true,
 			errContains: "unknown or unsupported invoke agent histogram metric",
+		},
+		{
+			name:        "unsupported invoke-skill metric",
+			meterName:   metrics.MeterNameInvokeSkill,
+			metricName:  "unknown.metric",
+			boundaries:  []float64{1},
+			wantErr:     true,
+			errContains: "unknown or unsupported invoke skill histogram metric",
 		},
 		{
 			name:        "unsupported workflow metric",
@@ -789,6 +825,15 @@ func TestSetHistogramBuckets_RoutingAndErrors(t *testing.T) {
 			metricName:  metrics.MetricGenAIClientOperationDuration,
 			boundaries:  []float64{1},
 			before:      nilInvokeAgentMetric(metrics.MetricGenAIClientOperationDuration),
+			wantErr:     true,
+			errContains: "not initialized",
+		},
+		{
+			name:        "invoke-skill operation duration not initialized",
+			meterName:   metrics.MeterNameInvokeSkill,
+			metricName:  metrics.MetricGenAIClientOperationDuration,
+			boundaries:  []float64{1},
+			before:      nilInvokeSkillMetric(metrics.MetricGenAIClientOperationDuration),
 			wantErr:     true,
 			errContains: "not initialized",
 		},
