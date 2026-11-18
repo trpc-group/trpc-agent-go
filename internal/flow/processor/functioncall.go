@@ -299,7 +299,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
+	if invocation == nil || !rsp.IsToolCallResponse() || rsp.IsPartial {
 		return
 	}
 	if invocation.EndInvocation && providerdata.ResponseRequestsActions(rsp) {
