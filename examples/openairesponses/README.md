@@ -187,10 +187,12 @@ and becomes the namespace description. `lookup_customer` and `current_time`
 are callable from the first request. In server mode, the API searches the deferred definitions
 and loads the matching ones inside the same response, so only the loaded
 tool calls are printed. In client mode, the deferred definitions are not sent.
-`keywordSearch` picks candidates whose namespace, name, or description shares
-a word with the model's query and returns each selected `candidate.ID` without
-constructing or parsing the ID. The search result is printed as a
-`tool_search` tool result, and the loaded tools run as ordinary tool calls:
+`keywordSearch` matches whole words in the namespace name, tool name, and
+tool description. It gives tool-name matches extra weight and returns
+the IDs of candidates scoring close to the best match. A request for a
+single invoice selects `billing.lookup_invoice`. A request for orders and
+delivery can select both `crm.list_orders` and `shipping_eta`. The example
+prints the selected IDs in the `tool_search` result, then shows each tool call:
 
 ```text
 OpenAI Responses tool search (client mode). Type /exit to quit.

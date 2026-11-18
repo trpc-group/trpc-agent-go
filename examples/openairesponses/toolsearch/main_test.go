@@ -22,22 +22,43 @@ import (
 )
 
 func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
-	req := &responses.ToolSearchRequest{
-		Query: "Is invoice inv_7 paid?",
-		Candidates: []responses.ToolSearchCandidate{
-			{ID: "billing_lookup_invoice", Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
-				Name: "lookup_invoice", Declaration: tool.Declaration{Description: "Look up an invoice and its payment status."}},
-			{ID: "crm_list_orders", Namespace: "crm", NamespaceDescription: "CRM tools for customer lookup and order management.",
-				Name: "list_orders", Declaration: tool.Declaration{Description: "List the open orders of a customer."}},
-			{ID: "shipping_eta", Name: "shipping_eta", Declaration: tool.Declaration{Description: "Estimate the delivery date of a shipped order."}},
-		},
+	candidates := []responses.ToolSearchCandidate{
+		{ID: "billing_lookup_invoice", Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
+			Name: "lookup_invoice", Declaration: tool.Declaration{Description: "Look up an invoice and its payment status."}},
+		{ID: "billing_list_invoices", Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
+			Name: "list_invoices", Declaration: tool.Declaration{Description: "List the invoices of a customer."}},
+		{ID: "crm_list_orders", Namespace: "crm", NamespaceDescription: "CRM tools for customer lookup and order management.",
+			Name: "list_orders", Declaration: tool.Declaration{Description: "List the open orders of a customer."}},
+		{ID: "shipping_eta", Name: "shipping_eta", Declaration: tool.Declaration{Description: "Estimate the delivery date of a shipped order."}},
 	}
-	got, err := keywordSearch(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"billing_lookup_invoice"}; !reflect.DeepEqual(got.ToolIDs, want) {
-		t.Fatalf("keywordSearch() = %v, want %v", got.ToolIDs, want)
+	for _, tc := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"invoice ID", "Is invoice inv_7 paid?", []string{"billing_lookup_invoice"}},
+		{"invoice with namespace", "Look up or retrieve an invoice by invoice ID using billing tools, " +
+			"including invoice ID, payment status, and amount.", []string{"billing_lookup_invoice"}},
+		{"customer invoices", "List invoices for a customer.", []string{"billing_list_invoices"}},
+		{"customer invoices with ID in result", "Billing tool to list invoices for a customer using customer ID " +
+			"and return invoice IDs.", []string{"billing_list_invoices"}},
+		{"orders and delivery", "Find/list orders for a customer using customer ID, then retrieve shipment tracking " +
+			"estimated delivery date for shipped order by order ID or tracking details.", []string{"crm_list_orders", "shipping_eta"}},
+		{"orders and shipping status", "Find/list orders belonging to a customer by customer ID, including order IDs " +
+			"and shipping status; also get estimated delivery date for a shipped order using its order ID.",
+			[]string{"crm_list_orders", "shipping_eta"}},
+		{"short multi-tool query", "orders and delivery", []string{"crm_list_orders", "shipping_eta"}},
+		{"whole namespace", "billing tools", []string{"billing_lookup_invoice", "billing_list_invoices"}},
+		{"unrelated word and filler", "the voice tools", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := keywordSearch(context.Background(), &responses.ToolSearchRequest{Query: tc.query, Candidates: candidates})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.ToolIDs, tc.want) {
+				t.Errorf("keywordSearch(%q) = %v, want %v", tc.query, got.ToolIDs, tc.want)
+			}
+		})
 	}
 }
 

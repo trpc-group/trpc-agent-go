@@ -105,28 +105,51 @@ func main() {
 	}
 }
 
-// keywordSearch is a client-executed tool search. It loads the candidates
-// whose namespace, name, or description contains a word of the query.
+// keywordSearch scores whole-word matches and gives tool names extra weight.
 func keywordSearch(_ context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
-	words := strings.FieldsFunc(strings.ToLower(req.Query), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	})
+	query := searchWords(req.Query)
+	scores := make([]int, len(req.Candidates))
+	best := 0
+	for i, candidate := range req.Candidates {
+		keywords := candidate.Namespace + " " + candidate.Name + " " + candidate.Declaration.Description
+		scores[i] = countMatches(query, keywords) + countMatches(query, candidate.Name)
+		best = max(best, scores[i])
+	}
+	// Allow a one-point gap for short matches and up to a third of a stronger score.
+	margin := max(1, best/3)
 	result := &responses.ToolSearchResult{}
-	for _, candidate := range req.Candidates {
-		text := strings.ToLower(strings.Join([]string{
-			candidate.Namespace,
-			candidate.NamespaceDescription,
-			strings.ReplaceAll(candidate.Name, "_", " "),
-			candidate.Declaration.Description,
-		}, " "))
-		for _, word := range words {
-			if len(word) > 2 && strings.Contains(text, word) {
-				result.ToolIDs = append(result.ToolIDs, candidate.ID)
-				break
-			}
+	for i, score := range scores {
+		if score > 0 && best-score <= margin {
+			result.ToolIDs = append(result.ToolIDs, req.Candidates[i].ID)
 		}
 	}
 	return result, nil
+}
+
+func countMatches(query map[string]bool, text string) int {
+	count := 0
+	for word := range searchWords(text) {
+		if query[word] {
+			count++
+		}
+	}
+	return count
+}
+
+func searchWords(text string) map[string]bool {
+	words := make(map[string]bool)
+	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		switch word {
+		case "and", "for", "from", "get", "its", "look", "the", "tool", "tools", "with":
+			continue
+		}
+		if len(word) > 2 {
+			words[word] = true
+		}
+	}
+	return words
 }
 
 // staticToolSet is a fixed ToolSet with a description. The description becomes
