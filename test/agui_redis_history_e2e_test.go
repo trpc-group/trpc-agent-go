@@ -101,7 +101,9 @@ func TestAGUIRedisHistoryFollowsLatestOverlappingRun(t *testing.T) {
 		"old-finished-before-snapshot", "older-finishes-last", "start-replaced", "startup-write-fails",
 		"reversed-uuid-order", "legacy-startup-write-fails-with-active-run",
 		"newer-legacy-run", "newer-legacy-run-finishes", "older-ordered-startup-lost-newer-legacy",
-		"older-startup-lost-before-newer-start", "latest-finishes-without-startup",
+		"older-startup-lost-before-newer-start", "older-startup-lost-without-order-capability",
+		"older-startup-lost-after-order-reservation-fails", "latest-finishes-without-startup",
+		"newer-startup-lost-without-order-capability",
 		"older-startup-flush-delayed", "older-startup-delayed-newer-startup-lost",
 	} {
 		t.Run(scenario, func(t *testing.T) { testAGUIRedisHistoryFollowsLatestRun(t, scenario) })
@@ -129,7 +131,9 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	oldModel := historyStreamModel{responses: make(chan *model.Response, 1)}
 	latestModel := historyStreamModel{responses: make(chan *model.Response, 1)}
 	legacy := scenario == "legacy-startup-write-fails-with-active-run"
-	olderStartupLost := scenario == "older-startup-lost-before-newer-start"
+	withoutOrderCapability := scenario == "older-startup-lost-without-order-capability"
+	orderReservationFails := scenario == "older-startup-lost-after-order-reservation-fails"
+	olderStartupLost := scenario == "older-startup-lost-before-newer-start" || withoutOrderCapability || orderReservationFails
 	leaveOlderRunning := olderStartupLost || scenario == "latest-finishes-without-startup" ||
 		scenario == "newer-legacy-run-finishes"
 	latestStartupLostWithDelay := scenario == "older-startup-delayed-newer-startup-lost"
@@ -140,9 +144,21 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	var oldService session.Service = oldRedisService
 	latestService := newService()
 	var liveService session.Service = latestService
+	if olderStartupLost {
+		writingService := &historyPersistenceFixture{
+			Service: oldRedisService, failFirstAppend: true, failOrderReservation: orderReservationFails,
+		}
+		oldService = writingService
+		if withoutOrderCapability {
+			oldService = historyTrackOnlyService{Service: writingService, TrackService: writingService}
+			liveService = historyTrackOnlyService{Service: latestService, TrackService: latestService}
+		}
+	}
 	switch scenario {
-	case "older-startup-lost-before-newer-start":
-		oldService = &historyPersistenceFixture{Service: oldRedisService, failFirstAppend: true}
+	case "newer-startup-lost-without-order-capability":
+		writingService := &historyPersistenceFixture{Service: latestService, failFirstAppend: true}
+		oldService = historyTrackOnlyService{Service: oldRedisService, TrackService: oldRedisService}
+		liveService = historyTrackOnlyService{Service: writingService, TrackService: writingService}
 	case "startup-write-fails", "latest-finishes-without-startup", "older-startup-delayed-newer-startup-lost":
 		liveService = &historyPersistenceFixture{Service: latestService, failFirstAppend: true}
 	case "reversed-uuid-order":
@@ -266,10 +282,13 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 	switch scenario {
 	case "older-finishes-last":
 		expectedTrackOrder = []string{"start:old", "start:latest", "finish:latest", "finish:old"}
-	case "older-startup-lost-before-newer-start":
+	case "older-startup-lost-before-newer-start", "older-startup-lost-without-order-capability",
+		"older-startup-lost-after-order-reservation-fails":
 		expectedTrackOrder = []string{olderPreview, "start:latest", "finish:latest"}
 	case "latest-finishes-without-startup":
 		expectedTrackOrder = []string{"start:old", "finish:latest"}
+	case "newer-startup-lost-without-order-capability":
+		expectedTrackOrder = []string{"start:old", "finish:old", latestPreview}
 	case "older-startup-flush-delayed":
 		expectedTrackOrder = []string{"start:latest", "start:old", "finish:old", latestPreview}
 	case "older-startup-delayed-newer-startup-lost":
@@ -290,6 +309,9 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 			require.NoError(t, err)
 			switch event := event.(type) {
 			case *aguievents.RunStartedEvent:
+				if olderStartupLost && event.RunID() == "latest" {
+					require.Equal(t, !withoutOrderCapability, historyHasRunOrder(t, record))
+				}
 				trackOrder = append(trackOrder, "start:"+event.RunID())
 			case *aguievents.RunFinishedEvent:
 				if olderOrderedStartupLost && event.RunID() == "old" {
@@ -297,6 +319,12 @@ func testAGUIRedisHistoryFollowsLatestRun(t *testing.T, scenario string) {
 				}
 				trackOrder = append(trackOrder, "finish:"+event.RunID())
 			case *aguievents.TextMessageContentEvent:
+				if event.Delta == olderPreview {
+					require.Equal(t, !withoutOrderCapability && !orderReservationFails, historyHasRunOrder(t, record))
+				}
+				if scenario == "newer-startup-lost-without-order-capability" && event.Delta == latestPreview {
+					require.False(t, historyHasRunOrder(t, record))
+				}
 				if event.Delta == olderPreview || event.Delta == latestPreview {
 					trackOrder = append(trackOrder, event.Delta)
 				}
@@ -426,13 +454,34 @@ func (g *historyStartupGate) start(t *testing.T, client *http.Client, url, paylo
 
 type historyPersistenceFixture struct {
 	*redisservice.Service
-	runID           string
-	omitRunID       bool
-	failFirstAppend bool
-	failed          atomic.Bool
+	runID                string
+	omitRunID            bool
+	failFirstAppend      bool
+	failOrderReservation bool
+	failed               atomic.Bool
 }
 
 var _ session.StateInitializationService = (*historyPersistenceFixture)(nil)
+
+// historyTrackOnlyService exposes track storage without state initialization.
+type historyTrackOnlyService struct {
+	session.Service
+	session.TrackService
+}
+
+func historyHasRunOrder(t *testing.T, record session.TrackEvent) bool {
+	t.Helper()
+	var metadata struct {
+		RunID string `json:"trpcRunId"`
+		Order struct {
+			Epoch    string `json:"epoch"`
+			Sequence uint64 `json:"sequence"`
+		} `json:"trpcRunOrder"`
+	}
+	require.NoError(t, json.Unmarshal(record.Payload, &metadata))
+	require.NotEmpty(t, metadata.RunID)
+	return metadata.Order.Epoch != "" && metadata.Order.Sequence > 0
+}
 
 func (s *historyPersistenceFixture) LoadOrInitializeSessionState(
 	ctx context.Context,
@@ -444,6 +493,9 @@ func (s *historyPersistenceFixture) LoadOrInitializeSessionState(
 ) ([]byte, bool, error) {
 	if s.omitRunID {
 		return nil, false, errors.New("legacy writer does not allocate history run order")
+	}
+	if s.failOrderReservation {
+		return nil, false, errors.New("temporary history run order reservation failure")
 	}
 	return s.Service.LoadOrInitializeSessionState(ctx, key, stateKey, validate, initialize, projections...)
 }

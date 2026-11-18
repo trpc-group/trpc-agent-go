@@ -319,13 +319,15 @@ type snapshotRuns struct {
 	latest          snapshotRunID
 	observed        map[snapshotRunID]snapshotRun
 	hasBoundary     bool
+	visibleBoundary int // One-based index of the latest owner's visible startup, if known.
 	completed       bool
 	ambiguousLegacy bool
 }
 
 type snapshotRun struct {
-	hasBoundary bool
-	finished    bool
+	hasBoundary         bool
+	finished            bool
+	firstUnorderedEvent int // One-based position. Zero for runs with shared order.
 }
 
 type orderedSnapshotRun struct {
@@ -337,7 +339,8 @@ func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 	runs := snapshotRuns{observed: make(map[snapshotRunID]snapshotRun)}
 	latestByEpoch := make(map[string]orderedSnapshotRun)
 	var previous aguievents.EventType
-	for _, event := range events {
+	for i, event := range events {
+		position := i + 1
 		id, order := track.HistoryRun(event.Payload)
 		latest := latestByEpoch[order.Epoch]
 		ordered := id != "" && order.Epoch != "" && order.Sequence > 0
@@ -368,17 +371,17 @@ func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 				// there is no boundary or this order supersedes its owner.
 				orderedBoundary = !runs.hasBoundary || latest.sequence != 0 && runs.latest == latest.owner
 			}
-			runs.observeTracked(id, boundary, orderedBoundary, terminal)
+			runs.observeTracked(id, position, boundary, orderedBoundary, terminal, ordered)
 			continue
 		}
 
 		switch {
 		case eventType == aguievents.EventTypeRunStarted:
-			runs.observeLegacyBoundary(evt.RunID())
+			runs.observeLegacyBoundary(evt.RunID(), position)
 		case userMessage:
 			// Legacy tracks can place a text user message just after its start.
 			if previous != aguievents.EventTypeRunStarted || eventType == aguievents.EventTypeCustom {
-				runs.observeLegacyBoundary("")
+				runs.observeLegacyBoundary("", position)
 			}
 		case terminal:
 			if runs.matchesLegacyTerminal(evt.RunID()) {
@@ -389,20 +392,30 @@ func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
 			// records are missing, even when an older run is still active.
 			runs.ambiguousLegacy = runs.hasOtherActiveRun()
 			runs.latest, runs.hasBoundary, runs.completed = snapshotRunID{}, true, false
+			runs.visibleBoundary = 0
 		}
 		previous = eventType
 	}
 	return runs.completed && !runs.hasUnresolvedRun(len(latestByEpoch) > 1)
 }
 
-func (r *snapshotRuns) observeTracked(id string, boundary, orderedBoundary, terminal bool) {
+func (r *snapshotRuns) observeTracked(id string, position int, boundary, orderedBoundary, terminal, ordered bool) {
 	owner := snapshotRunID{value: id, tracked: true}
-	run := r.observed[owner]
+	run, seen := r.observed[owner]
+	if ordered {
+		run.firstUnorderedEvent = 0
+	} else if !seen {
+		run.firstUnorderedEvent = position
+	}
 	// The first visible boundary establishes order. Later events from
 	// the same invocation only update that invocation's state.
 	if (boundary || orderedBoundary) && !run.hasBoundary {
 		run.hasBoundary = boundary
 		r.latest, r.hasBoundary, r.completed = owner, true, run.finished
+		r.visibleBoundary = 0
+		if boundary {
+			r.visibleBoundary = position
+		}
 		r.ambiguousLegacy = false
 	}
 	if terminal {
@@ -414,10 +427,12 @@ func (r *snapshotRuns) observeTracked(id string, boundary, orderedBoundary, term
 	r.observed[owner] = run
 }
 
-func (r *snapshotRuns) observeLegacyBoundary(id string) {
+func (r *snapshotRuns) observeLegacyBoundary(id string, position int) {
 	owner := snapshotRunID{value: id}
+	r.visibleBoundary = 0
 	if id != "" {
 		r.observed[owner] = snapshotRun{hasBoundary: true}
+		r.visibleBoundary = position
 	}
 	r.ambiguousLegacy = id == "" && r.hasBoundary && r.latest.value == "" && !r.completed
 	r.latest, r.hasBoundary, r.completed = owner, true, false
@@ -458,7 +473,16 @@ func (r *snapshotRuns) hasOtherActiveRun() bool {
 
 func (r *snapshotRuns) hasUnresolvedRun(multipleEpochs bool) bool {
 	for id, run := range r.observed {
-		if !run.finished && (!run.hasBoundary || multipleEpochs && id.tracked && id != r.latest) {
+		if run.finished {
+			continue
+		}
+		if multipleEpochs && id.tracked && id != r.latest {
+			return true
+		}
+		// Without shared order, an incomplete run first seen before a
+		// known startup belongs to the earlier visible history.
+		beforeBoundary := run.firstUnorderedEvent > 0 && run.firstUnorderedEvent < r.visibleBoundary
+		if !run.hasBoundary && !beforeBoundary {
 			return true
 		}
 	}
