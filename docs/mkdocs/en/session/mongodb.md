@@ -150,3 +150,29 @@ by the `integration` build tag and `MONGODB_INTEGRATION_URI`:
 MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
+
+## Event ordering index upgrades
+
+New services create `idx_session_events_ordered_lookup`, a non-unique partial
+index on `(app_name, user_id, session_id, created_at, _id)` for documents matching
+`{deleted_at: null}`. Collection prefixes also apply to the index name. It
+supports chronological event reads and reverse pagination without an additional
+sort. The original lookup index is retained for rolling upgrades and rollback;
+existing documents and older writers need no conversion.
+
+Index creation during initialization can add startup time and database load.
+For large collections, build the index before deploying the new service. If
+using `WithSkipDBInit(true)`, manage the index explicitly (adjust names for your
+collection prefix):
+
+```javascript
+db.session_events.createIndex(
+  {app_name: 1, user_id: 1, session_id: 1, created_at: 1, _id: 1},
+  {name: "idx_session_events_ordered_lookup",
+   partialFilterExpression: {deleted_at: null}}
+)
+```
+
+Reads remain correct without this index, but may need a blocking sort. Keeping
+both indexes adds storage and write overhead. This index alone does not limit
+the number of events loaded by a context-window read.

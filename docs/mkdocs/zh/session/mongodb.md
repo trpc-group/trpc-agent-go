@@ -138,3 +138,25 @@ MongoDB 使用以下集合：
 MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
+
+## 事件排序索引升级
+
+新服务初始化时新增 `idx_session_events_ordered_lookup` 非唯一 partial 索引，
+字段为 `(app_name, user_id, session_id, created_at, _id)`，条件为
+`{deleted_at: null}`。集合前缀同样应用于索引名称。该索引支持正序事件读取及
+倒序分页，避免额外排序。旧 lookup 索引保留，以支持滚动升级与回滚；
+历史文档及旧版本写入无需转换。
+
+初始化建索引会增加启动时间和数据库负载。大集合建议在部署前完成索引创建；
+使用 `WithSkipDBInit(true)` 时请手工管理索引（按实际集合前缀调整名称）：
+
+```javascript
+db.session_events.createIndex(
+  {app_name: 1, user_id: 1, session_id: 1, created_at: 1, _id: 1},
+  {name: "idx_session_events_ordered_lookup",
+   partialFilterExpression: {deleted_at: null}}
+)
+```
+
+未创建该索引不影响读取正确性，但可能需要阻塞排序。同时保留两个索引会增加
+存储和写入开销。仅增加索引不会限制上下文窗口实际加载的事件数量。
