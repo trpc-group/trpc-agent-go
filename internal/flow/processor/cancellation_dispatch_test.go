@@ -10,6 +10,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,10 +19,98 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// controlledDeadlineContext expires when its parent is cancelled so tests can
+// trigger deadline expiry after tool admission without relying on scheduling.
+type controlledDeadlineContext struct {
+	context.Context
+}
+
+func (c controlledDeadlineContext) Err() error {
+	if c.Context.Err() != nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
+	for _, failAppend := range []bool{false, true} {
+		name := "append succeeds"
+		if failAppend {
+			name = "append fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			watchdog, stopWatchdog := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stopWatchdog()
+			parent, expire := context.WithCancel(watchdog)
+			defer expire()
+			ctx := controlledDeadlineContext{parent}
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+				agent.WithInvocationAgent(&mockAgentWithTools{name: "tester"}),
+			)
+			var persisted []*event.Event
+			appender.Attach(inv, func(appendCtx context.Context, evt *event.Event) error {
+				require.NoError(t, appendCtx.Err())
+				persisted = append(persisted, evt)
+				if failAppend {
+					return errors.New("append failed")
+				}
+				return nil
+			})
+			var executed, afterTools []string
+			tools := map[string]tool.Tool{
+				"first": &mockInvocationStateDeltaTool{
+					declaration: &tool.Declaration{Name: "first"},
+					callFn: func(callCtx context.Context, _ []byte) (any, error) {
+						require.NoError(t, callCtx.Err())
+						executed = append(executed, "first")
+						expire()
+						return "committed", nil
+					},
+					delta: map[string][]byte{"completed": []byte("first")},
+				},
+				"second": &mockCallableTool{
+					declaration: &tool.Declaration{Name: "second"},
+					callFn: func(context.Context, []byte) (any, error) {
+						executed = append(executed, "second")
+						return "unexpected", nil
+					},
+				},
+			}
+			callbacks := tool.NewCallbacks().RegisterAfterTool(func(
+				_ context.Context, args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				afterTools = append(afterTools, args.ToolName)
+				return nil, nil
+			})
+			calls := []model.ToolCall{
+				{ID: "call-first", Function: model.FunctionDefinitionParam{Name: "first"}},
+				{ID: "call-second", Function: model.FunctionDefinitionParam{Name: "second"}},
+			}
+			eventChan := make(chan *event.Event, 4)
+			got, err := NewFunctionCallResponseProcessor(false, callbacks).handleFunctionCallsAndSendEvent(
+				ctx, inv, newToolCallResponseWithCalls(calls), tools, eventChan,
+			)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Nil(t, got)
+			require.Equal(t, []string{"first"}, executed)
+			require.Equal(t, []string{"first"}, afterTools)
+			require.Len(t, persisted, 1)
+			require.Equal(t, []string{"call-first"}, persisted[0].GetToolResultIDs())
+			require.Contains(t, persisted[0].Choices[0].Message.Content, "committed")
+			require.Equal(t, []byte("first"), persisted[0].StateDelta["completed"])
+			require.True(t, persisted[0].RequiresCompletion)
+			require.Empty(t, eventChan)
+		})
+	}
+}
 
 // #2757: pre-cancelled dispatch must not perform external work.
 func TestCancellationDispatch_PreCanceled(t *testing.T) {

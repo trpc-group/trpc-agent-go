@@ -490,6 +490,16 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		eventChan,
 	)
 	if err != nil {
+		// A later admission rejection must not discard results from tools
+		// that already completed. Keep the existing deadline persistence path
+		// while returning the original cancellation error to the caller.
+		if !p.enableParallelTools && functionResponseEvent != nil &&
+			errors.Is(err, context.DeadlineExceeded) &&
+			errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			_, _ = emitFunctionResponseEventAndWait(
+				ctx, invocation, eventChan, functionResponseEvent,
+			)
+		}
 		log.ErrorfContext(
 			ctx,
 			"Function call handling failed for agent %s: %v",
@@ -849,13 +859,19 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	}
 
 	toolResults := make([]toolResult, 0, len(toolCalls))
+	var callErr error
 	for i, tc := range toolCalls {
 		result, err := p.executeSingleToolCallSequentialResult(
 			ctx, invocation, llmResponse, tools, eventChan, i, tc,
 		)
 		if err != nil {
 			recordExecutionTraceToolResult(ctx, invocation, result)
-			return nil, err
+			if ctx.Err() == nil || !errors.Is(err, ctx.Err()) ||
+				len(toolResults) == 0 {
+				return nil, err
+			}
+			callErr = err
+			break
 		}
 		toolResults = append(toolResults, result)
 	}
@@ -864,6 +880,9 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		invocation,
 		toolResults,
 	)
+	if callErr != nil && len(toolCallResponsesEvents) == 0 {
+		return nil, callErr
+	}
 
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
@@ -878,6 +897,10 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
 		toolCallResponsesEvents,
 	)
+	if callErr != nil {
+		recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
+		return mergedEvent, callErr
+	}
 	if err := p.applyAfterToolMessagesHooks(
 		ctx,
 		invocation,

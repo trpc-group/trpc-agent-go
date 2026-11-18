@@ -229,6 +229,12 @@ alone proves all the later events. The observation, persistence, and safe Resume
 features discussed in #2757 are separate draft changes, not implied guarantees
 of context cancellation.
 
+In a sequential tool batch, rejecting a later call after cancellation does not
+discard results already produced by earlier tools. If the batch deadline has
+expired, those results use the existing bounded persistence fallback, and the
+caller still receives `context.DeadlineExceeded`. Persistence can still fail;
+explicit cancellation does not enable this deadline-only fallback.
+
 Tools should check the effective context before side effects, pass it to HTTP,
 database, and other I/O APIs, and observe Done in long waits. Already-running
 non-cooperative code may continue. External writes may require idempotency keys

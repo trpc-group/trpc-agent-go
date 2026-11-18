@@ -3624,10 +3624,14 @@ func TestPerToolCallResultEventsParallelStopErrorWinsAfterToolMessagesError(
 	}
 	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{
 		hook: func(
-			context.Context,
-			*plugin.AfterToolMessagesArgs,
+			hookCtx context.Context,
+			_ *plugin.AfterToolMessagesArgs,
 		) (*plugin.AfterToolMessagesResult, error) {
-			<-stopStarted
+			select {
+			case <-stopStarted:
+			case <-hookCtx.Done():
+				return nil, hookCtx.Err()
+			}
 			return nil, hookErr
 		},
 	})
@@ -5094,9 +5098,13 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 	)
 	type contextKey struct{}
 
-	baseCtx := context.WithValue(context.Background(), contextKey{}, "value")
-	ctx, cancel := context.WithTimeout(baseCtx, 100*time.Millisecond)
+	watchdogCtx, stopWatchdog := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopWatchdog()
+	baseCtx := context.WithValue(watchdogCtx, contextKey{}, "value")
+	ctx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
+	ctx = controlledDeadlineContext{ctx}
+	expire := cancel
 
 	p := NewFunctionCallResponseProcessor(false, nil)
 	inv := agent.NewInvocation(
@@ -5129,6 +5137,7 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 			declaration: &tool.Declaration{Name: toolName},
 			callFn: func(callCtx context.Context, _ []byte) (any, error) {
 				require.NoError(t, callCtx.Err())
+				expire()
 				<-callCtx.Done()
 				return "late evidence", nil
 			},
@@ -5184,8 +5193,10 @@ func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
 		return persistErr
 	})
 	failedEventChan := make(chan *event.Event, 1)
-	failedCtx, failedCancel := context.WithTimeout(baseCtx, 100*time.Millisecond)
+	failedCtx, failedCancel := context.WithCancel(baseCtx)
 	defer failedCancel()
+	failedCtx = controlledDeadlineContext{failedCtx}
+	expire = failedCancel
 	got, err = p.handleFunctionCallsAndSendEvent(
 		failedCtx,
 		inv,
