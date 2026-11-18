@@ -344,9 +344,10 @@ func TestOutputResponseProcessor_TypedInvalidJSON(t *testing.T) {
 	proc.ProcessResponse(ctx, inv, nil, rsp, ch)
 
 	close(ch)
-	if len(ch) != 0 {
-		t.Fatalf("expected no events for invalid structured output")
+	if len(ch) != 1 {
+		t.Fatalf("expected one parse error event for invalid structured output, got %d", len(ch))
 	}
+	assertStructuredOutputParseError(t, <-ch)
 }
 
 func TestOutputResponseProcessor_HandleOutputKey_AddNoticeError(t *testing.T) {
