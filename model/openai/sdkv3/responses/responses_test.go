@@ -130,7 +130,7 @@ func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.
 	message := projected.Choices[0].Message
 	message.ToolCalls[0].Function.Arguments = []byte(`{"edited":true}`)
 	message.Content = "edited"
-	items, err := convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")})
+	items, err := (&Model{}).convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")})
 	require.NoError(t, err)
 	encoded, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -151,17 +151,17 @@ func TestConvertMessagesValidatesProviderData(t *testing.T) {
 		Model:    "gpt-5",
 		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"state"}]`),
 	}
-	_, err := convertMessages([]model.Message{msg})
+	_, err := (&Model{}).convertMessages([]model.Message{msg})
 	require.NoError(t, err)
 	msg.ProviderData.Protocol = "another.protocol"
-	_, err = convertMessages([]model.Message{msg})
+	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "belongs to protocol")
 	msg.ProviderData.Protocol = responseProvider
 	msg.ProviderData.Payload = json.RawMessage(`[{"type":"tool_search_call"}]`)
-	_, err = convertMessages([]model.Message{msg})
+	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "unsupported native item type")
 	msg.ProviderData.Payload = json.RawMessage(`[{`)
-	_, err = convertMessages([]model.Message{msg})
+	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "provider payload must be a valid JSON object or array")
 }
 
@@ -279,7 +279,7 @@ func TestExtraFieldsCannotOverrideManagedState(t *testing.T) {
 }
 
 func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
-	items, err := convertMessages([]model.Message{
+	items, err := (&Model{}).convertMessages([]model.Message{
 		model.NewUserMessage("calc"),
 		{Role: model.RoleAssistant, Content: "calculating", ToolCalls: []model.ToolCall{{
 			ID: "call_1", Type: "function", Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
@@ -295,13 +295,13 @@ func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
 	require.Equal(t, []any{"user", "assistant", "function_call", "function_call_output", "assistant"}, []any{got[0]["role"], got[1]["role"], got[2]["type"], got[3]["type"], got[4]["role"]})
 	require.Equal(t, "call_1", got[3]["call_id"])
 
-	_, err = convertMessages([]model.Message{model.NewToolMessage("missing", "f", "x")})
+	_, err = (&Model{}).convertMessages([]model.Message{model.NewToolMessage("missing", "f", "x")})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
+	_, err = (&Model{}).convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
 	require.ErrorContains(t, err, "empty call_id")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
+	_, err = (&Model{}).convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
 	require.ErrorContains(t, err, "no tool result")
-	items, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}})
+	items, err = (&Model{}).convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}})
 	require.NoError(t, err)
 	require.Empty(t, items)
 }
@@ -324,7 +324,7 @@ func TestProviderDataPayloadValidatesDependencyIDs(t *testing.T) {
 		}, want: "duplicate tool result"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := convertMessages(tc.msgs)
+			_, err := (&Model{}).convertMessages(tc.msgs)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
@@ -337,7 +337,7 @@ func TestLegacyCallIDsRemainOpaque(t *testing.T) {
 			Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)},
 		}}}
 	}
-	items, err := convertMessages([]model.Message{
+	items, err := (&Model{}).convertMessages([]model.Message{
 		call(" call_1 "),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
 	})
@@ -349,12 +349,12 @@ func TestLegacyCallIDsRemainOpaque(t *testing.T) {
 		{"type":"function_call_output","call_id":" call_1 ","output":"ok"}
 	]`, string(raw))
 
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		call("call_1"),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
 	})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		call(" \t "),
 		model.NewToolMessage(" \t ", "f", "ok"),
 	})
@@ -373,7 +373,7 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 		return msg
 	}
 	item := `{"type":"function_call","call_id":" call_1 ","name":"f","arguments":"{}","future":true}`
-	items, err := convertMessages([]model.Message{
+	items, err := (&Model{}).convertMessages([]model.Message{
 		nativeMessage(t, `[`+item+`]`),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
 	})
@@ -385,12 +385,12 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 	require.JSONEq(t, item, string(got[0]), "native function call fields and call_id must be retained")
 	require.JSONEq(t, `{"type":"function_call_output","call_id":" call_1 ","output":"ok"}`, string(got[1]))
 
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		nativeMessage(t, `[{"type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}]`),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
 	})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		nativeMessage(t, `[{"type":"function_call","call_id":"  ","name":"f","arguments":"{}"}]`),
 	})
 	require.ErrorContains(t, err, "empty call_id")
@@ -537,7 +537,7 @@ func TestCompletedResponseAcceptsOptionalItemFields(t *testing.T) {
 	var native []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(payload, &native))
 	require.NotContains(t, native[1], "id", "replay must not fabricate an optional function-call item ID")
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		projected.Choices[0].Message,
 		{Role: model.RoleTool, ToolID: "call_optional", Content: "42"},
 	})
@@ -640,6 +640,6 @@ func TestProviderDataModelBindingUsesConfiguredName(t *testing.T) {
 	message := projected.Choices[0].Message
 	require.NotNil(t, message.ProviderData)
 	require.Equal(t, "configured-name", message.ProviderData.Model)
-	_, err = convertMessages([]model.Message{message})
+	_, err = (&Model{}).convertMessages([]model.Message{message})
 	require.NoError(t, err)
 }

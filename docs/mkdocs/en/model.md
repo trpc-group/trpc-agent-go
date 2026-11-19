@@ -2372,6 +2372,9 @@ for a complete SDK-based callback and model wrapper requirements.
 
 Switching between Responses models replays completed native items, including
 encrypted reasoning. The receiving service decides whether it can reuse them.
+Set `responses.WithOmitCrossModelEncryptedContent(true)` on the target to omit
+only the encrypted reasoning field from other configured models on each request.
+The session retains the original records.
 Switching to the built-in Chat Completions adapter sends the visible history,
 matching tool results to calls by `call_id`. Conversion happens on the outgoing
 request, so switching back can replay the native items kept in the session.

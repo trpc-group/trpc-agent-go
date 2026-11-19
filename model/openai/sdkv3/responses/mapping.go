@@ -112,7 +112,7 @@ func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams
 	if err := validateExtraFields(m.extraFields); err != nil {
 		return responses.ResponseNewParams{}, err
 	}
-	items, err := convertMessages(request.Messages)
+	items, err := m.convertMessages(request.Messages)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -294,13 +294,13 @@ func applyToolChoice(params *responses.ResponseNewParams, fields map[string]any)
 	return nil
 }
 
-func convertMessages(messages []model.Message) (responses.ResponseInputParam, error) {
+func (m *Model) convertMessages(messages []model.Message) (responses.ResponseInputParam, error) {
 	items := make(responses.ResponseInputParam, 0, len(messages)*2)
 	called := make(map[string]struct{})
 	completed := make(map[string]struct{})
 	for messageIndex, msg := range messages {
 		if msg.ProviderData != nil {
-			converted, err := convertProviderDataMessage(msg, messageIndex, called, completed)
+			converted, err := m.convertProviderDataMessage(msg, messageIndex, called, completed)
 			if err != nil {
 				return nil, err
 			}
@@ -356,7 +356,7 @@ func convertMessages(messages []model.Message) (responses.ResponseInputParam, er
 	return items, nil
 }
 
-func convertProviderDataMessage(msg model.Message, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func (m *Model) convertProviderDataMessage(msg model.Message, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	info := model.Info{Name: msg.ProviderData.Model, ProviderDataProtocol: responseProvider}
 	if err := providerdata.ValidateMessage(msg, info); err != nil {
@@ -372,7 +372,20 @@ func convertProviderDataMessage(msg model.Message, messageIndex int, called, com
 			return nil, fmt.Errorf("openai/responses: message %d: %w", messageIndex, err)
 		}
 	}
-	for _, rawItem := range rawItems(raw) {
+	omit := m.omitCrossModelEncryptedContent && msg.ProviderData.Model != m.name
+	for i, rawItem := range rawItems(raw) {
+		if omit && native[i].Type == outputTypeReasoning {
+			// Preserve unknown item fields without changing the saved payload.
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(rawItem, &fields); err != nil {
+				return nil, fmt.Errorf("openai/responses: decode reasoning item: %w", err)
+			}
+			delete(fields, "encrypted_content")
+			rawItem, err = json.Marshal(fields)
+			if err != nil {
+				return nil, fmt.Errorf("openai/responses: encode reasoning item: %w", err)
+			}
+		}
 		var item responses.ResponseInputItemUnion
 		if err := json.Unmarshal(rawItem, &item); err != nil {
 			return nil, fmt.Errorf("openai/responses: decode provider data item: %w", err)

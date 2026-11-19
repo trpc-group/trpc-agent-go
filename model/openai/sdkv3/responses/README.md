@@ -300,6 +300,15 @@ determines whether it can reuse those items. Its errors are returned to the
 caller. The framework does not infer account or deployment identity from model
 names or base URLs, or retry by removing encrypted reasoning.
 
+For a target that rejects encrypted reasoning from other models, configure
+`responses.New(name, responses.WithOmitCrossModelEncryptedContent(true))`.
+On every request this omits only `encrypted_content` from reasoning items whose
+stored producer model name differs from the target name. IDs, summaries and
+tool rounds are replayed in order. The target loses access to the omitted
+reasoning and may still reject other history. The original session stays intact.
+Configure both target adapters when this behavior is needed in both directions.
+The option does not relax pending tool recovery checks.
+
 Switching to the built-in OpenAI Chat Completions adapter uses the visible
 messages and paired function calls and results in a request-local projection.
 With `openai.WithOmitFileContentParts(true)`, both Chat requests and batch

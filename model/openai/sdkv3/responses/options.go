@@ -20,13 +20,14 @@ const defaultChannelBufferSize = 256
 type Option func(*options)
 
 type options struct {
-	apiKey            string
-	baseURL           string
-	store             bool
-	channelBufferSize int
-	httpClientOptions []model.HTTPClientOption
-	openaiOptions     []option.RequestOption
-	extraFields       map[string]any
+	apiKey                         string
+	baseURL                        string
+	store                          bool
+	omitCrossModelEncryptedContent bool
+	channelBufferSize              int
+	httpClientOptions              []model.HTTPClientOption
+	openaiOptions                  []option.RequestOption
+	extraFields                    map[string]any
 }
 
 func defaultOptions() options {
@@ -57,6 +58,15 @@ func WithStore(store bool) Option {
 	return func(o *options) {
 		o.store = store
 	}
+}
+
+// WithOmitCrossModelEncryptedContent controls whether replay omits encrypted_content
+// from reasoning items produced by a different configured Responses model name.
+// By default, all native items are replayed intact. Omission affects only the
+// outgoing request. Stored history, same-model items, and the request for new
+// encrypted reasoning are preserved.
+func WithOmitCrossModelEncryptedContent(omit bool) Option {
+	return func(o *options) { o.omitCrossModelEncryptedContent = omit }
 }
 
 // WithChannelBufferSize sets the GenerateContent channel buffer. Non-positive
