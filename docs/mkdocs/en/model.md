@@ -2374,7 +2374,9 @@ Switching between Responses models replays completed native items, including
 encrypted reasoning. The receiving service decides whether it can reuse them.
 Set `responses.WithOmitCrossModelEncryptedContent(true)` on the target to omit
 only the encrypted reasoning field from other configured models on each request.
-The session retains the original records.
+The session retains the original records. The target still receives the reasoning
+item with its ID and summary. If it looks up that ID, it may return HTTP 400
+when the original response used `store=false` (the adapter default).
 Switching to the built-in Chat Completions adapter sends the visible history,
 matching tool results to calls by `call_id`. Conversion happens on the outgoing
 request, so switching back can replay the native items kept in the session.

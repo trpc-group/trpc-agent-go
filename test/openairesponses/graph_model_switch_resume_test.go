@@ -10,6 +10,7 @@
 package openairesponses_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -33,6 +34,15 @@ import (
 )
 
 func TestGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T) {
+	testGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t, false)
+}
+
+func TestGraphModelSwitchRecoversWithCrossModelEncryptedContentOmitted(t *testing.T) {
+	testGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t, true)
+}
+
+func testGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T, omitOnRetry bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -50,13 +60,13 @@ func TestGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T) 
 		}
 		call := httpCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		switch call {
-		case 1:
+		switch {
+		case call == 1:
 			_, _ = fmt.Fprint(w, `{"id":"resp_first","status":"completed","output":`+graphInterruptNativeToolOutput+`}`)
-		case 2:
+		case call == 2 && !omitOnRetry, omitOnRetry && bytes.Contains(request["input"], []byte(`"opaque-tool-state"`)):
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprint(w, `{"error":{"message":"cannot decrypt reasoning","type":"invalid_request_error","code":"invalid_encrypted_content"}}`)
-		case 3:
+		case call == 3:
 			_, _ = fmt.Fprint(w, `{"id":"resp_success","status":"completed","output":[{"type":"message","id":"msg_success","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`)
 		default:
 			http.Error(w, "unexpected model call", http.StatusInternalServerError)
@@ -66,12 +76,13 @@ func TestGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T) 
 	}))
 	defer server.Close()
 
-	newModel := func(name string) model.Model {
-		return responses.New(name,
+	newModel := func(name string, extra ...responses.Option) model.Model {
+		options := []responses.Option{
 			responses.WithAPIKey("test"),
 			responses.WithBaseURL(server.URL),
 			responses.WithOpenAIOptions(option.WithMaxRetries(0)),
-		)
+		}
+		return responses.New(name, append(options, extra...)...)
 	}
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "graph.db"))
 	require.NoError(t, err)
@@ -156,7 +167,11 @@ func TestGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T) 
 	require.True(t, foundResult)
 
 	latestRef := graph.CheckpointRef{LineageID: lineage, Namespace: namespace}
-	retried := runGraphNativeInterrupt(t, ctx, newAgent(newModel("model-b")), "retry",
+	var retryOptions []responses.Option
+	if omitOnRetry {
+		retryOptions = append(retryOptions, responses.WithOmitCrossModelEncryptedContent(true))
+	}
+	retried := runGraphNativeInterrupt(t, ctx, newAgent(newModel("model-b", retryOptions...)), "retry",
 		model.Message{}, latestRef.ToRuntimeState())
 	assertNoGraphNativeEventErrors(t, retried)
 	var answered bool
@@ -173,5 +188,23 @@ func TestGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T) 
 	require.EqualValues(t, 1, toolCalls.Load(), "the completed call must not run again")
 	retryRequest := receiveGraphNativeRequest(t, ctx, requests)
 	require.JSONEq(t, `"model-b"`, string(retryRequest["model"]))
-	require.JSONEq(t, string(failedRequest["input"]), string(retryRequest["input"]))
+	if !omitOnRetry {
+		require.JSONEq(t, string(failedRequest["input"]), string(retryRequest["input"]))
+		return
+	}
+	var failedInput []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(failedRequest["input"], &failedInput))
+	var removed int
+	for _, item := range failedInput {
+		if string(item["id"]) == `"rs_tool"` {
+			require.JSONEq(t, `"opaque-tool-state"`, string(item["encrypted_content"]))
+			delete(item, "encrypted_content")
+			removed++
+		}
+	}
+	require.Equal(t, 1, removed)
+	expectedInput, err := json.Marshal(failedInput)
+	require.NoError(t, err)
+	require.JSONEq(t, string(expectedInput), string(retryRequest["input"]),
+		"only the foreign reasoning ciphertext may be removed; the tool call and result must remain intact")
 }

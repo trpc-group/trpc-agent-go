@@ -64,7 +64,9 @@ func WithStore(store bool) Option {
 // from reasoning items produced by a different configured Responses model name.
 // By default, all native items are replayed intact. Omission affects only the
 // outgoing request. Stored history, same-model items, and the request for new
-// encrypted reasoning are preserved.
+// encrypted reasoning are preserved. The target must accept reasoning items
+// without ciphertext. A target that looks up the retained item ID may reject
+// the request if the original response used store=false (the default).
 func WithOmitCrossModelEncryptedContent(omit bool) Option {
 	return func(o *options) { o.omitCrossModelEncryptedContent = omit }
 }

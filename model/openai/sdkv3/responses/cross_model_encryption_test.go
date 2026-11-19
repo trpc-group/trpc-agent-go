@@ -22,8 +22,8 @@ import (
 )
 
 func TestCrossModelEncryptedContentAcrossResponsesRequests(t *testing.T) {
-	const aReason = `{"type":"reasoning","id":"rs_a","status":"completed","summary":[{"type":"summary_text","text":"A summary"}],"encrypted_content":"cipher-a","future":{"encrypted_content":"nested-cipher-a","number":7}}`
-	const aReasonWithoutCipher = `{"type":"reasoning","id":"rs_a","status":"completed","summary":[{"type":"summary_text","text":"A summary"}],"future":{"encrypted_content":"nested-cipher-a","number":7}}`
+	const aReason = `{"type":"reasoning","id":"rs_a","status":"completed","summary":[{"type":"summary_text","text":"A summary"}],"encrypted_content":"cipher-a","future":{"encrypted_content":"nested-cipher-a","number":9007199254740993}}`
+	const aReasonWithoutCipher = `{"type":"reasoning","id":"rs_a","status":"completed","summary":[{"type":"summary_text","text":"A summary"}],"future":{"encrypted_content":"nested-cipher-a","number":9007199254740993}}`
 	const aMessage = `{"type":"message","id":"msg_a","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer A"}],"future":{"encrypted_content":"message-value"}}`
 	const aCall = `{"type":"function_call","id":"fc_a","status":"completed","call_id":"call_a","name":"lookup","arguments":"{\"key\":\"A\"}","future":"call-value"}`
 	const bReason = `{"type":"reasoning","id":"rs_b","summary":[{"type":"summary_text","text":"B summary"}],"encrypted_content":"cipher-b","future":[1,"b"]}`
@@ -62,10 +62,12 @@ func TestCrossModelEncryptedContentAcrossResponsesRequests(t *testing.T) {
 		aCipher     bool
 		bCipher     bool
 		fullHistory bool
+		stream      bool
 	}{
 		{name: "default keeps foreign ciphertext", modelName: "model-b", messages: firstTurn, aCipher: true},
 		{name: "explicit false keeps foreign ciphertext", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(false)}, messages: firstTurn, aCipher: true},
 		{name: "switch A to B", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: firstTurn},
+		{name: "stream switch A to B", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: firstTurn, stream: true},
 		{name: "continue on B with mixed history", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: fullHistory, bCipher: true, fullHistory: true},
 		{name: "switch back to A", modelName: "model-a", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: fullHistory, aCipher: true, fullHistory: true},
 		{name: "last option disables omission", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true), WithOmitCrossModelEncryptedContent(false)}, messages: fullHistory, aCipher: true, bCipher: true, fullHistory: true},
@@ -75,6 +77,15 @@ func TestCrossModelEncryptedContentAcrossResponsesRequests(t *testing.T) {
 			requests := make(chan map[string]json.RawMessage, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests <- mustReadJSONBody(t, r)
+				if tt.stream {
+					writeSSE(w,
+						`{"type":"response.output_text.delta","delta":"ok"}`,
+						`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_new","summary":[],"encrypted_content":"new-cipher"}}`,
+						`{"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_new","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}}`,
+						`{"type":"response.completed","response":{"id":"resp_new","status":"completed","output":[{"type":"reasoning","id":"rs_new","summary":[],"encrypted_content":"new-cipher"},{"type":"message","id":"msg_new","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}}`,
+					)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(w, `{"id":"resp_new","status":"completed","output":[{"type":"reasoning","id":"rs_new","summary":[],"encrypted_content":"new-cipher"},{"type":"message","id":"msg_new","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}`)
 			}))
@@ -84,38 +95,67 @@ func TestCrossModelEncryptedContentAcrossResponsesRequests(t *testing.T) {
 			require.NoError(t, err)
 			options := append([]Option{WithAPIKey("test"), WithBaseURL(server.URL)}, tt.options...)
 			adapter := New(tt.modelName, options...)
-			stream, err := adapter.GenerateContent(context.Background(), &model.Request{Messages: tt.messages})
+			stream, err := adapter.GenerateContent(context.Background(), &model.Request{
+				Messages:         tt.messages,
+				GenerationConfig: model.GenerationConfig{Stream: tt.stream},
+			})
 			require.NoError(t, err)
 			results := collect(t, stream)
-			require.Len(t, results, 1)
-			require.Nil(t, results[0].Error)
-			require.NotNil(t, results[0].Choices[0].Message.ProviderData)
-			require.Contains(t, string(results[0].Choices[0].Message.ProviderData.Payload), "new-cipher")
+			if tt.stream {
+				require.Len(t, results, 2)
+				require.True(t, results[0].IsPartial)
+				require.Equal(t, "ok", results[0].Choices[0].Delta.Content)
+			} else {
+				require.Len(t, results, 1)
+			}
+			final := results[len(results)-1]
+			require.Nil(t, final.Error)
+			require.True(t, final.Done)
+			require.Equal(t, "ok", final.Choices[0].Message.Content)
+			require.NotNil(t, final.Choices[0].Message.ProviderData)
+			require.Contains(t, string(final.Choices[0].Message.ProviderData.Payload), "new-cipher")
 
 			body := <-requests
 			require.JSONEq(t, `"`+tt.modelName+`"`, string(body["model"]))
-			require.Contains(t, string(body["include"]), "reasoning.encrypted_content")
+			require.JSONEq(t, `["reasoning.encrypted_content"]`, string(body["include"]))
+			require.Equal(t, "false", string(body["store"]))
+			if tt.stream {
+				require.Equal(t, "true", string(body["stream"]))
+			}
 			var items []json.RawMessage
 			require.NoError(t, json.Unmarshal(body["input"], &items))
+			if tt.fullHistory {
+				require.Len(t, items, 11)
+			} else {
+				require.Len(t, items, 6)
+			}
+			require.JSONEq(t, `{"role":"user","content":"first"}`, string(items[0]))
 			expectedA := aReasonWithoutCipher
 			if tt.aCipher {
 				expectedA = aReason
 			}
 			require.JSONEq(t, expectedA, string(items[1]))
+			var reasoning struct {
+				Future struct {
+					Number json.RawMessage `json:"number"`
+				} `json:"future"`
+			}
+			require.NoError(t, json.Unmarshal(items[1], &reasoning))
+			require.Equal(t, "9007199254740993", string(reasoning.Future.Number), "unknown integers must retain their exact value on the wire")
 			require.JSONEq(t, aMessage, string(items[2]))
 			require.JSONEq(t, aCall, string(items[3]))
 			require.JSONEq(t, `{"type":"function_call_output","call_id":"call_a","output":"result A"}`, string(items[4]))
+			require.JSONEq(t, `{"role":"user","content":"continue"}`, string(items[5]))
 			if tt.fullHistory {
-				require.Len(t, items, 11)
 				expectedB, expectedBSecond := bReasonWithoutCipher, bSecondReasonWithoutCipher
 				if tt.bCipher {
 					expectedB, expectedBSecond = bReason, bSecondReason
 				}
 				require.JSONEq(t, expectedB, string(items[6]))
 				require.JSONEq(t, bMessage, string(items[7]))
+				require.JSONEq(t, `{"role":"user","content":"continue again"}`, string(items[8]))
 				require.JSONEq(t, expectedBSecond, string(items[9]))
-			} else {
-				require.Len(t, items, 6)
+				require.JSONEq(t, `{"role":"user","content":"return"}`, string(items[10]))
 			}
 			after, err := json.Marshal(tt.messages)
 			require.NoError(t, err)

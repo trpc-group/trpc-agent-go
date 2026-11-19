@@ -305,7 +305,9 @@ For a target that rejects encrypted reasoning from other models, configure
 On every request this omits only `encrypted_content` from reasoning items whose
 stored producer model name differs from the target name. IDs, summaries and
 tool rounds are replayed in order. The target loses access to the omitted
-reasoning and may still reject other history. The original session stays intact.
+reasoning. It must accept the remaining reasoning item without ciphertext.
+If it resolves the item by ID, it may return HTTP 400 when the original
+response used `store=false` (the adapter default). The original session stays intact.
 Configure both target adapters when this behavior is needed in both directions.
 The option does not relax pending tool recovery checks.
 

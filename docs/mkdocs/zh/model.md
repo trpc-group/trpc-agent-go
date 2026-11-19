@@ -2315,7 +2315,7 @@ go run ./tools -streaming=false
 ### 切换模型与恢复工具调用
 
 在 Responses 模型之间切换时，框架按原顺序发送已完成的原生记录，包括加密推理，由目标服务决定能否复用。
-在目标模型上设置 `responses.WithOmitCrossModelEncryptedContent(true)` 后，每次请求都会省略其他配置模型的历史推理项中的 `encrypted_content`，会话仍保留原始记录。
+在目标模型上设置 `responses.WithOmitCrossModelEncryptedContent(true)` 后，每次请求都会省略其他配置模型的历史推理项中的 `encrypted_content`，会话仍保留原始记录。目标服务收到的推理项仍包含原有的 ID 和摘要。如果目标服务需要按 ID 查找该项，而生成该项时使用了默认的 `store=false`，请求仍可能返回 HTTP 400。
 切到内置 Chat Completions 适配器时，本次请求携带可见历史，并按 `call_id` 匹配工具调用和结果。
 切回 Responses 后仍可使用会话中保存的原生记录。遇到目标无法表达的业务内容时，框架在发请求前报错。
 
