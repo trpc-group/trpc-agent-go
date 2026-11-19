@@ -12,12 +12,18 @@ package langfuse
 import (
 	"context"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	"go.opentelemetry.io/otel/trace/noop"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 func TestNewResourceUsesDefaultServiceName(t *testing.T) {
@@ -121,5 +127,60 @@ func TestStart_WithObservationLeafValueMaxBytesOption(t *testing.T) {
 	out := truncateObservationValue(in)
 	if len([]byte(out)) > 1024 {
 		t.Fatalf("truncateObservationValue() got %d bytes, want <= %d", len([]byte(out)), 1024)
+	}
+}
+
+func TestStart_RejectsUnsupportedIngestionVersion(t *testing.T) {
+	_, err := Start(context.Background(), WithHost("localhost:3000"), WithPublicKey("pk"), WithSecretKey("sk"), WithIngestionVersion("5"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported ingestion version") {
+		t.Fatalf("Start() error = %v", err)
+	}
+}
+
+func TestStart_SendsIngestionVersionHeader(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		headers []http.Header
+		paths   []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		headers = append(headers, r.Header.Clone())
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	host, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldProvider, oldTracer := atrace.TracerProvider, atrace.Tracer
+	atrace.TracerProvider = noop.NewTracerProvider()
+	defer func() { atrace.TracerProvider, atrace.Tracer = oldProvider, oldTracer }()
+
+	clean, err := Start(context.Background(), WithHost(host.Host), WithInsecure(),
+		WithPublicKey("pk"), WithSecretKey("sk"), WithIngestionVersion("4"))
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	_, span := atrace.Tracer.Start(context.Background(), "work")
+	span.End()
+	if err := clean(context.Background()); err != nil {
+		t.Fatalf("shutdown error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(headers) == 0 {
+		t.Fatal("no export reached the server")
+	}
+	for i, h := range headers {
+		if got := h.Get("x-langfuse-ingestion-version"); got != "4" {
+			t.Errorf("x-langfuse-ingestion-version = %q, want 4", got)
+		}
+		if paths[i] != "/api/public/otel/v1/traces" {
+			t.Errorf("path = %q", paths[i])
+		}
 	}
 }

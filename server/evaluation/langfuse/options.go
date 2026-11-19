@@ -39,6 +39,7 @@ type options struct {
 	timeout        time.Duration
 	httpClient     *http.Client
 	runOptions     []agent.RunOption
+	apiVersion     APIVersion
 }
 
 func newOptions(opts ...Option) *options {
@@ -54,6 +55,7 @@ func newOptions(opts ...Option) *options {
 			return defaultUserID
 		},
 		environment: defaultEnvironment,
+		apiVersion:  APIVersionV3,
 		timeout:     defaultTimeout,
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
@@ -142,5 +144,15 @@ func WithHTTPClient(client *http.Client) Option {
 func WithRunOptions(runOptions ...agent.RunOption) Option {
 	return func(opts *options) {
 		opts.runOptions = append(opts.runOptions, runOptions...)
+	}
+}
+
+// WithAPIVersion selects the Langfuse write API generation. The default,
+// APIVersionV3, uses the legacy trace and dataset-run-item endpoints. Use
+// APIVersionV4 for Langfuse Cloud after 2026-11-16 and for self-hosted v4: it
+// records the trace and experiment fields as span attributes instead.
+func WithAPIVersion(version APIVersion) Option {
+	return func(opts *options) {
+		opts.apiVersion = version
 	}
 }
