@@ -1216,7 +1216,9 @@ func (p *streamingResponseProcessor) repairToolCallTextAndStats(
 func (p *streamingResponseProcessor) repairToolCallText(
 	response *model.Response,
 ) bool {
-	if p.currentInvocation == nil {
+	// Callbacks can replace the context invocation without its finalization state.
+	if p.currentInvocation == nil || calllimit.Active(p.invocation) ||
+		calllimit.Active(p.currentInvocation) {
 		return false
 	}
 	if !isToolCallTextRepairEnabled(p.currentInvocation) {
@@ -1229,7 +1231,8 @@ func (p *streamingResponseProcessor) shouldBufferToolCallTextPartial(
 	response *model.Response,
 ) bool {
 	return response != nil && response.IsPartial &&
-		p.currentInvocation != nil &&
+		p.currentInvocation != nil && !calllimit.Active(p.invocation) &&
+		!calllimit.Active(p.currentInvocation) &&
 		isToolCallTextRepairEnabled(p.currentInvocation) &&
 		p.llmRequest != nil && len(p.llmRequest.Tools) > 0 &&
 		responseMayContainTextToolCall(response)
@@ -1428,7 +1431,9 @@ func (f *Flow) createLLMResponseEvent(
 		response,
 		optionsInvocation,
 	)
-	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+	// The event invocation retains finalization state across callback replacement.
+	if !calllimit.Active(eventInvocation) && !calllimit.Active(optionsInvocation) &&
+		len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
 	}
 	return llmResponseEvent
@@ -2631,7 +2636,7 @@ func (f *Flow) callLLM(
 		)
 	}
 	// Run before model callbacks if they exist.
-	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
+	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		reportSummaryInjection(ctx, invocation, llmRequest)
 		return ctx, nil, false, err
@@ -2850,21 +2855,28 @@ func isCallLimitFinalizationMessage(
 		message.ReasoningSignature == ""
 }
 
-// enforceCallLimitFinalizationToolFree keeps finalization requests tool-free
-// across callback groups and retry callbacks. It is intentionally idempotent.
+// disabledToolPreserver is an optional, instance-specific model capability.
+// Wrappers must forward it to preserve framework request tool definitions.
+type disabledToolPreserver interface {
+	PreservesToolsWhenDisabled() bool
+}
+
+// enforceCallLimitFinalizationToolFree prevents tool use across callback groups
+// and retry callbacks. Models that disable tool choice keep normal request
+// processing; other models omit tool fields. It is idempotent.
 func enforceCallLimitFinalizationToolFree(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
+	preserveTools bool,
 ) context.Context {
 	if !calllimit.Active(invocation) {
 		return ctx
 	}
-	if req == nil {
-		return imodelrequest.WithToolsDisabled(ctx)
+	if req != nil && !preserveTools {
+		req.Tools = nil
+		imodelrequest.DeleteToolControlFields(req.ExtraFields)
 	}
-	req.Tools = nil
-	imodelrequest.DeleteToolControlFields(req.ExtraFields)
 	return imodelrequest.WithToolsDisabled(ctx)
 }
 
@@ -3001,11 +3013,15 @@ func (f *Flow) runBeforeModelCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
+	callModel model.Model,
 ) (context.Context, *model.Response, error) {
+	capability, ok := callModel.(disabledToolPreserver)
+	preserveTools := ok && capability.PreservesToolsWhenDisabled()
 	ctx = enforceCallLimitFinalizationToolFree(
 		ctx,
 		invocation,
 		llmRequest,
+		preserveTools,
 	)
 	ctx, span, started := startLatencySpan(
 		ctx,
@@ -3032,7 +3048,7 @@ func (f *Flow) runBeforeModelCallbacks(
 		return ctx, nil, nil
 	}
 	callbackCtx := withInvocationContextIfMissing(ctx, invocation)
-	ctx, resp, err = runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks)
+	ctx, resp, err = runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks, preserveTools)
 	if err != nil {
 		log.ErrorfContext(ctx, "Before model plugin failed for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, err
@@ -3041,7 +3057,7 @@ func (f *Flow) runBeforeModelCallbacks(
 		return withInvocationContextIfMissing(ctx, invocation), resp, nil
 	}
 	ctx = withInvocationContextIfMissing(ctx, invocation)
-	newCtx, resp, err := runBeforeModelCallbacksWith(ctx, invocation, llmRequest, f.modelCallbacks)
+	newCtx, resp, err := runBeforeModelCallbacksWith(ctx, invocation, llmRequest, f.modelCallbacks, preserveTools)
 	if err != nil {
 		log.ErrorfContext(newCtx, "Before model callback failed for agent %s: %v", invocation.AgentName, err)
 	}
@@ -3072,11 +3088,12 @@ func runBeforeModelCallbacksWith(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	callbacks *model.Callbacks,
+	preserveTools bool,
 ) (context.Context, *model.Response, error) {
 	if callbacks == nil {
 		return ctx, nil, nil
 	}
-	result, err := wrapBeforeModelCallbacksWithInvocation(callbacks, invocation).
+	result, err := wrapBeforeModelCallbacksWithInvocation(callbacks, invocation, preserveTools).
 		RunBeforeModel(ctx, &model.BeforeModelArgs{Request: llmRequest})
 	if err != nil {
 		return ctx, nil, err
@@ -3093,6 +3110,7 @@ func runBeforeModelCallbacksWith(
 func wrapBeforeModelCallbacksWithInvocation(
 	callbacks *model.Callbacks,
 	invocation *agent.Invocation,
+	preserveTools bool,
 ) *model.Callbacks {
 	if callbacks == nil || invocation == nil || len(callbacks.BeforeModel) == 0 {
 		return callbacks
@@ -3110,6 +3128,7 @@ func wrapBeforeModelCallbacksWithInvocation(
 				ctx,
 				invocation,
 				args.Request,
+				preserveTools,
 			)
 			result, err := callback(ctx, args)
 			if result != nil && result.Context != nil {
@@ -3122,6 +3141,7 @@ func wrapBeforeModelCallbacksWithInvocation(
 					resultCtx,
 					invocation,
 					args.Request,
+					preserveTools,
 				)
 				return &clonedResult, err
 			}
@@ -3129,6 +3149,7 @@ func wrapBeforeModelCallbacksWithInvocation(
 				ctx,
 				invocation,
 				args.Request,
+				preserveTools,
 			)
 			return result, err
 		}

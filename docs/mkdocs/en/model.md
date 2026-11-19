@@ -66,6 +66,49 @@ func main() {
 
 Example code is located at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
+### Preserving tools during call-limit finalization
+
+Suppose an agent is limited to five tool rounds and has finalization enabled.
+When the agent reaches the limit and enters finalization, it asks the model for
+an answer based on the results so far. If the model still returns a tool call,
+the framework rejects it.
+
+- By default, the final request omits tool definitions (`tools`).
+- With this option enabled, the final request builds `tools` as usual and sends
+  `tool_choice: "none"`. Keeping the definitions can help reuse the prompt cache
+  from earlier requests.
+
+Verify that your model and endpoint honor `tool_choice: "none"` before enabling
+the option.
+
+```go
+m := openai.New(modelName,
+    openai.WithBaseURL(baseURL),
+    openai.WithAPIKey(apiKey),
+    openai.WithPreserveToolsWhenDisabled(true),
+)
+a := llmagent.New("assistant",
+    llmagent.WithModel(m),
+    llmagent.WithTools(tools),
+    llmagent.WithMaxToolIterations(5),
+    llmagent.WithToolIterationLimitFinalization("Answer using the available results."),
+)
+```
+
+The option also applies to finalization at the LLM call limit. The final request
+counts toward `MaxLLMCalls`. If the endpoint returns an error, the framework
+returns it to the caller.
+
+<details>
+<summary>Using a model wrapper</summary>
+<p>A wrapper must forward <code>PreservesToolsWhenDisabled() bool</code> for the
+framework to retain the tool definitions it passes to the model. Without
+forwarding, the framework removes tool definitions and tool control fields from
+its request. If the option is enabled on the inner OpenAI model, that model still
+sends <code>tool_choice: "none"</code> and can send tool definitions from its own
+configuration or callbacks.</p>
+</details>
+
 ### Usage Methods and Platform Integration Guide
 
 The Model module supports multiple usage methods and platform integration. The following are common usage scenarios based on Runner examples:
