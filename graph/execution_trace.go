@@ -10,6 +10,7 @@ package graph
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 
@@ -17,6 +18,42 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 )
+
+func filterNodeResponse(result any) any {
+	if state, ok := stateFromAny(result); ok {
+		return state.withoutInternalKeys()
+	}
+	output, _ := filterCommandUpdatesForTrace(result)
+	return output
+}
+
+// filterCommandUpdatesForTrace copies command updates for tracing. Other node
+// results pass through with their original JSON representation.
+func filterCommandUpdatesForTrace(result any) (any, bool) {
+	switch v := result.(type) {
+	case Command:
+		return commandForTrace(&v), true
+	case *Command:
+		return commandForTrace(v), true
+	case []*Command:
+		commands := slices.Clone(v)
+		for i, cmd := range commands {
+			commands[i] = commandForTrace(cmd)
+		}
+		return commands, true
+	default:
+		return result, false
+	}
+}
+
+func commandForTrace(cmd *Command) *Command {
+	if cmd == nil {
+		return nil
+	}
+	snapshot := *cmd
+	snapshot.Update = cmd.Update.withoutInternalKeys()
+	return &snapshot
+}
 
 type graphToolTraceRecorder struct {
 	mu      sync.Mutex

@@ -613,10 +613,11 @@ func executeNodeWithWorkflowTrace(
 	}
 	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
 	workflow := &itelemetry.Workflow{
-		Name:    fmt.Sprintf("execute_function_node %s", id),
-		ID:      id,
-		Type:    workflowTypeFromNodeType(nodeType),
-		Request: state.safeClone(),
+		Name:           fmt.Sprintf("execute_function_node %s", id),
+		ID:             id,
+		Type:           workflowTypeFromNodeType(nodeType),
+		Request:        state.safeClone(),
+		FilterResponse: filterNodeResponse,
 	}
 	defer func() {
 		itelemetry.TraceWorkflow(span, workflow)
@@ -714,10 +715,11 @@ func (sg *StateGraph) AddLLMNode(
 		var workflow *itelemetry.Workflow
 		if recordWorkflow {
 			workflow = &itelemetry.Workflow{
-				Name:    workflowName,
-				ID:      id,
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           workflowName,
+				ID:             id,
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 		}
 		defer func() {
@@ -2477,10 +2479,11 @@ func newToolsNodeRuntime(
 		var workflow *itelemetry.Workflow
 		if startedSpan {
 			workflow = &itelemetry.Workflow{
-				Name:    "execute_tools_node",
-				ID:      "execute_tools_node",
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           "execute_tools_node",
+				ID:             "execute_tools_node",
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 			defer func() {
 				itelemetry.TraceWorkflow(span, workflow)

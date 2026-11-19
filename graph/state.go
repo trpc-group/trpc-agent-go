@@ -219,6 +219,21 @@ func (s State) Clone() State {
 	return clone
 }
 
+// withoutInternalKeys copies the bindings a node can update. Skip runtime
+// handles before inspecting their values, as other goroutines may own them.
+func (s State) withoutInternalKeys() State {
+	if s == nil {
+		return nil
+	}
+	update := make(State, len(s))
+	for k, v := range s {
+		if !isInternalStateKey(k) {
+			update[k] = v
+		}
+	}
+	return update
+}
+
 func (s State) safeClone() State {
 	clone := make(State, len(s))
 	for k, v := range s {

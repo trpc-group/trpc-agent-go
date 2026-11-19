@@ -295,6 +295,8 @@ To reduce memory, prefer `Drop()` on attributes **this backend will not read**. 
 
 Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `execute_tool` (messages, llm request/response, workflow request/response, tool arguments/result, and related keys).
 
+For graph nodes, `gen_ai.workflow.response` omits executor-owned keys such as `graph.StateKeySession` from returned state updates, including `Command.Update`. Application fields keep their usual JSON encoding.
+
 ### Configuration
 
 ```go
