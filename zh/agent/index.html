@@ -5241,7 +5241,7 @@
 <li>工具迭代上限收尾要求达到上限的这一轮中所有工具调用都由框架执行。如果其中任何调用是 external tool，或被 <code>WithToolExecutionFilter</code> 延后给调用方执行，该回复仍会计入 <code>MaxToolIterations</code>，但当前运行会沿用 caller-executed tool 的既有生命周期并直接结束，不再发起收尾调用。调用方后续继续执行时会创建新的 invocation，并使用独立的限制计数。</li>
 <li><code>MaxLLMCalls</code> 始终是严格的外层硬预算，收尾调用也计入其中。因此组合使用工具上限收尾和 <code>WithMaxLLMCalls</code> 时，需要预留一次 LLM 调用。</li>
 <li>最后一次模型请求会在消息尾部追加一条临时 user instruction，而不会修改已有 system prompt。<code>BeforeModel</code> callback 可以看到该消息，但它不会作为真实 user event 发送或持久化。</li>
-<li>收尾期间，框架会在 <code>BeforeModel</code> callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。</li>
+<li>默认情况下，收尾期间框架会在 <code>BeforeModel</code> callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。对于已验证支持 <code>tool_choice: "none"</code> 的 OpenAI 兼容端点，可通过 <a href="../model/#preserving-tools-during-call-limit-finalization">模型配置</a> 保留工具定义并禁用调用，争取复用缓存。</li>
 <li>如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。</li>
 <li>两个限制相互独立，可以单独使用或组合使用。</li>
 <li>这些限制是每次调用级别的，不同的 <code>runner.Run()</code> 调用会各自独立计数。</li>
@@ -6713,7 +6713,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月6日 09:49:29 UTC">2026-11-06 09:49:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月19日 09:57:31 UTC">2026-11-19 09:57:31</span>
   </span>
 
     
