@@ -6068,18 +6068,23 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 			}
 		}
 	}
-	// Emit tool execution complete event.
+	// Emit tool execution complete event. When the tool was interrupted, the
+	// pause payload is not the tool's final result, so do not attach a
+	// tool.response; otherwise the interrupted attempt would persist a stale
+	// tool message (with the original ToolID) that session replay could pick
+	// up instead of the successful result from the resumed run.
 	event := emitToolCompleteEvent(finalCtx, eventInvocation, toolCompleteEventConfig{
-		EventChan:    config.EventChan,
-		InvocationID: eventInvocationID,
-		ToolName:     name,
-		ToolID:       id,
-		NodeID:       nodeID,
-		StartTime:    startTime,
-		Result:       result,
-		Error:        eventErr,
-		Arguments:    modifiedArgs,
-		ResponseID:   responseID,
+		EventChan:       config.EventChan,
+		InvocationID:    eventInvocationID,
+		ToolName:        name,
+		ToolID:          id,
+		NodeID:          nodeID,
+		StartTime:       startTime,
+		Result:          result,
+		Error:           eventErr,
+		Arguments:       modifiedArgs,
+		ResponseID:      responseID,
+		IncludeResponse: interruptErr == nil,
 	})
 	if startedSpan {
 		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
@@ -6263,6 +6268,11 @@ type toolCompleteEventConfig struct {
 	Result       any
 	Error        error
 	Arguments    []byte
+	// IncludeResponse controls whether the complete event carries a
+	// tool.response payload (the tool result message). It should be false
+	// when the tool call did not actually complete, e.g. it was interrupted,
+	// so the partial pause payload is not persisted as a tool message.
+	IncludeResponse bool
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
@@ -6297,7 +6307,7 @@ func emitToolCompleteEvent(
 		WithToolEventInput(string(config.Arguments)),
 		WithToolEventOutput(outputStr),
 		WithToolEventError(config.Error),
-		WithToolEventIncludeResponse(true),
+		WithToolEventIncludeResponse(config.IncludeResponse),
 	)
 	agent.EmitEvent(ctx, invocation, config.EventChan, toolCompleteEvent)
 	return toolCompleteEvent

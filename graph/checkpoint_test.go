@@ -477,7 +477,7 @@ func TestToolEvents_And_ExecuteSingleToolCall(t *testing.T) {
 	// emit start
 	emitToolStartEvent(context.Background(), nil, ch, "inv-id", "echo", "id-1", "nodeA", time.Now(), []byte(`{"a":1}`), "")
 	// emit complete
-	emitToolCompleteEvent(context.Background(), nil, toolCompleteEventConfig{EventChan: ch, InvocationID: "inv-id", ToolName: "echo", ToolID: "id-1", NodeID: "nodeA", StartTime: time.Now(), Result: map[string]any{"x": 1}, Error: nil, Arguments: []byte(`{"a":1}`)})
+	emitToolCompleteEvent(context.Background(), nil, toolCompleteEventConfig{EventChan: ch, InvocationID: "inv-id", ToolName: "echo", ToolID: "id-1", NodeID: "nodeA", StartTime: time.Now(), Result: map[string]any{"x": 1}, Error: nil, Arguments: []byte(`{"a":1}`), IncludeResponse: true})
 	// ensure two events were sent
 	e1 := <-ch
 	e2 := <-ch
@@ -577,6 +577,62 @@ func TestExecuteSingleToolCall_Interrupt_NoErrorInEvent(t *testing.T) {
 	// Response.Error must be nil for interrupt tool completes.
 	if complete.Response != nil {
 		require.Nil(t, complete.Response.Error)
+	}
+}
+
+// pausePreviewInterruptTool interrupts while also returning a non-nil result
+// (a pause preview). The returned value must NOT be persisted as a tool
+// response, because it is not the tool's final output.
+type pausePreviewInterruptTool struct{ name string }
+
+func (p *pausePreviewInterruptTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: p.name}
+}
+
+func (p *pausePreviewInterruptTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return map[string]any{"pause-preview": "confirm?"}, NewInterruptError("confirm")
+}
+
+// When a tool interrupts, the complete event must NOT carry a tool.response.
+// Otherwise the interrupted attempt would persist a tool message with the
+// original ToolID (containing the pause payload), and session replay could
+// surface it instead of the successful result from the resumed run.
+func TestExecuteSingleToolCall_Interrupt_NoToolResponse(t *testing.T) {
+	ch := make(chan *event.Event, 4)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-int-no-resp")
+	ctx, span := tracer.Start(context.Background(), "span")
+	defer span.End()
+
+	cfg := singleToolCallConfig{
+		ToolCall: model.ToolCall{ID: "tool-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "pause",
+				Arguments: []byte(`{}`),
+			}},
+		Tools: map[string]tool.Tool{
+			"pause": &pausePreviewInterruptTool{name: "pause"},
+		},
+		InvocationID: "inv-int-no-resp",
+		EventChan:    ch,
+		Span:         span,
+		State:        State{StateKeyCurrentNodeID: "nodeInt"},
+	}
+
+	_, err := executeSingleToolCall(ctx, cfg)
+	require.Error(t, err)
+	require.True(t, IsInterruptError(err))
+
+	// Drain events and assert no tool.response is emitted for the interrupt.
+	drain := len(ch)
+	for i := 0; i < drain; i++ {
+		e := <-ch
+		require.NotNil(t, e)
+		require.NotEqual(t, model.ObjectTypeToolResponse, e.Object,
+			"interrupted tool call must not emit a tool.response")
+		if e.Response != nil {
+			require.NotEqual(t, model.ObjectTypeToolResponse, e.Response.Object,
+				"interrupted tool call must not attach a tool.response payload")
+		}
 	}
 }
 
