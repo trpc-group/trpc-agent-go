@@ -1626,7 +1626,104 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			history.items[i].Message,
 		)
 	}
-	return history
+	return history.withInterruptedToolResults(inv, resultEvents)
+}
+
+// supersededNativeReplies selects the final native reply of each prior invocation.
+// Only original user turns establish this boundary. The native payload, rather
+// than the editable display fields, determines whether the reply contains calls.
+// The active invocation and a resumable session tail have no missing outputs
+// inferred for them.
+func supersededNativeReplies(events []event.Event, activeInvocation string) map[string]bool {
+	replies := make(map[string]bool)
+	seenNativeReply := make(map[string]bool)
+	var latestUserInvocation string
+	for i := len(events) - 1; i >= 0; i-- {
+		evt := &events[i]
+		if latestUserInvocation == "" {
+			if isUserTurnEvent(evt) {
+				latestUserInvocation = evt.InvocationID
+			}
+			continue
+		}
+		if evt.ID == "" || evt.InvocationID == "" || evt.InvocationID == activeInvocation ||
+			evt.InvocationID == latestUserInvocation || seenNativeReply[evt.InvocationID] ||
+			!eventHasProviderData(*evt) {
+			continue
+		}
+		seenNativeReply[evt.InvocationID] = true
+		replies[evt.ID] = true
+	}
+	return replies
+}
+
+func isUserTurnEvent(evt *event.Event) bool {
+	return evt.InvocationID != "" && evt.Author == "user" && evt.IsUserMessage()
+}
+
+// Add missing outputs only to the selected request history, after windowing and
+// compaction. They must neither evict a real message nor be reported as
+// compacted successful results.
+func (history projectedHistory) withInterruptedToolResults(inv *agent.Invocation, events []event.Event) projectedHistory {
+	projector, ok := inv.Model.(model.ProviderDataProjector)
+	if !ok {
+		return history
+	}
+	replies := supersededNativeReplies(events, inv.InvocationID)
+	if len(replies) == 0 {
+		return history
+	}
+	var out projectedHistory
+	start := 0
+	for i, item := range history.items {
+		data := item.Message.ProviderData
+		if !replies[item.EffectiveEvent.ID] || data == nil || data.Protocol != "openai.responses" {
+			continue
+		}
+		next := i + 1
+		for next < len(history.items) && history.items[next].Message.Role == model.RoleTool {
+			next++
+		}
+		missing := missingResponsesToolResults(projector, data, history.messages[i+1:next])
+		if len(missing) == 0 {
+			continue
+		}
+		out.messages = append(out.messages, history.messages[start:next]...)
+		out.items = append(out.items, history.items[start:next]...)
+		// No stored event or summary cutoff corresponds to these outputs.
+		appendProjectedHistory(&out, event.Event{}, summaryview.Boundary{}, missing, false)
+		start = next
+	}
+	if start == 0 {
+		return history
+	}
+	out.messages = append(out.messages, history.messages[start:]...)
+	out.items = append(out.items, history.items[start:]...)
+	return out
+}
+
+func missingResponsesToolResults(
+	projector model.ProviderDataProjector,
+	data *model.ProviderData,
+	results []model.Message,
+) []model.Message {
+	// Replay uses the native IDs even if a callback edited the display ToolCalls.
+	native, err := projector.ProjectProviderData(data)
+	if err != nil || len(native.ToolCalls) <= len(results) {
+		return nil
+	}
+	reported := make(map[string]bool, len(results))
+	for _, result := range results {
+		reported[result.ToolID] = true
+	}
+	var missing []model.Message
+	for _, call := range native.ToolCalls {
+		if !reported[call.ID] {
+			missing = append(missing, model.NewToolMessage(call.ID, call.Function.Name,
+				"No result is available for this tool call. Its execution status is unknown."))
+		}
+	}
+	return missing
 }
 
 func sessionEventsSnapshot(sess *session.Session) []event.Event {
@@ -3940,6 +4037,12 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	var functionResponseEvents []event.Event
 	for i := functionCallEventIdx + 1; i < len(events); i++ {
 		evt := &events[i]
+		if isUserTurnEvent(evt) && evt.InvocationID != events[functionCallEventIdx].InvocationID &&
+			eventHasProviderData(events[functionCallEventIdx]) {
+			// A late result belongs to the older call. Let the subsequent
+			// history pass pair it without discarding the newer user turn.
+			return events
+		}
 		if evt.IsToolResultResponse() {
 			responseIDs := toMap(evt.GetToolResultIDs())
 			for _, callID := range functionCallIDs {
@@ -3988,8 +4091,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 				responseMatches,
 			)
 			// A native record cannot drop calls without losing its opaque
-			// reasoning, so its partial round stays intact and the provider
-			// adapter rejects the missing results explicitly.
+			// reasoning, so preserve its partial round for model-facing history.
 			if !eventHasProviderData(evt) &&
 				!allToolCallIDsMatched(callIDs, events, responseMatches) &&
 				perToolCallResultRound {

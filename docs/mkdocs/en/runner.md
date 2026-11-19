@@ -741,6 +741,14 @@ If the last event is a user or tool message (or a plain assistant reply
 without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
 today’s `Run` call.
 
+After stopping a tool, send a new user message to continue on the same session:
+`r.Run(ctx, userID, sessionID, model.NewUserMessage("What happened?"))`.
+With LLMAgent and the Responses adapter, if tools A and B were called and only
+A's result was saved, the request keeps A's result and marks B's execution
+status unknown. The framework adds this placeholder to the request and leaves
+the stored session intact. Starting the turn does not re-execute either tool. An unknown status can include a tool whose external side effect already
+occurred. [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
+
 #### Tool Call Arguments Auto Repair
 
 Some models may emit non-strict JSON arguments for `tool_calls` (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.

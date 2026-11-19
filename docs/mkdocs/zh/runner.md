@@ -704,10 +704,17 @@ eventChan, err := r.Run(
   - 使用当前 Agent 注册的工具集合和回调，执行这些“未完成的工具调用”；
   - 把工具执行结果写入 Session（作为 tool 消息事件）；
 - 工具执行结束后，再按正常流程发起新一轮 LLM 调用，此时模型能看到
-  “上一次的 tool_calls + 对应的工具结果”，不会重复要求调用同一工具。
+  “上一次的 tool_calls + 对应的工具结果”。
 
 如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
 则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
+
+停止工具后，可以在同一会话中直接发送新用户消息继续对话，例如
+`r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发生了什么？"))`。
+使用 LLMAgent 和 Responses 适配器时，如果上一轮调用了 A 和 B，但只保存了 A 的结果，
+模型请求会保留 A 的结果，把 B 的执行状态标记为未知。框架不会重跑这两个工具，
+占位结果仅用于本次请求。状态未知也包括工具已产生外部副作用、结果尚未保存的情况。
+[Responses 工具恢复说明](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call 参数自动修复
 
