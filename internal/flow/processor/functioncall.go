@@ -470,6 +470,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		emitToolIterationLimitError(ctx, invocation, eventChan, err.Error())
 		return nil, errors.Join(err, agent.NewStopError("tool tracking admission failed"))
 	}
+	defer tooljournal.End(ctx)
 	var tools map[string]tool.Tool
 	if req != nil {
 		tools = req.Tools

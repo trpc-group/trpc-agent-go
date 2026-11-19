@@ -1195,6 +1195,10 @@ type RunOptions struct {
 	// LLM request.
 	Resume bool
 
+	// StrictToolResume rejects legacy pending calls without execution evidence.
+	// It has no effect unless Resume is enabled.
+	StrictToolResume bool
+
 	// PersistInterruptedAssistant controls whether Runner persists already
 	// emitted assistant text as a final assistant message when a streaming run
 	// is cancelled before a normal final assistant response is produced.
@@ -2428,4 +2432,12 @@ func (inv *Invocation) GetCustomAgentConfig(agentKey string) any {
 		return nil
 	}
 	return inv.RunOptions.CustomAgentConfigs[agentKey]
+}
+
+// WithStrictToolResume requires execution evidence when resuming pending tools.
+// The default is false, preserving legacy WithResume behavior for old sessions.
+// Recorded rounds always use conservative evidence regardless of this flag.
+// It has no effect unless WithResume(true) is also supplied.
+func WithStrictToolResume(enabled bool) RunOption {
+	return func(opts *RunOptions) { opts.StrictToolResume = enabled }
 }

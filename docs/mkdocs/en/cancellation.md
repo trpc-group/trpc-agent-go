@@ -304,7 +304,9 @@ Session restoration and framework event appends are serialized within this
 Runner. Starting another run advances its session generation. A stale run's
 late result retains its original IDs and result text; application StateDelta
 is retained in `trpc_agent.stale_state_delta.v1` audit metadata instead of
-applying over the newer state. Unique execution-record keys still update the
+applying over the newer state. A unique `__tool_stale_state_v1/<event-id>`
+state key also retains that audit delta when a backend omits contentless events.
+Unique execution-record keys still update the
 old run's evidence. Unknown routed sessions are first claimed on append; a
 session already owned by another generation is treated conservatively as stale.
 Generation metadata lasts for this Runner's lifetime.
@@ -357,3 +359,40 @@ is missing actual persisted responses, projection emits a
 `tool_history_projection` error describing incomplete native history and stops
 before the model call. Complete native rounds keep their existing adapter
 validation. Provider-specific native recovery is outside this series.
+
+## Safe tool Resume and migration
+
+`agent.WithResume(true)` uses recorded facts when available. Completed/failed
+calls are reused through history; only `not_started` calls execute. Dispatched,
+in-flight and unknown outcomes produce a `tool_resume` error before any tool or
+model call. An ordinary new prompt does not replay tools. Recorded native
+pending tools require provider-specific recovery and are rejected before work.
+
+Recorded Resume requires `runner.WithToolExecutionTracking(true)`. The Runner
+claims a round and rereads its state before deciding, preventing concurrent
+Resume requests on that Runner from dispatching the same pending call from
+stale snapshots. The original round identity stays stable; each new admission
+records its current request/invocation owner. These are Runner-local claims,
+not distributed leases: do not concurrently recover one session from multiple
+Runner instances without storage-level coordination.
+
+For old sessions, `WithResume(true)` retains its legacy last-event behavior.
+Add `agent.WithStrictToolResume(true)` to reject pending legacy calls that lack
+evidence. This flag has no effect without Resume; newly recorded rounds always
+use conservative recovery. A caller must reconcile external effects before
+explicitly starting a new operation after an unknown outcome. No option in this
+series silently retries unknown writes.
+
+**Storage requirement:** crash-safe admission requires AppendEvent to apply
+state synchronously and acknowledge storage errors. Disable asynchronous
+persistence (for example, SQLite `WithEnableAsyncPersist(false)`). A queue-accept
+acknowledgement is insufficient: after a crash it could leave an older
+`not_started` snapshot. Generic SessionService implementations cannot be
+introspected to enforce this requirement. In-memory storage only supports
+same-process recovery, and even synchronous storage does not provide external
+exactly-once effects or undo writes already made by tools.
+
+The E2E SQLite test closes and reopens the database and creates a fresh Runner:
+a completed A is not replayed, only pending B executes, and an intent without
+an outcome blocks the entire recovery round. Live Hunyuan tests additionally
+validate the model request after safe continuation.
