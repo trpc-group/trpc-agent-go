@@ -124,9 +124,10 @@ type AfterToolResult struct {
 	// CustomResult if not nil, will replace the original result.
 	// Empty maps, slices, and strings are still replacements.
 	CustomResult any
-	// SkipResultFormatter requests default JSON serialization for CustomResult
+	// SkipResultFormatter requests default result conversion for CustomResult
 	// instead of applying the tool's configured result formatter. It is ignored
-	// when CustomResult is nil.
+	// when CustomResult is nil. model.ToolResultContent is preserved; other
+	// results use JSON serialization.
 	SkipResultFormatter bool
 	// SkipStateDelta requests skipping the tool's state-delta provider for
 	// CustomResult. It is ignored when CustomResult is nil.
@@ -141,8 +142,8 @@ type AfterToolResult struct {
 //   - CustomResult: if not nil, this result will be used instead of the actual tool result.
 //   - Context: if not nil, will be used by the framework for subsequent operations.
 //   - SkipResultFormatter: if true and CustomResult is non-nil, the framework
-//     serializes CustomResult with its default JSON representation instead of
-//     applying the tool's configured result formatter.
+//     uses default result conversion instead of the tool's configured result
+//     formatter, preserving model.ToolResultContent and using JSON for other values.
 //   - SkipStateDelta: if true and CustomResult is non-nil, the framework will
 //     not invoke the tool's state-delta provider for that result.
 //   - SkipSummarization: if true, the framework will skip the extra
