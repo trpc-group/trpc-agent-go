@@ -336,3 +336,24 @@ unsettled, new tracked runs fail explicitly. Request IDs cannot be reused while
 a snapshot is retained. Unknown, disabled or expired observation returns false;
 waiting returns `ErrExecutionNotFound`. Observation is in memory; durable tool
 records are the source for restart recovery.
+
+## Next-turn history after interrupted tools
+
+For rounds carrying version-1 evidence, ordinary history projection fills only
+missing tool results after branch, history-window and summary-cutoff selection.
+Real completed sibling results are retained even when the batch was never
+emitted. Not-dispatched and admitted/unknown calls receive explicit `[framework]`
+explanations, including the possibility of side effects or still-running work.
+Existing actual results take precedence. Projection does not execute tools or
+write synthetic responses back into session history/state.
+
+Source event IDs associate rounds, so reused call IDs do not borrow another
+round's results. Retained evidence does not resurrect events excluded by the
+caller-selected history window. Old sessions without records keep their prior
+projection behavior. Malformed/unsupported evidence fails explicitly.
+
+Opaque native ProviderData is not rewritten. When a selected native tool round
+is missing actual persisted responses, projection emits a
+`tool_history_projection` error describing incomplete native history and stops
+before the model call. Complete native rounds keep their existing adapter
+validation. Provider-specific native recovery is outside this series.
