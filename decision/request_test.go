@@ -54,3 +54,25 @@ func TestRequestValidate(t *testing.T) {
 		require.ErrorContains(t, req.Validate(), "duplicate option id")
 	})
 }
+
+func TestRequestValidateInvalidQuestion(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    decision.Kind
+		options []decision.Option
+		want    string
+	}{
+		{"predicate with options", decision.Predicate, []decision.Option{{ID: "low"}}, "predicate does not take options"},
+		{"score with one level", decision.Score, []decision.Option{{ID: "low"}}, "requires at least two options"},
+		{"score with duplicate ids", decision.Score, []decision.Option{{ID: "low"}, {ID: "low"}}, "duplicate option id"},
+		{"unsupported kind", "rank", nil, "unsupported kind"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := decision.Request{Input: decision.Input{Text: "A delivery is late."}, Questions: []decision.Question{{
+				ID: "severity", Instructions: "Assess severity.", Kind: tc.kind, Options: tc.options,
+			}}}
+			require.ErrorContains(t, req.Validate(), tc.want)
+		})
+	}
+}

@@ -76,7 +76,11 @@ func (c *Client) Decide(ctx context.Context, req decision.Request) (*decision.Re
 		nativeReq.State = req.Input.JSON
 	}
 	for _, q := range req.Questions {
-		nativeReq.Questions[q.ID] = nativeQuestion(q)
+		question, err := nativeQuestion(q)
+		if err != nil {
+			return nil, err
+		}
+		nativeReq.Questions[q.ID] = question
 	}
 	resp, err := c.native.SystemOne(ctx, nativeReq)
 	if err != nil {
@@ -104,28 +108,33 @@ func (c *Client) Decide(ctx context.Context, req decision.Request) (*decision.Re
 	return result, nil
 }
 
-func nativeQuestion(q decision.Question) wire.Question {
+func nativeQuestion(q decision.Question) (wire.Question, error) {
 	switch q.Kind {
 	case decision.Predicate:
-		return wire.BinaryQuestion{Instructions: q.Instructions}
+		return wire.BinaryQuestion{Instructions: q.Instructions}, nil
 	case decision.Choice:
 		options := make([]wire.ChoiceOption, 0, len(q.Options))
 		for _, opt := range q.Options {
 			options = append(options, wire.ChoiceOption{Name: opt.ID, Description: opt.Description})
 		}
-		return wire.ChoiceQuestion{Instructions: q.Instructions, Options: options}
+		return wire.ChoiceQuestion{Instructions: q.Instructions, Options: options}, nil
 	case decision.Score:
 		criteria := make([]string, 0, len(q.Options))
+		seen := make(map[string]struct{}, len(q.Options))
 		for _, opt := range q.Options {
 			text := opt.ID
 			if opt.Description != "" {
 				text += ": " + opt.Description
 			}
+			if _, exists := seen[text]; exists {
+				return nil, fmt.Errorf("systemone: question %q: duplicate score criterion %q", q.ID, text)
+			}
+			seen[text] = struct{}{}
 			criteria = append(criteria, text)
 		}
-		return wire.ScoreQuestion{Instructions: q.Instructions, Criteria: criteria}
+		return wire.ScoreQuestion{Instructions: q.Instructions, Criteria: criteria}, nil
 	default:
-		return nil // Request.Validate has rejected unsupported kinds.
+		return nil, fmt.Errorf("systemone: unsupported question kind %q", q.Kind)
 	}
 }
 
