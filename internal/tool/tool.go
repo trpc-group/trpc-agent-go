@@ -18,20 +18,30 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const defsRefPrefix = "#/$defs/"
 
+var (
+	toolResultContentType = reflect.TypeOf(model.ToolResultContent(nil))
+	byteSliceType         = reflect.TypeOf([]byte(nil))
+)
+
 // GenerateJSONSchema generates a basic JSON schema from a reflect.Type.
 func GenerateJSONSchema(t reflect.Type) *tool.Schema {
 	// Use a context to track visited types and handle recursion
 	ctx := &schemaContext{
-		visited: make(map[reflect.Type]string),
-		defs:    make(map[string]*tool.Schema),
+		visited:           make(map[reflect.Type]string),
+		defs:              make(map[string]*tool.Schema),
+		toolResultContent: t == toolResultContentType,
 	}
 
 	schema := generateJSONSchema(t, ctx, true)
+	if ctx.toolResultContent {
+		schema = nullableSchema(schema)
+	}
 
 	// Add $defs to the root schema if we have any definitions
 	if len(ctx.defs) > 0 {
@@ -43,8 +53,18 @@ func GenerateJSONSchema(t reflect.Type) *tool.Schema {
 
 // schemaContext tracks the state during schema generation to handle recursion
 type schemaContext struct {
-	visited map[reflect.Type]string // Maps types to their definition names
-	defs    map[string]*tool.Schema // Stores reusable schema definitions
+	visited           map[reflect.Type]string // Maps types to their definition names
+	defs              map[string]*tool.Schema // Stores reusable schema definitions
+	toolResultContent bool
+}
+
+func nullableSchema(schema *tool.Schema) *tool.Schema {
+	return &tool.Schema{
+		AnyOf: []*tool.Schema{
+			schema,
+			{Type: "null"},
+		},
+	}
 }
 
 func schemaRef(defName string) *tool.Schema {
@@ -275,6 +295,10 @@ func appendEnumValue(fieldType reflect.Type, value string, schema *tool.Schema) 
 
 // generateFieldSchema generates schema for a specific field type with recursion handling.
 func generateFieldSchema(t reflect.Type, ctx *schemaContext, isRoot bool) *tool.Schema {
+	if ctx.toolResultContent && t == byteSliceType {
+		return nullableSchema(&tool.Schema{Type: "string"})
+	}
+
 	// Delegate to smaller focused helpers to reduce cyclomatic complexity.
 	switch t.Kind() {
 	case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
