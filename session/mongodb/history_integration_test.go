@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -128,10 +129,62 @@ func TestIntegrationRecentHistoryScanCost(t *testing.T) {
 	t.Logf("full: docs=%d keys=%d returned=%d duration=%s; recent: docs=%d keys=%d returned=%d duration=%s", before.Docs, before.Keys, before.Returned, beforeDuration, after.Docs-before.Docs, after.Keys-before.Keys, after.Returned-before.Returned, afterDuration)
 }
 
+func TestIntegrationRecentHistorySmallWindowRoundTrips(t *testing.T) {
+	const historySize = 2000
+	for _, tc := range []struct {
+		name          string
+		userAt        int
+		returned      int64
+		maxOperations int64
+	}{
+		{name: "distant_user", userAt: 0, returned: historySize, maxOperations: 32},
+		{name: "no_user", userAt: -1, returned: historySize, maxOperations: 32},
+		{name: "user_in_window", userAt: historySize - 1, returned: 1, maxOperations: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, svc, db := newIntegrationService(t)
+			key := session.Key{AppName: "roundtrips", UserID: "user", SessionID: tc.name}
+			_, err := svc.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			base := time.Now().UTC().Truncate(time.Millisecond)
+			docs := make([]any, 0, historySize)
+			for i := 0; i < historySize; i++ {
+				role := model.RoleAssistant
+				if i == tc.userAt {
+					role = model.RoleUser
+				}
+				payload, err := json.Marshal(integrationEvent(fmt.Sprint(i), role, "message", base))
+				require.NoError(t, err)
+				docs = append(docs, sessionEventDoc{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Event: payload, CreatedAt: base})
+			}
+			_, err = db.Collection(svc.collSessionEvents).InsertMany(ctx, docs)
+			require.NoError(t, err)
+			// Keep every operation even if a regression fetches history one row at a time.
+			require.NoError(t, db.CreateCollection(ctx, "system.profile",
+				options.CreateCollection().SetCapped(true).SetSizeInBytes(16<<20)))
+			require.NoError(t, db.RunCommand(ctx, bson.D{{Key: "profile", Value: 2}}).Err())
+			defer db.RunCommand(ctx, bson.D{{Key: "profile", Value: 0}})
+			want, err := svc.getEventsList(ctx, []session.Key{key, key}, 1, time.Time{}, nil)
+			require.NoError(t, err)
+			before := historyProfileTotals(t, db, svc.collSessionEvents)
+			got, err := svc.GetSession(ctx, key, session.WithEventNum(1))
+			require.NoError(t, err)
+			require.Equal(t, want[0], got.Events)
+			after := historyProfileTotals(t, db, svc.collSessionEvents)
+			operations := after.Operations - before.Operations
+			returned := after.Returned - before.Returned
+			t.Logf("full operations=%d; recent operations=%d returned=%d", before.Operations, operations, returned)
+			require.Equal(t, tc.returned, returned)
+			require.LessOrEqual(t, operations, tc.maxOperations)
+		})
+	}
+}
+
 type historyProfile struct {
-	Docs     int64 `bson:"docs"`
-	Keys     int64 `bson:"keys"`
-	Returned int64 `bson:"returned"`
+	Operations int64 `bson:"operations"`
+	Docs       int64 `bson:"docs"`
+	Keys       int64 `bson:"keys"`
+	Returned   int64 `bson:"returned"`
 }
 
 func historyProfileTotals(t *testing.T, db *mongo.Database, coll string) historyProfile {
@@ -139,7 +192,7 @@ func historyProfileTotals(t *testing.T, db *mongo.Database, coll string) history
 	ctx := context.Background()
 	cursor, err := db.Collection("system.profile").Aggregate(ctx, bson.A{
 		bson.M{"$match": bson.M{"ns": db.Name() + "." + coll, "op": bson.M{"$in": bson.A{"query", "getmore"}}}},
-		bson.M{"$group": bson.M{"_id": nil, "docs": bson.M{"$sum": "$docsExamined"}, "keys": bson.M{"$sum": "$keysExamined"}, "returned": bson.M{"$sum": "$nreturned"}}},
+		bson.M{"$group": bson.M{"_id": nil, "operations": bson.M{"$sum": 1}, "docs": bson.M{"$sum": "$docsExamined"}, "keys": bson.M{"$sum": "$keysExamined"}, "returned": bson.M{"$sum": "$nreturned"}}},
 	})
 	require.NoError(t, err)
 	defer cursor.Close(ctx)

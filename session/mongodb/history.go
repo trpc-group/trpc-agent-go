@@ -33,8 +33,9 @@ func (s *Service) getRecentEvents(ctx context.Context, key session.Key, limit in
 	})
 	// Bound network overfetch when closing the cursor early. A server-side limit
 	// would prevent searching further back for the last user message.
-	batchSize := int32(128)
-	if limit > 0 && limit < 128 {
+	const maxBatchSize = 128
+	batchSize := int32(maxBatchSize)
+	if limit > 0 && limit < maxBatchSize {
 		batchSize = int32(limit)
 	}
 	opts := options.Find().SetSort(bson.D{
@@ -75,6 +76,9 @@ func (s *Service) getRecentEvents(ctx context.Context, key session.Key, limit in
 			if hasUser {
 				break
 			}
+			// A small window must not force tiny batches while searching older
+			// history for a user message. Keep subsequent overfetch bounded.
+			cursor.SetBatchSize(maxBatchSize)
 		} else if evt.IsUserMessage() {
 			// Retain only the nearest preceding user, not the intervening history.
 			events = append(events, evt)

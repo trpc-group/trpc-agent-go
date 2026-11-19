@@ -183,8 +183,9 @@ For a single session with a positive event limit, MongoDB reads newest events
 first in small cursor batches and closes the cursor once the window and its
 required user message are available. The returned order and filtering remain
 the same. If the window has no user message, the reader searches older history
-for the nearest user message; a history without any user message still requires
-a full scan. Empty payloads do not consume an event slot.
+for the nearest user message using batches of up to 128 documents, even for
+smaller event limits. A history without any user message still requires a full
+scan. Empty payloads do not consume an event slot.
 
 Time filtering uses the event payload timestamp, which can differ from the
 document's `created_at`. If the oldest event in the candidate window satisfies
