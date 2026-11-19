@@ -717,13 +717,15 @@ Send a new user message with the same `userID` and `sessionID`.
 eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("What happened?"))
 ```
 
-With LLMAgent and the Responses adapter, the new turn replays saved tool results
-by call ID without re-executing the interrupted calls. Each missing result gets
-an unknown execution status in the model request only. By default, Runner saves
-parallel tool results together. If A returns while B is running and the run
-stops before the combined result is saved, both appear as unknown. With
-`agent.WithToolResultEventPerCallEnabled(true)`, if A's result was already
-saved, the model receives that result and only B appears as unknown.
+When LLMAgent continues with the same configured Responses model that issued
+the tool calls, it replays saved results by call ID without re-executing those
+calls. Each missing result gets an unknown execution status in the model
+request only.
+
+By default, Runner saves parallel tool results together. If A returns while B
+is running and the run stops before the combined result is saved, both appear
+as unknown. With `agent.WithToolResultEventPerCallEnabled(true)`, a result
+already saved for A reaches the model and only B appears as unknown.
 
 #### Resume Interrupted Runs (tools-first resume)
 
@@ -735,8 +737,10 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResum
 
 With LLMAgent, Runner inspects the last persisted event. If it is an assistant
 reply with `tool_calls`, Runner executes those calls using the agent's tools and
-callbacks, saves the results, then calls the model. A retry can repeat an
-external action if the tool performed it before its result was saved.
+callbacks, saves the results, then calls the model. For Responses, it validates
+the saved call against the selected model before executing any tools. A retry
+can repeat an external action if the tool performed it before its result was
+saved.
 
 Other final events skip the tool recovery step. In particular, if the last
 event is A's result and B's result is missing, explicit resume currently

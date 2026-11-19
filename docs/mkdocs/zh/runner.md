@@ -683,8 +683,9 @@ eventChan, err := r.Run(
 eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发生了什么？"))
 ```
 
-使用 LLMAgent 和 Responses 适配器时，新一轮对话按调用 ID 保留已保存的工具结果，
-不会重跑中断的调用。缺少结果的调用只在发给模型的请求中标为“执行状态未知”。
+如果 LLMAgent 续聊时沿用发起工具调用时配置的 Responses 模型，新请求会按调用 ID
+保留已保存的工具结果，不会重跑中断的调用。缺少结果的调用只在发给模型的请求中标为“执行状态未知”。
+
 Runner 默认合并保存并行工具的结果。如果 A 已返回、B 仍在运行，停止时整批结果还没写入
 Session，模型会看到 A 和 B 都是未知。开启 `agent.WithToolResultEventPerCallEnabled(true)`
 后，如果 A 的结果已经写入 Session，模型能看到 A 的真实结果，只有 B 标为未知。
@@ -699,7 +700,8 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResum
 
 使用 LLMAgent 时，Runner 检查 Session 中最后一条已保存的事件。如果它是带
 `tool_calls` 的 assistant 回复，Runner 会使用当前 Agent 的工具和回调执行这些调用，
-保存结果后再请求模型。如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。
+保存结果后再请求模型。对于 Responses，Runner 会在执行工具前检查所选模型是否与已保存的调用匹配。
+如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。
 
 如果末尾是其他事件，Runner 会跳过工具恢复步骤。例如，末尾是 A 的工具结果，而 B
 缺少结果，显式恢复当前会在发送 Responses 请求前报告结果缺失。此时仍可在同一个
