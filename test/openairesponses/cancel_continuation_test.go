@@ -37,17 +37,28 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 		name              string
 		output            string
 		parallel          bool
+		perCall           bool
 		resume            bool
 		resumeWithMessage bool
 		projectAndRewrite bool
-		missingID         string
 		knownID           string
 		wantCalls         int32
 	}{
-		{name: "single tool, new message", output: nativeToolOutput, missingID: "call_tool", wantCalls: 1},
-		{name: "parallel per-call result, new message", output: toolResultNativeMultiOutput, parallel: true, missingID: "call_b", knownID: "call_a", wantCalls: 2},
-		{name: "single tool, new message with resume option", output: nativeToolOutput, missingID: "call_tool", resumeWithMessage: true, wantCalls: 1},
-		{name: "projected call and system-user turn", output: nativeToolOutput, missingID: "call_tool", projectAndRewrite: true, wantCalls: 1},
+		{name: "single tool, new message", output: nativeToolOutput, wantCalls: 1},
+		{
+			name: "parallel default merged result, new message", output: toolResultNativeMultiOutput,
+			parallel: true, wantCalls: 2,
+		},
+		{
+			name: "parallel per-call result, new message", output: toolResultNativeMultiOutput,
+			parallel: true, perCall: true, knownID: "call_a", wantCalls: 2,
+		},
+		{
+			name: "parallel per-call result, failed resume then new message", output: toolResultNativeMultiOutput,
+			parallel: true, perCall: true, resume: true, knownID: "call_a", wantCalls: 2,
+		},
+		{name: "single tool, new message with resume option", output: nativeToolOutput, resumeWithMessage: true, wantCalls: 1},
+		{name: "projected call and system-user turn", output: nativeToolOutput, projectAndRewrite: true, wantCalls: 1},
 		{name: "single tool, explicit resume", output: nativeToolOutput, resume: true, wantCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,6 +90,22 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 			}, function.WithName("calculator"))
 			agentOptions := []llmagent.Option{llmagent.WithModel(toolResultNativeModel(rt)),
 				llmagent.WithTools([]tool.Tool{calculator}), llmagent.WithEnableParallelTools(tc.parallel)}
+			var firstResult chan any
+			if tc.parallel && !tc.perCall {
+				// Merged results have no per-call event to wait for. Observe A's
+				// return before stopping B so the persistence boundary is tested.
+				firstResult = make(chan any, 1)
+				callbacks := tool.NewCallbacks().RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+					if args.ToolCallID == "call_a" {
+						select {
+						case firstResult <- args.Result:
+						case <-ctx.Done():
+						}
+					}
+					return nil, nil
+				})
+				agentOptions = append(agentOptions, llmagent.WithToolCallbacks(callbacks))
+			}
 			var projected atomic.Int32
 			if tc.projectAndRewrite {
 				agentOptions = append(agentOptions, llmagent.WithEventMessageProjector(func(_ *agent.Invocation, _ event.Event, msg model.Message) model.Message {
@@ -97,7 +124,7 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 			managed, ok := r.(runner.ManagedRunner)
 			require.True(t, ok)
 			opts := []agent.RunOption{agent.WithRequestID("cancel-request")}
-			if tc.parallel {
+			if tc.perCall {
 				opts = append(opts, agent.WithToolResultEventPerCallEnabled(true))
 			}
 			stream, err := r.Run(ctx, "user", "session", model.NewUserMessage("start calculation"), opts...)
@@ -108,6 +135,14 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 				t.Fatal("timed out waiting for the tool to start")
 			}
 			waitCancelBoundary(t, ctx, stream, tc.knownID)
+			if firstResult != nil {
+				select {
+				case result := <-firstResult:
+					require.Equal(t, 7, result)
+				case <-ctx.Done():
+					t.Fatal("timed out waiting for call_a to return")
+				}
+			}
 			require.True(t, managed.Cancel("cancel-request"), "the active request must be canceled through ManagedRunner")
 			select {
 			case <-canceled:
@@ -128,15 +163,21 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 					events = append(events, evt)
 				}
 				require.NoError(t, ctx.Err())
-				require.Empty(t, toolResultNativeErrors(events))
-				require.True(t, cancelHasAnswer(events))
-				require.EqualValues(t, 2, calls.Load(), "explicit resume must execute the pending tool again")
-				require.EqualValues(t, 2, rt.calls.Load())
-				input := <-rt.requests
-				assertToolProviderDataInput(t, input)
-				require.NotContains(t, strings.ToLower(string(input)), "unknown")
-				assertCancelSessionResults(t, svc, "call_tool", "2", false)
-				return
+				if tc.knownID == "" {
+					require.Empty(t, toolResultNativeErrors(events))
+					require.True(t, cancelHasAnswer(events))
+					require.EqualValues(t, 2, calls.Load(), "explicit resume must execute the pending tool again")
+					require.EqualValues(t, 2, rt.calls.Load())
+					input := <-rt.requests
+					assertToolProviderDataInput(t, input)
+					require.NotContains(t, strings.ToLower(string(input)), "unknown")
+					assertCancelSessionResults(t, svc, "call_tool", "2", false)
+					return
+				}
+				require.NotEmpty(t, toolResultNativeErrors(events), "explicit resume must report the incomplete round")
+				require.EqualValues(t, 1, rt.calls.Load(), "failed resume must stop before HTTP")
+				require.Equal(t, tc.wantCalls, calls.Load(), "failed resume must not retry either tool")
+				assertCancelSessionResults(t, svc, tc.knownID, "7", false)
 			}
 
 			for turn, userText := range []string{cancelFollowUp, "another follow-up"} {
@@ -152,7 +193,7 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 				events := runToolResultNative(t, r, userText, followUpOptions...)
 				require.Empty(t, toolResultNativeErrors(events))
 				require.True(t, cancelHasAnswer(events), "the new user turn must complete with a model answer")
-				assertCancelRequestHistory(t, <-rt.requests, tc.output, tc.missingID, tc.knownID, userText)
+				assertCancelRequestHistory(t, <-rt.requests, tc.output, tc.knownID, userText)
 				if tc.projectAndRewrite {
 					require.Positive(t, projected.Load(), "the request projector must edit the displayed call")
 				}
@@ -259,7 +300,7 @@ func assertCancelSessionResults(t *testing.T, svc session.Service, knownID, know
 	}
 }
 
-func assertCancelRequestHistory(t *testing.T, input json.RawMessage, nativeOutput, missingID, knownID, userText string) {
+func assertCancelRequestHistory(t *testing.T, input json.RawMessage, nativeOutput, knownID, userText string) {
 	t.Helper()
 	var items []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(input, &items))
@@ -306,18 +347,16 @@ func assertCancelRequestHistory(t *testing.T, input json.RawMessage, nativeOutpu
 	if userText != cancelFollowUp {
 		require.Less(t, firstUserIndex, userIndex, "follow-up messages must retain their order")
 	}
-	wantCalls := 1
 	if knownID != "" {
-		wantCalls = 2
 		require.Equal(t, "7", outputs[knownID], "retain the real result")
 	}
-	require.Len(t, callIndexes, wantCalls)
-	require.Len(t, outputs, wantCalls)
-	require.Contains(t, outputs, missingID)
-	require.Contains(t, strings.ToLower(outputs[missingID]), "unknown")
+	require.Len(t, outputs, len(callIndexes))
 	for id, callIndex := range callIndexes {
 		outputIndex, ok := outputIndexes[id]
 		require.True(t, ok, "missing output for %s", id)
+		if id != knownID {
+			require.Contains(t, strings.ToLower(outputs[id]), "unknown", "unrecorded result for %s", id)
+		}
 		require.Less(t, callIndex, outputIndex, "call must precede its result")
 		require.Less(t, outputIndex, firstUserIndex, "all prior results must precede the first new user turn")
 	}
@@ -380,7 +419,7 @@ func TestStoppedNativePartialResultWithEditedStoredDisplay(t *testing.T) {
 			require.Empty(t, toolResultNativeErrors(events))
 			require.True(t, cancelHasAnswer(events))
 			require.EqualValues(t, 2, rt.calls.Load())
-			assertCancelRequestHistory(t, <-rt.requests, toolResultNativeMultiOutput, "call_b", "call_a", cancelFollowUp)
+			assertCancelRequestHistory(t, <-rt.requests, toolResultNativeMultiOutput, "call_a", cancelFollowUp)
 			stored, err := svc.GetSession(ctx, key)
 			require.NoError(t, err)
 			var results []model.Message
