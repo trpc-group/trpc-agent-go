@@ -139,6 +139,40 @@ MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
 
+## 过期清理查询开销
+
+清理先找出包含 `updated_at` 不晚于 TTL 截止时间的未删除记录的会话，再利用
+原有会话前缀 cleanup 索引，以最多 8 个并发查询检查是否存在更新的未删除记录。
+只要存在新记录，整个会话的历史都会保留，包括旧记录。Track 仍按会话整组判断，覆盖该会话全部 track。
+
+初始化为两个事件集合新增非唯一 partial `cleanup_candidates` 索引。历史文档、
+旧 cleanup 索引、TTL 配置和删除模式不变。外部管理索引时，可在部署前执行
+以下命令，并按实际前缀修改集合和索引名称：
+
+```javascript
+for (const name of ["session_events", "session_tracks"]) {
+  db.getCollection(name).createIndex(
+    {updated_at: 1, app_name: 1, user_id: 1, session_id: 1},
+    {name: "idx_" + name + "_cleanup_candidates",
+     partialFilterExpression: {deleted_at: null}}
+  )
+}
+```
+
+该方案避免为了寻找候选而扫描大量近期历史，代价是新增索引，以及每个候选会话
+一次短查询。历史大部分已旧时，候选扫描仍可能较大，应同时观察查询次数、耗时
+和扫描量。缺少索引不影响正确性，旧版本也可以继续使用同一份数据。
+大集合建议提前建索引，避免启动时集中产生建索引负载。
+
+候选按每批最多 500 个处理，每批完成后即提交其中已过期的组，不需要凑满
+500 个过期组；后续批次失败不会丢失前面批次已完成的删除。事件与 Track
+清理依次执行，各自拥有 30 秒预算（合计最多 60 秒），避免事件清理超时后
+Track 没有剩余预算。更短的父 context 截止时间或服务关闭仍会取消两者，
+清理返回前会等待所有查询工作协程退出。
+
+清理仍沿用先检查、再删除的并发模型：候选检查与后续删除没有和并发追加构成
+原子操作。本优化不增加跨服务实例协调，也不改变清理间隔。
+
 ## 事件排序索引升级
 
 新服务初始化时新增 `idx_session_events_ordered_lookup` 非唯一 partial 索引，
