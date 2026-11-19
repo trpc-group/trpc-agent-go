@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/tooljournal"
+
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -1098,7 +1100,7 @@ func (p *streamingResponseProcessor) process(
 		return false
 	}
 	p.flow.postprocessWithLatencySpans(
-		p.ctx,
+		tooljournal.WithSource(p.ctx, llmResponseEvent.ID),
 		eventInvocation,
 		p.llmRequest,
 		response,
