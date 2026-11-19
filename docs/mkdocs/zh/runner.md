@@ -685,6 +685,7 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发�
 
 如果 LLMAgent 续聊时沿用发起工具调用时配置的 Responses 模型，新请求会按调用 ID
 保留已保存的工具结果，不会重跑中断的调用。缺少结果的调用只在发给模型的请求中标为“执行状态未知”。
+如果使用自定义模型包装器，请将 `model.ProviderDataProjector` 转发给底层 Responses 模型，以便 Runner 按原始工具调用 ID 匹配结果。
 
 Runner 默认合并保存并行工具的结果。如果 A 已返回、B 仍在运行，停止时整批结果还没写入
 Session，模型会看到 A 和 B 都是未知。开启 `agent.WithToolResultEventPerCallEnabled(true)`

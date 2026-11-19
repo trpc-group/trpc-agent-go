@@ -721,6 +721,7 @@ When LLMAgent continues with the same configured Responses model that issued
 the tool calls, it replays saved results by call ID without re-executing those
 calls. Each missing result gets an unknown execution status in the model
 request only.
+If you use a custom model wrapper, forward `model.ProviderDataProjector` to the underlying Responses model so Runner can match results by their original tool call IDs.
 
 By default, Runner saves parallel tool results together. If A returns while B
 is running and the run stops before the combined result is saved, both appear
