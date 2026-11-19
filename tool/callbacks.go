@@ -41,6 +41,10 @@ type BeforeToolCallback = func(
 ) (any, error)
 
 // AfterToolCallback is called after a tool is executed.
+// It is not a finally hook paired with BeforeTool: before-callback short circuits,
+// permission failures, and cancellation checks that reject the first tool attempt
+// can bypass it. Cancellation after an attempt starts preserves the usual
+// after-callback chain, including its error and override handling.
 // Returns (customResult, error).
 // - customResult: if not nil, this result will be used instead of the actual tool result.
 // - error: if not nil, this error will be returned.
@@ -73,6 +77,8 @@ type BeforeToolArgs struct {
 // BeforeToolResult contains the return value for before tool callback.
 type BeforeToolResult struct {
 	// Context if not nil, will be used by the framework for subsequent operations.
+	// Its cancellation and deadline control subsequent dispatch. Derive it from
+	// the callback input to preserve cancellation propagation.
 	Context context.Context
 	// CustomResult if not nil, will skip tool execution and return this result.
 	CustomResult any
@@ -137,6 +143,10 @@ type AfterToolResult struct {
 }
 
 // AfterToolCallbackStructured is called after a tool is executed.
+// It is not a finally hook paired with BeforeTool: before-callback short circuits,
+// permission failures, and cancellation checks that reject the first tool attempt
+// can bypass it. Cancellation after an attempt starts preserves the usual
+// after-callback chain, including its error and override handling.
 // Returns (result, error).
 // - result: contains optional custom result and context for subsequent operations.
 //   - CustomResult: if not nil, this result will be used instead of the actual tool result.

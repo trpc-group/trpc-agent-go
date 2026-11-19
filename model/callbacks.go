@@ -49,6 +49,8 @@ type BeforeModelArgs struct {
 // BeforeModelResult contains the return value for before model callback.
 type BeforeModelResult struct {
 	// Context if not nil, will be used by the framework for subsequent operations.
+	// Its cancellation and deadline control subsequent dispatch. Derive it from
+	// the callback input to preserve cancellation propagation.
 	Context context.Context
 	// CustomResponse if not nil, will skip model call and return this response.
 	CustomResponse *Response
