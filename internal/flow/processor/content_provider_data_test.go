@@ -553,6 +553,44 @@ func TestInterruptedNativeReplyWithoutDisplayToolCalls(t *testing.T) {
 	require.Equal(t, next, msgs[3])
 }
 
+func TestLateNativeCallFromSupersededUserTurn(t *testing.T) {
+	first := model.NewUserMessage("first question")
+	next := model.NewUserMessage("new question")
+	oldCall := interruptedTestCall(t, "old-call")
+	currentCall := interruptedTestCall(t, "current-call")
+	events := timedTestEvents(time.Now(),
+		toolTranscriptTestEvent("r1", "i1", first, ""),
+		toolTranscriptTestEvent("r2", "i2", next, ""),
+		toolTranscriptTestEvent("r1", "i1", oldCall, ""),
+		toolTranscriptTestEvent("r2", "i2", currentCall, ""),
+	)
+	events[0].Author = "user"
+	events[1].Author = "user"
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, got, 5)
+	require.Equal(t, []model.Message{first, next, oldCall}, got[:3])
+	require.Equal(t, "old-call", got[3].ToolID)
+	require.Contains(t, got[3].Content, "unknown")
+	require.Equal(t, currentCall, got[4], "the active call must stay pending")
+}
+
+func TestEmptyResumeInputKeepsNativeTailPending(t *testing.T) {
+	user := toolTranscriptTestEvent("r1", "i1", model.NewUserMessage("earlier question"), "")
+	user.Author = "user"
+	call := interruptedTestCall(t, "pending")
+	tail := toolTranscriptTestEvent("r2", "i2", call, "")
+	for _, events := range [][]event.Event{{tail}, {user, tail}} {
+		inv := testInvocation(timedTestEvents(time.Now(), events...), "i3", "r3", model.NewUserMessage(""))
+		inv.RunOptions.Resume = true
+		inv.Model = &interruptedRoundModel{}
+		got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+		require.Len(t, got, len(events))
+		require.Equal(t, call, got[len(got)-1])
+	}
+}
+
 func TestInterruptedToolOutputsFollowProjectedNativePayload(t *testing.T) {
 	next := model.NewUserMessage("follow up")
 	call := interruptedTestCall(t, "original")
@@ -571,6 +609,18 @@ func TestInterruptedToolOutputsFollowProjectedNativePayload(t *testing.T) {
 	require.Equal(t, "edited", got.messages[1].ToolID)
 	require.Contains(t, got.messages[1].Content, "unknown")
 	require.Equal(t, next, got.messages[2])
+}
+
+func TestInterruptedNativeOutputPairingUsesIDs(t *testing.T) {
+	calls := testToolCalls("kept", "pending")
+	results := []model.Message{
+		model.NewToolMessage("kept", "lookup", "7"),
+		model.NewToolMessage("different", "lookup", "9"),
+	}
+	missing := missingResponsesToolResults(calls, results)
+	require.Len(t, missing, 1)
+	require.Equal(t, "pending", missing[0].ToolID)
+	require.Contains(t, missing[0].Content, "unknown")
 }
 
 func TestContentRequestProcessor_IncompletePerCallNativeRoundStaysIntact(t *testing.T) {

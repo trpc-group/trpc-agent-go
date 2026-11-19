@@ -34,10 +34,17 @@ func (p *ContentRequestProcessor) bindInterruptedToolRounds(
 	if projector == nil {
 		return nil
 	}
+	latestUserIndex, userInvocations := p.visibleUserTurns(inv, filter, events)
 	var latestUserInvocation string
-	if inv.Message.Role == model.RoleUser && !containsInvocationUserTurn(events, inv.InvocationID) {
+	switch {
+	case inv.Message.Role == model.RoleUser && model.HasPayload(inv.Message) && !userInvocations[inv.InvocationID]:
 		// The processor will insert this invocation's user input into history.
 		latestUserInvocation = inv.InvocationID
+		latestUserIndex = len(events)
+	case latestUserIndex >= 0:
+		latestUserInvocation = events[latestUserIndex].InvocationID
+	default:
+		return nil
 	}
 	rounds := make(interruptedToolRounds)
 	seenNativeReply := make(map[string]bool)
@@ -46,14 +53,13 @@ func (p *ContentRequestProcessor) bindInterruptedToolRounds(
 		if !p.canMatchToolRound(*evt, inv, filter) {
 			continue
 		}
-		if latestUserInvocation == "" {
-			if isUserTurnEvent(evt) {
-				latestUserInvocation = evt.InvocationID
-			}
-			continue
-		}
 		if evt.ID == "" || evt.InvocationID == "" || evt.InvocationID == inv.InvocationID ||
 			evt.InvocationID == latestUserInvocation || seenNativeReply[evt.InvocationID] || len(evt.Choices) != 1 {
+			continue
+		}
+		// A call can arrive after a newer user message. Its own user turn
+		// must be visible to identify it as an earlier invocation in that case.
+		if i > latestUserIndex && !userInvocations[evt.InvocationID] {
 			continue
 		}
 		// A Responses completion has one assistant choice holding its entire output.
@@ -72,13 +78,19 @@ func (p *ContentRequestProcessor) bindInterruptedToolRounds(
 	return rounds
 }
 
-func containsInvocationUserTurn(events []event.Event, invocationID string) bool {
+func (p *ContentRequestProcessor) visibleUserTurns(
+	inv *agent.Invocation, filter string, events []event.Event,
+) (int, map[string]bool) {
+	last := -1
+	seen := make(map[string]bool)
 	for i := range events {
-		if events[i].InvocationID == invocationID && isUserTurnEvent(&events[i]) {
-			return true
+		evt := &events[i]
+		if isUserTurnEvent(evt) && p.canMatchToolRound(*evt, inv, filter) {
+			seen[evt.InvocationID] = true
+			last = i
 		}
 	}
-	return false
+	return last, seen
 }
 
 func (rounds interruptedToolRounds) restoreDisplayCalls(events []event.Event) {
@@ -161,9 +173,6 @@ func (history projectedHistory) withInterruptedToolResults(
 }
 
 func missingResponsesToolResults(calls []model.ToolCall, results []model.Message) []model.Message {
-	if len(calls) <= len(results) {
-		return nil
-	}
 	reported := make(map[string]bool, len(results))
 	for _, result := range results {
 		reported[result.ToolID] = true
