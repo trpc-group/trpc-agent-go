@@ -5719,9 +5719,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			}
 			newMessages = append(newMessages, toolMessage)
 			completedThisRun[completedKey] = toolMessage
-			if content := toolResultContentAt(config.resultContents, i).structuredJSON(); content != nil {
-				completedResultContentsThisRun[completedKey] = content
-			}
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, i).structuredJSON()
 		}
 		clearCompletedToolMessages(config.State, config.NodeID)
 		return newMessages, nil
@@ -5816,9 +5814,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			out[r.idx] = r.msg
 			completedKey := completedToolMessageKey(r.idx, config.ToolCalls[r.idx])
 			completedThisRun[completedKey] = r.msg
-			if content := toolResultContentAt(config.resultContents, r.idx).structuredJSON(); content != nil {
-				completedResultContentsThisRun[completedKey] = content
-			}
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, r.idx).structuredJSON()
 		}
 	}
 	traceRecorder.flush(ctx)
