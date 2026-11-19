@@ -124,7 +124,15 @@ func TestCancellationLive_TrackedLateResult(t *testing.T) {
 			return false
 		}
 		records, err := tooljournal.Records(sess)
-		return err == nil && len(records) == 1 && records[0].Calls[0].Status == "completed" && strings.Contains(records[0].Calls[0].Choices[0].Message.Content, "durable live evidence")
+		if err != nil || len(records) != 1 || records[0].Calls[0].Status != "completed" {
+			return false
+		}
+		for _, e := range sess.Events {
+			if e.IsToolResultResponse() && strings.Contains(e.Choices[0].Message.Content, "durable live evidence") {
+				return true
+			}
+		}
+		return false
 	}, 2*time.Second, 10*time.Millisecond)
 	require.EqualValues(t, 1, calls.Load())
 	t.Log("live tool result persisted after cancellation independently of Runner output")

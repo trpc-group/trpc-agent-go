@@ -174,7 +174,7 @@ func Finish(ctx context.Context, id string, choices []model.Choice, callErr erro
 			c.Error = callErr.Error()
 			c.Status = "failed"
 		}
-		if errors.Is(callErr, context.Canceled) || errors.Is(callErr, context.DeadlineExceeded) || len(choices) == 0 {
+		if errors.Is(callErr, context.Canceled) || errors.Is(callErr, context.DeadlineExceeded) || (len(choices) == 0 && callErr == nil) {
 			c.Status = "unknown"
 		}
 	})
