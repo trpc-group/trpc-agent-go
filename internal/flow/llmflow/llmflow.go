@@ -202,10 +202,12 @@ func New(
 
 // Run executes the flow in a loop until completion.
 func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	releaseExecution := tooljournal.StartFlow(invocation)
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
+		defer releaseExecution()
 		ctx, runSpan, runStarted := startLatencySpan(
 			ctx,
 			invocation,
