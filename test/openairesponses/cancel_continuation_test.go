@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -319,5 +320,83 @@ func assertCancelRequestHistory(t *testing.T, input json.RawMessage, nativeOutpu
 		require.True(t, ok, "missing output for %s", id)
 		require.Less(t, callIndex, outputIndex, "call must precede its result")
 		require.Less(t, outputIndex, firstUserIndex, "all prior results must precede the first new user turn")
+	}
+}
+
+// A native record can retain calls after its editable display projection changes.
+func TestStoppedNativePartialResultWithEditedStoredDisplay(t *testing.T) {
+	for _, edit := range []string{"clear", "change IDs"} {
+		t.Run(edit, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			rt := newToolResultNativeTransport(toolResultNativeMultiOutput)
+			m := toolResultNativeModel(rt)
+			responses, err := m.GenerateContent(ctx, &model.Request{Messages: []model.Message{model.NewUserMessage("calculate")}})
+			require.NoError(t, err)
+			original := collect(t, responses)
+			require.Len(t, original, 1)
+			pending := original[0]
+			require.Len(t, pending.Choices[0].Message.ToolCalls, 2)
+			if edit == "clear" {
+				pending.Choices[0].Message.ToolCalls = nil
+			} else {
+				pending.Choices[0].Message.ToolCalls[0].ID = "display-a"
+				pending.Choices[0].Message.ToolCalls[1].ID = "display-b"
+			}
+			svc := openToolResultNativeSQLite(t, filepath.Join(t.TempDir(), "edited-display.db"))
+			key := session.Key{AppName: "native", UserID: "user", SessionID: "session"}
+			sess, err := svc.CreateSession(ctx, key, nil)
+			require.NoError(t, err)
+			user := event.NewResponseEvent("old-run", "user", &model.Response{Done: true, Choices: []model.Choice{{Message: model.NewUserMessage("calculate")}}})
+			call := event.NewResponseEvent("old-run", "native", pending)
+			result := event.NewResponseEvent("old-run", "native", &model.Response{Done: true, Choices: []model.Choice{{Message: model.NewToolMessage("call_a", "calculator", "7")}}})
+			toolresultround.Mark(result, true)
+			require.True(t, result.IsToolResultResponse())
+			for _, evt := range []*event.Event{user, call, result} {
+				evt.FilterKey = "native"
+				require.NoError(t, svc.AppendEvent(ctx, sess, evt))
+			}
+			loaded, err := svc.GetSession(ctx, key)
+			require.NoError(t, err)
+			require.Len(t, loaded.Events, 3)
+			storedCall := loaded.Events[1].Choices[0].Message
+			require.NotNil(t, storedCall.ProviderData)
+			require.JSONEq(t, toolResultNativeMultiOutput, string(storedCall.ProviderData.Payload))
+			if edit == "clear" {
+				require.Empty(t, storedCall.ToolCalls)
+			} else {
+				require.Equal(t, "display-a", storedCall.ToolCalls[0].ID)
+				require.Equal(t, "display-b", storedCall.ToolCalls[1].ID)
+			}
+			storedResult := loaded.Events[2].Choices[0].Message
+			require.Equal(t, model.RoleTool, storedResult.Role)
+			require.Equal(t, "call_a", storedResult.ToolID)
+			require.Equal(t, "7", storedResult.Content)
+			<-rt.requests
+			a := llmagent.New("native", llmagent.WithModel(m))
+			r := runner.NewRunner("native", a, runner.WithSessionService(svc))
+			t.Cleanup(func() { _ = r.Close() })
+			events := runToolResultNative(t, r, cancelFollowUp)
+			require.Empty(t, toolResultNativeErrors(events))
+			require.True(t, cancelHasAnswer(events))
+			require.EqualValues(t, 2, rt.calls.Load())
+			assertCancelRequestHistory(t, <-rt.requests, toolResultNativeMultiOutput, "call_b", "call_a", cancelFollowUp)
+			stored, err := svc.GetSession(ctx, key)
+			require.NoError(t, err)
+			var results []model.Message
+			for _, evt := range stored.Events {
+				if evt.Response == nil {
+					continue
+				}
+				for _, choice := range evt.Response.Choices {
+					if choice.Message.Role == model.RoleTool {
+						results = append(results, choice.Message)
+					}
+				}
+			}
+			require.Len(t, results, 1, "the missing output must not be stored")
+			require.Equal(t, "call_a", results[0].ToolID)
+			require.Equal(t, "7", results[0].Content)
+		})
 	}
 }
