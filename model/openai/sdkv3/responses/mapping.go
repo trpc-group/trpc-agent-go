@@ -112,7 +112,7 @@ func (m *Model) buildParams(request *model.Request) (responses.ResponseNewParams
 	if err := validateExtraFields(m.extraFields); err != nil {
 		return responses.ResponseNewParams{}, err
 	}
-	items, err := convertMessages(request.Messages, m.name)
+	items, err := convertMessages(request.Messages)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -294,13 +294,13 @@ func applyToolChoice(params *responses.ResponseNewParams, fields map[string]any)
 	return nil
 }
 
-func convertMessages(messages []model.Message, modelName string) (responses.ResponseInputParam, error) {
+func convertMessages(messages []model.Message) (responses.ResponseInputParam, error) {
 	items := make(responses.ResponseInputParam, 0, len(messages)*2)
 	called := make(map[string]struct{})
 	completed := make(map[string]struct{})
 	for messageIndex, msg := range messages {
 		if msg.ProviderData != nil {
-			converted, err := convertProviderDataMessage(msg, modelName, messageIndex, called, completed)
+			converted, err := convertProviderDataMessage(msg, messageIndex, called, completed)
 			if err != nil {
 				return nil, err
 			}
@@ -356,9 +356,9 @@ func convertMessages(messages []model.Message, modelName string) (responses.Resp
 	return items, nil
 }
 
-func convertProviderDataMessage(msg model.Message, modelName string, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func convertProviderDataMessage(msg model.Message, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
-	info := model.Info{Name: modelName, ProviderDataProtocol: responseProvider}
+	info := model.Info{Name: msg.ProviderData.Model, ProviderDataProtocol: responseProvider}
 	if err := providerdata.ValidateMessage(msg, info); err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data at message %d: %w", messageIndex, err)
 	}
@@ -384,9 +384,8 @@ func convertProviderDataMessage(msg model.Message, modelName string, messageInde
 
 func convertAssistantMessage(msg model.Message, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
-	if msg.ReasoningContent != "" || msg.ReasoningSignature != "" {
-		return nil, fmt.Errorf("assistant reasoning requires provider data")
-	}
+	// Legacy reasoning is specific to the source model and has no Responses
+	// representation. Native Responses reasoning is handled before this path.
 	if len(msg.ContentParts) > 0 || msg.Content != "" {
 		item, hasContent, err := messageInputItem(msg, responses.EasyInputMessageRoleAssistant)
 		if err != nil {

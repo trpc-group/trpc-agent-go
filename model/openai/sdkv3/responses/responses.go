@@ -65,6 +65,13 @@ func (m *Model) Info() model.Info {
 	return model.Info{Name: m.name, ProviderDataProtocol: responseProvider}
 }
 
+// SupportsProviderHistory reports whether the adapter can replay native
+// history produced using protocol. The target service determines whether it
+// can use the replayed data.
+func (m *Model) SupportsProviderHistory(protocol string) bool {
+	return protocol == responseProvider
+}
+
 // ProjectProviderData rebuilds display fields and tool calls from a completed
 // native output array. It implements model.ProviderDataProjector without
 // modifying the payload or making an API request.

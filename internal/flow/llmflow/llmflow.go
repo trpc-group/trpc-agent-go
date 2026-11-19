@@ -3146,7 +3146,7 @@ func (f *Flow) generateContentSeq(
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
 	if callModel != nil && providerdata.MessagesHaveData(llmRequest.Messages) {
-		if err := providerdata.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
+		if err := providerdata.ValidateHistory(llmRequest.Messages, callModel); err != nil {
 			return nil, err
 		}
 	}

@@ -100,6 +100,25 @@ func TestValidateMessages(t *testing.T) {
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "valid JSON object or array")
 }
 
+type historyConsumer struct{ infoModel }
+
+func (historyConsumer) SupportsProviderHistory(protocol string) bool {
+	return protocol == nativeInfo.ProviderDataProtocol
+}
+
+func TestHistoryCompatibilityIsIndependentOfProducerValidation(t *testing.T) {
+	message := nativeMessage(t)
+	target := historyConsumer{infoModel{info: model.Info{Name: "another-model"}}}
+	require.NoError(t, ValidateHistory([]model.Message{message}, target))
+	require.ErrorContains(t, ValidateMessage(message, target.Info()), "belongs to protocol")
+	require.True(t, CandidatesSupportHistory([]model.Model{target, target}, nativeInfo.ProviderDataProtocol))
+	require.False(t, CandidatesSupportHistory([]model.Model{target, target.infoModel}, nativeInfo.ProviderDataProtocol))
+	require.False(t, CandidatesSupportHistory([]model.Model{target}, "another-protocol"))
+
+	message.ProviderData.Payload = json.RawMessage("null")
+	require.ErrorContains(t, ValidateHistory([]model.Message{message}, target), "valid JSON object or array")
+}
+
 func TestValidateResponse(t *testing.T) {
 	require.False(t, ResponseHasData(nil))
 	require.NoError(t, ValidateResponse(nil, nativeInfo))

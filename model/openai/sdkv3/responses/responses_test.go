@@ -69,6 +69,7 @@ func TestGenerateContent_NonStreamProviderDataProjectionAndUsage(t *testing.T) {
 func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	var calls int
 	var secondInput json.RawMessage
+	var secondModel string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
@@ -78,14 +79,16 @@ func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 		}
 		var request struct {
 			Input json.RawMessage `json:"input"`
+			Model string          `json:"model"`
 		}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		secondInput = request.Input
+		secondModel = request.Model
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"resp_2","status":"completed","output":[]}`)
 	}))
 	defer srv.Close()
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	m := New("gpt-6-astra", WithAPIKey("test"), WithBaseURL(srv.URL))
 	first, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.NoError(t, err)
 	firstResponses := collect(t, first)
@@ -96,7 +99,8 @@ func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	require.NoError(t, err)
 	var restored model.Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
-	request, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{
+	switched := New("gpt-6.2-astra", WithAPIKey("test"), WithBaseURL(srv.URL))
+	request, err := switched.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{
 		model.NewUserMessage("hi"),
 		restored,
 		model.NewToolMessage("call_1", "calculator", "2"),
@@ -104,6 +108,8 @@ func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	require.NoError(t, err)
 	_ = collect(t, request)
 	require.Equal(t, 2, calls)
+	require.Equal(t, "gpt-6.2-astra", secondModel)
+	require.Equal(t, "gpt-6-astra", restored.ProviderData.Model)
 	var got []json.RawMessage
 	require.NoError(t, json.Unmarshal(secondInput, &got))
 	require.Len(t, got, 7)
@@ -124,7 +130,7 @@ func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.
 	message := projected.Choices[0].Message
 	message.ToolCalls[0].Function.Arguments = []byte(`{"edited":true}`)
 	message.Content = "edited"
-	items, err := convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")}, "gpt-5")
+	items, err := convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")})
 	require.NoError(t, err)
 	encoded, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -145,19 +151,17 @@ func TestConvertMessagesValidatesProviderData(t *testing.T) {
 		Model:    "gpt-5",
 		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"state"}]`),
 	}
-	_, err := convertMessages([]model.Message{msg}, "gpt-5")
+	_, err := convertMessages([]model.Message{msg})
 	require.NoError(t, err)
-	_, err = convertMessages([]model.Message{msg}, "another-model")
-	require.ErrorContains(t, err, "belongs to protocol")
 	msg.ProviderData.Protocol = "another.protocol"
-	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	_, err = convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "belongs to protocol")
 	msg.ProviderData.Protocol = responseProvider
 	msg.ProviderData.Payload = json.RawMessage(`[{"type":"tool_search_call"}]`)
-	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	_, err = convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "unsupported native item type")
 	msg.ProviderData.Payload = json.RawMessage(`[{`)
-	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	_, err = convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "provider payload must be a valid JSON object or array")
 }
 
@@ -282,7 +286,7 @@ func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
 		}}},
 		model.NewToolMessage("call_1", "calculator", "2"),
 		model.NewAssistantMessage("2"),
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -291,14 +295,15 @@ func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
 	require.Equal(t, []any{"user", "assistant", "function_call", "function_call_output", "assistant"}, []any{got[0]["role"], got[1]["role"], got[2]["type"], got[3]["type"], got[4]["role"]})
 	require.Equal(t, "call_1", got[3]["call_id"])
 
-	_, err = convertMessages([]model.Message{model.NewToolMessage("missing", "f", "x")}, "gpt-5")
+	_, err = convertMessages([]model.Message{model.NewToolMessage("missing", "f", "x")})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}}, "gpt-5")
+	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
 	require.ErrorContains(t, err, "empty call_id")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}}, "gpt-5")
+	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
 	require.ErrorContains(t, err, "no tool result")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}}, "gpt-5")
-	require.ErrorContains(t, err, "requires provider data")
+	items, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}})
+	require.NoError(t, err)
+	require.Empty(t, items)
 }
 
 func TestProviderDataPayloadValidatesDependencyIDs(t *testing.T) {
@@ -319,7 +324,7 @@ func TestProviderDataPayloadValidatesDependencyIDs(t *testing.T) {
 		}, want: "duplicate tool result"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := convertMessages(tc.msgs, "gpt-5")
+			_, err := convertMessages(tc.msgs)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
@@ -335,7 +340,7 @@ func TestLegacyCallIDsRemainOpaque(t *testing.T) {
 	items, err := convertMessages([]model.Message{
 		call(" call_1 "),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -347,12 +352,12 @@ func TestLegacyCallIDsRemainOpaque(t *testing.T) {
 	_, err = convertMessages([]model.Message{
 		call("call_1"),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "no preceding function call")
 	_, err = convertMessages([]model.Message{
 		call(" \t "),
 		model.NewToolMessage(" \t ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "empty call_id")
 }
 
@@ -371,7 +376,7 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 	items, err := convertMessages([]model.Message{
 		nativeMessage(t, `[`+item+`]`),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -383,11 +388,11 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 	_, err = convertMessages([]model.Message{
 		nativeMessage(t, `[{"type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}]`),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "no preceding function call")
 	_, err = convertMessages([]model.Message{
 		nativeMessage(t, `[{"type":"function_call","call_id":"  ","name":"f","arguments":"{}"}]`),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "empty call_id")
 }
 
@@ -535,7 +540,7 @@ func TestCompletedResponseAcceptsOptionalItemFields(t *testing.T) {
 	_, err = convertMessages([]model.Message{
 		projected.Choices[0].Message,
 		{Role: model.RoleTool, ToolID: "call_optional", Content: "42"},
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 }
 
@@ -635,8 +640,6 @@ func TestProviderDataModelBindingUsesConfiguredName(t *testing.T) {
 	message := projected.Choices[0].Message
 	require.NotNil(t, message.ProviderData)
 	require.Equal(t, "configured-name", message.ProviderData.Model)
-	_, err = convertMessages([]model.Message{message}, "configured-name")
+	_, err = convertMessages([]model.Message{message})
 	require.NoError(t, err)
-	_, err = convertMessages([]model.Message{message}, "resolved-name")
-	require.ErrorContains(t, err, "belongs to protocol")
 }

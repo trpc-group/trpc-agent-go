@@ -246,8 +246,7 @@ native records keep callbacks' projection-only edits. Ordinary Chat Completions
 responses retain their existing callback behavior.
 
 The framework stores the record under `provider_data` with `provider`, `model`,
-and `payload` keys. It checks the protocol and configured model before
-continuation. Models implement the optional
+and `payload` keys. The configured model identifies the producer. Models implement the optional
 `model.ProviderDataProjector` capability to project edited native records;
 wrappers must forward it to support such edits. Built-in failover and hedge
 wrappers do so. `BeforeModel` edits affect only the current request's detached
@@ -290,18 +289,41 @@ messages without ProviderData. A legacy or differently configured downstream
 agent can therefore consume a native agent's output as ordinary context, which
 is a semantic rebase rather than a native continuation. With
 `WithPreserveForeignMessages(true)`, foreign records keep their roles and
-ProviderData, so only agents that consume the same protocol and model can use
-them. Custom event projectors cannot remove ProviderData from an unfinished native
-tool round and still rely on recovery; the framework does not promise recovery
-after ProviderData is removed from a pending round.
+ProviderData and follow the same replay rules as local messages. Keep the
+native record when recovering unfinished tool calls.
 
-LLM flows and Graph LLM nodes validate `model.Info.ProviderDataProtocol` and the
-configured model name before handing native history to an adapter. Another
-model or a legacy adapter is rejected; wrappers must forward `Info` correctly.
-Both allow callbacks to edit ProviderData on a completed response before it is
-stored. When a callback edits the native payload, its regenerated `ToolCalls` determine
-current execution and the same payload supplies subsequent wire input. Native item structure and
-call/result pairing remain validated. Before-model callbacks edit a detached
+#### Switching models
+
+For completed history, selecting another Responses model sends the saved native
+items in order, including item IDs and encrypted reasoning. The target service
+determines whether it can reuse those items. Its errors are returned to the
+caller. The framework does not infer account or deployment identity from model
+names or base URLs, or retry by removing encrypted reasoning.
+
+Switching to the built-in OpenAI Chat Completions adapter uses the visible
+messages and paired function calls and results in a request-local projection.
+Edits to visible text or tool arguments apply to that projection. Responses
+reasoning, signatures and item IDs stay in the session. The adapter returns
+an error before HTTP for images in tool results, annotated messages and
+messages that follow a function call in the same output. Those cases need
+content, metadata or ordering that this conversion cannot preserve.
+Switching back replays the original Responses items and converts the
+intervening Chat messages and tool rounds without Chat-specific reasoning.
+Completed tools are replayed as history.
+
+LLM flows and Graph LLM nodes allow adapters implementing
+`model.ProviderHistoryConsumer` to handle the protocols they declare. Other
+adapters require an exact protocol and producer model match for native history.
+Wrappers that support protocol conversion should forward the capability only
+when every possible target supports it. For model switching through Runner or
+Graph, use versions of both the root module and the Responses adapter that
+support this capability.
+
+Flows and Graph nodes allow callbacks to edit ProviderData on a completed
+response before it is stored. When a callback edits the native payload, its
+regenerated `ToolCalls` determine current execution and the same payload
+supplies subsequent wire input. Native item structure and call/result pairing
+remain validated. Before-model callbacks edit a detached
 copy of native history for the current model request. Before-tool
 callbacks receive separate execution arguments, so in-place edits and
 `ModifiedArguments` affect the current tool call without rewriting ProviderData. The
@@ -318,15 +340,16 @@ representation.
 
 ### Tool recovery boundaries
 
-With `agent.WithResume(true)`, a pending native tool response is validated
-against the first selected model before any of its tools execute. Resume and
-the following model request share that selection. A `ToolCalls` edit can
-change the resumed execution arguments; the following request still sends the
+**Runner with an LLMAgent.** With `agent.WithResume(true)`, the agent checks
+a pending native tool response against the first selected model before it
+executes any of the tools. Resume and the following model request share that
+selection. A `ToolCalls` edit can change the resumed execution arguments.
+The following request still sends the
 saved ProviderData payload. A different protocol or configured model name fails
 before tool execution. Legacy Chat recovery keeps its existing execution
 order.
 
-The existing resume mechanism only handles a final persisted assistant event
+LLMAgent resumes only a final persisted assistant event
 containing tool calls. It does not scan earlier events for missing results.
 For example, if a response calls A and B and only A's result was persisted as
 a separate event before a crash, resume does not run B. The incomplete native
@@ -339,6 +362,17 @@ can execute again on resume; use business idempotency where needed. Session
 write errors are not transactional execution barriers in the existing Runner:
 a failed tool-call event write can still be followed by tool execution. Do not
 interpret a final answer as proof that all session events were durably stored.
+
+**Graph checkpoints.** Resuming at a tools node executes the pending calls.
+The graph chooses the model when it next reaches an LLM node. Once a
+checkpoint contains the tool results, recovery from that checkpoint uses the
+stored results. For example, if the next model returns HTTP 400, resuming the
+latest checkpoint retries the model call with the same call IDs and results.
+Use `graph.CheckpointRef{LineageID: id, Namespace: ns}.ToRuntimeState()` to
+resume the latest checkpoint in that lineage and namespace.
+Explicitly replaying a checkpoint taken before the tools node can execute
+those calls again. A crash after an external side effect and before its
+result is checkpointed also requires tool-side idempotency for safe retries.
 
 The default token counter estimates serialized native payload size. It cannot
 measure the provider's decrypted reasoning tokens. Custom counters must account

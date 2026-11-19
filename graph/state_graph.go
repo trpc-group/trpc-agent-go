@@ -1670,10 +1670,7 @@ func (r *llmRunner) executeModel(
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
 	if callModel != nil && providerdata.MessagesHaveData(request.Messages) {
-		if err := providerdata.ValidateMessages(
-			request.Messages,
-			callModel.Info(),
-		); err != nil {
+		if err := providerdata.ValidateHistory(request.Messages, callModel); err != nil {
 			return nil, err
 		}
 	}
@@ -2294,7 +2291,7 @@ func generateModelStream(
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
 	if request != nil && providerdata.MessagesHaveData(request.Messages) {
-		if err := providerdata.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
+		if err := providerdata.ValidateHistory(request.Messages, llmModel); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			return modelResponseStream{}, err

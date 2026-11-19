@@ -2368,11 +2368,28 @@ alone leaves the original text in ProviderData. Keep the record when resuming an
 unfinished tool round. See the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)
 for a complete SDK-based callback and model wrapper requirements.
 
+### Switching models and resuming tools
+
+Switching between Responses models replays completed native items, including
+encrypted reasoning. The receiving service decides whether it can reuse them.
+Switching to the built-in Chat Completions adapter sends the visible history,
+matching tool results to calls by `call_id`. Conversion happens on the outgoing
+request, so switching back can replay the native items kept in the session.
+Content the target cannot represent produces a local error.
+
+- **Runner with an LLMAgent.** With `agent.WithResume(true)`, the agent checks
+  the producing protocol and model name before executing a pending native tool
+  call. Selecting a different model at this point fails before tool execution.
+- **Graph.** Resuming a checkpoint from before a tools node runs that node
+  before the next LLM node selects its model. Once the results are checkpointed,
+  resuming the latest checkpoint after a model error reuses those results.
+  Explicitly replaying an earlier checkpoint can run the same tool again.
+
 ### Notes
 
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
 - Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
-- Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
+- Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
 - Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).
