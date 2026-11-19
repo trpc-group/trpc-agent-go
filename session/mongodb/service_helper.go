@@ -348,7 +348,8 @@ func sessionPersistIndex(key session.Key, n int) int {
 // (created_at ASC, id ASC) ordering.
 //
 // When page is nil (context-window mode), time and limit filtering happens
-// in memory via session.ApplyEventFiltering on the full per-session history.
+// in memory via session.ApplyEventFiltering. Single-session bounded reads try
+// a recent suffix first, falling back to the full history when necessary.
 // When page is non-nil (pagination mode), strict offset/limit is applied to
 // the cursor for the single supplied session and ApplyEventFiltering is
 // skipped — same semantics as postgres' getPagedEvents.
@@ -374,6 +375,16 @@ func (s *Service) getEventsList(
 	}
 	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
+	if len(sessionKeys) == 1 && limit > 0 {
+		events, complete, err := s.getRecentEvents(ctx, sessionKeys[0], limit, afterTime)
+		if err != nil {
+			return nil, err
+		}
+		if complete {
+			return [][]event.Event{events}, nil
+		}
 	}
 
 	sessionIDs := make([]string, len(sessionKeys))
