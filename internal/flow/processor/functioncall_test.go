@@ -6559,6 +6559,7 @@ func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
 		false,
 		0,
 		tc,
+		false,
 	))
 	close(resultChan)
 
@@ -6608,6 +6609,7 @@ func TestRunParallelToolCall_PanicUsesModifiedArgsExtension(t *testing.T) {
 		false,
 		0,
 		tc,
+		false,
 	)
 	require.NoError(t, err)
 	close(resultChan)
