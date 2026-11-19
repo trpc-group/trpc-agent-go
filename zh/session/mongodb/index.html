@@ -1929,6 +1929,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      上下文窗口读取开销
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3825,6 +3834,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      上下文窗口读取开销
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4178,6 +4196,31 @@
 </span></code></pre></div></td></tr></table></div>
 <p>未创建该索引不影响读取正确性，但可能需要阻塞排序。同时保留两个索引会增加
 存储和写入开销。仅增加索引不会限制上下文窗口实际加载的事件数量。</p>
+<h2 id="_16">上下文窗口读取开销</h2>
+<p>单个会话设置正数事件上限时，MongoDB 按倒序分批读取最新事件。首批文档数
+最多为事件上限与 128 中的较小值，后续每批最多 128 条文档，包括跳过空
+payload 和向前查找用户消息的情况。获得窗口及所需用户消息后关闭游标，
+返回顺序和过滤规则保持不变。窗口内没有用户消息时，仍会向前查找最近的
+用户消息；整个历史没有用户消息时仍会扫描全部历史。空 payload 不占事件名额。</p>
+<p>时间过滤使用事件 payload 的时间戳，它可能与文档 <code>created_at</code> 不同。
+候选窗口最早一条事件满足时间条件时，可以直接使用该窗口；否则回退到原有
+完整历史过滤，以兼容时间戳乱序时从首个匹配事件开始截取的行为。无限制读取
+和多会话读取仍使用原有路径，分页行为不变。排序索引用于避免阻塞排序；
+读取不强制指定 hint，因此继续支持外部管理索引的部署。</p>
+<p>有界读取只校验实际遍历的 payload，包括查找用户消息时经过的较旧事件。
+与此前完整历史的上下文读取不同，尚未遍历的历史 payload 即使包含非法 JSON，
+本次读取也可能成功。实际遍历到非法 JSON 时仍返回错误；回退到完整历史读取
+时仍会解码全部历史。有界读取不保证校验整个会话历史的完整性。</p>
+<p>可选的真实模型测试会验证三轮对话、窗口截取及重建服务后的历史重载。
+该测试只发送合成提示词，默认跳过，需显式启用：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="c1"># 在环境中配置 OPENAI_API_KEY、OPENAI_BASE_URL 和 MODEL_NAME。</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="nv">MONGODB_LIVE_MODEL_TEST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">MONGO_TEST_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-run<span class="w"> </span><span class="s1">'^TestMongoDBHistoryLiveModel$'</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>-v<span class="w"> </span>.
+</span></code></pre></div></td></tr></table></div>
 
 
 
@@ -4200,7 +4243,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月19日 06:54:59 UTC">2026-11-19 06:54:59</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月19日 09:22:38 UTC">2026-11-19 09:22:38</span>
   </span>
 
     

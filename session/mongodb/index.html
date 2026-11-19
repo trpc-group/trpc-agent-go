@@ -1929,6 +1929,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#context-window-read-costs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context-window read costs
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3825,6 +3834,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#context-window-read-costs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context-window read costs
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4194,6 +4212,41 @@ collection prefix):</p>
 <p>Reads remain correct without this index, but may need a blocking sort. Keeping
 both indexes adds storage and write overhead. This index alone does not limit
 the number of events loaded by a context-window read.</p>
+<h2 id="context-window-read-costs">Context-window read costs</h2>
+<p>For a single session with a positive event limit, MongoDB reads newest events
+first. The initial cursor batch contains at most the smaller of the event limit
+and 128 documents. Subsequent batches contain up to 128 documents, including
+when skipping empty payloads or searching older history for a user message.
+The reader closes the cursor once the window and its required user message are
+available. The returned order and filtering remain the same. If the window has
+no user message, the reader searches older history for the nearest user message;
+a history without any user message still requires a full scan. Empty payloads
+do not consume an event slot.</p>
+<p>Time filtering uses the event payload timestamp, which can differ from the
+document's <code>created_at</code>. If the oldest event in the candidate window satisfies
+the time cutoff, the window is safe to use. Otherwise, the reader falls back to
+the original full-history filtering to preserve the first-matching-timestamp
+behavior even when timestamps are out of order. Unlimited and multi-session
+reads retain the existing full-history path. Pagination is unchanged. The
+ordered lookup index avoids a blocking sort; the optimization does not force
+an index hint, so externally managed indexes remain supported.</p>
+<p>Bounded reads validate only payloads actually traversed, including older events
+searched for a user message. Unlike the previous full-history context reads,
+they can succeed despite invalid JSON in unvisited historical payloads. Invalid
+JSON encountered during traversal still returns an error; full-history
+fallbacks still decode the complete history. A bounded read does not validate
+the integrity of the entire session history.</p>
+<p>An optional live-model smoke test verifies a three-turn conversation, event
+window truncation and history reloading after recreating the service. It sends
+synthetic prompts to the configured endpoint and is skipped by default:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="c1"># Configure OPENAI_API_KEY, OPENAI_BASE_URL and MODEL_NAME in your environment.</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="nv">MONGODB_LIVE_MODEL_TEST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">MONGO_TEST_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-run<span class="w"> </span><span class="s1">'^TestMongoDBHistoryLiveModel$'</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>-v<span class="w"> </span>.
+</span></code></pre></div></td></tr></table></div>
 
 
 
@@ -4216,7 +4269,7 @@ the number of events loaded by a context-window read.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 19, 2026 06:54:59 UTC">2026-11-19 06:54:59</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 19, 2026 09:22:38 UTC">2026-11-19 09:22:38</span>
   </span>
 
     
