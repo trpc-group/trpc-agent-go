@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	approvallog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -99,6 +100,24 @@ func TestRegister_IgnoresNilReceiverAndNilRegistry(t *testing.T) {
 	require.NotPanics(t, func() {
 		p.Register(nil)
 	})
+}
+
+func TestRegister_RequestsToolCallPersistenceOnlyWithReviewer(t *testing.T) {
+	withoutReviewer, err := New(WithDefaultToolPolicy(ToolPolicySkipApproval))
+	require.NoError(t, err)
+	require.Nil(t, plugin.MustNewManager(withoutReviewer).AgentCallbacks())
+	withReviewer, err := New(WithReviewer(&stubReviewer{}))
+	require.NoError(t, err)
+	callbacks := plugin.MustNewManager(withReviewer).AgentCallbacks()
+	require.NotNil(t, callbacks)
+	_, err = callbacks.RunBeforeAgent(context.Background(), nil)
+	require.NoError(t, err)
+	inv := agent.NewInvocation()
+	result, err := callbacks.RunBeforeAgent(context.Background(), &agent.BeforeAgentArgs{Invocation: inv})
+	require.NoError(t, err)
+	require.Nil(t, result)
+	require.True(t, barrier.ToolCallPersistenceRequired(inv))
+	require.False(t, barrier.Enabled(inv))
 }
 
 func TestWithToolPolicy_InitializesMap(t *testing.T) {

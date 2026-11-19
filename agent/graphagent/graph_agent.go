@@ -168,7 +168,7 @@ func (ga *GraphAgent) runWithoutBarrier(ctx context.Context, invocation *agent.I
 		innerChan,
 		suppressHiddenCompletion,
 		func(evt *event.Event) error {
-			if !terminalMessageFilter.Allows(evt) {
+			if !forwardTerminalMessage(ctx, invocation, terminalMessageFilter, evt) {
 				return nil
 			}
 			return event.EmitEvent(ctx, out, evt)
@@ -248,7 +248,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	terminalMessageFilter := newTerminalMessageFilter(invocation, ga.graph)
 	for evt := range innerChan {
 		fullRespEvent = recordTraceEvent(tracker, tokenUsage, fullRespEvent, evt)
-		if !terminalMessageFilter.Allows(evt) {
+		if !forwardTerminalMessage(ctx, invocation, terminalMessageFilter, evt) {
 			continue
 		}
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
