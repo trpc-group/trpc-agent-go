@@ -34,6 +34,11 @@ func filterCommandUpdatesForTrace(result any) (any, bool) {
 	case Command:
 		return commandForTrace(&v), true
 	case *Command:
+		if v == nil {
+			// An absent command has no execution snapshot. A workflow span
+			// still encodes this filtered value as JSON null.
+			return nil, true
+		}
 		return commandForTrace(v), true
 	case []*Command:
 		commands := slices.Clone(v)

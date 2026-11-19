@@ -112,6 +112,11 @@ func checkNodeWorkflowResponse(t *testing.T, result any, nodeErr error, wantJSON
 	return got
 }
 
+func TestExecutionTraceSnapshotOmitsNilCommand(t *testing.T) {
+	var cmd *Command
+	require.Nil(t, traceSnapshotFromValue(cmd))
+}
+
 func TestExecutionTraceSnapshotFiltersCommandState(t *testing.T) {
 	sess := session.NewSession("app", "user", "session")
 	command := &Command{Update: State{StateKeySession: sess, "answer": "ok"}, GoTo: "next"}
