@@ -153,11 +153,8 @@ func (m *Model) supportsUserHistoryPart(part model.ContentPart) bool {
 		if part.File == nil {
 			return false
 		}
-		if isInternalOnlyFile(part.File) {
+		if m.omitFileContentParts || isInternalOnlyFile(part.File) {
 			return true
-		}
-		if m.omitFileContentParts {
-			return false
 		}
 		if m.variantConfig.textOnlyMessageContent {
 			return fileURLFallbackText(part.File) != ""

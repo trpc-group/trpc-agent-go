@@ -119,6 +119,34 @@ func TestHistoryCompatibilityIsIndependentOfProducerValidation(t *testing.T) {
 	require.ErrorContains(t, ValidateHistory([]model.Message{message}, target), "valid JSON object or array")
 }
 
+func TestValidateHistoryRequiresProducerForUndeclaredProtocols(t *testing.T) {
+	message := nativeMessage(t)
+	legacy := model.NewUserMessage("ordinary message")
+	consumer := historyConsumer{infoModel{info: nativeInfo}}
+	require.NoError(t, ValidateHistory([]model.Message{legacy, message}, consumer))
+
+	// An adapter that does not declare this protocol can still use history
+	// from its own producer identity. A different producer remains rejected.
+	message.ProviderData.Protocol = "other"
+	otherInfo := model.Info{Name: message.ProviderData.Model, ProviderDataProtocol: "other"}
+	otherConsumer := historyConsumer{infoModel{info: otherInfo}}
+	require.NoError(t, ValidateHistory([]model.Message{legacy, message}, otherConsumer))
+	message.ProviderData.Model = "different-model"
+	require.ErrorContains(t, ValidateHistory([]model.Message{legacy, message}, otherConsumer),
+		"provider data message 1: provider data belongs to protocol")
+
+	// Models without the optional interface keep the exact producer check.
+	plain := infoModel{info: otherInfo}
+	require.ErrorContains(t, ValidateHistory([]model.Message{legacy, message}, plain),
+		"provider data message 1: provider data belongs to protocol")
+	message.ProviderData.Model = otherInfo.Name
+	require.NoError(t, ValidateHistory([]model.Message{legacy, message}, plain))
+	message.Role = model.RoleUser
+	require.ErrorContains(t, ValidateHistory([]model.Message{legacy, message}, plain),
+		"provider data is only valid on assistant messages")
+	require.False(t, CandidatesSupportHistory(nil, "other"))
+}
+
 func TestValidateResponse(t *testing.T) {
 	require.False(t, ResponseHasData(nil))
 	require.NoError(t, ValidateResponse(nil, nativeInfo))

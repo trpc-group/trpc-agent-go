@@ -30,6 +30,12 @@ func responsesHistory(payload string) model.Message {
 	}
 }
 
+func TestChatModelProviderHistoryCapability(t *testing.T) {
+	m := New("chat")
+	require.True(t, m.SupportsProviderHistory("openai.responses"))
+	require.False(t, m.SupportsProviderHistory("unknown"))
+}
+
 func TestPrepareChatMessagesUsesVisibleProjectionAndPreservesSession(t *testing.T) {
 	raw := `[
 		{"type":"reasoning","id":"rs_1","encrypted_content":"opaque","summary":[{"type":"summary_text","text":"private"}]},
@@ -99,4 +105,86 @@ func TestPrepareChatMessagesDoesNotModifyLegacyHistory(t *testing.T) {
 	got, _, err := New("chat").prepareProviderHistory([]model.Message{imageResult})
 	require.NoError(t, err)
 	require.Equal(t, imageResult, got[0])
+}
+
+func TestPrepareChatMessagesValidatesNativeHistory(t *testing.T) {
+	callPayload := `[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}]`
+	nativeCall := responsesHistory(callPayload)
+	nativeCall.ToolCalls = []model.ToolCall{{ID: "call_1", Type: "function", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte(`{}`)}}}
+	wrongProtocol := responsesHistory(`[]`)
+	wrongProtocol.ProviderData.Protocol = "other"
+	wrongRole := responsesHistory(`[]`)
+	wrongRole.Role = model.RoleUser
+	wrongCallID := nativeCall
+	wrongCallID.ToolCalls = append([]model.ToolCall(nil), nativeCall.ToolCalls...)
+	wrongCallID.ToolCalls[0].ID = "different"
+	invalidToolResult := model.NewToolMessage("call_1", "lookup", "")
+	invalidToolResult.ContentParts = []model.ContentPart{{ContentRef: &model.ContentRef{ArtifactRef: "artifact://result"}}}
+	assistantImage := model.Message{Role: model.RoleAssistant, ContentParts: []model.ContentPart{{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.test/image.png"}}}}
+	unknownPart := model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{Type: "custom"}}}
+	customRole := model.Message{Role: "custom", ContentParts: []model.ContentPart{{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.test/image.png"}}}}
+	legacyCalls := model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "same"}, {ID: "same"}}}
+	legacyEmptyID := model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: " "}}}
+	tests := []struct {
+		name     string
+		messages []model.Message
+		want     string
+	}{
+		{"unsupported protocol", []model.Message{wrongProtocol}, "unsupported provider data protocol"},
+		{"native record on user", []model.Message{wrongRole}, "assistant message"},
+		{"object instead of native items", []model.Message{responsesHistory(`{}`)}, "item array"},
+		{"reasoning without id", []model.Message{responsesHistory(`[{"type":"reasoning"}]`)}, "empty id"},
+		{"call without name", []model.Message{responsesHistory(`[{"type":"function_call","call_id":"call_1","arguments":"{}"}]`)}, "empty call_id or name"},
+		{"incomplete assistant message", []model.Message{responsesHistory(`[{"type":"message","id":"msg_1","role":"assistant"}]`)}, "not a completed assistant message"},
+		{"assistant message after call", []model.Message{responsesHistory(`[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"message","id":"msg_1","status":"completed","role":"assistant"}]`)}, "follows a function call"},
+		{"unknown assistant content", []model.Message{responsesHistory(`[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"unknown"}]}]`)}, "unsupported content type"},
+		{"missing call projection", []model.Message{responsesHistory(callPayload)}, "do not match the message projection"},
+		{"mismatched call ID", []model.Message{wrongCallID}, "does not match the message projection"},
+		{"unhydrated tool content", []model.Message{nativeCall, invalidToolResult}, "tool result content reference"},
+		{"assistant image", []model.Message{nativeAnswer(), assistantImage}, `content type "image"`},
+		{"unknown content part", []model.Message{nativeAnswer(), unknownPart}, `content type "custom"`},
+		{"custom role content", []model.Message{nativeAnswer(), customRole}, `role "custom"`},
+		{"missing tool result at end", []model.Message{nativeCall}, "missing tool results"},
+		{"duplicate call IDs", []model.Message{nativeAnswer(), legacyCalls}, "duplicate function call"},
+		{"empty call ID", []model.Message{nativeAnswer(), legacyEmptyID}, "empty call_id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := New("chat").prepareProviderHistory(tt.messages)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestPrepareChatMessagesUserMedia(t *testing.T) {
+	text := "not a file"
+	tests := []struct {
+		name     string
+		model    *Model
+		part     model.ContentPart
+		wantErr  bool
+		wantWire string
+	}{
+		{"file bytes", New("chat"), model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "report.txt", MimeType: "text/plain", Data: []byte("report")}}, false, "cmVwb3J0"},
+		{"malformed file", New("chat"), model.ContentPart{Type: model.ContentTypeFile, Text: &text}, true, ""},
+		{"image URL", New("chat"), model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.test/image.png"}}, false, "https://example.test/image.png"},
+		{"audio bytes", New("chat"), model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{Format: "wav", Data: []byte("audio")}}, false, "YXVkaW8="},
+		{"audio URL", New("chat"), model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{URL: "https://example.test/audio.wav"}}, true, ""},
+		{"text-only model with image", New("chat", WithTextOnlyMessageContent(true)), model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.test/image.png"}}, true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user := model.Message{Role: model.RoleUser, Content: "describe", ContentParts: []model.ContentPart{tt.part}}
+			messages, _, err := tt.model.prepareProviderHistory([]model.Message{nativeAnswer(), user})
+			if tt.wantErr {
+				require.ErrorContains(t, err, "cannot be represented")
+				return
+			}
+			require.NoError(t, err)
+			wire, err := json.Marshal(tt.model.convertMessages(messages))
+			require.NoError(t, err)
+			require.Contains(t, string(wire), "describe")
+			require.Contains(t, string(wire), tt.wantWire)
+		})
+	}
 }

@@ -337,3 +337,80 @@ func TestGenerateContentRejectsInvalidProjectedToolCall(t *testing.T) {
 	require.ErrorContains(t, err, "invalid JSON object arguments")
 	require.False(t, called)
 }
+
+func TestChatMigrationOmitsUserFileWhenConfigured(t *testing.T) {
+	const filename = "report.txt"
+	for _, tc := range []struct {
+		name     string
+		text     string
+		wantUser string
+	}{
+		{"file only", "", `{"role":"user","content":[{"type":"text","text":"Uploaded file: report.txt (available to tools)."}]}`},
+		{"file with text", "read the report", `{"role":"user","content":"read the report"}`},
+	} {
+		for _, transport := range []string{"chat", "batch"} {
+			t.Run(tc.name+"/"+transport, func(t *testing.T) {
+				user := model.NewUserMessage(tc.text)
+				user.ContentParts = []model.ContentPart{{Type: model.ContentTypeFile, File: &model.File{
+					Name: filename, FileID: "file-provider-123",
+				}}}
+				request := model.Request{Messages: []model.Message{nativeAnswer(), user}}
+				before, err := json.Marshal(request.Messages)
+				require.NoError(t, err)
+				var body json.RawMessage
+				if transport == "batch" {
+					m := New("chat", WithOmitFileContentParts(true))
+					line, err := m.generateBatchJSONL([]*BatchRequestInput{{
+						CustomID: "omitted-file", Body: BatchRequest{Request: request},
+					}})
+					require.NoError(t, err)
+					var batch struct{ Body json.RawMessage }
+					require.NoError(t, json.Unmarshal(line, &batch))
+					body = batch.Body
+				} else {
+					received := make(chan json.RawMessage, 1)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						var payload json.RawMessage
+						if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+							http.Error(w, err.Error(), http.StatusBadRequest)
+							return
+						}
+						received <- payload
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, `{"id":"answer","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+					}))
+					defer server.Close()
+					m := New("chat", WithAPIKey("test"), WithBaseURL(server.URL), WithOmitFileContentParts(true))
+					stream, err := m.GenerateContent(context.Background(), &request)
+					require.NoError(t, err)
+					for response := range stream {
+						require.Nil(t, response.Error)
+					}
+					require.Len(t, received, 1)
+					body = <-received
+				}
+				var payload struct{ Messages []json.RawMessage }
+				require.NoError(t, json.Unmarshal(body, &payload))
+				require.Len(t, payload.Messages, 2)
+				require.JSONEq(t, tc.wantUser, string(payload.Messages[1]))
+				require.NotContains(t, string(body), "file-provider-123")
+				after, err := json.Marshal(request.Messages)
+				require.NoError(t, err)
+				require.JSONEq(t, string(before), string(after))
+			})
+		}
+	}
+}
+
+func TestBatchRejectsUnrepresentableHistoryBeforeEncoding(t *testing.T) {
+	request := &BatchRequestInput{
+		CustomID: "unsupported-output",
+		Body: BatchRequest{Request: model.Request{Messages: []model.Message{
+			responsesHistory(`[{"type":"web_search_call"}]`),
+		}}},
+	}
+	line, err := New("chat").generateBatchJSONL([]*BatchRequestInput{request})
+	require.ErrorContains(t, err, request.CustomID)
+	require.ErrorContains(t, err, "web_search_call")
+	require.Empty(t, line)
+}

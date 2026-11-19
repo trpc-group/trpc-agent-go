@@ -302,6 +302,8 @@ names or base URLs, or retry by removing encrypted reasoning.
 
 Switching to the built-in OpenAI Chat Completions adapter uses the visible
 messages and paired function calls and results in a request-local projection.
+With `openai.WithOmitFileContentParts(true)`, both Chat requests and batch
+inputs omit user file parts. File-only messages keep the usual filename hint.
 Edits to visible text or tool arguments apply to that projection. Responses
 reasoning, signatures and item IDs stay in the session. The adapter returns
 an error before HTTP for images in tool results, annotated messages and
