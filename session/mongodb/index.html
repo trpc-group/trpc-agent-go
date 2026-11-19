@@ -1920,6 +1920,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#event-ordering-index-upgrades" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event ordering index upgrades
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3807,6 +3816,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#event-ordering-index-upgrades" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event ordering index upgrades
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4152,6 +4170,30 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
 <span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://user:pass@host:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./...
 </span></code></pre></div></td></tr></table></div>
+<h2 id="event-ordering-index-upgrades">Event ordering index upgrades</h2>
+<p>New services create <code>idx_session_events_ordered_lookup</code>, a non-unique partial
+index on <code>(app_name, user_id, session_id, created_at, _id)</code> for documents matching
+<code>{deleted_at: null}</code>. Collection prefixes also apply to the index name. It
+supports chronological event reads and reverse pagination without an additional
+sort. The original lookup index is retained for rolling upgrades and rollback;
+existing documents and older writers need no conversion.</p>
+<p>Index creation during initialization can add startup time and database load.
+For large collections, build the index before deploying the new service. If
+using <code>WithSkipDBInit(true)</code>, manage the index explicitly (adjust names for your
+collection prefix):</p>
+<div class="language-javascript highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">db</span><span class="p">.</span><span class="nx">session_events</span><span class="p">.</span><span class="nx">createIndex</span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span><span class="p">{</span><span class="nx">app_name</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">user_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">session_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">created_at</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">},</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span><span class="p">{</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"idx_session_events_ordered_lookup"</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">   </span><span class="nx">partialFilterExpression</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="nx">deleted_at</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}}</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Reads remain correct without this index, but may need a blocking sort. Keeping
+both indexes adds storage and write overhead. This index alone does not limit
+the number of events loaded by a context-window read.</p>
 
 
 
@@ -4174,7 +4216,7 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 29, 2026 08:07:20 UTC">2026-07-29 08:07:20</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 19, 2026 06:54:59 UTC">2026-11-19 06:54:59</span>
   </span>
 
     

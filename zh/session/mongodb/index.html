@@ -1920,6 +1920,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件排序索引升级
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3807,6 +3816,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件排序索引升级
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4140,6 +4158,26 @@
 <span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://user:pass@host:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./...
 </span></code></pre></div></td></tr></table></div>
+<h2 id="_15">事件排序索引升级</h2>
+<p>新服务初始化时新增 <code>idx_session_events_ordered_lookup</code> 非唯一 partial 索引，
+字段为 <code>(app_name, user_id, session_id, created_at, _id)</code>，条件为
+<code>{deleted_at: null}</code>。集合前缀同样应用于索引名称。该索引支持正序事件读取及
+倒序分页，避免额外排序。旧 lookup 索引保留，以支持滚动升级与回滚；
+历史文档及旧版本写入无需转换。</p>
+<p>初始化建索引会增加启动时间和数据库负载。大集合建议在部署前完成索引创建；
+使用 <code>WithSkipDBInit(true)</code> 时请手工管理索引（按实际集合前缀调整名称）：</p>
+<div class="language-javascript highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">db</span><span class="p">.</span><span class="nx">session_events</span><span class="p">.</span><span class="nx">createIndex</span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span><span class="p">{</span><span class="nx">app_name</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">user_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">session_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">created_at</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">},</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span><span class="p">{</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"idx_session_events_ordered_lookup"</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">   </span><span class="nx">partialFilterExpression</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="nx">deleted_at</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}}</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>未创建该索引不影响读取正确性，但可能需要阻塞排序。同时保留两个索引会增加
+存储和写入开销。仅增加索引不会限制上下文窗口实际加载的事件数量。</p>
 
 
 
@@ -4162,7 +4200,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月29日 08:07:20 UTC">2026-07-29 08:07:20</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月19日 06:54:59 UTC">2026-11-19 06:54:59</span>
   </span>
 
     
