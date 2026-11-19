@@ -46,6 +46,9 @@ func (s *Service) getRecentEvents(ctx context.Context, key session.Key, limit in
 		return nil, false, fmt.Errorf("query events: %w", err)
 	}
 	defer cursor.Close(ctx)
+	// SetBatchSize affects only subsequent batches, preserving the small initial
+	// batch without tiny getMore requests for empty payloads or older user messages.
+	cursor.SetBatchSize(maxBatchSize)
 
 	events := make([]event.Event, 0, int(batchSize))
 	hasUser := false
@@ -76,9 +79,6 @@ func (s *Service) getRecentEvents(ctx context.Context, key session.Key, limit in
 			if hasUser {
 				break
 			}
-			// A small window must not force tiny batches while searching older
-			// history for a user message. Keep subsequent overfetch bounded.
-			cursor.SetBatchSize(maxBatchSize)
 		} else if evt.IsUserMessage() {
 			// Retain only the nearest preceding user, not the intervening history.
 			events = append(events, evt)

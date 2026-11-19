@@ -134,12 +134,15 @@ func TestIntegrationRecentHistorySmallWindowRoundTrips(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		userAt        int
+		emptyNonUser  bool
 		returned      int64
 		maxOperations int64
 	}{
 		{name: "distant_user", userAt: 0, returned: historySize, maxOperations: 32},
 		{name: "no_user", userAt: -1, returned: historySize, maxOperations: 32},
 		{name: "user_in_window", userAt: historySize - 1, returned: 1, maxOperations: 1},
+		{name: "distant_user_with_empty_payloads", userAt: 0, emptyNonUser: true, returned: historySize, maxOperations: 32},
+		{name: "empty_payloads_only", userAt: -1, emptyNonUser: true, returned: historySize, maxOperations: 32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, svc, db := newIntegrationService(t)
@@ -149,12 +152,15 @@ func TestIntegrationRecentHistorySmallWindowRoundTrips(t *testing.T) {
 			base := time.Now().UTC().Truncate(time.Millisecond)
 			docs := make([]any, 0, historySize)
 			for i := 0; i < historySize; i++ {
-				role := model.RoleAssistant
-				if i == tc.userAt {
-					role = model.RoleUser
+				var payload []byte
+				if !tc.emptyNonUser || i == tc.userAt {
+					role := model.RoleAssistant
+					if i == tc.userAt {
+						role = model.RoleUser
+					}
+					payload, err = json.Marshal(integrationEvent(fmt.Sprint(i), role, "message", base))
+					require.NoError(t, err)
 				}
-				payload, err := json.Marshal(integrationEvent(fmt.Sprint(i), role, "message", base))
-				require.NoError(t, err)
 				docs = append(docs, sessionEventDoc{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Event: payload, CreatedAt: base})
 			}
 			_, err = db.Collection(svc.collSessionEvents).InsertMany(ctx, docs)
@@ -176,6 +182,50 @@ func TestIntegrationRecentHistorySmallWindowRoundTrips(t *testing.T) {
 			t.Logf("full operations=%d; recent operations=%d returned=%d", before.Operations, operations, returned)
 			require.Equal(t, tc.returned, returned)
 			require.LessOrEqual(t, operations, tc.maxOperations)
+		})
+	}
+}
+
+func TestIntegrationRecentHistoryPayloadValidation(t *testing.T) {
+	ctx, svc, db := newIntegrationService(t, WithSessionEventLimit(0))
+	key := session.Key{AppName: "validation", UserID: "user", SessionID: "history"}
+	_, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	base := time.Now().UTC().Truncate(time.Millisecond)
+	userPayload, err := json.Marshal(integrationEvent("user", model.RoleUser, "question", base))
+	require.NoError(t, err)
+	assistantPayload, err := json.Marshal(integrationEvent("assistant", model.RoleAssistant, "answer", base.Add(time.Second)))
+	require.NoError(t, err)
+	_, err = db.Collection(svc.collSessionEvents).InsertMany(ctx, []any{
+		sessionEventDoc{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Event: []byte("invalid"), CreatedAt: base.Add(-time.Second)},
+		sessionEventDoc{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Event: userPayload, CreatedAt: base},
+		sessionEventDoc{AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID, Event: assistantPayload, CreatedAt: base.Add(time.Second)},
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name      string
+		limit     int
+		afterTime time.Time
+		wantErr   bool
+	}{
+		{name: "outside_window", limit: 2},
+		// The next batch includes the invalid payload, but traversal stops at the user.
+		{name: "older_user_found_before_invalid_payload", limit: 1},
+		{name: "inside_window", limit: 3, wantErr: true},
+		{name: "time_filter_fallback", limit: 1, afterTime: base.Add(2 * time.Second), wantErr: true},
+		{name: "unlimited", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := svc.GetSession(ctx, key, session.WithEventNum(tc.limit), session.WithEventTime(tc.afterTime))
+			if tc.wantErr {
+				require.ErrorContains(t, err, "unmarshal event")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			require.Len(t, got.Events, 2)
+			require.Equal(t, "user", got.Events[0].ID)
+			require.Equal(t, "assistant", got.Events[1].ID)
 		})
 	}
 }
