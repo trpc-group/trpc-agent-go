@@ -26,12 +26,12 @@ import (
 // Model implements model.Model using the official OpenAI Responses API.
 // It supports concurrent requests.
 type Model struct {
-	client                         openai.Client
-	name                           string
-	store                          bool
-	omitCrossModelEncryptedContent bool
-	channelBufferSize              int
-	extraFields                    map[string]any
+	client                    openai.Client
+	name                      string
+	store                     bool
+	crossModelReasoningPolicy CrossModelReasoningPolicy
+	channelBufferSize         int
+	extraFields               map[string]any
 }
 
 // New creates a Responses API adapter with client-managed history and
@@ -53,12 +53,12 @@ func New(name string, opts ...Option) *Model {
 	))
 	clientOpts = append(clientOpts, o.openaiOptions...)
 	return &Model{
-		client:                         openai.NewClient(clientOpts...),
-		name:                           name,
-		store:                          o.store,
-		omitCrossModelEncryptedContent: o.omitCrossModelEncryptedContent,
-		channelBufferSize:              o.channelBufferSize,
-		extraFields:                    o.extraFields,
+		client:                    openai.NewClient(clientOpts...),
+		name:                      name,
+		store:                     o.store,
+		crossModelReasoningPolicy: o.crossModelReasoningPolicy,
+		channelBufferSize:         o.channelBufferSize,
+		extraFields:               o.extraFields,
 	}
 }
 
@@ -109,6 +109,11 @@ func (m *Model) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
+	switch m.crossModelReasoningPolicy {
+	case CrossModelReasoningPolicyReplay, CrossModelReasoningPolicyOmitEncryptedContent:
+	default:
+		return nil, fmt.Errorf("openai/responses: invalid cross-model reasoning policy %d", m.crossModelReasoningPolicy)
+	}
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}

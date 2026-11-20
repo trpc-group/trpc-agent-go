@@ -169,7 +169,7 @@ func testGraphModelSwitchRetriesFailedRequestFromLatestCheckpoint(t *testing.T, 
 	latestRef := graph.CheckpointRef{LineageID: lineage, Namespace: namespace}
 	var retryOptions []responses.Option
 	if omitOnRetry {
-		retryOptions = append(retryOptions, responses.WithOmitCrossModelEncryptedContent(true))
+		retryOptions = append(retryOptions, responses.WithCrossModelReasoningPolicy(responses.CrossModelReasoningPolicyOmitEncryptedContent))
 	}
 	retried := runGraphNativeInterrupt(t, ctx, newAgent(newModel("model-b", retryOptions...)), "retry",
 		model.Message{}, latestRef.ToRuntimeState())

@@ -19,15 +19,29 @@ const defaultChannelBufferSize = 256
 // Option configures a Responses model.
 type Option func(*options)
 
+// CrossModelReasoningPolicy controls how Responses reasoning items from a
+// different configured model name are replayed. Model names are compared
+// exactly as configured.
+type CrossModelReasoningPolicy int
+
+const (
+	// CrossModelReasoningPolicyReplay replays reasoning items intact. It is the
+	// zero value and the default.
+	CrossModelReasoningPolicyReplay CrossModelReasoningPolicy = iota
+	// CrossModelReasoningPolicyOmitEncryptedContent omits the top-level
+	// encrypted_content field from reasoning items produced by another model.
+	CrossModelReasoningPolicyOmitEncryptedContent
+)
+
 type options struct {
-	apiKey                         string
-	baseURL                        string
-	store                          bool
-	omitCrossModelEncryptedContent bool
-	channelBufferSize              int
-	httpClientOptions              []model.HTTPClientOption
-	openaiOptions                  []option.RequestOption
-	extraFields                    map[string]any
+	apiKey                    string
+	baseURL                   string
+	store                     bool
+	crossModelReasoningPolicy CrossModelReasoningPolicy
+	channelBufferSize         int
+	httpClientOptions         []model.HTTPClientOption
+	openaiOptions             []option.RequestOption
+	extraFields               map[string]any
 }
 
 func defaultOptions() options {
@@ -60,15 +74,17 @@ func WithStore(store bool) Option {
 	}
 }
 
-// WithOmitCrossModelEncryptedContent controls whether replay omits encrypted_content
-// from reasoning items produced by a different configured Responses model name.
-// By default, all native items are replayed intact. Omission affects only the
-// outgoing request. Stored history, same-model items, and the request for new
-// encrypted reasoning are preserved. The target must accept reasoning items
-// without ciphertext. A target that looks up the retained item ID may reject
-// the request if the original response used store=false (the default).
-func WithOmitCrossModelEncryptedContent(omit bool) Option {
-	return func(o *options) { o.omitCrossModelEncryptedContent = omit }
+// WithCrossModelReasoningPolicy configures replay of reasoning items produced
+// by a different configured Responses model name. The default is
+// CrossModelReasoningPolicyReplay. Omission affects only the outgoing request;
+// stored history, same-model items, and the request for new encrypted reasoning
+// are preserved. When omitting, the target must accept reasoning items without
+// ciphertext. A target that looks up the retained item ID may reject the request
+// if the original response used store=false (the default). The last option wins.
+// An unsupported policy makes GenerateContent return an error before any HTTP
+// request is sent.
+func WithCrossModelReasoningPolicy(policy CrossModelReasoningPolicy) Option {
+	return func(o *options) { o.crossModelReasoningPolicy = policy }
 }
 
 // WithChannelBufferSize sets the GenerateContent channel buffer. Non-positive

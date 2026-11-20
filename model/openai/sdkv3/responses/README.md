@@ -301,13 +301,17 @@ caller. The framework does not infer account or deployment identity from model
 names or base URLs, or retry by removing encrypted reasoning.
 
 For a target that rejects encrypted reasoning from other models, configure
-`responses.New(name, responses.WithOmitCrossModelEncryptedContent(true))`.
+`responses.New(name, responses.WithCrossModelReasoningPolicy(responses.CrossModelReasoningPolicyOmitEncryptedContent))`.
 On every request this omits only `encrypted_content` from reasoning items whose
 stored producer model name differs from the target name. IDs, summaries and
 tool rounds are replayed in order. The target loses access to the omitted
 reasoning. It must accept the remaining reasoning item without ciphertext.
 If it resolves the item by ID, it may return HTTP 400 when the original
 response used `store=false` (the adapter default). The original session stays intact.
+The zero-value policy, `CrossModelReasoningPolicyReplay`, replays every item intact.
+The omission policy compares configured model names. A business that knows a
+same-name route has changed can edit the detached native payload in a
+`BeforeModel` callback for that request.
 Configure both target adapters when this behavior is needed in both directions.
 The option does not relax pending tool recovery checks.
 
@@ -316,8 +320,11 @@ messages and paired function calls and results in a request-local projection.
 With `openai.WithOmitFileContentParts(true)`, both Chat requests and batch
 inputs omit user file parts. File-only messages keep the usual filename hint.
 Edits to visible text or tool arguments apply to that projection. Responses
-reasoning, signatures and item IDs stay in the session. The adapter returns
-an error before HTTP for images in tool results, annotated messages and
+reasoning, signatures and item IDs stay in the session. The adapter appends
+missing HTTP(S) URL citations as plain links when the visible text still matches
+the native text. Duplicate citations are emitted once. If a callback edits
+the visible text, its edits take precedence over the stored citations.
+The adapter returns an error before HTTP for images in tool results, unsupported annotations and
 messages that follow a function call in the same output. Those cases need
 content, metadata or ordering that this conversion cannot preserve.
 Switching back replays the original Responses items and converts the

@@ -339,7 +339,7 @@ func (m *Model) convertProviderDataMessage(msg model.Message, messageIndex int, 
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data items at message %d: %w", messageIndex, err)
 	}
-	omit := m.omitCrossModelEncryptedContent && msg.ProviderData.Model != m.name
+	omit := m.crossModelReasoningPolicy == CrossModelReasoningPolicyOmitEncryptedContent && msg.ProviderData.Model != m.name
 	for _, output := range native {
 		if output.Type == responseshistory.FunctionCall {
 			if err := trackCall(output.CallID, called); err != nil {

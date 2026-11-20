@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -65,12 +66,14 @@ func TestCrossModelEncryptedContentAcrossResponsesRequests(t *testing.T) {
 		stream      bool
 	}{
 		{name: "default keeps foreign ciphertext", modelName: "model-b", messages: firstTurn, aCipher: true},
-		{name: "explicit false keeps foreign ciphertext", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(false)}, messages: firstTurn, aCipher: true},
-		{name: "switch A to B", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: firstTurn},
-		{name: "stream switch A to B", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: firstTurn, stream: true},
-		{name: "continue on B with mixed history", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: fullHistory, bCipher: true, fullHistory: true},
-		{name: "switch back to A", modelName: "model-a", options: []Option{WithOmitCrossModelEncryptedContent(true)}, messages: fullHistory, aCipher: true, fullHistory: true},
-		{name: "last option disables omission", modelName: "model-b", options: []Option{WithOmitCrossModelEncryptedContent(true), WithOmitCrossModelEncryptedContent(false)}, messages: fullHistory, aCipher: true, bCipher: true, fullHistory: true},
+		{name: "explicit replay keeps foreign ciphertext", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyReplay)}, messages: firstTurn, aCipher: true},
+		{name: "switch A to B", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent)}, messages: firstTurn},
+		{name: "stream switch A to B", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent)}, messages: firstTurn, stream: true},
+		{name: "continue on B with mixed history", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent)}, messages: fullHistory, bCipher: true, fullHistory: true},
+		{name: "switch back to A", modelName: "model-a", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent)}, messages: fullHistory, aCipher: true, fullHistory: true},
+		{name: "last option disables omission", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent), WithCrossModelReasoningPolicy(CrossModelReasoningPolicyReplay)}, messages: fullHistory, aCipher: true, bCipher: true, fullHistory: true},
+		{name: "last option enables omission", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyReplay), WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent)}, messages: firstTurn},
+		{name: "last option replaces invalid policy", modelName: "model-b", options: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicy(-1)), WithCrossModelReasoningPolicy(CrossModelReasoningPolicyReplay)}, messages: firstTurn, aCipher: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,6 +163,38 @@ func TestCrossModelEncryptedContentAcrossResponsesRequests(t *testing.T) {
 			after, err := json.Marshal(tt.messages)
 			require.NoError(t, err)
 			require.Equal(t, string(before), string(after), "the session history must remain unchanged")
+		})
+	}
+}
+
+func TestInvalidCrossModelReasoningPolicyFailsBeforeHTTP(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy CrossModelReasoningPolicy
+		stream bool
+		error  string
+	}{
+		{name: "negative", policy: -1, error: "openai/responses: invalid cross-model reasoning policy -1"},
+		{name: "unsupported", policy: 2, error: "openai/responses: invalid cross-model reasoning policy 2"},
+		{name: "stream", policy: 2, stream: true, error: "openai/responses: invalid cross-model reasoning policy 2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			adapter := New("model-b", WithAPIKey("test"), WithBaseURL(server.URL), WithCrossModelReasoningPolicy(tt.policy))
+			stream, err := adapter.GenerateContent(context.Background(), &model.Request{
+				Messages:         []model.Message{model.NewUserMessage("hello")},
+				GenerationConfig: model.GenerationConfig{Stream: tt.stream},
+			})
+			require.Nil(t, stream)
+			require.EqualError(t, err, tt.error)
+			require.Zero(t, calls.Load(), "an invalid policy must not reach HTTP")
 		})
 	}
 }
