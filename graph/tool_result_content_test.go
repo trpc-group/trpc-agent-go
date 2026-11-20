@@ -335,9 +335,10 @@ func TestToolsNode_ToolResultContentInterruptResume(t *testing.T) {
 	calls := []model.ToolCall{
 		resultToolCall("call-marker", "marker"),
 		resultToolCall("call-empty", "empty"),
+		resultToolCall("call-ordinary", "ordinary"),
 		resultToolCall("call-later", "later"),
 	}
-	var markerCalls, emptyCalls, laterCalls int
+	var markerCalls, emptyCalls, ordinaryCalls, laterCalls int
 	tools := map[string]tool.Tool{
 		"marker": &toolResultContentTestTool{
 			name: "marker",
@@ -355,6 +356,13 @@ func TestToolsNode_ToolResultContentInterruptResume(t *testing.T) {
 				emptyCalls++
 				var empty model.ToolResultContent
 				return empty, nil
+			},
+		},
+		"ordinary": &toolResultContentTestTool{
+			name: "ordinary",
+			callFn: func(context.Context, []byte) (any, error) {
+				ordinaryCalls++
+				return "ordinary result", nil
 			},
 		},
 		"later": &toolResultContentTestTool{
@@ -406,6 +414,10 @@ func TestToolsNode_ToolResultContentInterruptResume(t *testing.T) {
 	var restoredCheckpoint Checkpoint
 	require.NoError(t, json.Unmarshal(encodedCheckpoint, &restoredCheckpoint))
 	interruptTuple.Checkpoint = &restoredCheckpoint
+	messages, contents := completedToolMessagesAndContentsForNode(State(restoredCheckpoint.ChannelValues), "tools")
+	ordinaryKey := completedToolMessageKey(2, calls[2])
+	require.Equal(t, `"ordinary result"`, messages[ordinaryKey].Content)
+	require.NotContains(t, contents, ordinaryKey)
 
 	resumeState := State{
 		CfgKeyLineageID:    lineageID,
@@ -426,6 +438,7 @@ func TestToolsNode_ToolResultContentInterruptResume(t *testing.T) {
 	require.NotNil(t, finalDelta)
 	require.Equal(t, 1, markerCalls, "completed marker tool must not run again")
 	require.Equal(t, 1, emptyCalls, "completed empty tool must not run again")
+	require.Equal(t, 1, ordinaryCalls, "completed ordinary tool must not run again")
 	require.Equal(t, 2, laterCalls, "interrupted tool should run again on resume")
 
 	var lastToolResponse string
@@ -438,7 +451,7 @@ func TestToolsNode_ToolResultContentInterruptResume(t *testing.T) {
 	require.NoError(t, json.Unmarshal(finalDelta[StateKeyNodeResponses], &nodeResponses))
 	var toolResponses []toolNodeResponseForTest
 	require.NoError(t, json.Unmarshal([]byte(nodeResponses["tools"]), &toolResponses))
-	require.Len(t, toolResponses, 3)
+	require.Len(t, toolResponses, 4)
 	require.Equal(t, "call-marker", toolResponses[0].ToolID)
 	require.JSONEq(t, mustJSON(t, model.ToolResultContent{{
 		Type: model.ContentTypeText,
@@ -446,11 +459,13 @@ func TestToolsNode_ToolResultContentInterruptResume(t *testing.T) {
 	}}), string(toolResponses[0].Output))
 	require.Equal(t, "call-empty", toolResponses[1].ToolID)
 	require.JSONEq(t, "null", string(toolResponses[1].Output))
-	require.Equal(t, "call-later", toolResponses[2].ToolID)
+	require.Equal(t, "call-ordinary", toolResponses[2].ToolID)
+	require.JSONEq(t, `"ordinary result"`, string(toolResponses[2].Output))
+	require.Equal(t, "call-later", toolResponses[3].ToolID)
 	require.JSONEq(t, mustJSON(t, model.ToolResultContent{{
 		Type: model.ContentTypeText,
 		Text: &finalText,
-	}}), string(toolResponses[2].Output))
+	}}), string(toolResponses[3].Output))
 }
 
 func runToolsNodeUpdate(t *testing.T, result any, opts ...Option) State {
