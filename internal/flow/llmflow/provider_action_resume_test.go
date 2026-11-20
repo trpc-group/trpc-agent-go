@@ -60,6 +60,10 @@ func TestRun_WithResumeAfterPartialProviderActionPersistence(t *testing.T) {
 			record.ProviderData = &model.ProviderData{Protocol: "test.native", Model: "native-model",
 				Payload: json.RawMessage(`[{"type":"action","id":"a1"},{"type":"action","id":"a2"}]`)}
 			pending := event.NewResponseEvent("old", "agent-resume", &model.Response{Choices: []model.Choice{{Message: record}}})
+			processor.MarkProviderActionSource(pending)
+			source := processor.ProviderActionSource(pending)
+			pending = pending.Clone()
+			require.NotEqual(t, source, pending.ID)
 			first := event.NewResponseEvent("old", "agent-resume", &model.Response{Done: true,
 				Choices: []model.Choice{{Message: savedActionResult("a1")}}})
 			sess := &session.Session{Events: []event.Event{*pending, *first}}
@@ -90,6 +94,8 @@ func TestRun_WithResumeAfterPartialProviderActionPersistence(t *testing.T) {
 				}
 				if evt.Response != nil && evt.Response.IsToolResultResponse() {
 					resultIDs = append(resultIDs, evt.Choices[0].Message.ToolID)
+					require.Equal(t, source, processor.ProviderActionSource(evt),
+						"resumed results retain the original source even after cloning")
 				}
 			}
 			require.NoError(t, ctx.Err())

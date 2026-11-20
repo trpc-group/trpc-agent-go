@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -25,6 +26,46 @@ import (
 // completed model response delegates to the caller. It must run before the
 // function call processor so action results precede ordinary tool results.
 type ProviderActionResponseProcessor struct{}
+
+const providerActionSourceExtension = "trpc.provider_action.source_event.v1"
+
+type providerActionSourceKey struct{}
+
+// MarkProviderActionSource records an identifier that survives Event.Clone.
+func MarkProviderActionSource(evt *event.Event) {
+	if evt == nil || evt.ID == "" {
+		return
+	}
+	if source, ok, err := event.GetExtension[string](evt, providerActionSourceExtension); err == nil && ok && source != "" {
+		return
+	}
+	_ = event.SetExtension(evt, providerActionSourceExtension, evt.ID)
+}
+
+// ProviderActionSource returns the stable source identifier of a response.
+// Older events use their invocation and response IDs when available.
+func ProviderActionSource(evt *event.Event) string {
+	if evt == nil {
+		return ""
+	}
+	source, ok, err := event.GetExtension[string](evt, providerActionSourceExtension)
+	if err == nil && ok && source != "" {
+		return source
+	}
+	if evt.InvocationID != "" && evt.Response != nil && evt.Response.ID != "" {
+		return "response:" + strconv.Quote(evt.InvocationID) + ":" + strconv.Quote(evt.Response.ID)
+	}
+	return evt.ID
+}
+
+// WithProviderActionSource associates action results with the response event
+// that requested them. The source ID is carried through session persistence.
+func WithProviderActionSource(ctx context.Context, eventID string) context.Context {
+	if eventID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, providerActionSourceKey{}, eventID)
+}
 
 // NewProviderActionResponseProcessor creates a provider action processor.
 func NewProviderActionResponseProcessor() *ProviderActionResponseProcessor {
@@ -93,6 +134,9 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 			rsp,
 			[]model.Choice{{Index: 0, Message: message}},
 		)
+		if sourceID, ok := ctx.Value(providerActionSourceKey{}).(string); ok && sourceID != "" {
+			_ = event.SetExtension(resultEvent, providerActionSourceExtension, sourceID)
+		}
 		bindings := staged[message.ToolID]
 		recordActionToolKeys(resultEvent, bindings)
 		if _, err := emitFunctionResponseEventAndWait(

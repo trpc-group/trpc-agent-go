@@ -1716,6 +1716,13 @@ func (p *ContentRequestProcessor) toolCallIDsToRestoreByEvent(
 					continue
 				}
 				resultID := toolResponseIDFromChoice(choices[choiceIndex])
+				if choices[choiceIndex].Message.ProviderData != nil || choices[choiceIndex].Delta.ProviderData != nil {
+					// A native action has no projected ToolCall. Restore the
+					// whole native record when its result crosses the cutoff.
+					for _, id := range events[callEventIndex].GetToolCallIDs() {
+						addToolCallIDToRestore(idsByEvent, callEventIndex, id)
+					}
+				}
 				addToolCallIDToRestore(
 					idsByEvent,
 					callEventIndex,
@@ -3297,13 +3304,24 @@ func (p *ContentRequestProcessor) restorePreCutoffToolCallEvent(
 	if cutoff.IsZero() || len(neededToolCallIDs) == 0 {
 		return event.Event{}, false
 	}
-	if !isEventEligibleForInclusion(evt) || !evt.IsToolCallResponse() {
+	if !isEventEligibleForInclusion(evt) {
 		return event.Event{}, false
 	}
 	if !cutoff.excludesEvent(eventIndex, evt) {
 		return event.Event{}, false
 	}
 	if !p.passTimelineFilter(evt, inv) || !p.passBranchFilter(evt, filter) {
+		return event.Event{}, false
+	}
+	if !evt.IsToolCallResponse() {
+		// An action-only native response has no projected ToolCalls. Its
+		// restored result is tied to this event by the persisted source marker.
+		for _, choice := range evt.Response.Choices {
+			if (choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil) ||
+				(choice.Delta.Role == model.RoleAssistant && choice.Delta.ProviderData != nil) {
+				return evt, true
+			}
+		}
 		return event.Event{}, false
 	}
 
@@ -4194,10 +4212,22 @@ func toolResponseMatchesByCallEventFiltered(
 ) map[int][]matchedToolResponseEvent {
 	responseMatchesByCallEvent := make(map[int][]matchedToolResponseEvent)
 	var pendingCallRounds []pendingToolCallRound
+	nativeSources := make(map[string]int)
 	for i, evt := range events {
 		evt := evt
 		if includeEvent != nil && !includeEvent(i, evt) {
 			continue
+		}
+		if evt.Response != nil && !evt.IsToolResultResponse() {
+			for _, choice := range evt.Response.Choices {
+				if (choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil) ||
+					(choice.Delta.Role == model.RoleAssistant && choice.Delta.ProviderData != nil) {
+					if source := ProviderActionSource(&evt); source != "" {
+						nativeSources[source] = i
+					}
+					break
+				}
+			}
 		}
 		if evt.IsToolCallResponse() {
 			ids := evt.GetToolCallIDs()
@@ -4217,6 +4247,19 @@ func toolResponseMatchesByCallEventFiltered(
 			responseID := toolResponseIDFromChoice(choice)
 			if responseID == "" {
 				continue
+			}
+			if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
+				source, ok, err := event.GetExtension[string](&evt, providerActionSourceExtension)
+				if callIndex, found := nativeSources[source]; err == nil && ok && found {
+					responseMatchesByCallEvent[callIndex] = appendToolResponseChoice(
+						responseMatchesByCallEvent[callIndex], i, choiceIndex,
+					)
+					continue
+				}
+				if err != nil || ok {
+					// A marked result never falls back to another round.
+					continue
+				}
 			}
 			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
 				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {

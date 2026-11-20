@@ -163,3 +163,118 @@ func TestRearrangeSharedLegacyAndNativeResultEvent(t *testing.T) {
 	require.Equal(t, []model.Choice{result.Choices[0], result.Choices[2]}, got[3].Choices)
 	require.Len(t, events[2].Choices, 3, "history preparation does not mutate the stored event")
 }
+
+func TestMixedNativeActionSourceSurvivesCloneAndRestoresCurrentTail(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	makeRound := func(callID string) []event.Event {
+		return []event.Event{
+			toolTranscriptTestEvent("req1", "inv1", testCallMessage(t, true, "reasoning", callID), ""),
+			toolTranscriptTestEvent("req1", "inv1", nativeActionResult(), model.ObjectTypeToolResponse),
+			toolTranscriptTestEvent("req1", "inv1", model.NewToolMessage(callID, "lookup", "result"), model.ObjectTypeToolResponse),
+		}
+	}
+	events := timedTestEvents(base, append(makeRound("old"), makeRound("new")...)...)
+	for _, i := range []int{0, 3} {
+		MarkProviderActionSource(&events[i])
+		require.NoError(t, event.SetExtension(&events[i+1], providerActionSourceExtension, ProviderActionSource(&events[i])))
+	}
+	// Cloning changes event IDs, but the shared source marker remains stable.
+	for i := range events {
+		events[i] = *events[i].Clone()
+	}
+	events = persistTestEvents(t, events)
+	inv := testInvocation(events, "inv1", "req1", model.Message{})
+	cutoff := newEventHistoryCutoff(events, summaryHistoryCutoff{
+		at: events[5].Timestamp, lastEventID: events[5].ID,
+	})
+	tail := NewContentRequestProcessor().latestCompleteToolRoundBeforeCutoff(events, inv, nil, "", cutoff)
+	require.Len(t, tail, 3)
+	require.NotContains(t, tail, 0, "the older covered round must not be revived")
+	require.NotContains(t, tail, 1)
+	require.NotContains(t, tail, 2)
+	require.Contains(t, tail, 3)
+	require.Contains(t, tail, 4)
+	require.Contains(t, tail, 5)
+	require.Equal(t, "search_1", tail[4].Choices[0].Message.ToolID)
+}
+
+func TestMixedNativeActionResultsMatchOnlyTheirSource(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	call1 := toolTranscriptTestEvent("req1", "inv1", testCallMessage(t, true, "", "one"), "")
+	call2 := toolTranscriptTestEvent("req1", "inv1", testCallMessage(t, true, "", "two"), "")
+	result := toolTranscriptTestEvent("req1", "inv1", nativeActionResult(), model.ObjectTypeToolResponse)
+	events := timedTestEvents(base, call1, call2, result)
+	MarkProviderActionSource(&events[0])
+	MarkProviderActionSource(&events[1])
+	require.NoError(t, event.SetExtension(&events[2], providerActionSourceExtension, ProviderActionSource(&events[0])))
+	matches := toolResponseMatchesByCallEvent(events)
+	require.Equal(t, []matchedToolResponseEvent{{eventIndex: 2, choiceIndices: []int{0}}}, matches[0])
+	require.Empty(t, matches[1], "the nearest unrelated native response must not claim the result")
+}
+
+func TestMixedNativeActionRestoresWhenSearchResultFollowsCutoff(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	current := model.NewUserMessage("next")
+	events := timedTestEvents(base,
+		toolTranscriptTestEvent("req1", "inv1", model.NewUserMessage("question"), ""),
+		toolTranscriptTestEvent("req1", "inv1", testCallMessage(t, true, "", "weather"), ""),
+		toolTranscriptTestEvent("req1", "inv1", model.NewToolMessage("weather", "weather", "sunny"), model.ObjectTypeToolResponse),
+		toolTranscriptTestEvent("req1", "inv1", nativeActionResult(), model.ObjectTypeToolResponse),
+		toolTranscriptTestEvent("req1", "inv1", model.NewAssistantMessage("done"), ""),
+		toolTranscriptTestEvent("req2", "inv2", current, ""),
+	)
+	MarkProviderActionSource(&events[1])
+	require.NoError(t, event.SetExtension(&events[3], providerActionSourceExtension, ProviderActionSource(&events[1])))
+	events = persistTestEvents(t, events)
+	inv := testInvocation(events, "inv2", "req2", current)
+	got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil,
+		summaryHistoryCutoff{at: events[2].Timestamp, lastEventID: events[2].ID})
+	require.Len(t, got, 6)
+	require.Equal(t, "question", got[0].Content)
+	require.Equal(t, "weather", got[1].ToolCalls[0].ID)
+	require.Equal(t, "weather", got[2].ToolID)
+	require.Equal(t, "search_1", got[3].ToolID)
+	require.Equal(t, nativeActionResult().ProviderData, got[3].ProviderData)
+	require.Equal(t, "done", got[4].Content)
+	require.Equal(t, "next", got[5].Content)
+}
+
+func TestMixedNativeLegacySourceWithResponseIDSurvivesClone(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	call := toolTranscriptTestEvent("req1", "inv1", testCallMessage(t, true, "", "weather"), "")
+	call.Response.ID = "model-response"
+	result := toolTranscriptTestEvent("req2", "inv2", nativeActionResult(), model.ObjectTypeToolResponse)
+	events := timedTestEvents(base, call, result)
+	source := ProviderActionSource(&events[0])
+	require.NoError(t, event.SetExtension(&events[1], providerActionSourceExtension, source))
+	events[0] = *events[0].Clone()
+	require.Equal(t, source, ProviderActionSource(&events[0]))
+	matches := toolResponseMatchesByCallEvent(persistTestEvents(t, events))
+	require.Equal(t, []matchedToolResponseEvent{{eventIndex: 1, choiceIndices: []int{0}}}, matches[0],
+		"a resumed result still references the older source after cloning")
+}
+
+func TestNativeActionOnlyRestoresWhenResultFollowsCutoff(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	current := model.NewUserMessage("next")
+	events := timedTestEvents(base,
+		toolTranscriptTestEvent("req1", "inv1", model.NewUserMessage("find orders"), ""),
+		toolTranscriptTestEvent("req1", "inv1", nativeActionRecord(), ""),
+		toolTranscriptTestEvent("req1", "inv1", nativeActionResult(), model.ObjectTypeToolResponse),
+		toolTranscriptTestEvent("req1", "inv1", model.NewAssistantMessage("done"), ""),
+		toolTranscriptTestEvent("req2", "inv2", current, ""),
+	)
+	MarkProviderActionSource(&events[1])
+	require.NoError(t, event.SetExtension(&events[2], providerActionSourceExtension, ProviderActionSource(&events[1])))
+	events = persistTestEvents(t, events)
+	inv := testInvocation(events, "inv2", "req2", current)
+	got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil,
+		summaryHistoryCutoff{at: events[1].Timestamp, lastEventID: events[1].ID})
+	require.Len(t, got, 5)
+	require.Equal(t, "find orders", got[0].Content)
+	require.Equal(t, nativeActionRecord().ProviderData, got[1].ProviderData)
+	require.Equal(t, "search_1", got[2].ToolID)
+	require.Equal(t, nativeActionResult().ProviderData, got[2].ProviderData)
+	require.Equal(t, "done", got[3].Content)
+	require.Equal(t, "next", got[4].Content)
+}

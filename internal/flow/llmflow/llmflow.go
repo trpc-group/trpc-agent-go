@@ -612,6 +612,17 @@ func (f *Flow) resumePendingToolCalls(
 		return
 	}
 	resumed = true
+	if providerdata.ResponseRequestsActions(lastResp) && invocation.Session != nil {
+		invocation.Session.EventMu.RLock()
+		for i := len(invocation.Session.Events) - 1; i >= 0; i-- {
+			evt := &invocation.Session.Events[i]
+			if evt.Response == lastResp {
+				ctx = processor.WithProviderActionSource(ctx, processor.ProviderActionSource(evt))
+				break
+			}
+		}
+		invocation.Session.EventMu.RUnlock()
+	}
 
 	req := &model.Request{
 		Tools: make(map[string]tool.Tool),
@@ -1217,8 +1228,12 @@ func (p *streamingResponseProcessor) process(
 		responseErr = err
 		return false
 	}
+	postprocessCtx := p.ctx
+	if providerdata.ResponseRequestsActions(response) {
+		postprocessCtx = processor.WithProviderActionSource(postprocessCtx, processor.ProviderActionSource(llmResponseEvent))
+	}
 	p.flow.postprocessWithLatencySpans(
-		p.ctx,
+		postprocessCtx,
 		eventInvocation,
 		p.llmRequest,
 		response,
@@ -1402,6 +1417,9 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 		response,
 		p.llmRequest,
 	)
+	if providerdata.ResponseRequestsActions(response) {
+		processor.MarkProviderActionSource(llmResponseEvent)
+	}
 	emitCtx := p.ctx
 	var emitSpan oteltrace.Span
 	emitStarted := false
