@@ -404,9 +404,7 @@ func (a *protocolAgent) CloseSession(
 	}
 	a.mu.Unlock()
 	if !ok {
-		return acpsdk.CloseSessionResponse{}, acpsdk.NewInvalidParams(
-			map[string]any{"sessionId": "unknown session"},
-		)
+		return acpsdk.CloseSessionResponse{}, nil
 	}
 	a.closeSession(session)
 	return acpsdk.CloseSessionResponse{}, nil

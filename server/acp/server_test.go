@@ -509,10 +509,38 @@ func TestProtocolAgentSessionValidation(t *testing.T) {
 	_, err = protocolAgent.CloseSession(ctx, acpsdk.CloseSessionRequest{
 		SessionId: "unknown",
 	})
-	assert.ErrorContains(t, err, "unknown session")
+	require.NoError(t, err)
 	require.NoError(t, protocolAgent.Cancel(ctx, acpsdk.CancelNotification{
 		SessionId: "unknown",
 	}))
+}
+
+func TestProtocolAgentCloseSessionIsIdempotent(t *testing.T) {
+	server, err := New(
+		&testRunner{},
+		WithSessionIDGenerator(func() string { return "session-close" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	ctx := context.Background()
+	session, err := protocolAgent.NewSession(
+		ctx,
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.NoError(t, err)
+
+	for rangeIndex := 0; rangeIndex < 2; rangeIndex++ {
+		_, err = protocolAgent.CloseSession(ctx, acpsdk.CloseSessionRequest{
+			SessionId: session.SessionId,
+		})
+		require.NoError(t, err)
+	}
+
+	_, err = protocolAgent.Prompt(ctx, acpsdk.PromptRequest{
+		SessionId: session.SessionId,
+		Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("hello")},
+	})
+	assert.ErrorContains(t, err, "unknown session")
 }
 
 func TestProtocolAgentUnsupportedMethods(t *testing.T) {
