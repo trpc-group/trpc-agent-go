@@ -49,13 +49,15 @@ type RunOptionsFunc func(Session) []agent.RunOption
 type Option func(*options)
 
 type options struct {
-	userID             string
-	implementationName string
-	implementationVer  string
-	sessionIDGenerator func() string
-	runOptions         []agent.RunOption
-	runOptionsFunc     RunOptionsFunc
-	reasoningEnabled   bool
+	userID                 string
+	implementationName     string
+	implementationVer      string
+	sessionIDGenerator     func() string
+	runOptions             []agent.RunOption
+	runOptionsFunc         RunOptionsFunc
+	reasoningEnabled       bool
+	clientFileReadEnabled  bool
+	clientFileWriteEnabled bool
 }
 
 // WithUserID sets the runner user ID shared by sessions on this server.
@@ -105,18 +107,36 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithClientFileReadEnabled controls whether ACP client file reads are exposed
+// as model tools. It is disabled by default.
+func WithClientFileReadEnabled(enabled bool) Option {
+	return func(options *options) {
+		options.clientFileReadEnabled = enabled
+	}
+}
+
+// WithClientFileWriteEnabled controls whether ACP client file writes are
+// exposed as model tools. It is disabled by default.
+func WithClientFileWriteEnabled(enabled bool) Option {
+	return func(options *options) {
+		options.clientFileWriteEnabled = enabled
+	}
+}
+
 // Server adapts a runner to ACP connections.
 type Server struct {
-	runner             runner.Runner
-	managedRunner      runner.ManagedRunner
-	userID             string
-	implementation     acpsdk.Implementation
-	sessionIDGenerator func() string
-	runOptions         []agent.RunOption
-	runOptionsFunc     RunOptionsFunc
-	reasoningEnabled   bool
-	sessionMu          sync.Mutex
-	usedSessionIDs     map[string]struct{}
+	runner                 runner.Runner
+	managedRunner          runner.ManagedRunner
+	userID                 string
+	implementation         acpsdk.Implementation
+	sessionIDGenerator     func() string
+	runOptions             []agent.RunOption
+	runOptionsFunc         RunOptionsFunc
+	reasoningEnabled       bool
+	clientFileReadEnabled  bool
+	clientFileWriteEnabled bool
+	sessionMu              sync.Mutex
+	usedSessionIDs         map[string]struct{}
 }
 
 // New creates an ACP server backed by a runner.
@@ -146,14 +166,16 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		return nil, errors.New("acp: session ID generator is required")
 	}
 	server := &Server{
-		runner:             r,
-		userID:             options.userID,
-		implementation:     acpsdk.Implementation{Name: options.implementationName, Version: options.implementationVer},
-		sessionIDGenerator: options.sessionIDGenerator,
-		runOptions:         append([]agent.RunOption(nil), options.runOptions...),
-		runOptionsFunc:     options.runOptionsFunc,
-		reasoningEnabled:   options.reasoningEnabled,
-		usedSessionIDs:     make(map[string]struct{}),
+		runner:                 r,
+		userID:                 options.userID,
+		implementation:         acpsdk.Implementation{Name: options.implementationName, Version: options.implementationVer},
+		sessionIDGenerator:     options.sessionIDGenerator,
+		runOptions:             append([]agent.RunOption(nil), options.runOptions...),
+		runOptionsFunc:         options.runOptionsFunc,
+		reasoningEnabled:       options.reasoningEnabled,
+		clientFileReadEnabled:  options.clientFileReadEnabled,
+		clientFileWriteEnabled: options.clientFileWriteEnabled,
+		usedSessionIDs:         make(map[string]struct{}),
 	}
 	server.managedRunner, _ = r.(runner.ManagedRunner)
 	return server, nil
@@ -198,22 +220,33 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 }
 
 type protocolAgent struct {
-	server     *Server
-	connection *acpsdk.AgentSideConnection
-	sessions   map[string]*sessionState
-	mu         sync.Mutex
+	server          *Server
+	connection      clientConnection
+	sessions        map[string]*sessionState
+	clientFileMu    sync.RWMutex
+	clientFileRead  bool
+	clientFileWrite bool
+	mu              sync.Mutex
+}
+
+type clientConnection interface {
+	ReadTextFile(context.Context, acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error)
+	WriteTextFile(context.Context, acpsdk.WriteTextFileRequest) (acpsdk.WriteTextFileResponse, error)
+	RequestPermission(context.Context, acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error)
+	SessionUpdate(context.Context, acpsdk.SessionNotification) error
 }
 
 type sessionState struct {
-	id         string
-	cwd        string
-	tools      []tool.Tool
-	toolSets   []tool.ToolSet
-	cancel     context.CancelFunc
-	requestID  string
-	promptDone chan struct{}
-	closed     bool
-	mu         sync.Mutex
+	id           string
+	cwd          string
+	tools        []tool.Tool
+	toolSets     []tool.ToolSet
+	cancel       context.CancelFunc
+	requestID    string
+	promptDone   chan struct{}
+	writeAllowed bool
+	closed       bool
+	mu           sync.Mutex
 }
 
 func newProtocolAgent(server *Server) *protocolAgent {
@@ -224,9 +257,11 @@ func newProtocolAgent(server *Server) *protocolAgent {
 }
 
 func (a *protocolAgent) Initialize(
-	_ context.Context,
+	ctx context.Context,
 	request acpsdk.InitializeRequest,
 ) (acpsdk.InitializeResponse, error) {
+	a.setClientFileCapabilities(request.ClientCapabilities.Fs)
+	a.warnUnsupportedClientFileCapabilities(ctx, request.ClientCapabilities.Fs)
 	protocolVersion := request.ProtocolVersion
 	if protocolVersion != acpsdk.ProtocolVersionNumber {
 		protocolVersion = acpsdk.ProtocolVersionNumber
@@ -267,13 +302,15 @@ func (a *protocolAgent) NewSession(
 		closeMCPServers(ctx, toolSets)
 		return acpsdk.NewSessionResponse{}, err
 	}
-	a.mu.Lock()
-	a.sessions[sessionID] = &sessionState{
+	session := &sessionState{
 		id:       sessionID,
 		cwd:      request.Cwd,
 		tools:    tools,
 		toolSets: toolSets,
 	}
+	session.tools = append(session.tools, a.newClientFileTools(session)...)
+	a.mu.Lock()
+	a.sessions[sessionID] = session
 	a.mu.Unlock()
 	return acpsdk.NewSessionResponse{SessionId: acpsdk.SessionId(sessionID)}, nil
 }

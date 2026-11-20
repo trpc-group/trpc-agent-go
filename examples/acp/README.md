@@ -32,9 +32,26 @@ The adapter supports:
 - tool-call start/completion updates
 - prompt usage and stop reasons
 - session cancellation
+- session-scoped stdio MCP servers
+- optional ACP client file reads and writes
 
-Dynamic MCP servers, session load/list/resume, client filesystem and terminal
-callbacks, image/audio prompts, and permission requests are not advertised.
+ACP client file reads and writes are disabled by default. Enable them
+independently when constructing the server:
+
+```go
+server, err := acp.New(
+	r,
+	acp.WithClientFileReadEnabled(true),
+	acp.WithClientFileWriteEnabled(true),
+)
+```
+
+The tools are injected only when the client also advertises the corresponding
+`fs.readTextFile` or `fs.writeTextFile` capability. Enabling a capability on
+the server when the client does not advertise it logs a warning and exposes no
+corresponding tool. Writes request ACP permission before calling the client.
+Session load/list/resume, terminal callbacks, image/audio prompts, and HTTP/SSE
+MCP remain unsupported.
 
 ACP supplies an absolute working directory for each session. Use
 `acp.WithRunOptionsFunc` when constructing the server to pass that directory to
