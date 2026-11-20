@@ -1299,6 +1299,12 @@ func TestContentRequestProcessor_MaxHistoryRuns_SkipsOrphanedToolResults(t *test
 		}
 	}
 
+	resultWithAttachment := createToolResultEvent("tc1", "result", baseTime.Add(-2*time.Hour))
+	resultWithAttachment.ID = "result-with-attachment"
+	attachment := model.Message{Role: model.RoleUser}
+	attachment.AddImageURL("https://example.test/image.png", "")
+	resultWithAttachment.Choices = append(resultWithAttachment.Choices, model.Choice{Message: attachment})
+
 	tests := []struct {
 		name            string
 		maxHistoryRuns  int
@@ -1373,6 +1379,18 @@ func TestContentRequestProcessor_MaxHistoryRuns_SkipsOrphanedToolResults(t *test
 			expectedCount:   3,
 			expectedContent: []string{"calling", "result", "msg"},
 			description:     "Tool result with its call within the window should be preserved",
+		},
+		{
+			name:           "attachment at the cutpoint does not outlive its tool round",
+			maxHistoryRuns: 2,
+			events: []event.Event{
+				createToolCallEvent("calling", baseTime.Add(-3*time.Hour), "tc1"),
+				resultWithAttachment,
+				createTestEvent("user", "msg", baseTime.Add(-1*time.Hour)),
+			},
+			expectedCount:   1,
+			expectedContent: []string{"msg"},
+			description:     "A user attachment without its tool receipt should be skipped",
 		},
 		{
 			name:           "tool result not orphaned when call is in window",

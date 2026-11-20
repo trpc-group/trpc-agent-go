@@ -373,6 +373,13 @@ type ToolResultMessagesFunc = func(
 - If the callback returns non-empty messages, they replace the default tool message.
 - When using llmagent with built-in OpenAI/Anthropic adapters, the recommended return type is `[]model.Message`.
 
+For Chat Completions, return the matching `RoleTool` receipt followed by a
+`RoleUser` message with image content, as in the
+[image tool example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/imagetool).
+If the user message sets `ToolID`, use `in.ToolCallID`. The framework places
+the user messages after all tool receipts for the round; no `BeforeModel`
+callback is needed.
+
 **Usage example:**
 
 ```go

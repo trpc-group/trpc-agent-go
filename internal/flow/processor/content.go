@@ -1606,11 +1606,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
-		startIdx := maxHistoryRunsStartIndex(
-			history.messages,
-			p.MaxHistoryRuns,
-		)
-		startIdx = pendingNativeToolRoundStart(history.messages, startIdx)
+		startIdx := projectedHistoryStartIndex(history, p.MaxHistoryRuns)
 		if len(history.items) == len(history.messages) {
 			history.items = history.items[startIdx:]
 		}
@@ -2695,6 +2691,46 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 	}
 
 	return startIdx
+}
+
+func projectedHistoryStartIndex(history projectedHistory, maxRuns int) int {
+	messages := history.messages
+	startIdx := maxHistoryRunsStartIndex(messages, maxRuns)
+	if toolResultUserStart(history, startIdx) >= 0 {
+		resultEventID := history.items[startIdx].EffectiveEvent.ID
+		for startIdx < len(messages) && messages[startIdx].Role == model.RoleUser &&
+			history.items[startIdx].EffectiveEvent.ID == resultEventID {
+			startIdx++
+		}
+	}
+	pendingEnd := len(messages)
+	if firstUser := toolResultUserStart(history, pendingEnd-1); firstUser >= 0 {
+		pendingEnd = firstUser
+	}
+	return pendingNativeToolRoundStart(messages[:pendingEnd], startIdx)
+}
+
+// toolResultUserStart returns the start of the user attachments following
+// receipts from the same projected event, or -1 for an ordinary message.
+func toolResultUserStart(history projectedHistory, index int) int {
+	if index < 1 || index >= len(history.messages) ||
+		len(history.items) != len(history.messages) || history.messages[index].Role != model.RoleUser {
+		return -1
+	}
+	resultEventID := history.items[index].EffectiveEvent.ID
+	if resultEventID == "" {
+		return -1
+	}
+	for first := index; first > 0 && history.items[first-1].EffectiveEvent.ID == resultEventID; first-- {
+		switch history.messages[first-1].Role {
+		case model.RoleTool:
+			return first
+		case model.RoleUser:
+		default:
+			return -1
+		}
+	}
+	return -1
 }
 
 // pendingNativeToolRoundStart moves a history limit back to the latest native
@@ -3892,7 +3928,8 @@ func hasNonToolPayload(msg model.Message) bool {
 	return msg.Content != "" || len(msg.ContentParts) > 0
 }
 
-// rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
+// rearrangeLatestFuncResp moves the latest tool results next to their call.
+// Rounds with attachments keep their result event boundaries until matching.
 func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	events []event.Event,
 ) []event.Event {
@@ -3906,7 +3943,7 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 		return events
 	}
 
-	functionResponseIDs := lastEvent.GetToolResultIDs()
+	functionResponseIDs := toolReceiptIDs(lastEvent.Choices)
 	if len(functionResponseIDs) == 0 {
 		return events
 	}
@@ -3941,7 +3978,7 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	for i := functionCallEventIdx + 1; i < len(events); i++ {
 		evt := &events[i]
 		if evt.IsToolResultResponse() {
-			responseIDs := toMap(evt.GetToolResultIDs())
+			responseIDs := toMap(toolReceiptIDs(evt.Choices))
 			for _, callID := range functionCallIDs {
 				if responseIDs[callID] {
 					functionResponseEvents = append(functionResponseEvents, *evt)
@@ -3955,11 +3992,14 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	resultEvents := make([]event.Event, functionCallEventIdx+1)
 	copy(resultEvents, events[:functionCallEventIdx+1])
 
-	if len(functionResponseEvents) > 0 {
-		mergedEvent := p.mergeFunctionResponseEvents(functionResponseEvents)
-		resultEvents = append(resultEvents, mergedEvent)
+	for _, evt := range functionResponseEvents {
+		if hasToolResultUserChoices(evt.Choices) {
+			return append(resultEvents, functionResponseEvents...)
+		}
 	}
-
+	if len(functionResponseEvents) > 0 {
+		resultEvents = append(resultEvents, p.mergeFunctionResponseEvents(functionResponseEvents))
+	}
 	return resultEvents
 }
 
@@ -4005,30 +4045,23 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 
 			if len(responseMatches) == 0 {
 				continue
-			} else if len(responseMatches) == 1 {
-				responseEvent := filterToolResponseEvent(events, responseMatches[0])
-				if perToolCallResultRound {
-					responseEvent = orderToolResultChoicesByCallOrder(
-						responseEvent,
-						callIDs,
-					)
-				}
-				resultEvents = append(resultEvents, responseEvent)
+			}
+			var responseEvent event.Event
+			if len(responseMatches) == 1 {
+				responseEvent = filterToolResponseEvent(events, responseMatches[0])
 			} else {
 				// Merge multiple async function responses.
 				var responseEvents []event.Event
 				for _, match := range responseMatches {
 					responseEvents = append(responseEvents, filterToolResponseEvent(events, match))
 				}
-				mergedEvent := p.mergeFunctionResponseEvents(responseEvents)
-				if perToolCallResultRound {
-					mergedEvent = orderToolResultChoicesByCallOrder(
-						mergedEvent,
-						callIDs,
-					)
-				}
-				resultEvents = append(resultEvents, mergedEvent)
+				responseEvent = p.mergeFunctionResponseEvents(responseEvents)
 			}
+			var order []string
+			if perToolCallResultRound {
+				order = callIDs
+			}
+			resultEvents = append(resultEvents, orderToolResultChoices(responseEvent, order))
 		} else {
 			resultEvents = append(resultEvents, evt)
 		}
@@ -4082,40 +4115,64 @@ func sameToolResultRound(callEvent, candidate event.Event) bool {
 		callEvent.RequestID == candidate.RequestID
 }
 
-// orderToolResultChoicesByCallOrder projects tool-result choices in the order
-// declared by the assistant, independently of the order in which tools
-// finished. Choices outside the round, if any, remain at the end in their
-// original order.
-func orderToolResultChoicesByCallOrder(
+// orderToolResultChoices keeps all tool receipts contiguous before user
+// attachments. Per-call result events also need to be ordered by the call list.
+func orderToolResultChoices(
 	evt event.Event,
 	callIDs []string,
 ) event.Event {
-	if evt.Response == nil || len(evt.Response.Choices) < 2 || len(callIDs) < 2 {
+	if evt.Response == nil || len(evt.Response.Choices) < 2 {
 		return evt
 	}
 
-	orderByID := make(map[string]int, len(callIDs))
-	for i, callID := range callIDs {
-		if _, exists := orderByID[callID]; !exists {
-			orderByID[callID] = i
+	var orderByID map[string]int
+	if len(callIDs) > 1 {
+		orderByID = make(map[string]int, len(callIDs))
+		for index, callID := range callIDs {
+			if _, exists := orderByID[callID]; !exists {
+				orderByID[callID] = index
+			}
 		}
+	} else if !hasInterleavedToolResultUsers(evt.Response.Choices) {
+		return evt
 	}
 
 	response := *evt.Response
 	response.Choices = append([]model.Choice(nil), evt.Response.Choices...)
-	sort.SliceStable(response.Choices, func(i, j int) bool {
-		iOrder, iKnown := orderByID[toolResponseIDFromChoice(response.Choices[i])]
-		jOrder, jKnown := orderByID[toolResponseIDFromChoice(response.Choices[j])]
-		if iKnown != jKnown {
-			return iKnown
+	sort.SliceStable(response.Choices, func(left, right int) bool {
+		leftChoice, rightChoice := &response.Choices[left], &response.Choices[right]
+		leftUser := leftChoice.Message.Role == model.RoleUser
+		rightUser := rightChoice.Message.Role == model.RoleUser
+		if leftUser != rightUser {
+			return !leftUser
 		}
-		if !iKnown {
+		if leftUser {
+			return orderByID != nil && leftChoice.Index < rightChoice.Index
+		}
+		leftOrder, leftKnown := orderByID[toolResponseIDFromChoice(*leftChoice)]
+		rightOrder, rightKnown := orderByID[toolResponseIDFromChoice(*rightChoice)]
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if !leftKnown {
 			return false
 		}
-		return iOrder < jOrder
+		return leftOrder < rightOrder
 	})
 	evt.Response = &response
 	return evt
+}
+
+func hasInterleavedToolResultUsers(choices []model.Choice) bool {
+	seenUser := false
+	for index := range choices {
+		if choices[index].Message.Role == model.RoleUser {
+			seenUser = true
+		} else if seenUser {
+			return true
+		}
+	}
+	return false
 }
 
 type pendingToolCallRound struct {
@@ -4159,6 +4216,7 @@ func toolResponseMatchesByCallEventFiltered(
 		if !evt.IsToolResultResponse() {
 			continue
 		}
+		userChoices := toolResultUserChoicesByReceipt(evt.Response.Choices)
 		for choiceIndex, choice := range evt.Response.Choices {
 			responseID := toolResponseIDFromChoice(choice)
 			if responseID == "" {
@@ -4173,6 +4231,7 @@ func toolResponseMatchesByCallEventFiltered(
 					responseMatchesByCallEvent[pendingCallRounds[j].eventIndex],
 					i,
 					choiceIndex,
+					userChoices[choiceIndex],
 				)
 				break
 			}
@@ -4181,30 +4240,110 @@ func toolResponseMatchesByCallEventFiltered(
 	return responseMatchesByCallEvent
 }
 
+// toolResultUserChoicesByReceipt associates callback messages in the same
+// event. Callback choices for one invocation of a tool share a choice index.
+// An attachment may omit its tool ID when that index identifies one receipt.
+func toolResultUserChoicesByReceipt(choices []model.Choice) map[int][]int {
+	if len(choices) < 2 {
+		return nil
+	}
+	var users []int
+	for index := range choices {
+		msg := &choices[index].Message
+		if msg.Role == model.RoleUser && hasNonToolPayload(*msg) {
+			users = append(users, index)
+		}
+	}
+	if len(users) == 0 {
+		return nil
+	}
+	type receiptKey struct {
+		index  int
+		toolID string
+	}
+	receipts := make(map[receiptKey]int)
+	for index := range choices {
+		msg := &choices[index].Message
+		if msg.Role != model.RoleTool || msg.ToolID == "" {
+			continue
+		}
+		for _, id := range [...]string{msg.ToolID, ""} {
+			key := receiptKey{index: choices[index].Index, toolID: id}
+			if _, exists := receipts[key]; exists {
+				receipts[key] = -1
+			} else {
+				receipts[key] = index
+			}
+		}
+	}
+	var attached map[int][]int
+	for _, index := range users {
+		key := receiptKey{index: choices[index].Index, toolID: choices[index].Message.ToolID}
+		if receipt, ok := receipts[key]; ok && receipt >= 0 {
+			if attached == nil {
+				attached = make(map[int][]int)
+			}
+			attached[receipt] = append(attached[receipt], index)
+		}
+	}
+	return attached
+}
+
 func toolResponseIDFromChoice(choice model.Choice) string {
+	if choice.Message.Role == model.RoleUser {
+		return ""
+	}
 	if choice.Message.ToolID != "" {
 		return choice.Message.ToolID
+	}
+	if choice.Delta.Role == model.RoleUser {
+		return ""
 	}
 	return choice.Delta.ToolID
 }
 
-// appendToolResponseChoice records one matching choice while coalescing choices
-// from the same response event into one match.
+func toolReceiptIDs(choices []model.Choice) []string {
+	ids := make([]string, 0, len(choices))
+	for index := range choices {
+		choice := &choices[index]
+		if choice.Message.Role != model.RoleUser && choice.Message.ToolID != "" {
+			ids = append(ids, choice.Message.ToolID)
+		}
+		if choice.Delta.Role != model.RoleUser && choice.Delta.ToolID != "" {
+			ids = append(ids, choice.Delta.ToolID)
+		}
+	}
+	return ids
+}
+
+func hasToolResultUserChoices(choices []model.Choice) bool {
+	for index := range choices {
+		if choices[index].Message.Role == model.RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
+// appendToolResponseChoice records a matched receipt and its attachments while
+// coalescing choices from the same response event.
 func appendToolResponseChoice(
 	matches []matchedToolResponseEvent,
 	eventIndex int,
 	choiceIndex int,
+	userChoices []int,
 ) []matchedToolResponseEvent {
 	for i := range matches {
 		if matches[i].eventIndex != eventIndex {
 			continue
 		}
 		matches[i].choiceIndices = append(matches[i].choiceIndices, choiceIndex)
+		matches[i].choiceIndices = append(matches[i].choiceIndices, userChoices...)
 		return matches
 	}
 	return append(matches, matchedToolResponseEvent{
 		eventIndex:    eventIndex,
-		choiceIndices: []int{choiceIndex},
+		choiceIndices: append([]int{choiceIndex}, userChoices...),
 	})
 }
 
@@ -4227,7 +4366,8 @@ func filterToolResponseEvent(events []event.Event, match matchedToolResponseEven
 	return evt
 }
 
-// mergeFunctionResponseEvents merges a list of function_response events into one event.
+// mergeFunctionResponseEvents merges tool result events. When an event has
+// matched user attachments, its receipt is kept even if its content is empty.
 func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	functionResponseEvents []event.Event,
 ) event.Event {
@@ -4238,9 +4378,12 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	// Start with the first event as base.
 	mergedEvent := functionResponseEvents[0]
 
-	// Collect all tool response messages, preserving each individual ToolID.
 	var allChoices []model.Choice
 	for _, evt := range functionResponseEvents {
+		if hasToolResultUserChoices(evt.Choices) {
+			allChoices = append(allChoices, evt.Choices...)
+			continue
+		}
 		for _, choice := range evt.Choices {
 			message := choice.Message
 			if message.ToolID == "" {

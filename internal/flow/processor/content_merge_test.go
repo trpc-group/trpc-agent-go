@@ -182,6 +182,32 @@ func Test_rearrangeLatestFuncResp_NoMatchingCall_ReturnsOriginal(t *testing.T) {
 	assert.Equal(t, "x", out[1].GetToolResultIDs()[0])
 }
 
+func TestToolResultUserMessagesKeepTheirReceipt(t *testing.T) {
+	processor := NewContentRequestProcessor()
+	assistant := event.Event{Response: &model.Response{Choices: []model.Choice{{
+		Message: model.Message{
+			Role:      model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{ID: "first"}, {ID: "second"}},
+		},
+	}}}}
+	first := model.Message{Role: model.RoleTool, ToolID: "first", Content: "first result"}
+	second := model.Message{Role: model.RoleTool, ToolID: "second", Content: "second result"}
+	unmatched := model.Message{Role: model.RoleUser, ToolID: "second"}
+	unmatched.AddImageURL("https://example.test/unmatched.png", "")
+	attached := model.Message{Role: model.RoleUser}
+	attached.AddImageURL("https://example.test/second.png", "")
+
+	events := []event.Event{
+		assistant,
+		{Response: &model.Response{Choices: []model.Choice{{Message: first}, {Message: unmatched}}}},
+		{Response: &model.Response{Choices: []model.Choice{{Message: second}, {Message: attached}}}},
+	}
+	projected := processor.rearrangeAsyncFuncRespHist(processor.rearrangeLatestFuncResp(events))
+	require.Len(t, projected, 2)
+	require.Equal(t, []model.Choice{{Message: first}, {Message: second}, {Message: attached}}, projected[1].Choices)
+	require.Equal(t, []model.Choice{{Message: first}, {Message: unmatched}}, events[1].Choices)
+}
+
 func Test_rearrangeLatestFuncResp_LatestNotToolResult_ReturnsOriginal(t *testing.T) {
 	p := NewContentRequestProcessor()
 
