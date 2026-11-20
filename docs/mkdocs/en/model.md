@@ -2384,6 +2384,13 @@ When the visible text still matches its native version, missing URL citations
 are appended as plain links. Callback edits to the visible text take precedence.
 Content the target cannot represent produces a local error.
 
+The native Gemini adapter can also continue completed Responses history. It sends
+visible text, function calls, and results as Gemini content parts. It matches
+parallel results by call ID and sends them in call order. If encoding would
+discard a tool result or change a JSON number, the request returns a local
+error. The root and Gemini modules must both include support for Responses
+history projection.
+
 - **Runner with an LLMAgent.** With `agent.WithResume(true)`, the agent checks
   the producing protocol and model name before executing a pending native tool
   call. Selecting a different model at this point fails before tool execution.

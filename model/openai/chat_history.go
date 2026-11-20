@@ -10,14 +10,9 @@
 package openai
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
@@ -68,13 +63,7 @@ func projectChatHistoryMessage(message model.Message) (model.Message, bool, erro
 		}
 	}
 	if data != nil {
-		if data.Protocol != responseshistory.Protocol {
-			return model.Message{}, false, fmt.Errorf("unsupported provider data protocol %q", data.Protocol)
-		}
-		if err := providerdata.ValidateMessage(message, model.Info{Name: data.Model, ProviderDataProtocol: data.Protocol}); err != nil {
-			return model.Message{}, false, err
-		}
-		return projectResponsesHistory(message)
+		return responseshistory.ProjectMessage(message)
 	}
 	if message.Role == model.RoleTool && len(message.ContentParts) > 0 {
 		var content strings.Builder
@@ -163,186 +152,6 @@ func (m *Model) supportsUserHistoryPart(part model.ContentPart) bool {
 	default:
 		return false
 	}
-}
-
-// projectResponsesHistory validates the native record while preserving the
-// caller-visible projection, which callbacks may have edited for this request.
-func projectResponsesHistory(message model.Message) (model.Message, bool, error) {
-	callIDs, nativeText, sources, err := responsesHistoryForChat(message.ProviderData.Payload)
-	if err != nil {
-		return model.Message{}, false, err
-	}
-	if len(callIDs) != len(message.ToolCalls) {
-		return model.Message{}, false, fmt.Errorf("responses function calls do not match the message projection")
-	}
-	for i, id := range callIDs {
-		if id != message.ToolCalls[i].ID {
-			return model.Message{}, false, fmt.Errorf("responses function call %q does not match the message projection", id)
-		}
-	}
-	converted := providerdata.CloneMessageProjections(message)
-	converted.ProviderData = nil
-	converted.ReasoningContent = ""
-	converted.ReasoningSignature = ""
-	// A callback can redact or otherwise replace the visible projection without
-	// editing ProviderData. Never restore source URLs from that stale record.
-	if visible, ok := chatVisibleText(converted); ok && visible == nativeText && len(sources) > 0 {
-		sources = slices.DeleteFunc(sources, func(source string) bool { return chatTextContainsURL(visible, source) })
-		if len(sources) > 0 {
-			links := "\n\nSources:\n" + strings.Join(sources, "\n")
-			if len(converted.ContentParts) == 0 {
-				converted.Content += links
-			} else {
-				converted.ContentParts = append(converted.ContentParts, model.ContentPart{Type: model.ContentTypeText, Text: &links})
-			}
-		}
-	}
-	for i := range converted.ToolCalls {
-		call := &converted.ToolCalls[i]
-		if err := validateProjectedChatCall(call); err != nil {
-			return model.Message{}, false, err
-		}
-		call.ExtraFields = nil
-	}
-	return converted, converted.Content != "" || len(converted.ContentParts) > 0 || len(converted.ToolCalls) > 0, nil
-}
-
-// responsesHistoryForChat validates the native items and collects their text
-// and supported citations without changing the persisted record.
-func responsesHistoryForChat(payload json.RawMessage) ([]string, string, []string, error) {
-	items, err := responseshistory.ReadCompleted(payload)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	var callIDs []string
-	var text strings.Builder
-	var sources []string
-	seen := make(map[string]struct{})
-	for i, item := range items {
-		switch item.Type {
-		case responseshistory.FunctionCall:
-			callIDs = append(callIDs, item.CallID)
-		case responseshistory.Message:
-			if len(callIDs) != 0 {
-				return nil, "", nil, fmt.Errorf("responses message item %d follows a function call in the same output", i)
-			}
-			for _, part := range item.Content {
-				switch part.Type {
-				case responseshistory.OutputText:
-					text.WriteString(part.Text)
-				case responseshistory.Refusal:
-					text.WriteString(part.Refusal)
-				}
-				links, err := chatCitationURLs(part)
-				if err != nil {
-					return nil, "", nil, fmt.Errorf("responses message item %d has annotations that chat history cannot represent: %w", i, err)
-				}
-				for _, link := range links {
-					if _, ok := seen[link]; !ok {
-						seen[link] = struct{}{}
-						sources = append(sources, link)
-					}
-				}
-			}
-		}
-	}
-	return callIDs, text.String(), sources, nil
-}
-
-func chatVisibleText(message model.Message) (string, bool) {
-	var text strings.Builder
-	text.WriteString(message.Content)
-	for _, part := range message.ContentParts {
-		if part.Type != model.ContentTypeText || part.Text == nil || part.ContentRef != nil {
-			return "", false
-		}
-		text.WriteString(*part.Text)
-	}
-	return text.String(), true
-}
-
-// chatCitationURLs accepts only URL citations with safe, absolute HTTP URLs.
-// The title and offsets are not used when projecting plain source links.
-func chatCitationURLs(part responseshistory.Content) ([]string, error) {
-	if part.Annotations == nil {
-		return nil, nil
-	}
-	var annotations []json.RawMessage
-	if err := json.Unmarshal(part.Annotations, &annotations); err != nil {
-		return nil, fmt.Errorf("invalid annotations")
-	}
-	var links []string
-	for _, raw := range annotations {
-		var citation struct {
-			Type string `json:"type"`
-			URL  string `json:"url"`
-		}
-		if err := json.Unmarshal(raw, &citation); err != nil || part.Type != responseshistory.OutputText ||
-			citation.Type != "url_citation" || !safeChatCitationURL(citation.URL) {
-			return nil, fmt.Errorf("unsupported or invalid annotation")
-		}
-		links = append(links, citation.URL)
-	}
-	return links, nil
-}
-
-// chatTextContainsURL avoids treating one URL as present merely because it is
-// a prefix or a substring of a longer URL in the visible text.
-func chatTextContainsURL(text, source string) bool {
-	for start := 0; start < len(text); {
-		i := strings.Index(text[start:], source)
-		if i < 0 {
-			return false
-		}
-		i += start
-		end := i + len(source)
-		before, after := rune(0), rune(0)
-		if i > 0 {
-			before, _ = utf8.DecodeLastRuneInString(text[:i])
-		}
-		if end < len(text) {
-			after, _ = utf8.DecodeRuneInString(text[end:])
-		}
-		wrapped := before == '(' && after == ')'
-		if wrapped && i > 1 {
-			outer, _ := utf8.DecodeLastRuneInString(text[:i-1])
-			wrapped = outer == ']' || !chatURLCharacter(outer)
-		}
-		if (!chatURLCharacter(before) && !chatURLCharacter(after)) || wrapped {
-			return true
-		}
-		start = i + len(source)
-	}
-	return false
-}
-
-func chatURLCharacter(r rune) bool {
-	return r != 0 && !unicode.IsSpace(r) && !unicode.IsControl(r) && !strings.ContainsRune(`<>"`, r)
-}
-
-func safeChatCitationURL(raw string) bool {
-	if strings.IndexFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
-		return false
-	}
-	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil && u.Opaque == ""
-}
-
-// validateProjectedChatCall checks the call that will actually be sent. Its
-// values may have been edited independently of the native payload.
-func validateProjectedChatCall(call *model.ToolCall) error {
-	if strings.TrimSpace(call.Function.Name) == "" {
-		return fmt.Errorf("function call %q has an empty name", call.ID)
-	}
-	args := bytes.TrimSpace(call.Function.Arguments)
-	if len(args) == 0 {
-		call.Function.Arguments = []byte("{}")
-		return nil
-	}
-	if !responseshistory.ValidArguments(args) {
-		return fmt.Errorf("function call %q has invalid JSON object arguments", call.ID)
-	}
-	return nil
 }
 
 func validateChatToolRounds(messages []model.Message) error {
