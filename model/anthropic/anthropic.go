@@ -598,6 +598,13 @@ func (m *Model) handleNonStreamingResponse(
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
 	}
+	// A successful HTTP response containing JSON null decodes to (nil, nil).
+	// Reject it before invoking the success callback or dereferencing it.
+	if message == nil {
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError,
+			errors.New("anthropic: received nil message"))
+		return
+	}
 	m.runChatResponseCallback(ctx, &chatRequest, message)
 	// Build final response payload.
 	now := time.Now()
