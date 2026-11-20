@@ -48,10 +48,12 @@ func (inv *Invocation) GetOrCreateWorkspaceRegistry(
 }
 
 func (inv *Invocation) workspaceRegistryState() *invocationWorkspaceRegistries {
-	inv.stateMu.Lock()
-	defer inv.stateMu.Unlock()
-	if inv.workspaceRegistries == nil {
-		inv.workspaceRegistries = &invocationWorkspaceRegistries{}
+	if state := inv.workspaceRegistries.Load(); state != nil {
+		return state
 	}
-	return inv.workspaceRegistries
+	state := &invocationWorkspaceRegistries{}
+	if inv.workspaceRegistries.CompareAndSwap(nil, state) {
+		return state
+	}
+	return inv.workspaceRegistries.Load()
 }
