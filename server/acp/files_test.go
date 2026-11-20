@@ -172,6 +172,22 @@ func TestClientReadTextFileTool(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, result)
+	require.Len(t, connection.readRequests(), 2)
+	defaults := connection.readRequests()[1]
+	require.NotNil(t, defaults.Line)
+	require.NotNil(t, defaults.Limit)
+	assert.Equal(t, defaultClientFileReadLine, *defaults.Line)
+	assert.Equal(t, defaultClientFileReadLimit, *defaults.Limit)
+
+	_, err = readTool.(tool.CallableTool).Call(
+		context.Background(),
+		[]byte(`{"path":"late.txt","line":5000000}`),
+	)
+	require.NoError(t, err)
+	require.Len(t, connection.readRequests(), 3)
+	largeLine := connection.readRequests()[2]
+	require.NotNil(t, largeLine.Line)
+	assert.Equal(t, 5_000_000, *largeLine.Line)
 }
 
 func TestClientReadTextFileToolValidation(t *testing.T) {
@@ -191,6 +207,11 @@ func TestClientReadTextFileToolValidation(t *testing.T) {
 		{name: "empty path", arguments: `{"path":""}`, wantError: "path is required"},
 		{name: "zero line", arguments: `{"path":"README.md","line":0}`, wantError: "line must be greater than zero"},
 		{name: "zero limit", arguments: `{"path":"README.md","limit":0}`, wantError: "limit must be greater than zero"},
+		{
+			name:      "limit exceeds maximum",
+			arguments: fmt.Sprintf(`{"path":"README.md","limit":%d}`, maxClientFileReadLimit+1),
+			wantError: fmt.Sprintf("limit must be at most %d", maxClientFileReadLimit),
+		},
 		{name: "parent traversal", arguments: `{"path":"../secret.txt"}`, wantError: "outside the session workspace"},
 		{
 			name:      "absolute outside",
@@ -208,6 +229,38 @@ func TestClientReadTextFileToolValidation(t *testing.T) {
 		})
 	}
 	assert.Empty(t, connection.readRequests())
+}
+
+func TestClientReadTextFileInputSchema(t *testing.T) {
+	_, _, session := newClientFileTestAgent(
+		t,
+		[]Option{WithClientFileReadEnabled(true)},
+		true,
+		false,
+	)
+	readTool := findTool(session.tools, clientReadTextFileToolName)
+	require.NotNil(t, readTool)
+	schema := readTool.Declaration().InputSchema
+	require.NotNil(t, schema)
+	require.Contains(t, schema.Properties, "line")
+	require.Contains(t, schema.Properties, "limit")
+	assert.Equal(t, defaultClientFileReadLine, schema.Properties["line"].Default)
+	assert.Equal(t, defaultClientFileReadLimit, schema.Properties["limit"].Default)
+	assert.Contains(
+		t,
+		schema.Properties["line"].Description,
+		fmt.Sprintf("Default: %d", defaultClientFileReadLine),
+	)
+	assert.Contains(
+		t,
+		schema.Properties["limit"].Description,
+		fmt.Sprintf("Maximum: %d", maxClientFileReadLimit),
+	)
+	assert.Contains(
+		t,
+		schema.Properties["limit"].Description,
+		fmt.Sprintf("Default: %d", defaultClientFileReadLimit),
+	)
 }
 
 func TestClientWriteTextFileTool(t *testing.T) {

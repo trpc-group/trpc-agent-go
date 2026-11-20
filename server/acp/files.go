@@ -27,6 +27,10 @@ import (
 const (
 	clientReadTextFileToolName  = "acp_read_text_file"
 	clientWriteTextFileToolName = "acp_write_text_file"
+
+	defaultClientFileReadLine  = 1
+	defaultClientFileReadLimit = 2000
+	maxClientFileReadLimit     = 10_000
 )
 
 type clientReadTextFileArgs struct {
@@ -36,8 +40,8 @@ type clientReadTextFileArgs struct {
 }
 
 type clientWriteTextFileArgs struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path    string `json:"path" jsonschema:"description=File path relative to the session workspace or an absolute path inside it"`
+	Content string `json:"content" jsonschema:"description=Text content to write to the file"`
 }
 
 type clientWriteTextFileTool struct {
@@ -101,7 +105,40 @@ func (a *protocolAgent) newClientReadTextFileTool(session *sessionState) tool.To
 		},
 		function.WithName(clientReadTextFileToolName),
 		function.WithDescription("Read a text file through the ACP client."),
+		function.WithInputSchema(clientReadTextFileInputSchema()),
 	)
+}
+
+func clientReadTextFileInputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type:     "object",
+		Required: []string{"path"},
+		Properties: map[string]*tool.Schema{
+			"path": {
+				Type: "string",
+				Description: "File path relative to the session workspace or an " +
+					"absolute path inside it.",
+			},
+			"line": {
+				Type: "integer",
+				Description: fmt.Sprintf(
+					"Optional 1-based start line. Default: %d.",
+					defaultClientFileReadLine,
+				),
+				Default: defaultClientFileReadLine,
+			},
+			"limit": {
+				Type: "integer",
+				Description: fmt.Sprintf(
+					"Optional maximum number of lines to return. "+
+						"Default: %d. Maximum: %d.",
+					defaultClientFileReadLimit,
+					maxClientFileReadLimit,
+				),
+				Default: defaultClientFileReadLimit,
+			},
+		},
+	}
 }
 
 func (a *protocolAgent) newClientWriteTextFileTool(session *sessionState) tool.Tool {
@@ -125,11 +162,22 @@ func (a *protocolAgent) readClientTextFile(
 	session *sessionState,
 	args clientReadTextFileArgs,
 ) (string, error) {
-	if args.Line != nil && *args.Line < 1 {
+	line := defaultClientFileReadLine
+	if args.Line != nil {
+		line = *args.Line
+	}
+	limit := defaultClientFileReadLimit
+	if args.Limit != nil {
+		limit = *args.Limit
+	}
+	if line < 1 {
 		return "", errors.New("line must be greater than zero")
 	}
-	if args.Limit != nil && *args.Limit < 1 {
+	if limit < 1 {
 		return "", errors.New("limit must be greater than zero")
+	}
+	if limit > maxClientFileReadLimit {
+		return "", fmt.Errorf("limit must be at most %d", maxClientFileReadLimit)
 	}
 	path, err := resolveSessionPath(session.cwd, args.Path)
 	if err != nil {
@@ -140,8 +188,8 @@ func (a *protocolAgent) readClientTextFile(
 	}
 	response, err := a.connection.ReadTextFile(ctx, acpsdk.ReadTextFileRequest{
 		Path:      path,
-		Line:      args.Line,
-		Limit:     args.Limit,
+		Line:      &line,
+		Limit:     &limit,
 		SessionId: acpsdk.SessionId(session.id),
 	})
 	if err != nil {

@@ -53,6 +53,10 @@ corresponding tool. Writes request ACP permission before calling the client.
 Session load/list/resume, terminal callbacks, image/audio prompts, and HTTP/SSE
 MCP remain unsupported.
 
+Client file reads default to `line=1` and `limit=2000`. Explicit values must be
+positive. `line` has no upper cap because it is a pagination cursor; `limit` is
+capped at 10,000.
+
 ACP supplies an absolute working directory for each session. Use
 `acp.WithRunOptionsFunc` when constructing the server to pass that directory to
 a request-scoped coding agent or agent factory:
