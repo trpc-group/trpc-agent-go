@@ -59,7 +59,9 @@ recovery contract.
   `RoleTool.ContentParts`; text-only tool outputs keep their string format.
 - Streaming text, refusal, and reasoning previews, followed by one
   authoritative completed response. Tool calls are exposed only in that
-  completed response. A completed response whose output array is empty is
+  completed response. Its output array determines item order, assistant text,
+  and function names and arguments, even when intermediate events differ.
+  A completed response whose output array is empty is
   valid only when the stream has not already shown output. Non-empty text,
   refusal, and reasoning deltas, and native or function-call output events,
   make that empty completion an error. Earlier previews remain previews; they
@@ -148,10 +150,15 @@ These three cases have different contracts:
 
 ## Native history and ownership
 
-Streaming reasoning replay uses the complete item from `response.output_item.done`.
-Its opaque `encrypted_content` can differ from the terminal response snapshot;
-all other item fields must agree. The adapter still waits for a valid
-`response.completed` before committing the response or executing tools.
+For streaming reasoning, a valid `response.output_item.done` item may contain
+the encrypted state needed for replay. When its ID identifies one encrypted
+done item and one completed reasoning item, the adapter uses the whole done
+item in that position for both the reasoning summary and native history.
+For repeated IDs, every encrypted done item must have a distinct, nonnegative
+output index, and those positions must exactly match the completed positions
+for that ID. If they do not, the adapter keeps all completed items for that ID.
+When the positions align, each done item is used only if its other fields match
+the completed item at that position, excluding `encrypted_content`.
 
 Each completed response stores its entire ordered output array, including
 opaque encrypted reasoning, annotations, item IDs, and message phase, in
