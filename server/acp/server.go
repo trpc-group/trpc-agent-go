@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -184,7 +185,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	if err != nil {
 		return err
 	}
-	defer connection.agent.cancelAll()
+	defer connection.agent.shutdown()
 	select {
 	case <-connection.done():
 		return nil
@@ -201,12 +202,15 @@ type protocolAgent struct {
 }
 
 type sessionState struct {
-	id        string
-	cwd       string
-	cancel    context.CancelFunc
-	requestID string
-	closed    bool
-	mu        sync.Mutex
+	id         string
+	cwd        string
+	tools      []tool.Tool
+	toolSets   []tool.ToolSet
+	cancel     context.CancelFunc
+	requestID  string
+	promptDone chan struct{}
+	closed     bool
+	mu         sync.Mutex
 }
 
 func newProtocolAgent(server *Server) *protocolAgent {
@@ -238,7 +242,7 @@ func (a *protocolAgent) Initialize(
 }
 
 func (a *protocolAgent) NewSession(
-	_ context.Context,
+	ctx context.Context,
 	request acpsdk.NewSessionRequest,
 ) (acpsdk.NewSessionResponse, error) {
 	if !filepath.IsAbs(request.Cwd) {
@@ -246,22 +250,27 @@ func (a *protocolAgent) NewSession(
 			map[string]any{"cwd": "must be an absolute path"},
 		)
 	}
-	if len(request.McpServers) != 0 {
-		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(
-			map[string]any{"mcpServers": "dynamic MCP servers are not supported"},
-		)
-	}
 	if len(request.AdditionalDirectories) != 0 {
 		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(
 			map[string]any{"additionalDirectories": "additional directories are not supported"},
 		)
 	}
-	sessionID, err := a.server.newSessionID()
+	tools, toolSets, err := initializeMCPServers(ctx, request.McpServers)
 	if err != nil {
 		return acpsdk.NewSessionResponse{}, err
 	}
+	sessionID, err := a.server.newSessionID()
+	if err != nil {
+		closeMCPServers(ctx, toolSets)
+		return acpsdk.NewSessionResponse{}, err
+	}
 	a.mu.Lock()
-	a.sessions[sessionID] = &sessionState{id: sessionID, cwd: request.Cwd}
+	a.sessions[sessionID] = &sessionState{
+		id:       sessionID,
+		cwd:      request.Cwd,
+		tools:    tools,
+		toolSets: toolSets,
+	}
 	a.mu.Unlock()
 	return acpsdk.NewSessionResponse{SessionId: acpsdk.SessionId(sessionID)}, nil
 }
@@ -310,6 +319,7 @@ func (a *protocolAgent) Prompt(
 			CWD: session.cwd,
 		})...)
 	}
+	runOptions = append(runOptions, agent.WithAdditionalTools(session.tools))
 	runOptions = append(runOptions, agent.WithRequestID(requestID))
 	events, err := a.server.runner.Run(
 		runCtx,
@@ -442,6 +452,7 @@ func (a *protocolAgent) beginPrompt(
 	}
 	session.cancel = cancel
 	session.requestID = requestID
+	session.promptDone = make(chan struct{})
 	session.mu.Unlock()
 	return nil
 }
@@ -451,6 +462,10 @@ func (a *protocolAgent) finishPrompt(session *sessionState, requestID string) {
 	if session.requestID == requestID {
 		session.cancel = nil
 		session.requestID = ""
+		if session.promptDone != nil {
+			close(session.promptDone)
+			session.promptDone = nil
+		}
 	}
 	session.mu.Unlock()
 }
@@ -479,10 +494,16 @@ func (a *protocolAgent) stopPrompt(
 }
 
 func (a *protocolAgent) closeSession(session *sessionState) {
+	promptDone := a.stopSession(session)
+	waitForPromptAndCloseResources(session, promptDone)
+}
+
+func (a *protocolAgent) stopSession(session *sessionState) <-chan struct{} {
 	session.mu.Lock()
 	session.closed = true
 	cancel := session.cancel
 	requestID := session.requestID
+	promptDone := session.promptDone
 	session.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -490,17 +511,33 @@ func (a *protocolAgent) closeSession(session *sessionState) {
 	if requestID != "" && a.server.managedRunner != nil {
 		a.server.managedRunner.Cancel(requestID)
 	}
+	return promptDone
 }
 
-func (a *protocolAgent) cancelAll() {
+func waitForPromptAndCloseResources(
+	session *sessionState,
+	promptDone <-chan struct{},
+) {
+	if promptDone != nil {
+		<-promptDone
+	}
+	closeMCPServers(context.Background(), session.toolSets)
+}
+
+func (a *protocolAgent) shutdown() {
 	a.mu.Lock()
 	sessions := make([]*sessionState, 0, len(a.sessions))
 	for _, session := range a.sessions {
 		sessions = append(sessions, session)
 	}
+	a.sessions = make(map[string]*sessionState)
 	a.mu.Unlock()
-	for _, session := range sessions {
-		a.cancelPrompt(session)
+	promptDone := make([]<-chan struct{}, len(sessions))
+	for index, session := range sessions {
+		promptDone[index] = a.stopSession(session)
+	}
+	for index, session := range sessions {
+		waitForPromptAndCloseResources(session, promptDone[index])
 	}
 }
 

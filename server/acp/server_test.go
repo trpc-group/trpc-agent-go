@@ -91,6 +91,8 @@ func TestServerPromptOverACP(t *testing.T) {
 	require.NotNil(t, initializeResponse.AgentInfo)
 	assert.Equal(t, "test-agent", initializeResponse.AgentInfo.Name)
 	require.NotNil(t, initializeResponse.AgentCapabilities.SessionCapabilities.Close)
+	assert.False(t, initializeResponse.AgentCapabilities.McpCapabilities.Http)
+	assert.False(t, initializeResponse.AgentCapabilities.McpCapabilities.Sse)
 
 	session, err := clientConnection.NewSession(ctx, acpsdk.NewSessionRequest{
 		Cwd:        "/workspace",
@@ -488,7 +490,7 @@ func TestProtocolAgentSessionValidation(t *testing.T) {
 		Cwd:        "/workspace",
 		McpServers: []acpsdk.McpServer{{}},
 	})
-	assert.ErrorContains(t, err, "dynamic MCP servers")
+	assert.ErrorContains(t, err, "only stdio MCP servers are supported")
 	_, err = protocolAgent.NewSession(ctx, acpsdk.NewSessionRequest{
 		Cwd:                   "/workspace",
 		AdditionalDirectories: []string{"/other"},
@@ -715,7 +717,7 @@ func connectTestClient(
 	)
 	return clientConnection, func() {
 		require.NoError(t, clientTransport.Close())
-		serverConnection.agent.cancelAll()
+		serverConnection.agent.shutdown()
 		select {
 		case <-serverConnection.done():
 		case <-time.After(time.Second):

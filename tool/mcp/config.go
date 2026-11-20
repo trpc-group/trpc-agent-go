@@ -64,6 +64,8 @@ type ConnectionConfig struct {
 	// STDIO configuration.
 	Command string   `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
+	// Env contains environment variables passed to a stdio MCP server.
+	Env map[string]string `json:"env,omitempty"`
 
 	// Common configuration.
 	Timeout time.Duration `json:"timeout,omitempty"`

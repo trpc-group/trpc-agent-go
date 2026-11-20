@@ -1115,6 +1115,7 @@ mcpToolSet := mcp.NewMCPToolSet(
         Transport: "stdio",
         Command:   "python",
         Args:      []string{"-m", "my_mcp_server"},
+        Env:       map[string]string{"API_KEY": "your-api-key"},
         Timeout:   10 * time.Second,
     },
 )
@@ -1122,6 +1123,8 @@ if err := mcpToolSet.Init(ctx); err != nil {
     return fmt.Errorf("初始化 STDIO MCP 工具集失败: %w", err)
 }
 ```
+
+`Env` 只用于子进程环境变量，不会写入 `Args`。
 
 #### 2. SSE 传输
 
