@@ -386,7 +386,6 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 		return msg
 	}
 	nativeCall := `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"}]`
-	image := model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.test/a.png"}}
 	for _, tc := range []struct {
 		name     string
 		messages func(t *testing.T) []model.Message
@@ -398,11 +397,6 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 		{name: "tool result without call_id", messages: func(*testing.T) []model.Message {
 			return []model.Message{model.NewToolMessage(" ", "f", "x")}
 		}, want: "tool result at message 0 has an empty call_id"},
-		{name: "tool result with an image", messages: func(*testing.T) []model.Message {
-			result := model.NewToolMessage("c", "f", "")
-			result.ContentParts = []model.ContentPart{image}
-			return []model.Message{call("c", "f", "{}"), result}
-		}, want: "tool messages only support text content"},
 		{name: "call without name", messages: func(*testing.T) []model.Message {
 			return []model.Message{call("c", " ", "{}")}
 		}, want: `function call "c" has an empty name`},

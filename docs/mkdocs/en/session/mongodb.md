@@ -150,3 +150,68 @@ by the `integration` build tag and `MONGODB_INTEGRATION_URI`:
 MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
+
+## Event ordering index upgrades
+
+New services create `idx_session_events_ordered_lookup`, a non-unique partial
+index on `(app_name, user_id, session_id, created_at, _id)` for documents matching
+`{deleted_at: null}`. Collection prefixes also apply to the index name. It
+supports chronological event reads and reverse pagination without an additional
+sort. The original lookup index is retained for rolling upgrades and rollback;
+existing documents and older writers need no conversion.
+
+Index creation during initialization can add startup time and database load.
+For large collections, build the index before deploying the new service. If
+using `WithSkipDBInit(true)`, manage the index explicitly (adjust names for your
+collection prefix):
+
+```javascript
+db.session_events.createIndex(
+  {app_name: 1, user_id: 1, session_id: 1, created_at: 1, _id: 1},
+  {name: "idx_session_events_ordered_lookup",
+   partialFilterExpression: {deleted_at: null}}
+)
+```
+
+Reads remain correct without this index, but may need a blocking sort. Keeping
+both indexes adds storage and write overhead. This index alone does not limit
+the number of events loaded by a context-window read.
+
+## Context-window read costs
+
+For a single session with a positive event limit, MongoDB reads newest events
+first. The initial cursor batch contains at most the smaller of the event limit
+and 128 documents. Subsequent batches contain up to 128 documents, including
+when skipping empty payloads or searching older history for a user message.
+The reader closes the cursor once the window and its required user message are
+available. The returned order and filtering remain the same. If the window has
+no user message, the reader searches older history for the nearest user message;
+a history without any user message still requires a full scan. Empty payloads
+do not consume an event slot.
+
+Time filtering uses the event payload timestamp, which can differ from the
+document's `created_at`. If the oldest event in the candidate window satisfies
+the time cutoff, the window is safe to use. Otherwise, the reader falls back to
+the original full-history filtering to preserve the first-matching-timestamp
+behavior even when timestamps are out of order. Unlimited and multi-session
+reads retain the existing full-history path. Pagination is unchanged. The
+ordered lookup index avoids a blocking sort; the optimization does not force
+an index hint, so externally managed indexes remain supported.
+
+Bounded reads validate only payloads actually traversed, including older events
+searched for a user message. Unlike the previous full-history context reads,
+they can succeed despite invalid JSON in unvisited historical payloads. Invalid
+JSON encountered during traversal still returns an error; full-history
+fallbacks still decode the complete history. A bounded read does not validate
+the integrity of the entire session history.
+
+An optional live-model smoke test verifies a three-turn conversation, event
+window truncation and history reloading after recreating the service. It sends
+synthetic prompts to the configured endpoint and is skipped by default:
+
+```bash
+# Configure OPENAI_API_KEY, OPENAI_BASE_URL and MODEL_NAME in your environment.
+cd test
+MONGODB_LIVE_MODEL_TEST=1 MONGO_TEST_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -run '^TestMongoDBHistoryLiveModel$' -count=1 -v .
+```

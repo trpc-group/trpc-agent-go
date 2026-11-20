@@ -39,6 +39,11 @@ func (e *NotFoundError) Error() string { return "not found: " + e.Message }
 // for some other HTTP failures, including a non-stream request timeout and a
 // gateway timeout.
 //
+// StatusCode is non-zero only when this error was mapped from an HTTP
+// response. HTTP 502 and 504 set it to that status. Client request and
+// execution deadlines leave it zero, including TimeoutError values created
+// with only a message. StatusCode does not mean the sandbox was deleted.
+//
 // For a RunCode deadline, Message identifies which one fired. A request timeout means the
 // client stopped waiting for response headers. An execution timeout means the
 // client stopped reading the response body after headers arrived, including
@@ -56,7 +61,10 @@ func (e *NotFoundError) Error() string { return "not found: " + e.Message }
 // its own net/http error can still match context.DeadlineExceeded.
 type TimeoutError struct {
 	Message string
-	cause   error
+	// StatusCode is the HTTP status mapped into this error. Zero means the
+	// error came from a client deadline rather than an HTTP response.
+	StatusCode int
+	cause      error
 }
 
 func (e *TimeoutError) Error() string { return "timeout: " + e.Message }

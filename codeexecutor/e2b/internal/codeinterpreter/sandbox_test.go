@@ -663,6 +663,52 @@ func TestCreate_BackfillsEnvdAccessToken(t *testing.T) {
 	}
 }
 
+func TestPrepareCreate_KeepsTokensPerSandbox(t *testing.T) {
+	t.Setenv("E2B_ACCESS_TOKEN", "")
+	t.Setenv("E2B_API_URL", "")
+	responses := []string{
+		`{"sandboxID":"sbx-1","envdAccessToken":"envd-1","trafficAccessToken":"traffic-1"}`,
+		`{"sandboxID":"sbx-2","envdAccessToken":"envd-2","trafficAccessToken":"traffic-2"}`,
+	}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if token := req.Header.Get("X-Access-Token"); token != "" {
+			t.Errorf("create request carried an instance access token %q", token)
+		}
+		body := responses[0]
+		responses = responses[1:]
+		return &http.Response{
+			StatusCode: http.StatusCreated,
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	create := PrepareCreate(SandboxOpts{APIKey: "test-key", HTTPClient: client})
+	first, err := create(context.Background())
+	if err != nil {
+		t.Fatalf("create first sandbox: %v", err)
+	}
+	second, err := create(context.Background())
+	if err != nil {
+		t.Fatalf("create second sandbox: %v", err)
+	}
+	for _, test := range []struct {
+		sandbox      *Sandbox
+		accessToken  string
+		trafficToken string
+	}{
+		{first, "envd-1", "traffic-1"},
+		{second, "envd-2", "traffic-2"},
+	} {
+		headers := http.Header{}
+		test.sandbox.addAuthHeaders(headers)
+		if token := headers.Get("X-Access-Token"); token != test.accessToken {
+			t.Errorf("sandbox %s access token = %q, want %q", test.sandbox.SandboxID(), token, test.accessToken)
+		}
+		if token := headers.Get("E2B-Traffic-Access-Token"); token != test.trafficToken {
+			t.Errorf("sandbox %s traffic token = %q, want %q", test.sandbox.SandboxID(), token, test.trafficToken)
+		}
+	}
+}
+
 func TestCreate_DoesNotOverrideExplicitAccessToken(t *testing.T) {
 	t.Setenv("E2B_ACCESS_TOKEN", "")
 

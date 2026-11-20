@@ -142,9 +142,15 @@ func executionTraceToolMessageFromChoice(
 	if msg.ToolID == "" {
 		return executionTraceToolMessage{}, false
 	}
+	content := msg.Content
+	if content == "" && len(msg.ContentParts) > 0 {
+		if data, err := marshalJSONNoHTMLEscape(msg.ContentParts); err == nil {
+			content = string(data)
+		}
+	}
 	return executionTraceToolMessage{
 		id:      msg.ToolID,
 		name:    msg.ToolName,
-		content: msg.Content,
+		content: content,
 	}, true
 }

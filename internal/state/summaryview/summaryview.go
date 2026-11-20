@@ -104,7 +104,7 @@ func AttachProjection(inv *agent.Invocation, view *View) {
 	if inv == nil || view == nil {
 		return
 	}
-	next := cloneView(view)
+	next := cloneStoredView(view)
 	setBindingReason(next, BindingReasonNotFinalized)
 	inv.SetState(stateKey, &invocationState{view: next})
 }
@@ -143,7 +143,7 @@ func Finalize(inv *agent.Invocation, req *model.Request, requestTokens int) {
 		return
 	}
 	view := state.view
-	next := cloneView(view)
+	next := cloneStoredView(view)
 	next.RequestTokens = requestTokens
 	next.Bound = !state.bindingInvalidated && bindItems(next, req.Messages)
 	if !state.bindingInvalidated {
@@ -185,7 +185,7 @@ func RebaseAfterTransform(
 		len(before),
 	)
 	if !boundBefore {
-		next := cloneView(state.view)
+		next := cloneStoredView(state.view)
 		next.ContentRequestLength = len(after)
 		storeInvalidated(inv, next, BindingReasonTransformMismatch)
 		return false
@@ -197,7 +197,7 @@ func RebaseAfterTransform(
 		len(before),
 	)
 	if !ok {
-		next := cloneView(state.view)
+		next := cloneStoredView(state.view)
 		next.ContentRequestLength = len(after)
 		storeInvalidated(inv, next, BindingReasonRebaseFailed)
 		return false
@@ -259,6 +259,7 @@ func rebaseItems(
 
 	transformed := make([]Item, 0, len(after))
 	completed := make([]bool, len(items))
+	extensions := make(extensionCopies)
 	frontier := 0
 	for outputIndex := range after {
 		sourceIndex := sourceIndexForOutput(sourceIndexes, outputIndex)
@@ -268,7 +269,7 @@ func rebaseItems(
 		}
 		item := items[itemIndex]
 		item.Message = statecopy.Message(after[outputIndex])
-		item.EffectiveEvent = cloneEvent(item.EffectiveEvent)
+		item.EffectiveEvent = cloneEventWithExtensions(item.EffectiveEvent, extensions)
 		setEffectiveMessage(&item.EffectiveEvent, item.Message)
 		item.RequestIndex = outputIndex
 		item.Boundary = Boundary{}
@@ -655,6 +656,16 @@ func toolCallIDs(calls []model.ToolCall) []string {
 }
 
 func cloneView(view *View) *View {
+	return cloneViewWithExtensions(view, nil)
+}
+
+// cloneStoredView owns its payloads but preserves extension sharing within
+// the immutable stored view. Mutable snapshots must use cloneView instead.
+func cloneStoredView(view *View) *View {
+	return cloneViewWithExtensions(view, make(extensionCopies))
+}
+
+func cloneViewWithExtensions(view *View, extensions extensionCopies) *View {
 	if view == nil {
 		return nil
 	}
@@ -663,12 +674,18 @@ func cloneView(view *View) *View {
 	for i := range view.Items {
 		cloned.Items[i] = view.Items[i]
 		cloned.Items[i].Message = statecopy.Message(view.Items[i].Message)
-		cloned.Items[i].EffectiveEvent = cloneEvent(view.Items[i].EffectiveEvent)
+		cloned.Items[i].EffectiveEvent = cloneEventWithExtensions(
+			view.Items[i].EffectiveEvent, extensions,
+		)
 	}
 	return &cloned
 }
 
 func cloneEvent(evt event.Event) event.Event {
+	return cloneEventWithExtensions(evt, nil)
+}
+
+func cloneEventWithExtensions(evt event.Event, extensions extensionCopies) event.Event {
 	cloned := evt
 	if evt.Response != nil {
 		cloned.Response = evt.Response.Clone()
@@ -715,9 +732,34 @@ func cloneEvent(evt event.Event) event.Event {
 	if evt.Extensions != nil {
 		cloned.Extensions = make(map[string]json.RawMessage, len(evt.Extensions))
 		for key, value := range evt.Extensions {
-			cloned.Extensions[key] = append(json.RawMessage(nil), value...)
+			cloned.Extensions[key] = extensions.clone(value)
 		}
 	}
+	return cloned
+}
+
+// extensionCopies is scoped to one stored-view copy. Parallel result items
+// inherit the same extension buffer; copy it once without decoding its JSON.
+// Buffer identity, rather than event ID, also preserves distinct projections
+// of the same event. The cache is discarded after copying, so it cannot retain
+// the source view. A nil cache gives each mutable snapshot item its own bytes.
+type extensionCopies map[extensionBuffer]json.RawMessage
+
+type extensionBuffer struct {
+	start  *byte
+	length int
+}
+
+func (copies extensionCopies) clone(value json.RawMessage) json.RawMessage {
+	if copies == nil || len(value) == 0 {
+		return append(json.RawMessage(nil), value...)
+	}
+	key := extensionBuffer{start: &value[0], length: len(value)}
+	if cloned, ok := copies[key]; ok {
+		return cloned
+	}
+	cloned := append(json.RawMessage(nil), value...)
+	copies[key] = cloned
 	return cloned
 }
 

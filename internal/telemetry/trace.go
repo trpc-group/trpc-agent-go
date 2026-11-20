@@ -90,6 +90,8 @@ type Workflow struct {
 	Request  any
 	Response any
 	Error    error
+	// FilterResponse prepares the response only when the span attribute policy requires its contents.
+	FilterResponse func(any) any
 }
 
 // NewWorkflowSpanName creates a new workflow span name.
@@ -258,7 +260,11 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	}
 	if workflow.Response != nil {
 		setStringAttribute(span, OperationWorkflow, semconvtrace.KeyGenAIWorkflowResponse, "<not json serializable>", func() ([]byte, error) {
-			return json.Marshal(workflow.Response)
+			response := workflow.Response
+			if workflow.FilterResponse != nil {
+				response = workflow.FilterResponse(response)
+			}
+			return json.Marshal(response)
 		})
 	}
 	if workflow.Error != nil {

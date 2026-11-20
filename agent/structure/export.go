@@ -231,6 +231,7 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 		Type:                 schema.Type,
 		Description:          schema.Description,
 		Pattern:              schema.Pattern,
+		AnyOf:                cloneSchemaList(schema.AnyOf),
 		Required:             append([]string(nil), schema.Required...),
 		Properties:           cloneSchemaMap(schema.Properties),
 		Items:                cloneToolSchema(schema.Items),
@@ -240,6 +241,17 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 		Ref:                  schema.Ref,
 		Defs:                 cloneSchemaMap(schema.Defs),
 	}
+}
+
+func cloneSchemaList(in []*tool.Schema) []*tool.Schema {
+	if in == nil {
+		return nil
+	}
+	out := make([]*tool.Schema, len(in))
+	for i, schema := range in {
+		out[i] = cloneToolSchema(schema)
+	}
+	return out
 }
 
 func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {

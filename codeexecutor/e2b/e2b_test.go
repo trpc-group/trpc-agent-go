@@ -46,6 +46,7 @@ func TestOptions(t *testing.T) {
 	WithHTTPClient(hc)(c)
 	WithHeaders(map[string]string{"X-Test": "1"})(c)
 	WithSandboxID("sbx-123")(c)
+	WithAutoRecreate(true)(c)
 	WithLanguage(ci.LanguageJavaScript)(c)
 	WithSandboxRunBase("/tmp/sandbox-run")(c)
 
@@ -62,7 +63,10 @@ func TestOptions(t *testing.T) {
 	assert.Same(t, hc, c.httpClient)
 	assert.Equal(t, map[string]string{"X-Test": "1"}, c.headers)
 	assert.Equal(t, "sbx-123", c.sandboxID)
+	assert.True(t, c.autoRecreate)
 	assert.Equal(t, ci.LanguageJavaScript, c.defaultLanguage)
+	WithAutoRecreate(false)(c)
+	assert.False(t, c.autoRecreate)
 	assert.Equal(t, "/tmp/sandbox-run", c.sandboxRunBase)
 }
 

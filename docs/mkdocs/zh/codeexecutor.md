@@ -179,6 +179,12 @@ Workspace 文件系统操作仍使用 `/execute`，本次迁移仅覆盖程序�
 
 - `RunProgramSpec.Timeout` 非正时默认 **30 秒**，覆盖目录准备和命令执行。
   `WithExecutionTimeout` 作用于代码单元，不控制 workspace 程序。
+- `WithMaxProgramTimeout` 可限制每次程序执行的最大超时，在解析默认值后生效。
+  直接调用、Engine 调用和 `workspace_exec` 均受约束；零值或负值不设上限。
+  例如，`e2b.WithMaxProgramTimeout(10*time.Second)` 会将模型的
+  `timeout_sec: 60` 限制为 10 秒，传入 5 秒则仍为 5 秒。工具未传超时时，
+  先使用原有的 5 分钟默认值，再应用上限。该选项不影响 `ExecuteCode`、
+  workspace 文件操作或 sandbox 寿命；代码单元仍单独配置 `WithExecutionTimeout`。
 - stdout/stderr 保留原始字节、末尾换行及与旧哨兵字符串相同的内容，不做截断。
 - 正常的非零退出通过 `RunResult.ExitCode` 返回，Go error 为 nil。
   调用方取消、HTTP/RPC 故障返回错误；只有进程自身的 deadline 设置 `TimedOut`，
@@ -207,6 +213,41 @@ Basic 认证，例如在 HTTPS 上使用 `Authorization: Basic dXNlcjo=` 表示 
 显式配置的 `Authorization` header 优先。无凭据的回环地址调试使用本地服务端
 账号。kernel 进程内临时修改的环境不会被原生进程继承；自定义模板迁移时仍需
 核对 HOME/PATH。
+
+### E2B 工作区持久化
+
+`WithWorkspacePersistence` 默认为 `WorkspacePersistencePerTurn`。Agent 工具在
+一次调用内共享工作区，下一次调用获取新目录，复用同一个 `LLMAgent` 时也是如此。
+通过 `Invocation.View()` 并行执行的工具调用共享原调用的目录。
+通过 `Invocation.Clone()` 创建的子调用使用独立目录，即使它们属于同一轮用户请求。
+设置 `WorkspacePersistencePerSession` 后，同一会话在沙箱存活期间跨轮次复用目录。
+两种模式都在执行器的沙箱内分配目录，并共用该沙箱的 Code Interpreter kernel。
+
+### E2B 沙箱自动重建
+
+`WithAutoRecreate` 默认关闭。可为执行器自行创建的沙箱开启自动重建。
+
+```go
+executor, err := e2b.New(
+    e2b.WithTemplate("code-interpreter-v1"),
+    e2b.WithAutoRecreate(true),
+)
+```
+
+开启时传入 `WithSandboxID` 会导致构造函数返回错误。通过 `Pause` 暂停的沙箱也不会自动重建。
+
+执行遇到可能由沙箱失效引起的错误时，执行器会查询管理 API。确认实例已不存在或处于终态后，才会用原配置创建新实例。当前调用仍返回错误，不会自动重跑。成功切换到新实例后，错误会提醒 Agent 在继续执行前检查所需的文件和运行环境。如果后续调用在执行前才完成重建，这次调用会先返回提示，Agent 检查后可在新实例上重新发起操作。
+
+执行器不会恢复旧沙箱本地的文件、进程和解释器状态。如果新实例挂载了同一持久化存储，之前写入该存储的文件仍可能可用。框架会在新沙箱上重新初始化它管理的工作区。
+如果自行管理工作区，用旧句柄调用 `RunProgram` 等操作会收到 `codeexecutor.ErrWorkspaceStale`。
+请重新调用 `CreateWorkspace`，并准备所需的输入文件。
+触发恢复的操作可能已产生副作用，返回的错误可能同时匹配 `ErrWorkspaceStale` 和 `ErrWorkspaceRetryUnsafe`。
+开启重建后，如果失败的操作可能已发到沙箱，例如响应流断开，即使还不能确认沙箱失效，框架的工具重试策略也不会自动重跑该操作。
+只有 `codeexecutor.IsWorkspaceRetrySafe(err)` 返回 true 时，才可以自动重试原操作。
+
+调用 `Sandbox()` 或直接操作它返回的实例，都不会触发重建。
+重建失败时，`Sandbox()` 可能仍返回旧实例，后续执行器操作可以再次尝试创建。
+比较操作前后的 `SandboxID()`。如果 ID 变为不同的非空值，就可以用 `Sandbox()` 获取新实例。
 
 ## Workspace 中有哪些目录
 

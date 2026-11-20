@@ -508,6 +508,55 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 	assert.Equal(t, "string", exported.OutputSchema.Items.Type)
 }
 
+func TestExport_PreservesAndClonesAnyOf(t *testing.T) {
+	resultSchema := &tool.Schema{AnyOf: []*tool.Schema{
+		{Type: "array", Items: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"data": {AnyOf: []*tool.Schema{{Type: "string"}, {Type: "null"}}},
+			},
+		}},
+		{Type: "null"},
+	}}
+	inputSchema := &tool.Schema{Type: "object", Properties: map[string]*tool.Schema{
+		"result": resultSchema,
+	}}
+	exporter := &customExporterAgent{
+		testAgent: &testAgent{name: "root"},
+		snapshot: &Snapshot{
+			EntryNodeID: "root",
+			Nodes:       []Node{{NodeID: "root", Kind: NodeKindAgent, Name: "root"}},
+			Surfaces: []Surface{{
+				NodeID: "root", Type: SurfaceTypeTool,
+				Value: SurfaceValue{Tools: []ToolRef{{
+					ID: "read", InputSchema: inputSchema, OutputSchema: resultSchema,
+				}}},
+			}},
+		},
+	}
+	snapshot, err := Export(context.Background(), exporter)
+	require.NoError(t, err)
+	exported := snapshot.Surfaces[0].Value.Tools[0]
+	require.Equal(t, inputSchema, exported.InputSchema)
+	require.Equal(t, resultSchema, exported.OutputSchema)
+
+	repeated, err := Export(context.Background(), exporter)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.StructureID, repeated.StructureID)
+	// AnyOf is part of the exported contract and therefore its structure ID.
+	resultSchema.AnyOf[1].Type = "string"
+	changed, err := Export(context.Background(), exporter)
+	require.NoError(t, err)
+	require.NotEqual(t, snapshot.StructureID, changed.StructureID)
+	require.Equal(t, "null", exported.OutputSchema.AnyOf[1].Type)
+
+	resultSchema.AnyOf[0].Items.Properties["data"].AnyOf[0].Type = "integer"
+	require.Equal(t, "string", exported.OutputSchema.AnyOf[0].Items.Properties["data"].AnyOf[0].Type)
+	// Shared source schemas must not alias either exported surface.
+	exported.InputSchema.Properties["result"].AnyOf[0].Items.Properties["data"].AnyOf[0].Type = "boolean"
+	require.Equal(t, "string", exported.OutputSchema.AnyOf[0].Items.Properties["data"].AnyOf[0].Type)
+}
+
 func TestCloneHelpers_CloneFewShotAndSchemaValues(t *testing.T) {
 	originalFewShot := []FewShotExample{
 		{

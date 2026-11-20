@@ -22,6 +22,13 @@ The suites intentionally use selected short and typical scenarios rather than
 the Cartesian product of every dimension. Expensive stress cases belong in
 post-merge or manually dispatched workflows.
 
+The core suite caps `BenchmarkAppendProjectedToolResults/tools=800` at 4 MiB
+per operation. Projection currently allocates about 1.7 MiB; the budget leaves
+room for toolchain variation while rejecting the roughly 208 MiB cost of
+copying the full choice slice for each projected message. This byte budget
+complements the allocation-count unit test: one allocation can still copy an
+entire slice, so a flat allocation count does not bound its byte cost.
+
 ## Running benchmarks
 
 Run the complete smoke suite:

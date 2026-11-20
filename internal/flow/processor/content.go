@@ -2003,6 +2003,13 @@ func effectiveEventForMessage(
 	evt event.Event,
 	msg model.Message,
 ) event.Event {
+	if evt.Response != nil {
+		// Choices are replaced below. Copy only the response metadata so a
+		// merged batch is not cloned in full for every projected message.
+		response := *evt.Response
+		response.Choices = nil
+		evt.Response = &response
+	}
 	effective := cloneEventForContentSnapshot(evt)
 	if effective.Response == nil {
 		effective.Response = &model.Response{}
