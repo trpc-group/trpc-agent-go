@@ -17,12 +17,14 @@ import (
 	"io"
 	"path/filepath"
 	"sync"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -31,6 +33,7 @@ const (
 	defaultImplementationName    = "trpc-agent-go"
 	defaultImplementationVersion = "dev"
 	defaultUserID                = "acp"
+	defaultShutdownTimeout       = 5 * time.Second
 )
 
 // Session describes an ACP session when run options are resolved.
@@ -494,8 +497,15 @@ func (a *protocolAgent) stopPrompt(
 }
 
 func (a *protocolAgent) closeSession(session *sessionState) {
+	a.closeSessionWithTimeout(session, defaultShutdownTimeout)
+}
+
+func (a *protocolAgent) closeSessionWithTimeout(
+	session *sessionState,
+	timeout time.Duration,
+) {
 	promptDone := a.stopSession(session)
-	waitForPromptAndCloseResources(session, promptDone)
+	waitForPromptAndCloseResources(session, promptDone, timeout)
 }
 
 func (a *protocolAgent) stopSession(session *sessionState) <-chan struct{} {
@@ -517,14 +527,32 @@ func (a *protocolAgent) stopSession(session *sessionState) <-chan struct{} {
 func waitForPromptAndCloseResources(
 	session *sessionState,
 	promptDone <-chan struct{},
+	timeout time.Duration,
 ) {
 	if promptDone != nil {
-		<-promptDone
+		timer := time.NewTimer(timeout)
+		select {
+		case <-promptDone:
+			timer.Stop()
+		case <-timer.C:
+			log.WarnContext(
+				context.Background(),
+				"Timed out waiting for ACP prompt shutdown; forcing MCP close",
+				"session_id",
+				session.id,
+				"timeout",
+				timeout,
+			)
+		}
 	}
 	closeMCPServers(context.Background(), session.toolSets)
 }
 
 func (a *protocolAgent) shutdown() {
+	a.shutdownWithTimeout(defaultShutdownTimeout)
+}
+
+func (a *protocolAgent) shutdownWithTimeout(timeout time.Duration) {
 	a.mu.Lock()
 	sessions := make([]*sessionState, 0, len(a.sessions))
 	for _, session := range a.sessions {
@@ -536,9 +564,19 @@ func (a *protocolAgent) shutdown() {
 	for index, session := range sessions {
 		promptDone[index] = a.stopSession(session)
 	}
+	var waitGroup sync.WaitGroup
 	for index, session := range sessions {
-		waitForPromptAndCloseResources(session, promptDone[index])
+		waitGroup.Add(1)
+		go func(session *sessionState, promptDone <-chan struct{}) {
+			defer waitGroup.Done()
+			waitForPromptAndCloseResources(
+				session,
+				promptDone,
+				timeout,
+			)
+		}(session, promptDone[index])
 	}
+	waitGroup.Wait()
 }
 
 func (*protocolAgent) Authenticate(
