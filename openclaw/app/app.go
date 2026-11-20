@@ -35,6 +35,7 @@ import (
 	"time"
 	"unicode"
 
+	openaisdk "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
@@ -83,7 +84,7 @@ const (
 	modeMock   = "mock"
 	modeOpenAI = "openai"
 
-	defaultOpenAIModel = "gpt-5"
+	defaultOpenAIModel = "gpt-5.6-sol"
 
 	defaultSkillsDir        = "skills"
 	defaultAgentsDir        = ".agents"
@@ -4031,6 +4032,16 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	opts := []openai.Option{
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
+	}
+	if name == "gpt-5.6-sol" && variant == openai.VariantOpenAI {
+		opts = append(opts, openai.WithChatRequestCallback(func(
+			_ context.Context, req *openaisdk.ChatCompletionNewParams,
+		) {
+			// GPT-5.6 Chat Completions tools require no reasoning.
+			if req.ReasoningEffort == "" {
+				req.ReasoningEffort = "none"
+			}
+		}))
 	}
 	if spec.OpenAITextOnlyMessageContent {
 		opts = append(opts, openai.WithTextOnlyMessageContent(true))

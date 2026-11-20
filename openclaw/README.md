@@ -69,7 +69,7 @@ cd openclaw
 go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
-Note: by default, OpenClaw uses `-mode openai` and `-model gpt-5`.
+Note: by default, OpenClaw uses `-mode openai` and `-model gpt-5.6-sol`.
 If you do not have model credentials, keep using `-mode mock`.
 
 ## Agent types
@@ -832,7 +832,7 @@ go run ./cmd/openclaw \
 ```
 
 By default, `-model` uses `$OPENAI_MODEL` if set, otherwise it falls
-back to `gpt-5`.
+back to `gpt-5.6-sol`.
 
 ### Request-scoped model selection
 
