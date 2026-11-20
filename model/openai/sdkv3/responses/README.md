@@ -282,8 +282,8 @@ summary cutoffs, and `MaxHistoryRuns` behave as they do for legacy history.
 - Native call arguments in a resumed tool round are not compacted; their tool
   results are.
 - An incomplete per-call result round is kept intact for a native record
-  instead of being stripped, so the adapter rejects the missing result
-  explicitly rather than replaying a record without some of its calls.
+  with its existing results. See [Tool recovery boundaries](#tool-recovery-boundaries)
+  for how a later user turn handles missing results.
 
 Foreign-agent events converted into user context are newly authored user
 messages without ProviderData. A legacy or differently configured downstream
@@ -329,9 +329,16 @@ order.
 The existing resume mechanism only handles a final persisted assistant event
 containing tool calls. It does not scan earlier events for missing results.
 For example, if a response calls A and B and only A's result was persisted as
-a separate event before a crash, resume does not run B. The incomplete native
-round fails history validation; this adapter does not provide recovery for
-partially completed multi-tool rounds.
+a separate event before a crash, resume does not run B.
+
+A new user message on the same session lets Runner and LLMAgent continue after
+an interruption. The outgoing request keeps A's result and adds a
+`function_call_output` for B stating that its execution status is unknown.
+The framework neither runs B again nor writes that placeholder to the session.
+This also works for existing sessions with a retained tool call and no recorded
+result. Wrappers must forward `model.ProviderDataProjector` so the framework
+can pair results with the IDs in the native record. Direct adapter calls and
+Graph LLM nodes continue to validate the history supplied to them.
 
 Session persistence and business side effects are separate operations. A
 successful tool side effect followed by a crash before its result is stored

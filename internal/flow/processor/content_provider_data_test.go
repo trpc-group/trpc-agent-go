@@ -487,6 +487,142 @@ func TestContentRequestProcessor_MaxHistoryRunsBoundsCompletedNativeRounds(t *te
 	}
 }
 
+type interruptedRoundModel struct {
+	mockModel
+}
+
+func (*interruptedRoundModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
+	msg := model.NewAssistantMessage("")
+	err := json.Unmarshal(data.Payload, &msg.ToolCalls)
+	return msg, err
+}
+
+func interruptedTestCall(t *testing.T, ids ...string) model.Message {
+	t.Helper()
+	msg := testCallMessage(t, true, "", ids...)
+	raw, err := json.Marshal(msg.ToolCalls)
+	require.NoError(t, err)
+	msg.ProviderData.Payload = raw
+	return msg
+}
+
+func TestNativeLateToolResultKeepsNewUserTurn(t *testing.T) {
+	next := model.NewUserMessage("new question")
+	events := timedTestEvents(time.Now(),
+		toolTranscriptTestEvent("r1", "i1", interruptedTestCall(t, "a", "b"), ""),
+		toolTranscriptTestEvent("r2", "i2", next, ""),
+		toolTranscriptTestEvent("r1", "i1", model.NewToolMessage("b", "lookup", "late result"), model.ObjectTypeToolResponse),
+	)
+	events[0].Choices[0].Message.ToolCalls = nil // Wire IDs remain in the native record.
+	events[1].Author = "user"
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	processor := NewContentRequestProcessor(WithMaxHistoryRuns(3))
+	history := processor.getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, history.messages, 4)
+	require.Equal(t, events[0].Choices[0].Message, history.messages[0])
+	require.Equal(t, events[2].Choices[0].Message, history.messages[1])
+	require.Equal(t, "a", history.messages[2].ToolID)
+	require.Contains(t, history.messages[2].Content, "unknown")
+	require.True(t, history.items[2].Boundary.IsZero(), "a placeholder cannot advance the stored summary cutoff")
+	require.Equal(t, next, history.messages[3])
+
+	processor = NewContentRequestProcessor(WithMaxHistoryRuns(2))
+	trimmed := processor.getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Equal(t, []model.Message{next}, trimmed.messages, "a truncated call must take its real result with it")
+}
+
+func TestInterruptedNativeReplyWithoutDisplayToolCalls(t *testing.T) {
+	// AfterModel may clear the display calls before the event is saved. The
+	// native record still owns the IDs that the next request has to answer.
+	call := interruptedTestCall(t, "a", "b")
+	call.ToolCalls = nil
+	next := model.NewUserMessage("continue")
+	events := timedTestEvents(time.Now(),
+		toolTranscriptTestEvent("r1", "i1", call, ""),
+		toolTranscriptTestEvent("r2", "i2", next, ""),
+	)
+	events[1].Author = "user"
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	msgs := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, msgs, 4)
+	require.Empty(t, msgs[0].ToolCalls)
+	require.Equal(t, "a", msgs[1].ToolID)
+	require.Equal(t, "b", msgs[2].ToolID)
+	require.Equal(t, next, msgs[3])
+}
+
+func TestLateNativeCallFromSupersededUserTurn(t *testing.T) {
+	first := model.NewUserMessage("first question")
+	next := model.NewUserMessage("new question")
+	oldCall := interruptedTestCall(t, "old-call")
+	currentCall := interruptedTestCall(t, "current-call")
+	events := timedTestEvents(time.Now(),
+		toolTranscriptTestEvent("r1", "i1", first, ""),
+		toolTranscriptTestEvent("r2", "i2", next, ""),
+		toolTranscriptTestEvent("r1", "i1", oldCall, ""),
+		toolTranscriptTestEvent("r2", "i2", currentCall, ""),
+	)
+	events[0].Author = "user"
+	events[1].Author = "user"
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, got, 5)
+	require.Equal(t, []model.Message{first, next, oldCall}, got[:3])
+	require.Equal(t, "old-call", got[3].ToolID)
+	require.Contains(t, got[3].Content, "unknown")
+	require.Equal(t, currentCall, got[4], "the active call must stay pending")
+}
+
+func TestEmptyResumeInputKeepsNativeTailPending(t *testing.T) {
+	user := toolTranscriptTestEvent("r1", "i1", model.NewUserMessage("earlier question"), "")
+	user.Author = "user"
+	call := interruptedTestCall(t, "pending")
+	tail := toolTranscriptTestEvent("r2", "i2", call, "")
+	for _, events := range [][]event.Event{{tail}, {user, tail}} {
+		inv := testInvocation(timedTestEvents(time.Now(), events...), "i3", "r3", model.NewUserMessage(""))
+		inv.RunOptions.Resume = true
+		inv.Model = &interruptedRoundModel{}
+		got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+		require.Len(t, got, len(events))
+		require.Equal(t, call, got[len(got)-1])
+	}
+}
+
+func TestInterruptedToolOutputsFollowProjectedNativePayload(t *testing.T) {
+	next := model.NewUserMessage("follow up")
+	call := interruptedTestCall(t, "original")
+	events := timedTestEvents(time.Now(), toolTranscriptTestEvent("r1", "i1", call, ""))
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	edited := interruptedTestCall(t, "edited")
+	processor := NewContentRequestProcessor(WithEventMessageProjector(func(_ *agent.Invocation, _ event.Event, msg model.Message) model.Message {
+		if msg.ProviderData != nil {
+			msg.ProviderData = edited.ProviderData
+		}
+		return msg
+	}))
+	got := processor.getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, got.messages, 3)
+	require.Equal(t, "edited", got.messages[1].ToolID)
+	require.Contains(t, got.messages[1].Content, "unknown")
+	require.Equal(t, next, got.messages[2])
+}
+
+func TestInterruptedNativeOutputPairingUsesIDs(t *testing.T) {
+	calls := testToolCalls("kept", "pending")
+	results := []model.Message{
+		model.NewToolMessage("kept", "lookup", "7"),
+		model.NewToolMessage("different", "lookup", "9"),
+	}
+	missing := missingResponsesToolResults(calls, results)
+	require.Len(t, missing, 1)
+	require.Equal(t, "pending", missing[0].ToolID)
+	require.Contains(t, missing[0].Content, "unknown")
+}
+
 func TestContentRequestProcessor_IncompletePerCallNativeRoundStaysIntact(t *testing.T) {
 	newEvents := func(native bool) []event.Event {
 		call := toolTranscriptTestEvent("req1", "inv1",

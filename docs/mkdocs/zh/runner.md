@@ -675,39 +675,39 @@ eventChan, err := r.Run(
 同一套 Runner event pipeline，因此 graph LLM 节点的文本 chunk 同样受该选项控制，
 不需要额外的 graph 专用开关。
 
-#### 中断恢复（工具优先继续执行）
+#### 停止工具后继续对话
 
-在真实业务里，用户可能在 Agent 还处于“工具调用阶段”时中断：
-
-- 会话里的最后一条消息是带 `tool_calls` 的 assistant 消息；
-- 但对应的工具结果（tool result）还没来得及写回 Session。
-
-之后如果你想在同一个 `sessionID` 上“继续上次的任务”，可以开启
-`WithResume(true)`，让 Runner 先把上次未完成的工具调用执行完，再进入
-下一轮 LLM 调用：
+沿用原来的 `userID` 和 `sessionID`，直接发送新的用户消息。
 
 ```go
-eventChan, err := r.Run(
-    ctx,
-    userID,
-    sessionID,
-    model.Message{},          // 没有新的用户输入
-    agent.WithResume(true),   // 开启恢复模式
-)
+eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发生了什么？"))
 ```
 
-开启 `WithResume(true)` 时，Runner 会：
+如果 LLMAgent 续聊时沿用发起工具调用时配置的 Responses 模型，新请求会按调用 ID
+保留已保存的工具结果，不会重跑中断的调用。缺少结果的调用只在发给模型的请求中标为“执行状态未知”。
+如果使用自定义模型包装器，请将 `model.ProviderDataProjector` 转发给底层 Responses 模型，以便 Runner 按原始工具调用 ID 匹配结果。
 
-- 读取当前 Session 中最新的一条事件；
-- 如果最后一条是「带 `tool_calls` 的 assistant 回复」，且之后没有对应的
-  工具结果事件：
-  - 使用当前 Agent 注册的工具集合和回调，执行这些“未完成的工具调用”；
-  - 把工具执行结果写入 Session（作为 tool 消息事件）；
-- 工具执行结束后，再按正常流程发起新一轮 LLM 调用，此时模型能看到
-  “上一次的 tool_calls + 对应的工具结果”，不会重复要求调用同一工具。
+Runner 默认合并保存并行工具的结果。如果 A 已返回、B 仍在运行，停止时整批结果还没写入
+Session，模型会看到 A 和 B 都是未知。开启 `agent.WithToolResultEventPerCallEnabled(true)`
+后，如果 A 的结果已经写入 Session，模型能看到 A 的真实结果，只有 B 标为未知。
 
-如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
-则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
+#### 中断恢复（工具优先继续执行）
+
+要执行上次挂起的工具调用，传入空消息和 `agent.WithResume(true)`。
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResume(true))
+```
+
+使用 LLMAgent 时，Runner 检查 Session 中最后一条已保存的事件。如果它是带
+`tool_calls` 的 assistant 回复，Runner 会使用当前 Agent 的工具和回调执行这些调用，
+保存结果后再请求模型。对于 Responses，Runner 会在执行工具前检查所选模型是否与已保存的调用匹配。
+如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。
+
+如果末尾是其他事件，Runner 会跳过工具恢复步骤。例如，末尾是 A 的工具结果，而 B
+缺少结果，显式恢复当前会在发送 Responses 请求前报告结果缺失。此时仍可在同一个
+Session 发新消息继续聊。
+[Responses 工具恢复说明](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call 参数自动修复
 

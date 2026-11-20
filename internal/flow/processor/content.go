@@ -1500,6 +1500,8 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	var events []event.Event
 	sessionEvents := sessionEventsSnapshot(inv.Session)
+	projector, _ := inv.Model.(model.ProviderDataProjector)
+	rounds := p.bindInterruptedToolRounds(inv, filter, sessionEvents, projector)
 	eventCutoff := newEventHistoryCutoff(sessionEvents, cutoff)
 	toolCallIDsToRestoreByEvent := p.toolCallIDsToRestoreByEvent(
 		sessionEvents,
@@ -1593,6 +1595,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			inv.AgentName,
 		)
 	}
+	rounds.restoreDisplayCalls(resultEvents)
 	history := p.projectHistoryAcrossSummaryCutoff(
 		resultEvents,
 		sessionEvents,
@@ -1606,10 +1609,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
-		startIdx := maxHistoryRunsStartIndex(
-			history.messages,
-			p.MaxHistoryRuns,
-		)
+		startIdx := rounds.windowStart(history, p.MaxHistoryRuns)
 		startIdx = pendingNativeToolRoundStart(history.messages, startIdx)
 		if len(history.items) == len(history.messages) {
 			history.items = history.items[startIdx:]
@@ -1626,7 +1626,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			history.items[i].Message,
 		)
 	}
-	return history
+	return history.withInterruptedToolResults(rounds, projector)
 }
 
 func sessionEventsSnapshot(sess *session.Session) []event.Event {
@@ -3940,6 +3940,12 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	var functionResponseEvents []event.Event
 	for i := functionCallEventIdx + 1; i < len(events); i++ {
 		evt := &events[i]
+		if isUserTurnEvent(evt) && evt.InvocationID != events[functionCallEventIdx].InvocationID &&
+			eventHasProviderData(events[functionCallEventIdx]) {
+			// A late result belongs to the older call. Let the subsequent
+			// history pass pair it without discarding the newer user turn.
+			return events
+		}
 		if evt.IsToolResultResponse() {
 			responseIDs := toMap(evt.GetToolResultIDs())
 			for _, callID := range functionCallIDs {
@@ -3988,8 +3994,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 				responseMatches,
 			)
 			// A native record cannot drop calls without losing its opaque
-			// reasoning, so its partial round stays intact and the provider
-			// adapter rejects the missing results explicitly.
+			// reasoning, so preserve its partial round for model-facing history.
 			if !eventHasProviderData(evt) &&
 				!allToolCallIDsMatched(callIDs, events, responseMatches) &&
 				perToolCallResultRound {

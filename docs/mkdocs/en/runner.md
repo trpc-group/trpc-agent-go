@@ -709,37 +709,44 @@ interrupted assistant event. GraphAgent workflows use the same Runner event
 pipeline, so this option also applies to graph LLM node text chunks; no
 graph-specific option is required.
 
-#### Resume Interrupted Runs (tools-first resume)
+#### Continue the Conversation After Stopping a Tool
 
-In long-running conversations, users may interrupt the agent while it is still
-in a tool-calling phase (for example, the last message in the session is an
-assistant message with `tool_calls`, but no tool result has been written yet).
-When you later reuse the same `sessionID`, you can ask the Runner to _resume_
-from that point instead of asking the model to repeat the tool calls:
+Send a new user message with the same `userID` and `sessionID`.
 
 ```go
-eventChan, err := r.Run(
-    ctx,
-    userID,
-    sessionID,
-    model.Message{},                // no new user message
-    agent.WithResume(true),         // enable resume mode
-)
+eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("What happened?"))
 ```
 
-When `WithResume(true)` is set:
+When LLMAgent continues with the same configured Responses model that issued
+the tool calls, it replays saved results by call ID without re-executing those
+calls. Each missing result gets an unknown execution status in the model
+request only.
+If you use a custom model wrapper, forward `model.ProviderDataProjector` to the underlying Responses model so Runner can match results by their original tool call IDs.
 
-- Runner inspects the latest persisted session event.
-- If the last event is an assistant response that contains `tool_calls` and
-  there is no later tool result, Runner will execute those pending tools first
-  (using the same tool set and callbacks as a normal step) and persist the
-  tool results into the session.
-- After tools finish, the normal LLM cycle continues using the updated session
-  history, so the model sees both the original tool calls and their results.
+By default, Runner saves parallel tool results together. If A returns while B
+is running and the run stops before the combined result is saved, both appear
+as unknown. With `agent.WithToolResultEventPerCallEnabled(true)`, a result
+already saved for A reaches the model and only B appears as unknown.
 
-If the last event is a user or tool message (or a plain assistant reply
-without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
-today’s `Run` call.
+#### Resume Interrupted Runs (tools-first resume)
+
+To execute pending tool calls, pass an empty message with `agent.WithResume(true)`.
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResume(true))
+```
+
+With LLMAgent, Runner inspects the last persisted event. If it is an assistant
+reply with `tool_calls`, Runner executes those calls using the agent's tools and
+callbacks, saves the results, then calls the model. For Responses, it validates
+the saved call against the selected model before executing any tools. A retry
+can repeat an external action if the tool performed it before its result was
+saved.
+
+Other final events skip the tool recovery step. In particular, if the last
+event is A's result and B's result is missing, explicit resume currently
+reports the missing result before sending a Responses request. You can still
+send a new user message on the same session. [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call Arguments Auto Repair
 
