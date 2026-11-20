@@ -24,20 +24,31 @@ import (
 func promptToMessage(blocks []acpsdk.ContentBlock) (model.Message, error) {
 	message := model.Message{Role: model.RoleUser}
 	var text strings.Builder
+	var contentParts []model.ContentPart
+	hasMultimodalContent := false
 	for _, block := range blocks {
 		switch {
 		case block.Text != nil:
 			text.WriteString(block.Text.Text)
+			textContent := block.Text.Text
+			contentParts = append(contentParts, model.ContentPart{
+				Type: model.ContentTypeText,
+				Text: &textContent,
+			})
 		case block.ResourceLink != nil:
+			hasMultimodalContent = true
 			mimeType := ""
 			if block.ResourceLink.MimeType != nil {
 				mimeType = *block.ResourceLink.MimeType
 			}
-			message.AddFileURL(
-				block.ResourceLink.Name,
-				block.ResourceLink.Uri,
-				mimeType,
-			)
+			contentParts = append(contentParts, model.ContentPart{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     block.ResourceLink.Name,
+					URL:      block.ResourceLink.Uri,
+					MimeType: mimeType,
+				},
+			})
 		case block.Image != nil:
 			return model.Message{}, errors.New("image content is not supported")
 		case block.Audio != nil:
@@ -48,7 +59,11 @@ func promptToMessage(blocks []acpsdk.ContentBlock) (model.Message, error) {
 			return model.Message{}, errors.New("empty content block")
 		}
 	}
-	message.Content = text.String()
+	if hasMultimodalContent {
+		message.ContentParts = contentParts
+	} else {
+		message.Content = text.String()
+	}
 	return message, nil
 }
 

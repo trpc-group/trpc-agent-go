@@ -20,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestPromptToMessage(t *testing.T) {
+func TestPromptToMessagePreservesMixedContentOrder(t *testing.T) {
 	mimeType := "text/plain"
 	message, err := promptToMessage([]acpsdk.ContentBlock{
 		acpsdk.TextBlock("explain "),
@@ -36,12 +36,30 @@ func TestPromptToMessage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, model.RoleUser, message.Role)
+	assert.Empty(t, message.Content)
+	require.Len(t, message.ContentParts, 3)
+	assert.Equal(t, model.ContentTypeText, message.ContentParts[0].Type)
+	require.NotNil(t, message.ContentParts[0].Text)
+	assert.Equal(t, "explain ", *message.ContentParts[0].Text)
+	assert.Equal(t, model.ContentTypeFile, message.ContentParts[1].Type)
+	require.NotNil(t, message.ContentParts[1].File)
+	assert.Equal(t, "README.md", message.ContentParts[1].File.Name)
+	assert.Equal(t, "file:///workspace/README.md", message.ContentParts[1].File.URL)
+	assert.Equal(t, mimeType, message.ContentParts[1].File.MimeType)
+	assert.Equal(t, model.ContentTypeText, message.ContentParts[2].Type)
+	require.NotNil(t, message.ContentParts[2].Text)
+	assert.Equal(t, "briefly", *message.ContentParts[2].Text)
+}
+
+func TestPromptToMessageKeepsPlainTextContent(t *testing.T) {
+	message, err := promptToMessage([]acpsdk.ContentBlock{
+		acpsdk.TextBlock("explain "),
+		acpsdk.TextBlock("briefly"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, model.RoleUser, message.Role)
 	assert.Equal(t, "explain briefly", message.Content)
-	require.Len(t, message.ContentParts, 1)
-	require.NotNil(t, message.ContentParts[0].File)
-	assert.Equal(t, "README.md", message.ContentParts[0].File.Name)
-	assert.Equal(t, "file:///workspace/README.md", message.ContentParts[0].File.URL)
-	assert.Equal(t, mimeType, message.ContentParts[0].File.MimeType)
+	assert.Empty(t, message.ContentParts)
 }
 
 func TestPromptToMessageRejectsUnadvertisedContent(t *testing.T) {
