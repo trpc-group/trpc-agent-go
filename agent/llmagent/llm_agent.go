@@ -570,12 +570,9 @@ func appendPostToolProcessor(
 	}
 
 	var postToolOpts []processor.PostToolOption
-	hasToolSurface := hasPotentialToolSurface(a, options)
-	postToolOpts = append(
-		postToolOpts,
-		processor.WithPostToolPromptBeforeResult(hasToolSurface),
-		processor.WithPostToolPromptCreateSystemMessage(hasToolSurface),
-	)
+	if !hasPotentialToolSurface(a, options) {
+		postToolOpts = append(postToolOpts, processor.WithPostToolPromptForModelTools())
+	}
 	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,

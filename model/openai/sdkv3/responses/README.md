@@ -196,7 +196,12 @@ next request. An unknown namespaced call becomes a not-found tool call named
 never falls back to a tool with the bare name. A namespace name that equals a
 top-level function name fails the request. After an `AfterModel` payload edit,
 the flow uses `ProjectProviderDataWithRequest` to resolve namespaced calls
-against the request's tool bindings, including original-name ToolSets. Direct
+against the request's tool bindings, including original-name ToolSets. An edit
+to function arguments preserves the executor selected for that call ID,
+namespace, and function name. If a callback introduces a call such as
+`weather.weather` that could select two executors, reprojection reports
+ambiguity before execution. To explicitly select a top-level function, use
+its name with an empty namespace. Direct
 `ProjectProviderData` calls have no request, so they reject namespaced calls.
 
 ### Client-executed search
@@ -274,13 +279,23 @@ namespace and function name with the sandbox tool's schema. The sandbox tool
 receives those arguments through the usual permissions and tool callbacks.
 `Run.ToolFilter` also applies to replacements and external tools. Each returned
 entry needs a tool with a declaration and a distinct model-facing identity.
-A nil or empty slice reports a search with no matches.
+If two entries in one result map to the same execution key, the search
+fails before either entry can be used. A nil or empty slice reports a search
+with no matches.
 
 The agent borrows returned objects for this Run. The application owns their
 resources. Session history keeps the schema seen by the model. In a later Run,
-an original candidate can execute through the agent's registered tool. A call
-to a replacement or external tool from an earlier Run returns a tool error
-asking the model to search again. The handler can then supply a fresh object.
+an original candidate can execute through the agent's registered tool when
+its namespace and function name still match, even if the ToolSet's naming
+mode has changed. A call to a replacement or external tool from an earlier Run returns a tool error
+asking the model to search again. If that tool is now registered as deferred
+under the same namespace and name, the handler can select it from
+`Candidates`. Later searches use this latest selection.
+
+The candidate list stays local. With its default prompt and a fixed tool
+configuration, LLMAgent includes its tool guidance from the first request,
+even with an entirely external catalog. Search results append tool definitions
+to the input history.
 
 A search response is not `Done`. LLMAgent completes it through
 `model.ProviderActionCompleter` before running ordinary tool calls in the same
@@ -326,8 +341,11 @@ search error. The handler may be called concurrently for different requests.
   the current failover and hedge wrappers, cannot complete client searches.
   LLMAgent then stops with `model "..." does not complete provider actions`.
 - Resume is not exactly-once. A crash after the handler returns and before its
-  output is stored runs the handler again. Resume candidates exclude tools
-  already loaded by saved search results.
+  output is stored runs the handler again. Resume applies the session history
+  policy to events preceding the pending response, then reuses results already
+  saved for that response. Resume candidates exclude loaded tools with usable
+  bindings. A deferred registration can be selected again
+  when its previous binding expired.
 - A response can contain both a client search and function calls. If only
   some ordinary function results were stored, resume does not run the
   remaining function calls, as described under

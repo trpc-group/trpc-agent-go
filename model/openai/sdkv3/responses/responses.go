@@ -19,13 +19,17 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+type builtinTools = modelrequest.BuiltinTools
+
 // Model implements model.Model using the official OpenAI Responses API.
 // It supports concurrent requests.
 type Model struct {
+	builtinTools
 	client            openai.Client
 	name              string
 	store             bool
@@ -53,6 +57,7 @@ func New(name string, opts ...Option) *Model {
 	))
 	clientOpts = append(clientOpts, o.openaiOptions...)
 	return &Model{
+		builtinTools:      builtinTools(o.toolSearch.mode == toolSearchClient),
 		client:            openai.NewClient(clientOpts...),
 		name:              name,
 		store:             o.store,

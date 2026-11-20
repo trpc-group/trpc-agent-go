@@ -569,6 +569,7 @@ func WithContextCompactionSkipRecentFunc(
 
 // WithContextCompactionForceCleanToolNames sets tool names whose results should
 // always be compacted to a placeholder while context compaction is enabled.
+// Opaque provider-native results retain their complete replay records.
 func WithContextCompactionForceCleanToolNames(names ...string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.toolResultCompactionRules.forceCleanToolNames =
@@ -1047,6 +1048,22 @@ func (p *ContentRequestProcessor) sessionHistoryAfterCutoff(
 		invocation.SetState(contentHasCompactedToolResultsStateKey, true)
 	}
 	return history
+}
+
+// ProviderActionResumeHistory applies the normal session history policy without
+// injecting context or publishing preprocessing events or a summary selection.
+// The caller supplies a private snapshot ending before the pending response.
+func (p *ContentRequestProcessor) ProviderActionResumeHistory(
+	invocation *agent.Invocation,
+	req *model.Request,
+) []model.Message {
+	if p == nil || invocation == nil || invocation.Session == nil {
+		return nil
+	}
+	cfg := p.runtimeConfigFromInvocation(invocation)
+	skipHistory := cfg.includeMode == "none"
+	selection := p.sessionSummaryForRequest(invocation, skipHistory)
+	return p.sessionHistoryAfterCutoff(invocation, req, skipHistory, true, selection.cutoff).messages
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
@@ -2248,8 +2265,8 @@ func latestCompleteToolRoundMatch(
 		if callIndex < 0 || callIndex >= len(events) || len(matches) == 0 {
 			continue
 		}
-		if !allToolCallIDsMatched(
-			events[callIndex].GetToolCallIDs(),
+		if !allToolCallResultsMatched(
+			events[callIndex],
 			events,
 			matches,
 		) {
@@ -2299,7 +2316,8 @@ func toolCallEventForResumeTail(evt event.Event) (event.Event, bool) {
 	response := evt.Response.Clone()
 	response.Choices = response.Choices[:0]
 	for _, choice := range evt.Response.Choices {
-		if len(choice.Message.ToolCalls) == 0 && len(choice.Delta.ToolCalls) == 0 {
+		if len(choice.Message.ToolCalls) == 0 && len(choice.Delta.ToolCalls) == 0 &&
+			!choiceHasNativeAssistantRecord(choice) {
 			continue
 		}
 		choice.Message.ToolCalls = cloneToolCallsForResumeTail(
@@ -2354,16 +2372,16 @@ func compactResumeToolRound(
 		changed := false
 		for choiceIndex := range response.Choices {
 			choice := &response.Choices[choiceIndex]
-			// Native call arguments are part of the replayed output record;
-			// only their tool results may be compacted.
-			if choice.Message.ProviderData == nil && compactOversizedResumeToolCallArguments(
+			// Native call arguments and results are complete replay records.
+			// Ordinary tool results can still be compacted independently.
+			if compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Message,
 				cfg,
 			) {
 				changed = true
 			}
-			if choice.Delta.ProviderData == nil && compactOversizedResumeToolCallArguments(
+			if compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Delta,
 				cfg,
@@ -2371,7 +2389,7 @@ func compactResumeToolRound(
 				changed = true
 			}
 			message := choice.Message
-			if message.Role != model.RoleTool || message.ToolID == "" ||
+			if message.Role != model.RoleTool || message.ToolID == "" || message.ProviderData != nil ||
 				cfg.keepToolResult(message) {
 				continue
 			}
@@ -2415,7 +2433,7 @@ func compactOversizedResumeToolCallArguments(
 	message *model.Message,
 	cfg ContextCompactionConfig,
 ) bool {
-	if message == nil {
+	if message == nil || message.ProviderData != nil {
 		return false
 	}
 	changed := false
@@ -3747,8 +3765,8 @@ func (p *ContentRequestProcessor) applyToolTranscriptMode(
 		if !allMatchedToolResultsArePrevious(events, responseMatches, inv) {
 			continue
 		}
-		if !allToolCallIDsMatched(
-			events[callEventIndex].GetToolCallIDs(),
+		if !allToolCallResultsMatched(
+			events[callEventIndex],
 			events,
 			responseMatches,
 		) {
@@ -3822,6 +3840,34 @@ func allMatchedToolResultsArePrevious(
 		}
 	}
 	return true
+}
+
+// allToolCallResultsMatched also recognizes native action-only rounds, whose
+// results are matched by their persisted source rather than projected call IDs.
+func allToolCallResultsMatched(
+	callEvent event.Event,
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+) bool {
+	callIDs := callEvent.GetToolCallIDs()
+	if callEvent.Response != nil {
+		for _, choice := range callEvent.Choices {
+			for _, msg := range []model.Message{choice.Message, choice.Delta} {
+				if msg.Role != model.RoleAssistant || msg.ProviderData == nil {
+					continue
+				}
+				ids, err := providerdata.RequestedActionIDs(msg.ProviderData)
+				if err != nil {
+					return false
+				}
+				callIDs = append(callIDs, ids...)
+			}
+		}
+	}
+	if len(callIDs) == 0 {
+		return providerActionCallSource(callEvent) != "" && len(matches) > 0
+	}
+	return allToolCallIDsMatched(callIDs, events, matches)
 }
 
 func allToolCallIDsMatched(
@@ -4218,16 +4264,8 @@ func toolResponseMatchesByCallEventFiltered(
 		if includeEvent != nil && !includeEvent(i, evt) {
 			continue
 		}
-		if evt.Response != nil && !evt.IsToolResultResponse() {
-			for _, choice := range evt.Response.Choices {
-				if (choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil) ||
-					(choice.Delta.Role == model.RoleAssistant && choice.Delta.ProviderData != nil) {
-					if source := ProviderActionSource(&evt); source != "" {
-						nativeSources[source] = i
-					}
-					break
-				}
-			}
+		if source := providerActionCallSource(evt); source != "" {
+			nativeSources[source] = i
 		}
 		if evt.IsToolCallResponse() {
 			ids := evt.GetToolCallIDs()
@@ -4248,34 +4286,67 @@ func toolResponseMatchesByCallEventFiltered(
 			if responseID == "" {
 				continue
 			}
-			if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
-				source, ok, err := event.GetExtension[string](&evt, providerActionSourceExtension)
-				if callIndex, found := nativeSources[source]; err == nil && ok && found {
-					responseMatchesByCallEvent[callIndex] = appendToolResponseChoice(
-						responseMatchesByCallEvent[callIndex], i, choiceIndex,
-					)
-					continue
-				}
-				if err != nil || ok {
-					// A marked result never falls back to another round.
-					continue
-				}
+			callIndex, marked := providerActionCallIndex(evt, choice, nativeSources)
+			if !marked {
+				callIndex = takePendingToolCallRound(pendingCallRounds, responseID)
 			}
-			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
-				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
-					continue
-				}
-				delete(pendingCallRounds[j].pendingIDs, responseID)
-				responseMatchesByCallEvent[pendingCallRounds[j].eventIndex] = appendToolResponseChoice(
-					responseMatchesByCallEvent[pendingCallRounds[j].eventIndex],
-					i,
-					choiceIndex,
+			if callIndex >= 0 {
+				responseMatchesByCallEvent[callIndex] = appendToolResponseChoice(
+					responseMatchesByCallEvent[callIndex], i, choiceIndex,
 				)
-				break
 			}
 		}
 	}
 	return responseMatchesByCallEvent
+}
+
+func choiceHasNativeAssistantRecord(choice model.Choice) bool {
+	return (choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil) ||
+		(choice.Delta.Role == model.RoleAssistant && choice.Delta.ProviderData != nil)
+}
+
+func providerActionCallSource(evt event.Event) string {
+	if evt.Response == nil || evt.IsToolResultResponse() {
+		return ""
+	}
+	for _, choice := range evt.Response.Choices {
+		if choiceHasNativeAssistantRecord(choice) {
+			return ProviderActionSource(&evt)
+		}
+	}
+	return ""
+}
+
+func providerActionCallIndex(
+	evt event.Event,
+	choice model.Choice,
+	nativeSources map[string]int,
+) (int, bool) {
+	if choice.Message.ProviderData == nil && choice.Delta.ProviderData == nil {
+		return -1, false
+	}
+	source, ok, err := event.GetExtension[string](&evt, providerActionSourceExtension)
+	if err != nil {
+		return -1, true
+	}
+	if !ok {
+		return -1, false
+	}
+	if callIndex, found := nativeSources[source]; found {
+		return callIndex, true
+	}
+	// A marked result never falls back to an unrelated projected call.
+	return -1, true
+}
+
+func takePendingToolCallRound(rounds []pendingToolCallRound, responseID string) int {
+	for i := len(rounds) - 1; i >= 0; i-- {
+		if _, ok := rounds[i].pendingIDs[responseID]; ok {
+			delete(rounds[i].pendingIDs, responseID)
+			return rounds[i].eventIndex
+		}
+	}
+	return -1
 }
 
 func toolResponseIDFromChoice(choice model.Choice) string {

@@ -22,6 +22,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/stretchr/testify/require"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -820,4 +821,15 @@ func TestNonStreamingClientToolSearchResponseIsNotDone(t *testing.T) {
 	  "description":"`+clientToolSearchDescription+`",
 	  "parameters":{"type":"object","properties":{"query":{"type":"string","description":"The capability or task that the needed tools must support."}},
 	    "required":["query"],"additionalProperties":false}}]`, body["tools"])
+}
+
+func TestClientSearchIDsExcludeServerCalls(t *testing.T) {
+	data := &model.ProviderData{Protocol: responseProvider, Payload: json.RawMessage(`[
+      {"type":"tool_search_call","execution":"server","status":"completed","arguments":{"query":"inventory"}},
+      {"type":"tool_search_call","execution":"client","call_id":"first","status":"completed","arguments":{"query":"orders"}},
+      {"type":"tool_search_call","execution":"client","call_id":"second","status":"completed","arguments":{"query":"billing"}}
+    ]`)}
+	ids, err := providerdata.RequestedActionIDs(data)
+	require.NoError(t, err)
+	require.Equal(t, []string{"first", "second"}, ids)
 }

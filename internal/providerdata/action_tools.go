@@ -11,6 +11,7 @@ package providerdata
 
 import (
 	"context"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -18,33 +19,76 @@ import (
 
 type actionToolsKey struct{}
 
-const (
-	actionBindingCallID = "trpc.provider_action.binding_call_id"
-	actionBindingKey    = "trpc.provider_action.binding_key"
-)
-
-// SetActionBindingHint records a possible prior execution key for a single
-// provider call. The executor must verify it against its own action bindings.
-func SetActionBindingHint(call *model.ToolCall, callID, key string) {
-	if call.ExtraFields == nil {
-		call.ExtraFields = make(map[string]any)
-	}
-	call.ExtraFields[actionBindingCallID] = callID
-	call.ExtraFields[actionBindingKey] = key
+// ActionToolIdentity identifies a tool as represented by its provider.
+// Namespace is empty for a top-level tool.
+type ActionToolIdentity struct {
+	Namespace string
+	Name      string
 }
 
-// ActionBindingHint returns a provider's hint without authorizing its use.
-func ActionBindingHint(call model.ToolCall) (string, string) {
-	callID, _ := call.ExtraFields[actionBindingCallID].(string)
-	key, _ := call.ExtraFields[actionBindingKey].(string)
-	return callID, key
+// ActionBinding identifies the latest provider action that selected one native
+// tool call. Identity remains stable when the local execution name changes.
+type ActionBinding struct {
+	CallID   string
+	Name     string
+	ActionID string
+	Identity ActionToolIdentity
+}
+
+// ActionToolResolver decodes provider-native action identities without model,
+// invocation, tool, or handler state.
+type ActionToolResolver func(*model.Request, model.Message) ([]ActionBinding, error)
+
+type actionDecoder struct {
+	bindings  ActionToolResolver
+	callIDs   func(*model.ProviderData) ([]string, error)
+	reconcile ProjectionToolReconciler
+}
+
+var actionDecoders sync.Map // provider protocol -> actionDecoder
+
+// RegisterActionDecoder associates native protocol decoding with its
+// adapter package. The decoder also applies when a wrapper delegates to it.
+func RegisterActionDecoder(protocol string, resolver ActionToolResolver, callIDs func(*model.ProviderData) ([]string, error), reconcile ProjectionToolReconciler) {
+	actionDecoders.Store(protocol, actionDecoder{bindings: resolver, callIDs: callIDs, reconcile: reconcile})
+}
+
+// ResolveActionBindings resolves bindings from the native record's protocol.
+// Protocols without a registered decoder have no provider action bindings.
+func ResolveActionBindings(request *model.Request, message model.Message) ([]ActionBinding, error) {
+	if message.ProviderData == nil {
+		return nil, nil
+	}
+	decode := decoderFor(message.ProviderData.Protocol).bindings
+	if decode == nil {
+		return nil, nil
+	}
+	return decode(request, message)
+}
+
+// RequestedActionIDs returns the client action IDs encoded by a known adapter.
+func RequestedActionIDs(data *model.ProviderData) ([]string, error) {
+	if data == nil {
+		return nil, nil
+	}
+	decode := decoderFor(data.Protocol).callIDs
+	if decode == nil {
+		return nil, nil
+	}
+	return decode(data)
+}
+
+func decoderFor(protocol string) actionDecoder {
+	value, _ := actionDecoders.Load(protocol)
+	decoder, _ := value.(actionDecoder)
+	return decoder
 }
 
 // ActionTools connects one provider action to the caller's tool executor.
-// Unavailable contains prior search bindings that this run must rediscover.
+// Expired reports whether an exact prior action binding needs rediscovery.
 type ActionTools struct {
-	Unavailable map[string]bool
-	Bind        func(callID, name string, t tool.Tool) bool
+	Expired func(callID string, identity ActionToolIdentity) bool
+	Bind    func(callID, name string, identity ActionToolIdentity, t tool.Tool) bool
 }
 
 // WithActionTools lets a completer return bindings without changing the model

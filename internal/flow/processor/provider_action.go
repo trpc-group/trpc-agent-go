@@ -150,13 +150,13 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 		}
 		if len(bindings) > 0 {
 			state.live[message.ToolID] = bindings
-			if rsp.IsToolCallResponse() {
-				if state.response != rsp {
-					state.response = rsp
-					state.justCompleted = nil
-				}
-				state.justCompleted = append(state.justCompleted, message.ToolID)
+		}
+		if rsp.IsToolCallResponse() {
+			if state.response != rsp {
+				state.response = rsp
+				state.justCompleted = nil
 			}
+			state.justCompleted = append(state.justCompleted, message)
 		}
 	}
 }

@@ -1066,13 +1066,6 @@ func projectOutput(output []responses.ResponseOutputItemUnion, tools *toolPlan) 
 					Arguments: []byte(arguments),
 				},
 			}
-			if tools != nil && native.Namespace != "" {
-				fn := wireFunction{namespace: native.Namespace, name: native.Name}
-				key := native.Namespace + "." + native.Name
-				if origin := tools.searchOrigins[fn]; origin != "" && key != name {
-					providerdata.SetActionBindingHint(&call, origin, key)
-				}
-			}
 			out.toolCalls = append(out.toolCalls, call)
 		case outputTypeToolSearchCall:
 			if native.Execution == executionClient {

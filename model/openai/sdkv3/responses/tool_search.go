@@ -104,10 +104,15 @@ type toolPlan struct {
 	// flat maps the wire names of functions outside namespaces to request
 	// tool keys.
 	flat map[string]string
+	// exposedFlat tracks functions actually exposed at the top level. flat
+	// also contains deferred candidates needed to resolve search results.
+	exposedFlat map[string]bool
+	// namespaces records ToolSets exposed as namespaces on this request.
+	namespaces map[string]bool
 	// keyFromSearch reserves each execution key. Registered keys have value
 	// false. Keys first introduced by a client search have value true.
 	keyFromSearch map[string]bool
-	// searchOrigins records the client result that loaded each wire identity.
+	// searchOrigins records the latest client result for each wire identity.
 	searchOrigins map[wireFunction]string
 	// deferred lists client tool search candidates in request key order.
 	deferred []ToolSearchEntry
@@ -122,37 +127,62 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 	plan := &toolPlan{
 		functions:     make(map[wireFunction]string),
 		flat:          make(map[string]string),
+		exposedFlat:   make(map[string]bool),
+		namespaces:    make(map[string]bool),
 		keyFromSearch: make(map[string]bool),
 	}
-	for key, tl := range request.Tools {
-		if tl == nil || tl.Declaration() == nil {
+	keys := make([]string, 0, len(request.Tools))
+	for key := range request.Tools {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		t := request.Tools[key]
+		if t == nil || t.Declaration() == nil {
 			continue
 		}
 		plan.keyFromSearch[key] = false
-		plan.flat[tl.Declaration().Name] = key
-		if namespace, name, _, ok := itool.ToolSetMember(tl); ok {
+		if namespace, name, _, ok := itool.ToolSetMember(t); ok {
 			plan.functions[wireFunction{namespace: namespace, name: name}] = key
+		} else {
+			plan.flat[t.Declaration().Name] = key
+			plan.exposedFlat[t.Declaration().Name] = true
 		}
 	}
 	history := scanToolSearchHistory(request.Messages)
-	for fn := range plan.functions {
-		if fn.namespace == fn.name && !history.loaded[fn] {
-			if _, ok := plan.flat[fn.name]; ok {
-				delete(plan.functions, fn)
-			}
-		}
-	}
 	plan.searchOrigins = history.origins
 	plan.addLoadedFunctions(history.loaded)
 	return plan
 }
 
+func (p *toolPlan) preferStandaloneFunctions(loaded map[wireFunction]bool) {
+	for fn := range p.functions {
+		if fn.namespace == fn.name && !loaded[fn] && !p.namespaces[fn.namespace] {
+			if p.exposedFlat[fn.name] {
+				delete(p.functions, fn)
+			}
+		}
+	}
+}
+
 func (p *toolPlan) addLoadedFunctions(loaded map[wireFunction]bool) {
+	// Reserve literal top-level names before deriving names for namespace members.
+	identities := make([]wireFunction, 0, len(loaded))
 	for fn := range loaded {
+		identities = append(identities, fn)
+	}
+	sort.Slice(identities, func(i, j int) bool {
+		if identities[i].namespace == identities[j].namespace {
+			return identities[i].name < identities[j].name
+		}
+		return identities[i].namespace < identities[j].namespace
+	})
+	for _, fn := range identities {
 		if key, err := p.searchExecutionKey(fn); err == nil {
 			p.rememberSearchTool(fn, key)
 		}
 	}
+	p.preferStandaloneFunctions(loaded)
 }
 
 func (p *toolPlan) rememberSearchTool(fn wireFunction, key string) {
@@ -161,8 +191,10 @@ func (p *toolPlan) rememberSearchTool(fn wireFunction, key string) {
 	}
 	if fn.namespace == "" {
 		p.flat[fn.name] = key
+		p.exposedFlat[fn.name] = true
 	} else {
 		p.functions[fn] = key
+		p.namespaces[fn.namespace] = true
 	}
 }
 
@@ -238,8 +270,9 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 	history := scanToolSearchHistory(request.Messages)
 	entries, namespaced := toolEntries(ctx, request.Tools)
 	p := newToolPlanner(m.toolSearch.mode == toolSearchClient, history.loaded, len(entries))
+	p.plan.searchOrigins = history.origins
 	if actions := providerdata.ActionToolsFromContext(ctx); actions != nil {
-		p.unavailable = actions.Unavailable
+		p.expired = actions.Expired
 	}
 	anyDeferred := false
 	for _, e := range entries {
@@ -251,7 +284,7 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 		} else {
 			err = p.addTopLevel(e)
 			fn := wireFunction{namespace: e.namespace, name: e.name}
-			if e.member && history.loaded[fn] {
+			if e.member {
 				if other, exists := p.plan.functions[fn]; exists && other != e.key {
 					return nil, fmt.Errorf("openai/responses: tools %q and %q are both %q in namespace %q", other, e.key, e.name, e.namespace)
 				}
@@ -262,7 +295,6 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 			return nil, err
 		}
 	}
-	p.plan.searchOrigins = history.origins
 	p.plan.addLoadedFunctions(history.loaded)
 	if err := p.finishNamespaces(); err != nil {
 		return nil, err
@@ -332,11 +364,11 @@ type namespaceGroup struct {
 type toolPlanner struct {
 	client bool
 	// loaded holds the functions that history already loaded.
-	loaded      map[wireFunction]bool
-	unavailable map[string]bool
-	plan        *toolPlan
-	groups      map[string]*namespaceGroup
-	topLevel    map[string]struct{}
+	loaded   map[wireFunction]bool
+	expired  func(callID string, identity providerdata.ActionToolIdentity) bool
+	plan     *toolPlan
+	groups   map[string]*namespaceGroup
+	topLevel map[string]struct{}
 }
 
 func newToolPlanner(client bool, loaded map[wireFunction]bool, size int) *toolPlanner {
@@ -346,6 +378,8 @@ func newToolPlanner(client bool, loaded map[wireFunction]bool, size int) *toolPl
 		plan: &toolPlan{
 			functions:     make(map[wireFunction]string),
 			flat:          make(map[string]string),
+			exposedFlat:   make(map[string]bool),
+			namespaces:    make(map[string]bool),
 			keyFromSearch: make(map[string]bool, size),
 		},
 		groups:   make(map[string]*namespaceGroup),
@@ -360,9 +394,10 @@ func (p *toolPlanner) addTopLevel(e toolEntry) error {
 	}
 	p.plan.flat[fn.Name] = e.key
 	if e.deferred && p.client {
-		p.offer(e.key, ToolSearchEntry{Name: fn.Name, Tool: e.tool})
+		p.offer(ToolSearchEntry{Name: fn.Name, Tool: e.tool})
 		return nil
 	}
+	p.plan.exposedFlat[fn.Name] = true
 	if e.deferred {
 		fn.DeferLoading = openai.Bool(true)
 	}
@@ -382,11 +417,12 @@ func (p *toolPlanner) addNamespaced(e toolEntry) error {
 		description = fmt.Sprintf(toolSetNamespaceDescription, e.namespace)
 	}
 	if e.deferred && p.client {
-		p.offer(e.key, ToolSearchEntry{
+		p.offer(ToolSearchEntry{
 			Namespace: e.namespace, NamespaceDescription: description, Name: e.name, Tool: e.tool,
 		})
 		return nil
 	}
+	p.plan.namespaces[e.namespace] = true
 	member, err := namespaceFunctionParam(e.name, e.decl, e.deferred)
 	if err != nil {
 		return err
@@ -405,10 +441,23 @@ func (p *toolPlanner) addNamespaced(e toolEntry) error {
 
 // offer makes a deferred tool a client search candidate unless history
 // already loaded it.
-func (p *toolPlanner) offer(key string, entry ToolSearchEntry) {
-	if p.unavailable[key] || !p.loaded[wireFunction{namespace: entry.Namespace, name: entry.Name}] {
+func (p *toolPlanner) offer(entry ToolSearchEntry) {
+	fn := wireFunction{namespace: entry.Namespace, name: entry.Name}
+	if !p.loaded[fn] || p.bindingExpired(fn) {
 		p.plan.deferred = append(p.plan.deferred, entry)
 	}
+}
+
+func (p *toolPlanner) bindingExpired(fn wireFunction) bool {
+	if p.expired == nil {
+		return false
+	}
+	origin := p.plan.searchOrigins[fn]
+	return origin != "" && p.expired(origin, actionToolIdentity(fn))
+}
+
+func actionToolIdentity(fn wireFunction) providerdata.ActionToolIdentity {
+	return providerdata.ActionToolIdentity{Namespace: fn.namespace, Name: fn.name}
 }
 
 // finishNamespaces fills the namespace params with their members and rejects
@@ -478,7 +527,9 @@ type toolSearchHistory struct {
 }
 
 func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
-	history := toolSearchHistory{loaded: make(map[wireFunction]bool), origins: make(map[wireFunction]string)}
+	history := toolSearchHistory{
+		loaded: make(map[wireFunction]bool), origins: make(map[wireFunction]string),
+	}
 	for _, msg := range messages {
 		if msg.ProviderData == nil || msg.ProviderData.Protocol != responseProvider {
 			continue
@@ -497,8 +548,16 @@ func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 				if msg.Role == model.RoleTool && item.Execution == executionClient && item.CallID == msg.ToolID {
 					origin = item.CallID
 				}
+				// Reserve top-level identities first, regardless of result order.
+				// A namespace member cannot own the same qualified execution key.
+				for _, raw := range item.Tools {
+					var definition struct{ Type, Name string }
+					if json.Unmarshal(raw, &definition) == nil && definition.Type == functionToolType {
+						history.loaded[wireFunction{name: definition.Name}] = true
+					}
+				}
 				for _, loaded := range item.Tools {
-					markLoadedTools(history.loaded, history.origins, origin, loaded)
+					markLoadedTools(history, origin, loaded)
 				}
 			}
 		}
@@ -506,7 +565,7 @@ func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 	return history
 }
 
-func markLoadedTools(loaded map[wireFunction]bool, origins map[wireFunction]string, origin string, raw json.RawMessage) {
+func markLoadedTools(history toolSearchHistory, origin string, raw json.RawMessage) {
 	var definition struct {
 		Type  string `json:"type"`
 		Name  string `json:"name"`
@@ -521,21 +580,79 @@ func markLoadedTools(loaded map[wireFunction]bool, origins map[wireFunction]stri
 	switch definition.Type {
 	case functionToolType:
 		fn := wireFunction{name: definition.Name}
-		loaded[fn] = true
+		history.loaded[fn] = true
 		if origin != "" {
-			origins[fn] = origin
+			history.origins[fn] = origin
 		}
 	case "namespace":
 		for _, member := range definition.Tools {
 			if member.Type == functionToolType {
 				fn := wireFunction{namespace: definition.Name, name: member.Name}
-				loaded[fn] = true
+				history.loaded[fn] = true
 				if origin != "" {
-					origins[fn] = origin
+					history.origins[fn] = origin
 				}
 			}
 		}
 	}
+}
+
+func init() {
+	providerdata.RegisterActionDecoder(responseProvider, resolveActionBindings, clientSearchIDs, reconcileProjectedToolNames)
+}
+
+func resolveActionBindings(request *model.Request, message model.Message) ([]providerdata.ActionBinding, error) {
+	if request == nil || message.ProviderData == nil || message.ProviderData.Protocol != responseProvider {
+		return nil, nil
+	}
+	items, err := parseNativeItems(message.ProviderData.Payload, true)
+	if err != nil {
+		return nil, err
+	}
+	plan := projectionToolPlan(request)
+	var bindings []providerdata.ActionBinding
+	for _, item := range items {
+		if item.Type != outputTypeFunctionCall {
+			continue
+		}
+		fn := wireFunction{namespace: item.Namespace, name: item.Name}
+		origin := plan.searchOrigins[fn]
+		if origin == "" && item.Namespace == item.Name {
+			// Standalone functions can be returned with namespace == name.
+			// Do not attach their historical binding to an actual namespace
+			// member that projects to its own registered execution name.
+			memberCall := false
+			for key, candidate := range request.Tools {
+				namespace, member, _, isMember := itool.ToolSetMember(candidate)
+				// In Original mode the bare execution name also matches the
+				// standalone search result, so it cannot identify the member.
+				if key == item.Name || !isMember || namespace != fn.namespace || member != fn.name {
+					continue
+				}
+				for _, call := range message.ToolCalls {
+					if call.ID == item.CallID && call.Function.Name == key {
+						memberCall = true
+						break
+					}
+				}
+			}
+			if !memberCall {
+				fn = wireFunction{name: item.Name}
+				origin = plan.searchOrigins[fn]
+			}
+		}
+		if origin == "" {
+			continue
+		}
+		name, err := plan.functionName(item.Namespace, item.Name)
+		if err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, providerdata.ActionBinding{
+			CallID: item.CallID, Name: name, ActionID: origin, Identity: actionToolIdentity(fn),
+		})
+	}
+	return bindings, nil
 }
 
 // clientSearchArguments returns the JSON object of tool search arguments,
@@ -664,17 +781,39 @@ func pendingToolSearchCalls(response *model.Response, info model.Info) ([]native
 			return nil, fmt.Errorf("openai/responses: provider data belongs to protocol %q and model %q, not %q and %q",
 				data.Protocol, data.Model, info.ProviderDataProtocol, info.Name)
 		}
-		items, err := parseNativeItems(data.Payload, true)
+		pending, err := clientSearchItems(data)
 		if err != nil {
-			return nil, fmt.Errorf("openai/responses: invalid provider data items: %w", err)
+			return nil, err
 		}
-		for _, item := range items {
-			if item.Type == outputTypeToolSearchCall && item.Execution == executionClient {
-				calls = append(calls, item)
-			}
+		calls = append(calls, pending...)
+	}
+	return calls, nil
+}
+
+func clientSearchItems(data *model.ProviderData) ([]nativeItem, error) {
+	items, err := parseNativeItems(data.Payload, true)
+	if err != nil {
+		return nil, fmt.Errorf("openai/responses: invalid provider data items: %w", err)
+	}
+	var calls []nativeItem
+	for _, item := range items {
+		if item.Type == outputTypeToolSearchCall && item.Execution == executionClient {
+			calls = append(calls, item)
 		}
 	}
 	return calls, nil
+}
+
+func clientSearchIDs(data *model.ProviderData) ([]string, error) {
+	calls, err := clientSearchItems(data)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, call := range calls {
+		ids = append(ids, call.CallID)
+	}
+	return ids, nil
 }
 
 type loadedFunction struct {
@@ -714,6 +853,7 @@ func (m *Model) toolSearchOutputMessage(
 	}
 	ids := make([]string, 0, len(entries))
 	namespaces := make(map[string]*loadedNamespace)
+	selectedKeys := make(map[string]wireFunction)
 	actions := providerdata.ActionToolsFromContext(ctx)
 	for _, entry := range entries {
 		value := reflect.ValueOf(entry.Tool)
@@ -738,9 +878,15 @@ func (m *Model) toolSearchOutputMessage(
 		if err != nil {
 			return model.Message{}, err
 		}
-		if actions != nil && !actions.Bind(callID, key, entry.Tool) {
+		// One result persists bindings by execution key. Registered aliases can
+		// otherwise overwrite a different wire identity in that same result.
+		if other, exists := selectedKeys[key]; exists && other != fn {
+			return model.Message{}, fmt.Errorf("tool %q in namespace %q conflicts with execution key %q", fn.name, fn.namespace, key)
+		}
+		if actions != nil && !actions.Bind(callID, key, actionToolIdentity(fn), entry.Tool) {
 			continue
 		}
+		selectedKeys[key] = fn
 		plan.rememberSearchTool(fn, key)
 		loaded[fn] = true
 		ids = append(ids, key)

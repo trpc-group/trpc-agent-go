@@ -629,7 +629,7 @@ func (f *Flow) resumePendingToolCalls(
 	}
 	f.populateRequestTools(ctx, invocation, req)
 	if providerdata.ResponseHasData(lastResp) {
-		req.Messages = persistedProviderDataHistory(invocation)
+		f.populateResumeProviderDataHistory(invocation, req, lastResp)
 	}
 
 	for _, rp := range f.responseProcessors {
@@ -646,9 +646,58 @@ func (f *Flow) resumePendingToolCalls(
 	}
 }
 
+// populateResumeProviderDataHistory keeps a pending native response's bindings
+// consistent with the history policy that produced the model request.
+// Only its history selection runs here; context injection, callbacks, and
+// request processors retain their normal execution timing after recovery.
+func (f *Flow) populateResumeProviderDataHistory(
+	invocation *agent.Invocation,
+	req *model.Request,
+	pending *model.Response,
+) {
+	for _, requestProcessor := range f.requestProcessors {
+		contentProcessor, ok := requestProcessor.(*processor.ContentRequestProcessor)
+		if !ok {
+			continue
+		}
+		if invocation == nil || invocation.Session == nil {
+			return
+		}
+		// The pending response comes from the session in pendingToolCallResponse.
+		// Split one locked snapshot so later events cannot move the original
+		// model request's history window during recovery.
+		snapshot := invocation.Session.Clone()
+		view := invocation.View(agent.WithInvocationSession(snapshot))
+		events := snapshot.Events
+		for i := range events {
+			if events[i].Response != pending {
+				continue
+			}
+			// Resume uses a new invocation, but historical tail restoration
+			// must identify the invocation that produced this response.
+			view.InvocationID = events[i].InvocationID
+			view.RunOptions.RequestID = events[i].RequestID
+			snapshot.Events = events[i:]
+			suffix := persistedProviderDataHistory(view, nil)
+			snapshot.Events = events[:i]
+			req.Messages = contentProcessor.ProviderActionResumeHistory(view, req)
+			// The disjoint suffix contains the pending record and any results
+			// already saved from this round for action-level deduplication.
+			req.Messages = append(req.Messages, suffix...)
+			return
+		}
+		// Preserve the prior fallback if a caller supplied a response that is
+		// not in the session snapshot.
+		req.Messages = persistedProviderDataHistory(view, nil)
+		return
+	}
+	req.Messages = persistedProviderDataHistory(invocation, nil)
+}
+
 // persistedProviderDataHistory supplies native records to a resumed provider
 // action completer without rebuilding or mutating the ordinary model context.
-func persistedProviderDataHistory(invocation *agent.Invocation) []model.Message {
+// A non-nil pending response restricts it to that round's persisted suffix.
+func persistedProviderDataHistory(invocation *agent.Invocation, pending *model.Response) []model.Message {
 	if invocation == nil || invocation.Session == nil || invocation.AgentName == "" {
 		return nil
 	}
@@ -656,8 +705,15 @@ func persistedProviderDataHistory(invocation *agent.Invocation) []model.Message 
 	defer invocation.Session.EventMu.RUnlock()
 
 	var messages []model.Message
+	started := pending == nil
 	for i := range invocation.Session.Events {
 		evt := &invocation.Session.Events[i]
+		if evt.Response == pending {
+			started = true
+		}
+		if !started {
+			continue
+		}
 		if evt.Response == nil || evt.IsPartial || !nativeResumeEventMatches(invocation, evt) {
 			continue
 		}
@@ -1214,7 +1270,7 @@ func (p *streamingResponseProcessor) process(
 		}
 		return true
 	}
-	llmResponseEvent := p.emitLLMResponse(
+	llmResponseEvent, sourceID := p.emitLLMResponse(
 		eventInvocation,
 		response,
 		traceDetails,
@@ -1228,10 +1284,7 @@ func (p *streamingResponseProcessor) process(
 		responseErr = err
 		return false
 	}
-	postprocessCtx := p.ctx
-	if providerdata.ResponseRequestsActions(response) {
-		postprocessCtx = processor.WithProviderActionSource(postprocessCtx, processor.ProviderActionSource(llmResponseEvent))
-	}
+	postprocessCtx := processor.WithProviderActionSource(p.ctx, sourceID)
 	p.flow.postprocessWithLatencySpans(
 		postprocessCtx,
 		eventInvocation,
@@ -1410,15 +1463,18 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 	eventInvocation *agent.Invocation,
 	response *model.Response,
 	traceDetails bool,
-) *event.Event {
+) (*event.Event, string) {
 	llmResponseEvent := p.flow.createLLMResponseEvent(
 		eventInvocation,
 		p.currentInvocation,
 		response,
 		p.llmRequest,
 	)
+	var sourceID string
 	if providerdata.ResponseRequestsActions(response) {
 		processor.MarkProviderActionSource(llmResponseEvent)
+		// Event consumers may edit extensions as soon as the event is published.
+		sourceID = processor.ProviderActionSource(llmResponseEvent)
 	}
 	emitCtx := p.ctx
 	var emitSpan oteltrace.Span
@@ -1433,7 +1489,7 @@ func (p *streamingResponseProcessor) emitLLMResponse(
 	}
 	agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
 	finishLatencySpan(emitSpan, emitStarted, nil)
-	return llmResponseEvent
+	return llmResponseEvent, sourceID
 }
 
 func (p *streamingResponseProcessor) traceChat(

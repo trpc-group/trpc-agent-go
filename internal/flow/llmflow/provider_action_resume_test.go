@@ -49,6 +49,29 @@ func (m *resumePartialActionModel) CompleteProviderActions(_ context.Context, re
 	return []model.Message{savedActionResult("a2")}, nil
 }
 
+func TestResumeProviderDataHistorySkipsContextInjectionAndDeduplicatesResults(t *testing.T) {
+	record := model.NewAssistantMessage("")
+	record.ProviderData = savedActionResult("a1").ProviderData
+	pending := event.NewResponseEvent("old", "agent-resume", &model.Response{
+		Choices: []model.Choice{{Message: record}},
+	})
+	first := event.NewResponseEvent("old", "agent-resume", &model.Response{
+		Done: true, Choices: []model.Choice{{Message: savedActionResult("a1")}},
+	})
+	inv := agent.NewInvocation(agent.WithInvocationAgent(&mockAgentWithTools{name: "agent-resume"}),
+		agent.WithInvocationSession(&session.Session{Events: []event.Event{*pending, *first}}))
+	content := processor.NewContentRequestProcessor(processor.WithMaxHistoryRuns(1),
+		processor.WithFewShotResolver(func(*agent.Invocation) [][]model.Message {
+			t.Fatal("resume must not rerun context injection")
+			return nil
+		}))
+	f := &Flow{requestProcessors: []flow.RequestProcessor{content}}
+	req := &model.Request{}
+	f.populateResumeProviderDataHistory(inv, req, pending.Response)
+	require.Equal(t, []model.Message{record, savedActionResult("a1")}, req.Messages,
+		"a stored result present in the selected history is included only once")
+}
+
 func TestRun_WithResumeAfterPartialProviderActionPersistence(t *testing.T) {
 	for _, trailingError := range []bool{false, true} {
 		name := "saved result"
@@ -249,4 +272,22 @@ func TestRun_WithResumeCompletesPendingProviderActions(t *testing.T) {
 	require.Equal(t, []string{"a1"}, results, "the pending action is completed once before the next model step")
 	require.Equal(t, 1, llm.completions)
 	require.Equal(t, 1, llm.requests)
+}
+
+func TestProviderActionSourceCapturedBeforeEventPublication(t *testing.T) {
+	events := make(chan *event.Event)
+	p := streamingResponseProcessor{flow: &Flow{}, ctx: context.Background(), eventChan: events}
+	response := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ProviderData: savedActionResult("search").ProviderData,
+	}}}}
+	result := make(chan string, 1)
+	go func() {
+		_, source := p.emitLLMResponse(nil, response, false)
+		result <- source
+	}()
+	evt := <-events
+	// The subscriber owns the event after delivery and may replace its extensions.
+	evt.Extensions = nil
+	require.NotEmpty(t, evt.ID)
+	require.Equal(t, evt.ID, <-result)
 }

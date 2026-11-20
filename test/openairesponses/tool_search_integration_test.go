@@ -651,6 +651,7 @@ func TestRunnerClientToolSearch(t *testing.T) {
 				require.Equal(t, wantTools, toolSummary(t, request["tools"]),
 					"request %d keeps the same top-level tools; loaded definitions stay in history", i)
 			}
+			requireAppendOnlySearchRequests(t, requests)
 			second := conversationItems(t, requests[1]["input"])
 			require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output"}, inputTypes(second))
 			require.Equal(t, "search_1", second[3].CallID)

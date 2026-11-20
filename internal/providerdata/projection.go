@@ -18,11 +18,8 @@ import (
 type choiceSnapshot struct {
 	message      *model.ProviderData
 	delta        *model.ProviderData
-	bindingHints []callBindingHint
-}
-
-type callBindingHint struct {
-	id, name, actionID, key string
+	messageCalls []model.ToolCall
+	deltaCalls   []model.ToolCall
 }
 
 // ResponseSnapshot retains native records before AfterModel callbacks run.
@@ -42,38 +39,11 @@ func SnapshotResponse(response *model.Response) ResponseSnapshot {
 		snapshot.choices[i] = choiceSnapshot{
 			message:      snapshotRecord(choice.Message.ProviderData),
 			delta:        snapshotRecord(choice.Delta.ProviderData),
-			bindingHints: snapshotActionBindingHints(choice.Message),
+			messageCalls: append([]model.ToolCall(nil), choice.Message.ToolCalls...),
+			deltaCalls:   append([]model.ToolCall(nil), choice.Delta.ToolCalls...),
 		}
 	}
 	return snapshot
-}
-
-func snapshotActionBindingHints(message model.Message) []callBindingHint {
-	if message.ProviderData == nil {
-		return nil
-	}
-	var hints []callBindingHint
-	for _, call := range message.ToolCalls {
-		actionID, key := ActionBindingHint(call)
-		if call.ID != "" && actionID != "" && key != "" {
-			hints = append(hints, callBindingHint{call.ID, call.Function.Name, actionID, key})
-		}
-	}
-	return hints
-}
-
-func restoreActionBindingHints(message *model.Message, hints []callBindingHint) {
-	for i := range message.ToolCalls {
-		call := &message.ToolCalls[i]
-		delete(call.ExtraFields, actionBindingCallID)
-		delete(call.ExtraFields, actionBindingKey)
-		for _, hint := range hints {
-			if call.ID == hint.id && call.Function.Name == hint.name {
-				SetActionBindingHint(call, hint.actionID, hint.key)
-				break
-			}
-		}
-	}
 }
 
 func snapshotRecord(data *model.ProviderData) *model.ProviderData {
@@ -112,10 +82,11 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 		for _, field := range []struct {
 			message  *model.Message
 			previous *model.ProviderData
+			calls    []model.ToolCall
 			choice   *model.Choice
 		}{
-			{&choice.Message, previous.message, choice},
-			{&choice.Delta, previous.delta, nil},
+			{&choice.Message, previous.message, previous.messageCalls, choice},
+			{&choice.Delta, previous.delta, previous.deltaCalls, nil},
 		} {
 			data := field.message.ProviderData
 			if data == nil || sameRecord(field.previous, data) {
@@ -140,6 +111,9 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 			if err != nil {
 				return fmt.Errorf("reproject provider data message %d: %w", i, err)
 			}
+			if err := reconcileProjectedTools(request, field.previous, data, field.calls, projected.ToolCalls); err != nil {
+				return fmt.Errorf("reproject provider data message %d: %w", i, err)
+			}
 			updates = append(updates, update{field.message, projected, field.choice})
 		}
 	}
@@ -155,15 +129,6 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 				reason = "tool_calls"
 			}
 			edit.choice.FinishReason = &reason
-		}
-	}
-	for i := range response.Choices {
-		if i >= len(before.choices) {
-			break
-		}
-		message := &response.Choices[i].Message
-		if message.ProviderData != nil && sameRecord(before.choices[i].message, message.ProviderData) {
-			restoreActionBindingHints(message, before.choices[i].bindingHints)
 		}
 	}
 	return nil
