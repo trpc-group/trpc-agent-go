@@ -177,6 +177,27 @@ func TestResponsesHistoryRejectsIncompleteOrUnrepresentableInput(t *testing.T) {
 	}
 }
 
+func TestResponsesHistoryReplaysLegacyNullToolArguments(t *testing.T) {
+	m := &Model{}
+	messages := []model.Message{
+		responsesHistoryMessage(`[]`, "source answer"),
+		{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{historyCall("c1", "lookup", `null`)}},
+		model.NewToolMessage("c1", "lookup", "legacy result"),
+		model.NewUserMessage("continue"),
+	}
+	prepared, projected, err := m.prepareProviderHistory(messages)
+	require.NoError(t, err)
+	require.True(t, projected)
+	contents, err := m.convertProviderHistory(prepared)
+	require.NoError(t, err)
+	require.Len(t, contents, 4)
+	require.Equal(t, "c1", contents[1].Parts[0].FunctionCall.ID)
+	require.Equal(t, map[string]any{}, contents[1].Parts[0].FunctionCall.Args)
+	require.Equal(t, "c1", contents[2].Parts[0].FunctionResponse.ID)
+	require.Equal(t, "legacy result", contents[2].Parts[0].FunctionResponse.Response["output"])
+	require.Equal(t, "null", string(messages[1].ToolCalls[0].Function.Arguments))
+}
+
 func TestResponsesHistoryRetainsEmptyToolOutputAndLegacyPath(t *testing.T) {
 	call := responsesHistoryMessage(`[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"}]`, "", historyCall("c1", "lookup", `{}`))
 	text := " world"

@@ -174,7 +174,8 @@ func (m *Model) convertProviderHistory(messages []model.Message) ([]*genai.Conte
 				return nil, fmt.Errorf("gemini history message %d: invalid function call %q", i, call.ID)
 			}
 			args := bytes.TrimSpace(call.Function.Arguments)
-			if len(args) == 0 {
+			// Older Gemini responses stored omitted args as JSON null.
+			if len(args) == 0 || bytes.Equal(args, []byte("null")) {
 				args = []byte("{}")
 			}
 			var err error

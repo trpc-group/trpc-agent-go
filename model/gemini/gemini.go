@@ -496,7 +496,12 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 					}
 				}
 				if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
+					// Gemini may omit args for a parameterless call. Represent it
+					// as an empty object so the framework can replay the tool round.
+					args := []byte("{}")
+					if part.FunctionCall.Args != nil {
+						args, _ = json.Marshal(part.FunctionCall.Args)
+					}
 					// Vertex AI does not always populate FunctionCall.ID.
 					// Without a non-empty ID, SanitizeMessagesWithTools treats the
 					// corresponding tool result as orphaned and downgrades it to a
