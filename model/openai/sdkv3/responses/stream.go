@@ -216,8 +216,8 @@ func handleTerminalStreamEvent(
 	}
 }
 
-// A nil entry marks an ambiguous match. Slots are used only to disambiguate
-// providers that reuse a reasoning ID.
+// unique is set for a single candidate. A missing or repeated index disables
+// positional matching for the entire ID by clearing byIndex.
 type reasoningCandidates struct {
 	unique  *responses.ResponseOutputItemUnion
 	byIndex map[int64]*responses.ResponseOutputItemUnion
@@ -244,15 +244,16 @@ func (acc *streamAccumulator) recordReasoning(event *responses.ResponseStreamEve
 	} else {
 		candidates.unique = nil
 	}
-	if !event.JSON.OutputIndex.Valid() || event.OutputIndex < 0 {
+	if candidates.byIndex == nil {
 		return
 	}
 	index := event.OutputIndex
-	if _, exists := candidates.byIndex[index]; exists {
-		candidates.byIndex[index] = nil
-	} else {
-		candidates.byIndex[index] = &item
+	_, duplicate := candidates.byIndex[index]
+	if !event.JSON.OutputIndex.Valid() || index < 0 || duplicate {
+		candidates.byIndex = nil
+		return
 	}
+	candidates.byIndex[index] = &item
 }
 
 // selectReplayReasoning keeps the terminal order and replaces only complete,
@@ -261,26 +262,45 @@ func (acc *streamAccumulator) selectReplayReasoning(output []responses.ResponseO
 	if len(acc.reasoning) == 0 {
 		return
 	}
-	counts := make(map[string]int)
+	positions := make(map[string][]int)
 	for i := range output {
-		if output[i].Type == outputTypeReasoning {
-			counts[output[i].ID]++
+		id := output[i].ID
+		if output[i].Type == outputTypeReasoning && acc.reasoning[id] != nil {
+			positions[id] = append(positions[id], i)
 		}
 	}
-	for i := range output {
-		final := &output[i]
-		candidates := acc.reasoning[final.ID]
-		if final.Type != outputTypeReasoning || candidates == nil || !validReasoning(final) {
+	for id, indices := range positions {
+		candidates := acc.reasoning[id]
+		if len(indices) == 1 && candidates.unique != nil {
+			final := &output[indices[0]]
+			if validReasoning(final) {
+				*final = *candidates.unique
+			}
 			continue
 		}
-		if counts[final.ID] == 1 && candidates.unique != nil {
-			*final = *candidates.unique
+		if !candidates.covers(indices) {
 			continue
 		}
-		if done := candidates.byIndex[int64(i)]; done != nil && sameReasoningExceptCiphertext(done, final) {
-			*final = *done
+		for _, i := range indices {
+			done := candidates.byIndex[int64(i)]
+			if validReasoning(&output[i]) && sameReasoningExceptCiphertext(done, &output[i]) {
+				output[i] = *done
+			}
 		}
 	}
+}
+
+// An overlapping subset of positions cannot identify items with a repeated ID.
+func (c *reasoningCandidates) covers(indices []int) bool {
+	if len(indices) != len(c.byIndex) {
+		return false
+	}
+	for _, i := range indices {
+		if c.byIndex[int64(i)] == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func sameReasoningExceptCiphertext(a, b *responses.ResponseOutputItemUnion) bool {

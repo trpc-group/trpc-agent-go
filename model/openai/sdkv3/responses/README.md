@@ -154,9 +154,11 @@ For streaming reasoning, a valid `response.output_item.done` item may contain
 the encrypted state needed for replay. When its ID identifies one encrypted
 done item and one completed reasoning item, the adapter uses the whole done
 item in that position for both the reasoning summary and native history.
-For repeated IDs, it uses a done item only when the output index identifies a
-single candidate and all fields except `encrypted_content` match. Otherwise
-the completed reasoning item is replayed as received.
+For repeated IDs, every encrypted done item must have a distinct, nonnegative
+output index, and those positions must exactly match the completed positions
+for that ID. If they do not, the adapter keeps all completed items for that ID.
+When the positions align, each done item is used only if its other fields match
+the completed item at that position, excluding `encrypted_content`.
 
 Each completed response stores its entire ordered output array, including
 opaque encrypted reasoning, annotations, item IDs, and message phase, in
