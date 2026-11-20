@@ -296,6 +296,61 @@ func TestModelSwitchResponsesChatAndBack(t *testing.T) {
 	require.JSONEq(t, string(saved.ProviderData.Payload), string(f.savedNative(t, sid).ProviderData.Payload))
 }
 
+func TestModelSwitchCitationFailsChatAndReplaysResponses(t *testing.T) {
+	const (
+		sid          = "citation-round-trip"
+		nativeOutput = `{"type":"reasoning","id":"rs_citation","status":"completed","summary":[{"type":"summary_text","text":"source reasoning"}],"encrypted_content":"opaque-citation-reasoning"},` +
+			`{"type":"message","id":"msg_citation","status":"completed","role":"assistant","content":[{"type":"output_text","text":"See the source.","annotations":[{"type":"url_citation","url":"https://example.com/source","title":"Source","start_index":8,"end_index":14}]}]}`
+	)
+	f := newSwitchFixture(t, switchResponsesReply(nativeOutput), switchTextReply("msg_back", "back answer"))
+	require.Empty(t, f.run(t, sid, switchSource, model.NewUserMessage("find a source")))
+	require.Len(t, f.snapshot(), 1)
+	saved := f.savedNative(t, sid)
+	require.Equal(t, switchSource, saved.ProviderData.Model)
+	require.Equal(t, "See the source.", saved.Content)
+	require.JSONEq(t, "["+nativeOutput+"]", string(saved.ProviderData.Payload))
+
+	snapshot, err := json.Marshal(saved)
+	require.NoError(t, err)
+	assertSavedRecord := func() {
+		t.Helper()
+		current, err := json.Marshal(f.savedNative(t, sid))
+		require.NoError(t, err)
+		require.JSONEq(t, string(snapshot), string(current))
+	}
+
+	failure := f.run(t, sid, switchChat, model.NewUserMessage("continue in Chat"))
+	require.Contains(t, failure, "annotations")
+	require.Len(t, f.snapshot(), 1, "unsupported citation must fail before Chat HTTP")
+	assertSavedRecord()
+
+	require.Empty(t, f.run(t, sid, switchSource, model.NewUserMessage("return to Responses")))
+	requests := f.snapshot()
+	require.Len(t, requests, 2)
+	require.Equal(t, "/responses", requests[1].Path)
+	require.Equal(t, switchSource, requests[1].Model)
+	var items []json.RawMessage
+	require.NoError(t, json.Unmarshal(requests[1].Input, &items))
+	var native []json.RawMessage
+	var positions []int
+	for i, raw := range items {
+		var item struct {
+			ID string `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &item))
+		if item.ID == "rs_citation" || item.ID == "msg_citation" {
+			native = append(native, raw)
+			positions = append(positions, i)
+		}
+	}
+	require.Len(t, native, 2)
+	require.Equal(t, positions[0]+1, positions[1], "native items must remain in their original order")
+	replayed, err := json.Marshal(native)
+	require.NoError(t, err)
+	require.JSONEq(t, "["+nativeOutput+"]", string(replayed), "the original text and citation must survive replay")
+	assertSavedRecord()
+}
+
 func (f *switchFixture) seedPending(t *testing.T, sid string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -17,31 +17,14 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
-
-const responsesProtocol = "openai.responses"
-
-type responsesHistoryItem struct {
-	Type      string                    `json:"type"`
-	ID        string                    `json:"id"`
-	Status    string                    `json:"status"`
-	Role      string                    `json:"role"`
-	CallID    string                    `json:"call_id"`
-	Name      string                    `json:"name"`
-	Arguments string                    `json:"arguments"`
-	Content   []responsesHistoryContent `json:"content"`
-}
-
-type responsesHistoryContent struct {
-	Type        string            `json:"type"`
-	Annotations []json.RawMessage `json:"annotations"`
-}
 
 // SupportsProviderHistory reports whether this adapter can project the given
 // native protocol into Chat Completions history.
 func (m *Model) SupportsProviderHistory(protocol string) bool {
-	return protocol == responsesProtocol
+	return protocol == responseshistory.Protocol
 }
 
 // prepareProviderHistory projects completed Responses history for a Chat
@@ -82,7 +65,7 @@ func projectChatHistoryMessage(message model.Message) (model.Message, bool, erro
 		}
 	}
 	if data != nil {
-		if data.Protocol != responsesProtocol {
+		if data.Protocol != responseshistory.Protocol {
 			return model.Message{}, false, fmt.Errorf("unsupported provider data protocol %q", data.Protocol)
 		}
 		if err := providerdata.ValidateMessage(message, model.Info{Name: data.Model, ProviderDataProtocol: data.Protocol}); err != nil {
@@ -209,67 +192,31 @@ func projectResponsesHistory(message model.Message) (model.Message, bool, error)
 }
 
 func responsesHistoryCallIDs(payload json.RawMessage) ([]string, error) {
-	var items []responsesHistoryItem
-	if err := json.Unmarshal(payload, &items); err != nil || items == nil {
-		return nil, fmt.Errorf("responses provider data must be an item array")
+	items, err := responseshistory.ReadCompleted(payload)
+	if err != nil {
+		return nil, err
 	}
 	var callIDs []string
 	for i, item := range items {
-		if err := validateResponsesHistoryItem(item, i, len(callIDs) > 0); err != nil {
-			return nil, err
-		}
-		if item.Type == "function_call" {
+		switch item.Type {
+		case responseshistory.FunctionCall:
 			callIDs = append(callIDs, item.CallID)
+		case responseshistory.Message:
+			if len(callIDs) != 0 {
+				return nil, fmt.Errorf("responses message item %d follows a function call in the same output", i)
+			}
+			for _, part := range item.Content {
+				if part.Annotations == nil {
+					continue
+				}
+				var annotations []json.RawMessage
+				if err := json.Unmarshal(part.Annotations, &annotations); err != nil || len(annotations) != 0 {
+					return nil, fmt.Errorf("responses message item %d has annotations that chat history cannot represent", i)
+				}
+			}
 		}
 	}
 	return callIDs, nil
-}
-
-func validateResponsesHistoryItem(item responsesHistoryItem, index int, hasCalls bool) error {
-	if item.Status != "" && item.Status != "completed" {
-		return fmt.Errorf("responses item %d has status %q", index, item.Status)
-	}
-	switch item.Type {
-	case "reasoning":
-		if strings.TrimSpace(item.ID) == "" {
-			return fmt.Errorf("responses reasoning item %d has an empty id", index)
-		}
-	case "message":
-		return validateResponsesHistoryMessage(item, index, hasCalls)
-	case "function_call":
-		if strings.TrimSpace(item.CallID) == "" || strings.TrimSpace(item.Name) == "" {
-			return fmt.Errorf("responses function call item %d has an empty call_id or name", index)
-		}
-		if !isChatHistoryJSONObject([]byte(item.Arguments)) {
-			return fmt.Errorf("responses function call item %d has invalid JSON arguments", index)
-		}
-	default:
-		return fmt.Errorf("responses item %d has unsupported type %q", index, item.Type)
-	}
-	return nil
-}
-
-func validateResponsesHistoryMessage(item responsesHistoryItem, index int, hasCalls bool) error {
-	if strings.TrimSpace(item.ID) == "" || item.Status != "completed" || item.Role != "assistant" {
-		return fmt.Errorf("responses message item %d is not a completed assistant message", index)
-	}
-	if hasCalls {
-		return fmt.Errorf("responses message item %d follows a function call in the same output", index)
-	}
-	for _, part := range item.Content {
-		if len(part.Annotations) != 0 {
-			return fmt.Errorf("responses message item %d has annotations that chat history cannot represent", index)
-		}
-		if part.Type != "output_text" && part.Type != "refusal" {
-			return fmt.Errorf("responses message item %d has unsupported content type %q", index, part.Type)
-		}
-	}
-	return nil
-}
-
-func isChatHistoryJSONObject(raw []byte) bool {
-	args := bytes.TrimSpace(raw)
-	return len(args) > 0 && args[0] == '{' && json.Valid(args)
 }
 
 // validateProjectedChatCall checks the call that will actually be sent. Its
@@ -283,7 +230,7 @@ func validateProjectedChatCall(call *model.ToolCall) error {
 		call.Function.Arguments = []byte("{}")
 		return nil
 	}
-	if !isChatHistoryJSONObject(args) {
+	if !responseshistory.ValidArguments(args) {
 		return fmt.Errorf("function call %q has invalid JSON object arguments", call.ID)
 	}
 	return nil

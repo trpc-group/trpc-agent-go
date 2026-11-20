@@ -88,7 +88,7 @@ func TestPrepareChatMessagesRejectsIncompleteOrLossyHistory(t *testing.T) {
 		{"image result", []model.Message{call, imageResult}, `content type "image"`},
 		{"unfinished native item", []model.Message{responsesHistory(`[{"type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":"{}"}]`)}, "in_progress"},
 		{"invalid arguments", []model.Message{responsesHistory(`[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"[]"}]`)}, "invalid JSON"},
-		{"unsupported item", []model.Message{responsesHistory(`[{"type":"web_search_call","id":"ws_1"}]`)}, "unsupported type"},
+		{"unsupported item", []model.Message{responsesHistory(`[{"type":"web_search_call","id":"ws_1"}]`)}, `unsupported native item type "web_search_call"`},
 		{"annotations", []model.Message{responsesHistory(`[{"type":"message","id":"m1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello","annotations":[{"type":"url_citation"}]}]}]`)}, "annotations"},
 	}
 	for _, tt := range tests {
@@ -134,8 +134,8 @@ func TestPrepareChatMessagesValidatesNativeHistory(t *testing.T) {
 		{"native record on user", []model.Message{wrongRole}, "assistant message"},
 		{"object instead of native items", []model.Message{responsesHistory(`{}`)}, "item array"},
 		{"reasoning without id", []model.Message{responsesHistory(`[{"type":"reasoning"}]`)}, "empty id"},
-		{"call without name", []model.Message{responsesHistory(`[{"type":"function_call","call_id":"call_1","arguments":"{}"}]`)}, "empty call_id or name"},
-		{"incomplete assistant message", []model.Message{responsesHistory(`[{"type":"message","id":"msg_1","role":"assistant"}]`)}, "not a completed assistant message"},
+		{"call without name", []model.Message{responsesHistory(`[{"type":"function_call","call_id":"call_1","arguments":"{}"}]`)}, "has an empty name"},
+		{"incomplete assistant message", []model.Message{responsesHistory(`[{"type":"message","id":"msg_1","role":"assistant"}]`)}, `has status "", want completed`},
 		{"assistant message after call", []model.Message{responsesHistory(`[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"message","id":"msg_1","status":"completed","role":"assistant"}]`)}, "follows a function call"},
 		{"unknown assistant content", []model.Message{responsesHistory(`[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"unknown"}]}]`)}, "unsupported content type"},
 		{"missing call projection", []model.Message{responsesHistory(callPayload)}, "do not match the message projection"},

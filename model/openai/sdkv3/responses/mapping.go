@@ -10,7 +10,6 @@
 package responses
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -22,25 +21,20 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	responseProvider = "openai.responses"
+	responseProvider = responseshistory.Protocol
 	functionToolType = "function"
 
 	finishReasonStop      = "stop"
 	finishReasonToolCalls = "tool_calls"
 
 	incompleteReasonContentFilter = "content_filter"
-
-	outputTypeMessage      = "message"
-	outputTypeFunctionCall = "function_call"
-	outputTypeReasoning    = "reasoning"
-	contentTypeOutputText  = "output_text"
-	contentTypeRefusal     = "refusal"
 
 	// extraFieldInclude is the only extra-field key consumed as an additive
 	// include list. Nested and indexed paths keep the managed-field rejection.
@@ -55,27 +49,6 @@ var officialReasoningEfforts = map[string]shared.ReasoningEffort{
 	string(shared.ReasoningEffortHigh):    shared.ReasoningEffortHigh,
 	string(shared.ReasoningEffortXhigh):   shared.ReasoningEffortXhigh,
 	string(shared.ReasoningEffortMax):     shared.ReasoningEffortMax,
-}
-
-type nativeItem struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id"`
-	Status    string          `json:"status"`
-	Role      string          `json:"role"`
-	Phase     string          `json:"phase"`
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments string          `json:"arguments"`
-	Content   []nativeContent `json:"content"`
-	Summary   []struct {
-		Text string `json:"text"`
-	} `json:"summary"`
-}
-
-type nativeContent struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	Refusal string `json:"refusal"`
 }
 
 func validateRequest(request *model.Request) error {
@@ -300,7 +273,7 @@ func (m *Model) convertMessages(messages []model.Message) (responses.ResponseInp
 	completed := make(map[string]struct{})
 	for messageIndex, msg := range messages {
 		if msg.ProviderData != nil {
-			converted, err := m.convertProviderDataMessage(msg, messageIndex, called, completed)
+			converted, err := m.convertProviderDataMessage(msg, messageIndex, called)
 			if err != nil {
 				return nil, err
 			}
@@ -333,7 +306,7 @@ func (m *Model) convertMessages(messages []model.Message) (responses.ResponseInp
 			items = append(items, item)
 			completed[callID] = struct{}{}
 		case model.RoleAssistant:
-			converted, err := convertAssistantMessage(msg, called, completed)
+			converted, err := convertAssistantMessage(msg, called)
 			if err != nil {
 				return nil, fmt.Errorf("openai/responses: assistant message %d: %w", messageIndex, err)
 			}
@@ -356,25 +329,25 @@ func (m *Model) convertMessages(messages []model.Message) (responses.ResponseInp
 	return items, nil
 }
 
-func (m *Model) convertProviderDataMessage(msg model.Message, messageIndex int, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func (m *Model) convertProviderDataMessage(msg model.Message, messageIndex int, called map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	info := model.Info{Name: msg.ProviderData.Model, ProviderDataProtocol: responseProvider}
 	if err := providerdata.ValidateMessage(msg, info); err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data at message %d: %w", messageIndex, err)
 	}
-	raw := msg.ProviderData.Payload
-	native, err := parseNativeItems(raw, true)
+	native, err := responseshistory.ReadCompleted(msg.ProviderData.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data items at message %d: %w", messageIndex, err)
 	}
-	for _, item := range native {
-		if err := trackCall(item, called, completed); err != nil {
-			return nil, fmt.Errorf("openai/responses: message %d: %w", messageIndex, err)
-		}
-	}
 	omit := m.omitCrossModelEncryptedContent && msg.ProviderData.Model != m.name
-	for i, rawItem := range rawItems(raw) {
-		if omit && native[i].Type == outputTypeReasoning {
+	for _, output := range native {
+		if output.Type == responseshistory.FunctionCall {
+			if err := trackCall(output.CallID, called); err != nil {
+				return nil, fmt.Errorf("openai/responses: message %d: %w", messageIndex, err)
+			}
+		}
+		rawItem := output.Raw
+		if omit && output.Type == responseshistory.Reasoning {
 			// Preserve unknown item fields without changing the saved payload.
 			var fields map[string]json.RawMessage
 			if err := json.Unmarshal(rawItem, &fields); err != nil {
@@ -395,7 +368,7 @@ func (m *Model) convertProviderDataMessage(msg model.Message, messageIndex int, 
 	return items, nil
 }
 
-func convertAssistantMessage(msg model.Message, called, completed map[string]struct{}) (responses.ResponseInputParam, error) {
+func convertAssistantMessage(msg model.Message, called map[string]struct{}) (responses.ResponseInputParam, error) {
 	var items responses.ResponseInputParam
 	// Legacy reasoning is specific to the source model and has no Responses
 	// representation. Native Responses reasoning is handled before this path.
@@ -412,7 +385,7 @@ func convertAssistantMessage(msg model.Message, called, completed map[string]str
 		if err := validateLegacyToolCall(call); err != nil {
 			return nil, err
 		}
-		if err := trackCall(nativeItem{Type: outputTypeFunctionCall, CallID: call.ID}, called, completed); err != nil {
+		if err := trackCall(call.ID, called); err != nil {
 			return nil, err
 		}
 		items = append(items, responses.ResponseInputItemParamOfFunctionCall(
@@ -429,114 +402,18 @@ func validateLegacyToolCall(call model.ToolCall) error {
 	if strings.TrimSpace(call.Function.Name) == "" {
 		return fmt.Errorf("function call %q has an empty name", call.ID)
 	}
-	if !isJSONObject(call.Function.Arguments) {
+	if !responseshistory.ValidArguments(call.Function.Arguments) {
 		return fmt.Errorf("function call %q has invalid JSON arguments", call.ID)
 	}
 	return nil
 }
 
-func trackCall(item nativeItem, called, completed map[string]struct{}) error {
-	switch item.Type {
-	case outputTypeFunctionCall:
-		callID := item.CallID
-		if strings.TrimSpace(callID) == "" {
-			return fmt.Errorf("function call has an empty call_id")
-		}
-		if _, ok := called[callID]; ok {
-			return fmt.Errorf("duplicate function call call_id %q", callID)
-		}
-		called[callID] = struct{}{}
-	case "function_call_output":
-		callID := item.CallID
-		if strings.TrimSpace(callID) == "" {
-			return fmt.Errorf("function_call_output has an empty call_id")
-		}
-		if _, ok := called[callID]; !ok {
-			return fmt.Errorf("function_call_output %q has no preceding function call", callID)
-		}
-		if _, ok := completed[callID]; ok {
-			return fmt.Errorf("duplicate function_call_output for call_id %q", callID)
-		}
-		completed[callID] = struct{}{}
+func trackCall(callID string, called map[string]struct{}) error {
+	if _, ok := called[callID]; ok {
+		return fmt.Errorf("duplicate function call call_id %q", callID)
 	}
+	called[callID] = struct{}{}
 	return nil
-}
-
-func parseNativeItems(payload json.RawMessage, requireCompleted bool) ([]nativeItem, error) {
-	if len(bytes.TrimSpace(payload)) == 0 {
-		return nil, fmt.Errorf("provider data payload is empty")
-	}
-	var raw []json.RawMessage
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		return nil, fmt.Errorf("provider data payload must be an item array: %w", err)
-	}
-	if raw == nil {
-		return nil, fmt.Errorf("provider data payload must be an item array")
-	}
-	items := make([]nativeItem, 0, len(raw))
-	for i, encoded := range raw {
-		var item nativeItem
-		if err := json.Unmarshal(encoded, &item); err != nil {
-			return nil, fmt.Errorf("decode item %d: %w", i, err)
-		}
-		if err := validateNativeItem(item, requireCompleted); err != nil {
-			return nil, fmt.Errorf("item %d: %w", i, err)
-		}
-		items = append(items, item)
-	}
-	return items, nil
-}
-
-func validateNativeItem(item nativeItem, requireCompleted bool) error {
-	switch item.Type {
-	case outputTypeReasoning, outputTypeMessage, outputTypeFunctionCall:
-	default:
-		return fmt.Errorf("unsupported native item type %q", item.Type)
-	}
-	// Function-call item IDs are optional; call_id is the required correlation
-	// key. Preserve an absent item ID instead of inventing one during replay.
-	if item.Type != outputTypeFunctionCall && strings.TrimSpace(item.ID) == "" {
-		return fmt.Errorf("%s item has an empty id", item.Type)
-	}
-	// The API requires status on messages, but makes it optional on reasoning
-	// and function-call items. A present non-completed status is never replayable.
-	if requireCompleted && item.Status != "completed" &&
-		(item.Type == outputTypeMessage || item.Status != "") {
-		return fmt.Errorf("%s item %q has status %q, want completed", item.Type, item.ID, item.Status)
-	}
-	switch item.Type {
-	case outputTypeMessage:
-		if item.Role != "assistant" {
-			return fmt.Errorf("message item %q has role %q, want assistant", item.ID, item.Role)
-		}
-		for _, content := range item.Content {
-			if content.Type != contentTypeOutputText && content.Type != contentTypeRefusal {
-				return fmt.Errorf("message item %q has unsupported content type %q", item.ID, content.Type)
-			}
-		}
-	case outputTypeFunctionCall:
-		if strings.TrimSpace(item.CallID) == "" {
-			return fmt.Errorf("function_call item %q has an empty call_id", item.ID)
-		}
-		if strings.TrimSpace(item.Name) == "" {
-			return fmt.Errorf("function_call item %q has an empty name", item.ID)
-		}
-		if !isJSONObject([]byte(item.Arguments)) {
-			return fmt.Errorf("function_call item %q has invalid JSON arguments", item.ID)
-		}
-	}
-	return nil
-}
-
-func isJSONObject(data []byte) bool {
-	data = bytes.TrimSpace(data)
-	return len(data) > 0 && data[0] == '{' && json.Valid(data)
-}
-
-func rawItems(payload json.RawMessage) []json.RawMessage {
-	var items []json.RawMessage
-	_ = json.Unmarshal(payload, &items)
-	return items
 }
 
 func roleToEasyInput(role model.Role) responses.EasyInputMessageRole {
@@ -867,7 +744,6 @@ func projectOutput(output []responses.ResponseOutputItemUnion) (projectedOutput,
 	var text strings.Builder
 	var reasoning strings.Builder
 	called := make(map[string]struct{})
-	completed := make(map[string]struct{})
 	for index, item := range output {
 		raw := item.RawJSON()
 		if raw == "" {
@@ -878,28 +754,25 @@ func projectOutput(output []responses.ResponseOutputItemUnion) (projectedOutput,
 			raw = string(encoded)
 		}
 		encoded := json.RawMessage(raw)
-		var native nativeItem
-		if err := json.Unmarshal(encoded, &native); err != nil {
-			return out, nil, fmt.Errorf("openai/responses: decode output item %d: %w", index, err)
-		}
-		if err := validateNativeItem(native, true); err != nil {
-			return out, nil, fmt.Errorf("openai/responses: output item %d: %w", index, err)
-		}
-		if err := trackCall(native, called, completed); err != nil {
+		native, err := responseshistory.ReadCompletedItem(encoded)
+		if err != nil {
 			return out, nil, fmt.Errorf("openai/responses: output item %d: %w", index, err)
 		}
 		items = append(items, encoded)
 		switch native.Type {
-		case outputTypeMessage:
+		case responseshistory.Message:
 			for _, content := range native.Content {
 				switch content.Type {
-				case contentTypeOutputText:
+				case responseshistory.OutputText:
 					text.WriteString(content.Text)
-				case contentTypeRefusal:
+				case responseshistory.Refusal:
 					text.WriteString(content.Refusal)
 				}
 			}
-		case outputTypeFunctionCall:
+		case responseshistory.FunctionCall:
+			if err := trackCall(native.CallID, called); err != nil {
+				return out, nil, fmt.Errorf("openai/responses: output item %d: %w", index, err)
+			}
 			idx := len(out.toolCalls)
 			out.toolCalls = append(out.toolCalls, model.ToolCall{
 				Type:  functionToolType,
@@ -910,7 +783,7 @@ func projectOutput(output []responses.ResponseOutputItemUnion) (projectedOutput,
 					Arguments: []byte(native.Arguments),
 				},
 			})
-		case outputTypeReasoning:
+		case responseshistory.Reasoning:
 			for _, part := range native.Summary {
 				reasoning.WriteString(part.Text)
 			}

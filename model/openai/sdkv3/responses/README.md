@@ -413,8 +413,9 @@ access the same sessions to versions that understand `provider_data`. An older
 binary may strip ProviderData, so resuming that history through the old binary
 cannot be promised.
 
-This adapter requires a root module version containing `Message.ProviderData` and
-`Info.ProviderDataProtocol`. Repository-relative `replace` directives support local
+This adapter requires a root module version containing `Message.ProviderData`,
+`Info.ProviderDataProtocol`, and the shared Responses history reader.
+Repository-relative `replace` directives support local
 development only; downstream consumers must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited. Publish
 the compatible root module first, update this module's required root version,
