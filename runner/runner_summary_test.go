@@ -65,6 +65,77 @@ func TestRunnerEnqueuesModelVisibleSummaryView(t *testing.T) {
 	require.Equal(t, 13_310, view.RequestTokens)
 }
 
+func TestRunnerEnqueuesRebasedViewAndResponseAppendedFork(t *testing.T) {
+	service := &mockSessionService{}
+	r := NewRunner(
+		"test-app",
+		&mockAgent{name: "test-agent"},
+		WithSessionService(service),
+	).(*runner)
+	sess := &session.Session{ID: "session"}
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	history := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+		}},
+	}
+	before := []model.Message{
+		model.NewSystemMessage("system"),
+		history,
+		model.NewUserMessage("current"),
+	}
+	summaryview.AttachProjection(invocation, &summaryview.View{
+		ContentRequestLength: len(before),
+		Items: []summaryview.Item{
+			{Message: history, RequestIndex: 1},
+			{Message: before[2], RequestIndex: 2},
+		},
+	})
+	summaryview.Finalize(
+		invocation,
+		&model.Request{Messages: before},
+		13_310,
+	)
+	after := append([]model.Message(nil), before...)
+	after[1].Content = " "
+	require.True(t, summaryview.RebaseAfterTransform(
+		invocation,
+		before,
+		after,
+		nil,
+	))
+	summaryfork.Attach(invocation, &model.Request{Messages: after})
+	evt := &event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	}
+
+	require.True(t, r.handleEventPersistence(
+		context.Background(),
+		invocation,
+		sess,
+		sess,
+		evt,
+	))
+	require.Len(t, service.enqueueSummaryJobCalls, 1)
+	enqueued := service.enqueueSummaryJobCalls[0]
+	view, ok := summaryview.FromContext(enqueued.ctx)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Equal(t, " ", view.Items[0].Message.Content)
+	fork, ok := summary.CacheSafeForkRequestFromContext(enqueued.ctx)
+	require.True(t, ok)
+	require.Len(t, fork.Messages, len(after)+1)
+	require.Equal(t, after, fork.Messages[:len(after)])
+	require.Equal(t, "answer", fork.Messages[len(after)].Content)
+}
+
 func TestRunnerPersistsErrorEventWithoutEnqueuingSummary(t *testing.T) {
 	service := &mockSessionService{}
 	r := NewRunner(

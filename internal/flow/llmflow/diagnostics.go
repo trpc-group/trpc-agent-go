@@ -262,5 +262,9 @@ func tokenTailoringAttrs(
 			"llmflow.token_tailoring.after_messages",
 			last.AfterMessages,
 		),
+		attribute.String(
+			"llmflow.token_tailoring.provenance",
+			last.Provenance.String(),
+		),
 	)
 }

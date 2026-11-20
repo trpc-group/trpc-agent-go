@@ -95,14 +95,18 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 	return &Model{
 		client:                     &clientWrapper{client: client},
 		name:                       name,
+		channelBufferSize:          o.channelBufferSize,
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
 		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
+		enableTokenTailoring:       o.enableTokenTailoring,
 		maxInputTokens:             o.maxInputTokens,
 		contextWindow:              o.contextWindow,
+		tokenCounter:               o.tokenCounter,
+		tailoringStrategy:          o.tailoringStrategy,
 		chatRequestCallback:        o.chatRequestCallback,
 		chatResponseCallback:       o.chatResponseCallback,
 		chatChunkCallback:          o.chatChunkCallback,
@@ -621,7 +625,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		)
 	}
 	finishObservation := modeltailoring.ObserveChanges(
-		ctx, "gemini.Model", request, maxInputTokens,
+		ctx, "gemini.Model", request, maxInputTokens, m.tailoringStrategy,
 	)
 	defer finishObservation()
 
