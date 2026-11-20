@@ -107,6 +107,8 @@ type toolPlan struct {
 	// keyFromSearch reserves each execution key. Registered keys have value
 	// false. Keys first introduced by a client search have value true.
 	keyFromSearch map[string]bool
+	// searchOrigins records the client result that loaded each wire identity.
+	searchOrigins map[wireFunction]string
 	// deferred lists client tool search candidates in request key order.
 	deferred []ToolSearchEntry
 }
@@ -132,7 +134,16 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 			plan.functions[wireFunction{namespace: namespace, name: name}] = key
 		}
 	}
-	plan.addLoadedFunctions(scanToolSearchHistory(request.Messages).loaded)
+	history := scanToolSearchHistory(request.Messages)
+	for fn := range plan.functions {
+		if fn.namespace == fn.name && !history.loaded[fn] {
+			if _, ok := plan.flat[fn.name]; ok {
+				delete(plan.functions, fn)
+			}
+		}
+	}
+	plan.searchOrigins = history.origins
+	plan.addLoadedFunctions(history.loaded)
 	return plan
 }
 
@@ -239,11 +250,19 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 			err = p.addNamespaced(e)
 		} else {
 			err = p.addTopLevel(e)
+			fn := wireFunction{namespace: e.namespace, name: e.name}
+			if e.member && history.loaded[fn] {
+				if other, exists := p.plan.functions[fn]; exists && other != e.key {
+					return nil, fmt.Errorf("openai/responses: tools %q and %q are both %q in namespace %q", other, e.key, e.name, e.namespace)
+				}
+				p.plan.functions[fn] = e.key
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
+	p.plan.searchOrigins = history.origins
 	p.plan.addLoadedFunctions(history.loaded)
 	if err := p.finishNamespaces(); err != nil {
 		return nil, err
@@ -454,11 +473,12 @@ func namespaceFunctionParam(name string, decl *tool.Declaration, deferred bool) 
 type toolSearchHistory struct {
 	seen bool
 	// loaded holds functions loaded by earlier tool_search_output items.
-	loaded map[wireFunction]bool
+	loaded  map[wireFunction]bool
+	origins map[wireFunction]string
 }
 
 func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
-	history := toolSearchHistory{loaded: make(map[wireFunction]bool)}
+	history := toolSearchHistory{loaded: make(map[wireFunction]bool), origins: make(map[wireFunction]string)}
 	for _, msg := range messages {
 		if msg.ProviderData == nil || msg.ProviderData.Protocol != responseProvider {
 			continue
@@ -473,8 +493,12 @@ func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 				history.seen = true
 			case outputTypeToolSearchOutput:
 				history.seen = true
+				origin := ""
+				if msg.Role == model.RoleTool && item.Execution == executionClient && item.CallID == msg.ToolID {
+					origin = item.CallID
+				}
 				for _, loaded := range item.Tools {
-					markLoadedTools(history.loaded, loaded)
+					markLoadedTools(history.loaded, history.origins, origin, loaded)
 				}
 			}
 		}
@@ -482,7 +506,7 @@ func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 	return history
 }
 
-func markLoadedTools(loaded map[wireFunction]bool, raw json.RawMessage) {
+func markLoadedTools(loaded map[wireFunction]bool, origins map[wireFunction]string, origin string, raw json.RawMessage) {
 	var definition struct {
 		Type  string `json:"type"`
 		Name  string `json:"name"`
@@ -496,11 +520,19 @@ func markLoadedTools(loaded map[wireFunction]bool, raw json.RawMessage) {
 	}
 	switch definition.Type {
 	case functionToolType:
-		loaded[wireFunction{name: definition.Name}] = true
+		fn := wireFunction{name: definition.Name}
+		loaded[fn] = true
+		if origin != "" {
+			origins[fn] = origin
+		}
 	case "namespace":
 		for _, member := range definition.Tools {
 			if member.Type == functionToolType {
-				loaded[wireFunction{namespace: definition.Name, name: member.Name}] = true
+				fn := wireFunction{namespace: definition.Name, name: member.Name}
+				loaded[fn] = true
+				if origin != "" {
+					origins[fn] = origin
+				}
 			}
 		}
 	}

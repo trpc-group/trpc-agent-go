@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -346,6 +347,189 @@ func TestRunnerToolSearchAfterModelEditsNamespacedCall(t *testing.T) {
 				require.Contains(t, string(requests[1]["input"]), "billing.lookup:inv-9",
 					"the edited arguments reach the correct executor and its result reaches the model")
 				require.NotContains(t, string(requests[1]["input"]), "inv-7")
+			})
+		}
+	}
+}
+
+func TestRunnerClientToolSearchLoadedToolSetBecomesEager(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, edit := range []bool{false, true} {
+			for _, mode := range []tool.ToolSetToolNameMode{tool.ToolSetToolNameModeQualified, tool.ToolSetToolNameModeOriginal} {
+				t.Run(fmt.Sprintf("stream=%v/edit=%v/mode=%v", stream, edit, mode), func(t *testing.T) {
+					server, srv := newSearchServer(t, clientSearchRound, loadedBillingCall, messageOutput("msg_1", "done"))
+					executions := &searchExecutions{}
+					var deferLoading atomic.Bool
+					deferLoading.Store(true)
+					handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+						selected := selectSearchCandidates(req, "billing_lookup")
+						require.Len(t, selected, 1)
+						deferLoading.Store(false)
+						return selected, nil
+					}
+					callbacks := model.NewCallbacks().RegisterAfterModel(func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+						if edit && args.Response != nil && !args.Response.IsPartial && len(args.Response.Choices) > 0 {
+							if data := args.Response.Choices[0].Message.ProviderData; data != nil {
+								data.Payload = bytes.ReplaceAll(data.Payload, []byte("inv-7"), []byte("inv-9"))
+							}
+						}
+						return nil, nil
+					})
+					set := deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{
+						executions.tool("lookup", "Look up an invoice.", "billing"),
+					}}, deferred.WithFilter(func(context.Context, tool.Tool) bool { return deferLoading.Load() }))
+					r := runner.NewRunner("search", llmagent.New("search",
+						llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(handler))),
+						llmagent.WithToolSets([]tool.ToolSet{set}), llmagent.WithToolSetToolNameMode("billing", mode),
+						llmagent.WithGenerationConfig(model.GenerationConfig{Stream: stream}), llmagent.WithModelCallbacks(callbacks)))
+					defer r.Close()
+					events, failures := runSearch(t, r, model.NewUserMessage("invoice"))
+					require.Empty(t, failures)
+					require.Equal(t, "done", finalText(events))
+					require.Equal(t, []string{"billing"}, executions.executed())
+					requests := server.requests()
+					require.Len(t, requests, 3)
+					wantName := "billing_lookup"
+					if mode == tool.ToolSetToolNameModeOriginal {
+						wantName = "lookup"
+					}
+					require.Equal(t, []string{"function:" + wantName, "tool_search:client"}, toolSummary(t, requests[1]["tools"]))
+					wantID := "inv-7"
+					if edit {
+						wantID = "inv-9"
+					}
+					require.Contains(t, string(requests[2]["input"]), "billing:"+wantID)
+				})
+			}
+		}
+	}
+}
+
+func TestRunnerClientSearchExternalIdentityBeforeEagerToolSet(t *testing.T) {
+	const calls = `[{"type":"function_call","id":"fc_external","status":"completed","call_id":"external_1","namespace":"billing","name":"lookup","arguments":"{\"sandbox_id\":\"inv-7\"}"},{"type":"function_call","id":"fc_production","status":"completed","call_id":"production_1","name":"billing_lookup","arguments":"{\"id\":\"inv-8\"}"}]`
+	for _, stream := range []bool{false, true} {
+		for _, edit := range []string{"none", "payload", "extra_fields"} {
+			t.Run(fmt.Sprintf("stream=%v/edit=%s", stream, edit), func(t *testing.T) {
+				server, srv := newSearchServer(t, clientSearchRound, calls, messageOutput("msg_1", "done"))
+				executions := &searchExecutions{}
+				handler := func(context.Context, *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+					return []responses.ToolSearchEntry{{Namespace: "billing", Name: "lookup", Tool: executions.sandboxTool("sandbox_lookup", "sandbox")}}, nil
+				}
+				var models int
+				callbacks := model.NewCallbacks().RegisterBeforeModel(func(_ context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+					models++
+					if models == 1 {
+						delete(args.Request.Tools, "billing_lookup")
+					}
+					return nil, nil
+				}).RegisterAfterModel(func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+					if args.Response != nil && !args.Response.IsPartial && len(args.Response.Choices) > 0 {
+						message := &args.Response.Choices[0].Message
+						if data := message.ProviderData; edit == "payload" && data != nil {
+							data.Payload = bytes.ReplaceAll(data.Payload, []byte("inv-7"), []byte("inv-9"))
+						}
+						if edit == "extra_fields" {
+							for i := range message.ToolCalls {
+								message.ToolCalls[i].ExtraFields = nil
+							}
+						}
+					}
+					return nil, nil
+				})
+				r := runner.NewRunner("search", llmagent.New("search",
+					llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(handler))),
+					llmagent.WithToolSets([]tool.ToolSet{searchToolSet{name: "billing", tools: []tool.Tool{
+						executions.tool("lookup", "Production lookup.", "production"),
+					}}}), llmagent.WithModelCallbacks(callbacks),
+					llmagent.WithGenerationConfig(model.GenerationConfig{Stream: stream})))
+				defer r.Close()
+				events, failures := runSearch(t, r, model.NewUserMessage("lookup"))
+				require.Empty(t, failures)
+				require.Equal(t, "done", finalText(events))
+				require.ElementsMatch(t, []string{"sandbox", "production"}, executions.executed())
+				requests := server.requests()
+				require.Len(t, requests, 3)
+				wantID := "inv-7"
+				if edit == "payload" {
+					wantID = "inv-9"
+				}
+				require.Contains(t, string(requests[2]["input"]), "sandbox:"+wantID)
+				require.Contains(t, string(requests[2]["input"]), "production:inv-8")
+			})
+		}
+	}
+}
+
+func TestRunnerClientSearchExpiredExternalIdentityBeforeEagerToolSet(t *testing.T) {
+	const calls = `[{"type":"function_call","id":"fc_external","status":"completed","call_id":"external_1","namespace":"billing","name":"lookup","arguments":"{\"sandbox_id\":\"inv-7\"}"},{"type":"function_call","id":"fc_production","status":"completed","call_id":"production_1","name":"billing_lookup","arguments":"{\"id\":\"inv-8\"}"}]`
+	for _, content := range []string{"", `{"loaded_tools":["billing_lookup"]}`} {
+		for _, filtered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("content=%q/filtered=%v", content, filtered), func(t *testing.T) {
+				server, srv := newSearchServer(t, clientSearchRound, calls, messageOutput("msg_1", "done"))
+				executions := &searchExecutions{}
+				handler := func(context.Context, *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+					return []responses.ToolSearchEntry{{Namespace: "billing", Name: "lookup", Tool: executions.sandboxTool("sandbox_lookup", "sandbox")}}, nil
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				path := filepath.Join(t.TempDir(), "expired-external.db")
+				db, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				svc, err := sqlite.NewService(db, sqlite.WithEnableAsyncPersist(false),
+					sqlite.WithAppendEventHook(func(c *session.AppendEventContext, next func() error) error {
+						if c.Event.Response != nil && len(c.Event.Choices) > 0 && c.Event.Choices[0].Message.ToolID == "search_1" {
+							c.Event.Choices[0].Message.Content = content
+							err := next()
+							if err == nil {
+								cancel()
+							}
+							return err
+						}
+						return next()
+					}))
+				require.NoError(t, err)
+				m := newSearchModel(srv, responses.WithClientToolSearch(handler))
+				r := runner.NewRunner("search", llmagent.New("search", llmagent.WithModel(m)), runner.WithSessionService(svc))
+				ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("find external tools"))
+				require.NoError(t, err)
+				for range ch {
+				}
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+				require.NoError(t, r.Close())
+				require.NoError(t, svc.Close())
+
+				svc = openNativeRoutingSQLite(t, path)
+				defer svc.Close()
+				callbacks := model.NewCallbacks().RegisterAfterModel(func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+					if args.Response != nil && !args.Response.IsPartial && len(args.Response.Choices) > 0 {
+						if data := args.Response.Choices[0].Message.ProviderData; data != nil {
+							data.Payload = bytes.ReplaceAll(data.Payload, []byte("inv-7"), []byte("inv-9"))
+						}
+					}
+					return nil, nil
+				})
+				r = runner.NewRunner("search", llmagent.New("search", llmagent.WithModel(m), llmagent.WithModelCallbacks(callbacks),
+					llmagent.WithToolSets([]tool.ToolSet{searchToolSet{name: "billing", tools: []tool.Tool{
+						executions.tool("lookup", "Production lookup.", "production"),
+					}}})), runner.WithSessionService(svc))
+				defer r.Close()
+				var opts []agent.RunOption
+				if filtered {
+					opts = append(opts, agent.WithToolFilter(tool.NewExcludeToolNamesFilter("billing_lookup")))
+				}
+				events, failures := runSearch(t, r, model.Message{}, append(opts, agent.WithResume(true))...)
+				require.Empty(t, failures)
+				require.Equal(t, "done", finalText(events))
+				if filtered {
+					require.Empty(t, executions.executed())
+				} else {
+					require.Equal(t, []string{"production"}, executions.executed())
+				}
+				requests := server.requests()
+				require.Len(t, requests, 3)
+				require.Contains(t, string(requests[2]["input"]), "search for it again")
+				require.NotContains(t, string(requests[2]["input"]), "production:inv-9")
+				require.NotContains(t, string(requests[2]["input"]), "sandbox:inv-9")
 			})
 		}
 	}

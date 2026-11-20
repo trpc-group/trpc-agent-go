@@ -344,7 +344,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		invocation.MaxToolIterations,
 	)
 
-	req, err := executionRequest(invocation, req, rsp)
+	req, rsp, err := executionRequest(invocation, req, rsp)
 	if err != nil {
 		invocation.EndInvocation = true
 		_ = agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(

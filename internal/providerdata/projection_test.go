@@ -92,6 +92,33 @@ func TestReprojectResponsePreservesProjectionOnlyEdits(t *testing.T) {
 	require.Equal(t, "chat", legacy.Choices[0].Message.Content)
 }
 
+func TestReprojectResponseRetainsOnlyMatchingActionBindingHints(t *testing.T) {
+	message := nativeMessage(t)
+	message.ToolCalls = []model.ToolCall{
+		{ID: "one", Function: model.FunctionDefinitionParam{Name: "billing_lookup"}},
+		{ID: "two", Function: model.FunctionDefinitionParam{Name: "billing_lookup"}},
+		{ID: "three", Function: model.FunctionDefinitionParam{Name: "billing_lookup"}},
+	}
+	for i := range message.ToolCalls {
+		SetActionBindingHint(&message.ToolCalls[i], "search", "billing.lookup")
+	}
+	response := &model.Response{Choices: []model.Choice{{Message: message}}}
+	before := SnapshotResponse(response)
+	calls := response.Choices[0].Message.ToolCalls
+	calls[0].ExtraFields = nil
+	calls[1].Function.Name = "different"
+	calls[2].ID = "different"
+	require.NoError(t, ReprojectResponse(before, response, infoModel{info: nativeInfo}, nil))
+	id, key := ActionBindingHint(calls[0])
+	require.Equal(t, "search", id)
+	require.Equal(t, "billing.lookup", key)
+	for _, call := range calls[1:] {
+		id, key = ActionBindingHint(call)
+		require.Empty(t, id)
+		require.Empty(t, key)
+	}
+}
+
 func TestReprojectResponseValidatesBeforeApplyingAnyEdits(t *testing.T) {
 	producer := projectingModel{infoModel{info: nativeInfo}}
 	response := &model.Response{Choices: []model.Choice{{Message: nativeMessage(t)}, {Message: nativeMessage(t)}}}

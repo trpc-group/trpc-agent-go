@@ -440,6 +440,43 @@ func mustFunctionName(t *testing.T, plan *toolPlan, namespace, name string) stri
 	return got
 }
 
+func TestProjectionPrefersStandaloneSelfNamespaceOverUnloadedEagerMember(t *testing.T) {
+	request := &model.Request{Tools: agentTools(t, []tool.Tool{searchTestTool{name: "crm"}},
+		searchTestToolSet{name: "crm", tools: []tool.Tool{searchTestTool{name: "crm"}}})}
+	m := New("gpt-5", WithClientToolSearch(func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) { return nil, nil }))
+	plan, err := m.planTools(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "crm", mustFunctionName(t, plan, "crm", "crm"))
+	require.Equal(t, "crm", mustFunctionName(t, projectionToolPlan(request), "crm", "crm"))
+}
+
+func TestHostedSearchHistoryKeepsLoadedEagerMemberRouting(t *testing.T) {
+	history := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "gpt-5", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"server","status":"completed","tools":[{"type":"namespace","name":"billing","tools":[{"type":"function","name":"lookup"}]}]}]`),
+	}}
+	for _, mode := range []tool.ToolSetToolNameMode{tool.ToolSetToolNameModeQualified, tool.ToolSetToolNameModeOriginal} {
+		members := itool.NewNamedToolSetWithMode(billingToolSet(), mode).Tools(context.Background())
+		key := members[0].Declaration().Name
+		request := &model.Request{Messages: []model.Message{history}, Tools: map[string]tool.Tool{key: members[0]}}
+		plan, err := New("gpt-5", WithHostedToolSearch()).planTools(context.Background(), request)
+		require.NoError(t, err)
+		require.Equal(t, key, mustFunctionName(t, plan, "billing", "lookup"))
+		require.Equal(t, key, mustFunctionName(t, projectionToolPlan(request), "billing", "lookup"))
+	}
+}
+
+func TestHostedSearchHistoryDoesNotEraseClientBindingOrigin(t *testing.T) {
+	definitions := `[{"type":"namespace","name":"billing","tools":[{"type":"function","name":"lookup"}]}]`
+	client := model.Message{Role: model.RoleTool, ToolID: "search_1", ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "gpt-5", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"search_1","tools":` + definitions + `}]`),
+	}}
+	hosted := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "gpt-5", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"server","tools":` + definitions + `}]`),
+	}}
+	history := scanToolSearchHistory([]model.Message{client, hosted})
+	require.Equal(t, "search_1", history.origins[wireFunction{namespace: "billing", name: "lookup"}])
+}
+
 func TestClientToolSearchUsesReturnedEntries(t *testing.T) {
 	withSchema := func(name, description, property string) tool.Tool {
 		return itool.ApplyDeclarations([]tool.Tool{searchTestTool{name: name}}, []tool.Declaration{{

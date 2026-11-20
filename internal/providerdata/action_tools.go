@@ -12,10 +12,33 @@ package providerdata
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type actionToolsKey struct{}
+
+const (
+	actionBindingCallID = "trpc.provider_action.binding_call_id"
+	actionBindingKey    = "trpc.provider_action.binding_key"
+)
+
+// SetActionBindingHint records a possible prior execution key for a single
+// provider call. The executor must verify it against its own action bindings.
+func SetActionBindingHint(call *model.ToolCall, callID, key string) {
+	if call.ExtraFields == nil {
+		call.ExtraFields = make(map[string]any)
+	}
+	call.ExtraFields[actionBindingCallID] = callID
+	call.ExtraFields[actionBindingKey] = key
+}
+
+// ActionBindingHint returns a provider's hint without authorizing its use.
+func ActionBindingHint(call model.ToolCall) (string, string) {
+	callID, _ := call.ExtraFields[actionBindingCallID].(string)
+	key, _ := call.ExtraFields[actionBindingKey].(string)
+	return callID, key
+}
 
 // ActionTools connects one provider action to the caller's tool executor.
 // Unavailable contains prior search bindings that this run must rediscover.

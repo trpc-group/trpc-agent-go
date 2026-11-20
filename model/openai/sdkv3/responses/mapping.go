@@ -1057,7 +1057,7 @@ func projectOutput(output []responses.ResponseOutputItemUnion, tools *toolPlan) 
 			}
 			arguments, _ := native.functionArguments()
 			idx := len(out.toolCalls)
-			out.toolCalls = append(out.toolCalls, model.ToolCall{
+			call := model.ToolCall{
 				Type:  functionToolType,
 				ID:    native.CallID,
 				Index: intPtr(idx),
@@ -1065,7 +1065,15 @@ func projectOutput(output []responses.ResponseOutputItemUnion, tools *toolPlan) 
 					Name:      name,
 					Arguments: []byte(arguments),
 				},
-			})
+			}
+			if tools != nil && native.Namespace != "" {
+				fn := wireFunction{namespace: native.Namespace, name: native.Name}
+				key := native.Namespace + "." + native.Name
+				if origin := tools.searchOrigins[fn]; origin != "" && key != name {
+					providerdata.SetActionBindingHint(&call, origin, key)
+				}
+			}
+			out.toolCalls = append(out.toolCalls, call)
 		case outputTypeToolSearchCall:
 			if native.Execution == executionClient {
 				out.pendingSearch = true

@@ -186,13 +186,14 @@ func (s *actionToolState) overrides(inv *agent.Invocation, req *model.Request, r
 
 // executionRequest overlays the tools for execution without changing the
 // request seen by the model or the shared Agent directory.
-func executionRequest(inv *agent.Invocation, req *model.Request, rsp *model.Response) (*model.Request, error) {
+func executionRequest(inv *agent.Invocation, req *model.Request, rsp *model.Response) (*model.Request, *model.Response, error) {
 	if inv.Model == nil || req == nil || !providerdata.ResponseHasData(rsp) {
-		return req, nil
+		return req, rsp, nil
 	}
-	overrides, err := actionToolsForInvocation(inv).overrides(inv, req, rsp)
+	state := actionToolsForInvocation(inv)
+	overrides, err := state.overrides(inv, req, rsp)
 	if err != nil || len(overrides) == 0 {
-		return req, err
+		return req, rsp, err
 	}
 	exec := *req
 	exec.Tools = make(map[string]tool.Tool, len(req.Tools)+len(overrides))
@@ -203,7 +204,44 @@ func executionRequest(inv *agent.Invocation, req *model.Request, rsp *model.Resp
 		}
 		exec.Tools[name] = t
 	}
-	return &exec, nil
+	// A qualified provider call can still refer to a prior external binding
+	// after a registered ToolSet with the same wire name becomes visible. Use
+	// the hint only when that exact action result recorded the binding. Rewrite
+	// a private response copy so another call to the registered key is not
+	// redirected and the published native projection stays unchanged.
+	var executionResponse *model.Response
+	for i := range rsp.Choices {
+		for j, call := range rsp.Choices[i].Message.ToolCalls {
+			id, name := providerdata.ActionBindingHint(call)
+			if _, active := overrides[name]; id == "" || name == "" || !active || !state.boundBy(inv, id, name) {
+				continue
+			}
+			if executionResponse == nil {
+				executionResponse = rsp.Clone()
+				for k := range executionResponse.Choices {
+					executionResponse.Choices[k].Message = providerdata.CloneMessageProjections(executionResponse.Choices[k].Message)
+				}
+			}
+			executionResponse.Choices[i].Message.ToolCalls[j].Function.Name = name
+		}
+	}
+	if executionResponse == nil {
+		executionResponse = rsp
+	}
+	return &exec, executionResponse, nil
+}
+
+func (s *actionToolState) boundBy(inv *agent.Invocation, id, name string) bool {
+	if bindings, ok := s.live[id]; ok {
+		_, exists := bindings[name]
+		return exists
+	}
+	var bindings map[string]bool
+	if err := json.Unmarshal(s.savedBindings(inv)[id], &bindings); err != nil {
+		return false
+	}
+	_, exists := bindings[name]
+	return exists
 }
 
 // A saved schema cannot recreate a Go execution binding. Let the model
