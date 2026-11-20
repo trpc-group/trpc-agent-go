@@ -176,9 +176,26 @@ func (m *Model) GenerateContent(
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
 	}
+	prepared, projected, err := m.prepareProviderHistory(request.Messages)
+	if err != nil {
+		return nil, err
+	}
+	if projected {
+		requestCopy := *request
+		requestCopy.Messages = prepared
+		request = &requestCopy
+	}
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
-	chatRequest := m.convertMessages(request.Messages)
+	var chatRequest []*genai.Content
+	if projected {
+		chatRequest, err = m.convertProviderHistory(request.Messages)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		chatRequest = m.convertMessages(request.Messages)
+	}
 	if len(chatRequest) == 0 {
 		return nil, errors.New("gemini: no content after message conversion")
 	}
@@ -190,6 +207,11 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if projected && m.chatRequestCallback != nil {
+		if err := validateProviderHistoryNumbers(chatRequest); err != nil {
+			return nil, err
+		}
+	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)

@@ -97,6 +97,7 @@ func TestModelSwitchWithReorderedToolResults(t *testing.T) {
 	require.Contains(t, persistedResults["call_first"], "result-for-first")
 	require.Contains(t, persistedResults["call_second"], "result-for-second")
 
+	assertGeminiReplaysReorderedResults(t, f, reorderedSession)
 	require.Empty(t, f.run(t, reorderedSession, switchChat, model.NewUserMessage("continue in chat")))
 	require.Empty(t, f.run(t, reorderedSession, switchSource, model.NewUserMessage("return to responses")))
 	require.EqualValues(t, 1, firstRuns.Load(), "the first completed call must not run again")
@@ -141,6 +142,7 @@ func TestModelSwitchWithReorderedToolResults(t *testing.T) {
 	require.Contains(t, chatResults["call_second"], "result-for-second")
 	require.NotContains(t, string(requests[2].Messages), "opaque-switch-reasoning")
 
+	require.Contains(t, string(requests[3].Input), "gemini continuation")
 	require.Equal(t, "/responses", requests[3].Path)
 	require.Equal(t, switchSource, requests[3].Model)
 	var input []json.RawMessage
