@@ -1,0 +1,654 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+// Package context provides tools for LLM self-context management.
+//
+// These tools implement the Pensieve paradigm (arXiv:2602.12108), enabling
+// language models to actively manage their own context window. Instead of
+// relying on external truncation, the model can:
+//   - Prune processed context via delete_context
+//   - Check remaining budget via check_budget
+//   - Maintain persistent notes via note / read_notes
+package context
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+// --- delete_context tool ---
+
+// DeleteContextInput is the input for the delete_context tool.
+type DeleteContextInput struct {
+	// EventIDs is the list of event IDs to mask (hide) from visible context.
+	EventIDs []string `json:"event_ids" jsonschema:"description=IDs of events to remove from visible context,required"`
+}
+
+// DeleteContextOutput is the output for the delete_context tool.
+type DeleteContextOutput struct {
+	Masked  int    `json:"masked"`
+	Message string `json:"message"`
+}
+
+// sessionFromContext retrieves the session from the invocation context.
+// Returns nil if not available.
+func sessionFromContext(ctx context.Context) *session.Session {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return nil
+	}
+	return inv.Session
+}
+
+// invocationFromContext returns the Invocation attached to ctx, if any.
+func invocationFromContext(ctx context.Context) *agent.Invocation {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return inv
+}
+
+// projectedVisibleEvents returns the same model-visible history the request
+// builder projected for this turn when a summaryview is attached. Without a
+// projection it falls back to session.GetVisibleEvents so unit tests and
+// hosts that have not attached a view still list unmasked events.
+func projectedVisibleEvents(ctx context.Context) []event.Event {
+	if view, ok := summaryview.FromContext(ctx); ok {
+		return view.Events()
+	}
+	inv := invocationFromContext(ctx)
+	if inv != nil {
+		if view, ok := summaryview.Snapshot(inv); ok {
+			return view.Events()
+		}
+		if inv.Session != nil {
+			return inv.Session.GetVisibleEvents()
+		}
+	}
+	return nil
+}
+
+// projectedEventIDSet builds a set of event IDs from projectedVisibleEvents.
+func projectedEventIDSet(ctx context.Context) map[string]struct{} {
+	events := projectedVisibleEvents(ctx)
+	ids := make(map[string]struct{}, len(events))
+	for _, evt := range events {
+		if evt.ID == "" {
+			continue
+		}
+		ids[evt.ID] = struct{}{}
+	}
+	return ids
+}
+
+// NewDeleteContextTool creates a tool that allows the LLM to prune specific
+// events from its visible context. Events are soft-masked (hidden from view
+// but preserved for audit). This is the Pensieve paradigm's "deleteContext".
+func NewDeleteContextTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, input DeleteContextInput) (DeleteContextOutput, error) {
+			inv, ok := agent.InvocationFromContext(ctx)
+			if !ok || inv == nil || inv.Session == nil {
+				return DeleteContextOutput{
+					Message: "no session available",
+				}, nil
+			}
+
+			allowed := projectedEventIDSet(ctx)
+			ids := make([]string, 0, len(input.EventIDs))
+			skipped := 0
+			for _, id := range input.EventIDs {
+				if id == "" {
+					continue
+				}
+				if _, ok := allowed[id]; !ok {
+					skipped++
+					continue
+				}
+				ids = append(ids, id)
+			}
+			if len(ids) == 0 {
+				msg := "no projected event IDs to mask"
+				if skipped > 0 {
+					msg = fmt.Sprintf(
+						"ignored %d event ID(s) outside the model-visible projection",
+						skipped,
+					)
+				}
+				return DeleteContextOutput{Message: msg}, nil
+			}
+
+			key := session.Key{
+				AppName:   inv.Session.AppName,
+				UserID:    inv.Session.UserID,
+				SessionID: inv.Session.ID,
+			}
+			masked, err := inv.Session.MaskAndPersistEvents(
+				ctx,
+				inv.SessionService,
+				key,
+				ids...,
+			)
+			if err != nil {
+				return DeleteContextOutput{}, fmt.Errorf("persist masked events: %w", err)
+			}
+
+			msg := fmt.Sprintf("masked %d events from context", masked)
+			if skipped > 0 {
+				msg = fmt.Sprintf(
+					"%s; ignored %d ID(s) outside the model-visible projection",
+					msg,
+					skipped,
+				)
+			}
+			return DeleteContextOutput{
+				Masked:  masked,
+				Message: msg,
+			}, nil
+		},
+		function.WithName("delete_context"),
+		function.WithDescription(
+			"Remove specific events from your visible context to free up space. "+
+				"Events are soft-hidden (preserved for audit) but no longer sent to the LLM. "+
+				"Use list_context first to obtain event_ids, then call this after extracting "+
+				"key information into notes to reduce context pressure. "+
+				"Only IDs from the current model-visible projection are accepted.",
+		),
+		function.WithConcurrencySafe(false),
+	)
+}
+
+// --- list_context tool ---
+
+// ListContextInput controls which page of visible context events is returned.
+type ListContextInput struct {
+	Offset int `json:"offset,omitempty" jsonschema:"description=Zero-based event offset; use next_offset from the previous response"`
+	Limit  int `json:"limit,omitempty" jsonschema:"description=Maximum events to return; defaults to 50 and is capped at 100"`
+}
+
+// ContextEventEntry summarises one LLM-visible session event.
+type ContextEventEntry struct {
+	ID      string `json:"id"`
+	Author  string `json:"author,omitempty"`
+	Kind    string `json:"kind"`
+	Preview string `json:"preview,omitempty"`
+}
+
+// ListContextOutput is the output for the list_context tool.
+type ListContextOutput struct {
+	Events     []ContextEventEntry `json:"events"`
+	Count      int                 `json:"count"`
+	Total      int                 `json:"total"`
+	NextOffset int                 `json:"next_offset,omitempty"`
+	HasMore    bool                `json:"has_more"`
+}
+
+const (
+	listContextPreviewMaxRunes = 120
+	listContextDefaultLimit    = 50
+	listContextMaxLimit        = 100
+)
+
+// NewListContextTool creates a tool that lists visible session events with
+// stable IDs so the model can pass them to delete_context.
+func NewListContextTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, input ListContextInput) (ListContextOutput, error) {
+			visible := projectedVisibleEvents(ctx)
+			if visible == nil {
+				return ListContextOutput{Events: []ContextEventEntry{}}, nil
+			}
+
+			offset, limit := listContextPage(input, len(visible))
+			end := min(offset+limit, len(visible))
+			entries := make([]ContextEventEntry, 0, end-offset)
+			for _, evt := range visible[offset:end] {
+				entries = append(entries, ContextEventEntry{
+					ID:      evt.ID,
+					Author:  evt.Author,
+					Kind:    contextEventKind(evt),
+					Preview: contextEventPreview(evt),
+				})
+			}
+
+			hasMore := end < len(visible)
+			nextOffset := 0
+			if hasMore {
+				nextOffset = end
+			}
+			return ListContextOutput{
+				Events:     entries,
+				Count:      len(entries),
+				Total:      len(visible),
+				NextOffset: nextOffset,
+				HasMore:    hasMore,
+			}, nil
+		},
+		function.WithName("list_context"),
+		function.WithDescription(
+			"List a bounded page of visible session events with stable event IDs, "+
+				"authors, kinds, and short previews. Call this before delete_context "+
+				"and follow next_offset while has_more is true to inspect later pages.",
+		),
+	)
+}
+
+func listContextPage(input ListContextInput, total int) (int, int) {
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	limit := input.Limit
+	if limit <= 0 {
+		limit = listContextDefaultLimit
+	}
+	if limit > listContextMaxLimit {
+		limit = listContextMaxLimit
+	}
+	return offset, limit
+}
+
+func contextEventKind(evt event.Event) string {
+	if evt.Response == nil {
+		return "other"
+	}
+	if evt.IsToolCallResponse() {
+		return "tool_call"
+	}
+	if evt.IsToolResultResponse() {
+		return "tool_result"
+	}
+	if evt.IsUserMessage() {
+		return "user"
+	}
+	if len(evt.Response.Choices) > 0 {
+		role := evt.Response.Choices[0].Message.Role
+		if role != "" {
+			return string(role)
+		}
+	}
+	return "assistant"
+}
+
+func contextEventPreview(evt event.Event) string {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return ""
+	}
+	choice := evt.Response.Choices[0]
+	content := strings.TrimSpace(choice.Message.Content)
+	if content == "" {
+		content = strings.TrimSpace(choice.Delta.Content)
+	}
+	if content == "" && len(choice.Message.ToolCalls) > 0 {
+		content = choice.Message.ToolCalls[0].Function.Name
+	}
+	if content == "" && len(choice.Delta.ToolCalls) > 0 {
+		content = choice.Delta.ToolCalls[0].Function.Name
+	}
+	if content == "" && choice.Message.ToolID != "" {
+		content = choice.Message.ToolID
+	}
+	if content == "" && choice.Delta.ToolID != "" {
+		content = choice.Delta.ToolID
+	}
+	if content == "" {
+		return ""
+	}
+	flat := strings.Join(strings.Fields(content), " ")
+	runes := []rune(flat)
+	if len(runes) <= listContextPreviewMaxRunes {
+		return flat
+	}
+	return string(runes[:listContextPreviewMaxRunes]) + "…"
+}
+
+// --- check_budget tool ---
+
+// CheckBudgetInput is the input for the check_budget tool (empty — no args needed).
+type CheckBudgetInput struct{}
+
+// CheckBudgetOutput is the output for the check_budget tool.
+type CheckBudgetOutput struct {
+	TotalEvents   int `json:"total_events"`
+	VisibleEvents int `json:"visible_events"`
+	MaskedEvents  int `json:"masked_events"`
+}
+
+// NewCheckBudgetTool creates a tool that reports the current context budget.
+// The LLM can query this to decide when to prune context.
+func NewCheckBudgetTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, _ CheckBudgetInput) (CheckBudgetOutput, error) {
+			sess := sessionFromContext(ctx)
+			if sess == nil {
+				return CheckBudgetOutput{}, nil
+			}
+
+			total := sess.GetEventCount()
+			masked := sess.MaskedEventCount()
+			visible := len(sess.GetVisibleEvents())
+
+			return CheckBudgetOutput{
+				TotalEvents:   total,
+				VisibleEvents: visible,
+				MaskedEvents:  masked,
+			}, nil
+		},
+		function.WithName("check_budget"),
+		function.WithDescription(
+			"Check how much context budget remains. Returns total, visible, and "+
+				"masked event counts (visible uses len(GetVisibleEvents())). "+
+				"Use this proactively to decide when to prune context via delete_context.",
+		),
+	)
+}
+
+// --- note / read_notes tools ---
+
+const noteKeyPrefix = "note:"
+
+// NoteInput is the input for the note tool.
+type NoteInput struct {
+	Key     string `json:"key" jsonschema:"description=Short key name for the note (e.g. 'findings' or 'plan'),required"`
+	Content string `json:"content" jsonschema:"description=The content to store. Overwrites any existing note with this key.,required"`
+}
+
+// NoteOutput is the output for the note tool.
+type NoteOutput struct {
+	Message string `json:"message"`
+}
+
+// NewNoteTool creates a tool that writes a persistent note to session state.
+// Notes survive context pruning (delete_context) — they are stored in session
+// state, not in the event stream. Use this to distill key information before
+// pruning the raw context that contained it.
+func NewNoteTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, input NoteInput) (NoteOutput, error) {
+			inv, ok := agent.InvocationFromContext(ctx)
+			if !ok || inv == nil || inv.Session == nil {
+				return NoteOutput{Message: "no session available"}, nil
+			}
+
+			keyStr := noteKeyPrefix + input.Key
+			byteContent := []byte(input.Content)
+
+			if inv.SessionService != nil {
+				key := session.Key{
+					AppName:   inv.Session.AppName,
+					UserID:    inv.Session.UserID,
+					SessionID: inv.Session.ID,
+				}
+				err := inv.SessionService.UpdateSessionState(ctx, key, session.StateMap{
+					keyStr: byteContent,
+				})
+				if err != nil {
+					return NoteOutput{}, fmt.Errorf("persist note: %w", err)
+				}
+			}
+
+			inv.Session.SetState(keyStr, byteContent)
+
+			return NoteOutput{
+				Message: fmt.Sprintf("note '%s' saved (%d bytes)", input.Key, len(input.Content)),
+			}, nil
+		},
+		function.WithName("note"),
+		function.WithDescription(
+			"Save a persistent note that survives context pruning. "+
+				"Use this to distill key findings, plans, or intermediate results "+
+				"before removing raw context via delete_context. "+
+				"Notes are stored by key and can be overwritten.",
+		),
+		function.WithConcurrencySafe(false),
+	)
+}
+
+// ReadNotesInput controls which page of persistent notes is returned.
+type ReadNotesInput struct {
+	Offset int `json:"offset,omitempty" jsonschema:"description=Zero-based note offset in sorted key order; use next_offset from the previous response"`
+	Limit  int `json:"limit,omitempty" jsonschema:"description=Maximum notes to return; defaults to 50 and is capped at 100"`
+}
+
+// ReadNotesOutput is the output for the read_notes tool.
+type ReadNotesOutput struct {
+	Notes      map[string]string `json:"notes"`
+	Count      int               `json:"count"`
+	Total      int               `json:"total"`
+	NextOffset int               `json:"next_offset,omitempty"`
+	HasMore    bool              `json:"has_more"`
+}
+
+// NewReadNotesTool creates a tool that lists all persistent notes.
+// The LLM uses this to recall distilled information after pruning context.
+func NewReadNotesTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, input ReadNotesInput) (ReadNotesOutput, error) {
+			sess := sessionFromContext(ctx)
+			if sess == nil {
+				return ReadNotesOutput{Notes: map[string]string{}}, nil
+			}
+
+			snapshot := sess.SnapshotState()
+			keys := make([]string, 0)
+			bodies := make(map[string]string)
+			for k, v := range snapshot {
+				if !strings.HasPrefix(k, noteKeyPrefix) {
+					continue
+				}
+				key := strings.TrimPrefix(k, noteKeyPrefix)
+				keys = append(keys, key)
+				bodies[key] = string(v)
+			}
+			sort.Strings(keys)
+
+			offset, limit := notesPage(input.Offset, input.Limit, len(keys))
+			end := min(offset+limit, len(keys))
+			pageKeys := keys[offset:end]
+			ordered := make(map[string]string, len(pageKeys))
+			for _, k := range pageKeys {
+				ordered[k] = bodies[k]
+			}
+
+			hasMore := end < len(keys)
+			nextOffset := 0
+			if hasMore {
+				nextOffset = end
+			}
+			return ReadNotesOutput{
+				Notes:      ordered,
+				Count:      len(ordered),
+				Total:      len(keys),
+				NextOffset: nextOffset,
+				HasMore:    hasMore,
+			}, nil
+		},
+		function.WithName("read_notes"),
+		function.WithDescription(
+			"Read a bounded page of persistent notes previously saved via the note tool. "+
+				"Returns a map of key→content for the page plus total/has_more/next_offset. "+
+				"Use notes_index to browse keys cheaply, then paginate read_notes for bodies.",
+		),
+	)
+}
+
+// --- notes_index tool ---
+
+// NotesIndexInput controls which page of the notes index is returned.
+type NotesIndexInput struct {
+	Offset int `json:"offset,omitempty" jsonschema:"description=Zero-based note offset in sorted key order; use next_offset from the previous response"`
+	Limit  int `json:"limit,omitempty" jsonschema:"description=Maximum index entries to return; defaults to 50 and is capped at 100"`
+}
+
+// NoteIndexEntry summarises a single persistent note without sending its
+// full body back to the model. It carries everything the LLM needs to
+// decide whether to fetch the body via read_notes.
+type NoteIndexEntry struct {
+	// Key is the note key (without the internal note: prefix).
+	Key string `json:"key"`
+	// Bytes is the raw byte length of the stored content, useful when the
+	// model is reasoning about its remaining context budget.
+	Bytes int `json:"bytes"`
+	// Preview is the first PreviewMaxChars characters of the note content
+	// with a trailing ellipsis when truncated. It exists so the LLM can
+	// disambiguate similarly-named notes without paying for the whole body.
+	Preview string `json:"preview,omitempty"`
+}
+
+// NotesIndexOutput is the output for the notes_index tool.
+type NotesIndexOutput struct {
+	// Notes lists one page of persistent notes in deterministic key order.
+	Notes []NoteIndexEntry `json:"notes"`
+	// Count is len(Notes) for the current page.
+	Count int `json:"count"`
+	// Total is the number of notes across all pages.
+	Total int `json:"total"`
+	// TotalBytes is the sum of all note byte lengths (all pages). Hosts can
+	// use this alongside their context budget to decide when to prune.
+	TotalBytes int `json:"total_bytes"`
+	// NextOffset is the offset to request for the next page when HasMore.
+	NextOffset int `json:"next_offset,omitempty"`
+	// HasMore reports whether more notes exist after this page.
+	HasMore bool `json:"has_more"`
+}
+
+// notesIndexPreviewMaxChars caps how much of each note body the index
+// returns. Long enough to disambiguate notes by content, short enough that
+// indexing 100 notes stays well under 8 KB of total payload.
+const notesIndexPreviewMaxChars = 80
+
+// notesIndexPreview returns the first notesIndexPreviewMaxChars characters
+// of content, collapsing runs of whitespace into a single space and
+// appending an ellipsis when the original was longer. Empty input returns
+// the empty string so callers don't have to special-case it.
+func notesIndexPreview(content string) string {
+	if content == "" {
+		return ""
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	flat := strings.Join(strings.Fields(trimmed), " ")
+	runes := []rune(flat)
+	if len(runes) <= notesIndexPreviewMaxChars {
+		return flat
+	}
+	return string(runes[:notesIndexPreviewMaxChars]) + "…"
+}
+
+// NewNotesIndexTool creates a tool that returns a lightweight index of all
+// persistent notes — keys, byte sizes, and short previews — without
+// dumping every note body into the prompt.
+//
+// This pairs with note / read_notes to support a "browse → fetch" pattern
+// for context-pressed agents: the LLM scans the index, picks the note(s)
+// it actually needs, and only then calls read_notes (or, in a future
+// iteration, a keyed fetch). It's the on-demand alternative to read_notes
+// returning the entire map every time.
+func NewNotesIndexTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, input NotesIndexInput) (NotesIndexOutput, error) {
+			sess := sessionFromContext(ctx)
+			if sess == nil {
+				return NotesIndexOutput{Notes: []NoteIndexEntry{}}, nil
+			}
+
+			snapshot := sess.SnapshotState()
+			// Collect note keys first so the index is emitted in a
+			// deterministic order regardless of map iteration order.
+			keys := make([]string, 0, len(snapshot))
+			for k := range snapshot {
+				if strings.HasPrefix(k, noteKeyPrefix) {
+					keys = append(keys, k)
+				}
+			}
+			sort.Strings(keys)
+
+			totalBytes := 0
+			for _, k := range keys {
+				totalBytes += len(snapshot[k])
+			}
+
+			offset, limit := notesPage(input.Offset, input.Limit, len(keys))
+			end := min(offset+limit, len(keys))
+			pageKeys := keys[offset:end]
+			entries := make([]NoteIndexEntry, 0, len(pageKeys))
+			for _, k := range pageKeys {
+				body := snapshot[k]
+				entries = append(entries, NoteIndexEntry{
+					Key:     strings.TrimPrefix(k, noteKeyPrefix),
+					Bytes:   len(body),
+					Preview: notesIndexPreview(string(body)),
+				})
+			}
+
+			hasMore := end < len(keys)
+			nextOffset := 0
+			if hasMore {
+				nextOffset = end
+			}
+			return NotesIndexOutput{
+				Notes:      entries,
+				Count:      len(entries),
+				Total:      len(keys),
+				TotalBytes: totalBytes,
+				NextOffset: nextOffset,
+				HasMore:    hasMore,
+			}, nil
+		},
+		function.WithName("notes_index"),
+		function.WithDescription(
+			"List a bounded page of keys, byte sizes, and short previews for "+
+				"persistent notes saved via the note tool, without returning full "+
+				"content. Follow next_offset while has_more is true. Use this to "+
+				"discover notes before fetching bodies via read_notes.",
+		),
+	)
+}
+
+func notesPage(offset, limit, total int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if limit <= 0 {
+		limit = listContextDefaultLimit
+	}
+	if limit > listContextMaxLimit {
+		limit = listContextMaxLimit
+	}
+	return offset, limit
+}
+
+// Tools returns all context management tools as a convenience.
+func Tools() []tool.Tool {
+	return []tool.Tool{
+		NewListContextTool(),
+		NewDeleteContextTool(),
+		NewCheckBudgetTool(),
+		NewNoteTool(),
+		NewReadNotesTool(),
+		NewNotesIndexTool(),
+	}
+}
