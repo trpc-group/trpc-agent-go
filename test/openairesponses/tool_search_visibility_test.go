@@ -222,3 +222,40 @@ func TestRunnerAfterModelChangesNativeCallIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerToolSearchSelfNamespaceAfterMemberSearch(t *testing.T) {
+	const call = `[{"type":"function_call","id":"fc_weather","status":"completed","call_id":"weather_1","namespace":"weather","name":"weather","arguments":"{\"id\":\"city\"}"}]`
+	for _, tc := range []struct{ loaded, want string }{
+		{"forecast", "top"},
+		{"weather", "member"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("loaded=%s/stream=%v", tc.loaded, stream), func(t *testing.T) {
+				_, srv := newSearchServer(t, clientSearchRound, call, messageOutput("msg_done", "done"))
+				executions := &searchExecutions{}
+				set := deferred.ToolSet(searchToolSet{name: "weather", tools: []tool.Tool{
+					executions.tool("weather", "Group weather", "member"),
+					executions.tool("forecast", "Group forecast", "forecast"),
+				}})
+				handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+					for _, entry := range req.Candidates {
+						if entry.Namespace == "weather" && entry.Name == tc.loaded {
+							return []responses.ToolSearchEntry{entry}, nil
+						}
+					}
+					return nil, fmt.Errorf("missing weather.%s candidate", tc.loaded)
+				}
+				r := runner.NewRunner("search", llmagent.New("search",
+					llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(handler))),
+					llmagent.WithTools([]tool.Tool{executions.tool("weather", "Top-level weather", "top")}),
+					llmagent.WithToolSets([]tool.ToolSet{set}),
+					llmagent.WithGenerationConfig(model.GenerationConfig{Stream: stream})))
+				t.Cleanup(func() { _ = r.Close() })
+				events, failures := runSearch(t, r, model.NewUserMessage("check weather"))
+				require.Empty(t, failures)
+				require.Equal(t, "done", finalText(events))
+				require.Equal(t, []string{tc.want}, executions.executed())
+			})
+		}
+	}
+}

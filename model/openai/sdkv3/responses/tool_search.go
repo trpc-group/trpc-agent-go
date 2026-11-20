@@ -107,8 +107,8 @@ type toolPlan struct {
 	// exposedFlat tracks functions actually exposed at the top level. flat
 	// also contains deferred candidates needed to resolve search results.
 	exposedFlat map[string]bool
-	// namespaces records ToolSets exposed as namespaces on this request.
-	namespaces map[string]bool
+	// exposedMembers records individual functions included in request namespaces.
+	exposedMembers map[wireFunction]bool
 	// keyFromSearch reserves each execution key. Registered keys have value
 	// false. Keys first introduced by a client search have value true.
 	keyFromSearch map[string]bool
@@ -128,7 +128,6 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 		functions:     make(map[wireFunction]string),
 		flat:          make(map[string]string),
 		exposedFlat:   make(map[string]bool),
-		namespaces:    make(map[string]bool),
 		keyFromSearch: make(map[string]bool),
 	}
 	keys := make([]string, 0, len(request.Tools))
@@ -157,7 +156,7 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 
 func (p *toolPlan) preferStandaloneFunctions(loaded map[wireFunction]bool) {
 	for fn := range p.functions {
-		if fn.namespace == fn.name && !loaded[fn] && !p.namespaces[fn.namespace] {
+		if fn.namespace == fn.name && !loaded[fn] && !p.exposedMembers[fn] {
 			if p.exposedFlat[fn.name] {
 				delete(p.functions, fn)
 			}
@@ -194,7 +193,6 @@ func (p *toolPlan) rememberSearchTool(fn wireFunction, key string) {
 		p.exposedFlat[fn.name] = true
 	} else {
 		p.functions[fn] = key
-		p.namespaces[fn.namespace] = true
 	}
 }
 
@@ -376,11 +374,11 @@ func newToolPlanner(client bool, loaded map[wireFunction]bool, size int) *toolPl
 		client: client,
 		loaded: loaded,
 		plan: &toolPlan{
-			functions:     make(map[wireFunction]string),
-			flat:          make(map[string]string),
-			exposedFlat:   make(map[string]bool),
-			namespaces:    make(map[string]bool),
-			keyFromSearch: make(map[string]bool, size),
+			functions:      make(map[wireFunction]string),
+			flat:           make(map[string]string),
+			exposedFlat:    make(map[string]bool),
+			exposedMembers: make(map[wireFunction]bool),
+			keyFromSearch:  make(map[string]bool, size),
 		},
 		groups:   make(map[string]*namespaceGroup),
 		topLevel: make(map[string]struct{}),
@@ -422,7 +420,7 @@ func (p *toolPlanner) addNamespaced(e toolEntry) error {
 		})
 		return nil
 	}
-	p.plan.namespaces[e.namespace] = true
+	p.plan.exposedMembers[function] = true
 	member, err := namespaceFunctionParam(e.name, e.decl, e.deferred)
 	if err != nil {
 		return err
