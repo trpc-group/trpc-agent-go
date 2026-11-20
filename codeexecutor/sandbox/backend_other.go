@@ -20,23 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-func backendCapabilities(backend BackendType, profile PermissionProfile) backendCapabilitiesInfo {
-	_ = backend
-	_ = profile
-	return backendCapabilitiesInfo{
-		OSSandbox:          false,
-		PTY:                false,
-		Stdin:              true,
-		NetworkIsolation:   false,
-		DenyReadGlob:       false,
-		Snapshot:           false,
-		Ports:              false,
-		ExternalPathGrants: false,
-		ProtectedPathMasks: false,
-		PerCommandGrants:   true,
-	}
-}
-
 func (r *Runtime) osSandboxCommand(
 	ctx context.Context,
 	profile PermissionProfile,
@@ -60,3 +43,5 @@ func (r *Runtime) osSandboxCommand(
 		errors.New("managed OS sandbox backend is not implemented for this platform"),
 	)
 }
+
+func platformReadPaths() []string { return nil }

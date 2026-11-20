@@ -294,6 +294,7 @@ tools:
       backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
+      read_mode: "granted" # granted|host；granted 不暴露未授权的宿主文件
       default_timeout: "30s"
       output_max_bytes: 1048576
       shell_env:
@@ -330,6 +331,14 @@ memory:
   auto:
     enabled: false
 ```
+
+沙箱执行器的 `workspace_write` 和 `read_only` 都默认使用 `read_mode: granted`。
+这有意改变了原先的 Linux 默认行为：文档列明的运行资源和 workspace 之外的宿主文件，
+需要通过具体路径授权访问。`read_mode: host` 显式开启更广泛的宿主读取权限，不能保护任意
+宿主文件的机密性。两种模式都保留固定凭证位置及其他会话的保护；不会自动按 `.env`、
+`*.pem`、`*.key` 文件名过滤。`profile: disabled` 会绕过这些限制。
+运行资源、保护边界和 Go 路径授权 API 见[文件系统策略](../codeexecutor/sandbox/docs/FILE_SYSTEM_POLICY.md)。
+`shell_env` 独立控制环境变量继承。
 
 运行：
 

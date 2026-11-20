@@ -104,6 +104,9 @@ func defaultWorkspaceRoot() string {
 }
 
 func normalizeProfile(profile PermissionProfile) PermissionProfile {
+	if profile.fileSystem.ReadMode == "" {
+		profile.fileSystem.ReadMode = ReadModeGranted
+	}
 	if profile.typ == "" {
 		profile.typ = profileManaged
 	}
