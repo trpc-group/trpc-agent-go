@@ -69,17 +69,26 @@ func RunProcess(ctx context.Context, s *Sandbox, req envdprocess.Request) (envdp
 }
 
 func (s *Sandbox) newProcessClient(needsStdin bool) (*envdprocess.Client, error) {
-	s.RLock()
-	port, version, domain := s.envdPort, strings.TrimSpace(s.envdVersion), s.sandboxDomain
-	s.RUnlock()
+	baseURL, version, err := s.envdConnection()
+	if err != nil {
+		return nil, err
+	}
 	if needsStdin && version == "" {
 		return nil, errors.New("e2b: finite stdin requires a known envd version >= 0.5.2")
 	}
+	return envdprocess.NewClient(baseURL, s.connection.HTTPClient, s.envdHeaders(),
+		envdprocess.WithEnvdVersion(version))
+}
+
+func (s *Sandbox) envdConnection() (string, string, error) {
+	s.RLock()
+	port, version, domain := s.envdPort, strings.TrimSpace(s.envdVersion), s.sandboxDomain
+	s.RUnlock()
 	if port == 0 {
 		port = defaultEnvdPort
 	}
 	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("e2b: invalid envd port %d", port)
+		return "", "", fmt.Errorf("e2b: invalid envd port %d", port)
 	}
 	hostID := s.hostID(domain)
 	if domain == "" {
@@ -93,11 +102,10 @@ func (s *Sandbox) newProcessClient(needsStdin bool) (*envdprocess.Client, error)
 	if s.connection.Debug && (domain == "localhost" || net.ParseIP(domain).IsLoopback()) {
 		baseURL = "http://" + net.JoinHostPort(domain, strconv.Itoa(port))
 	}
-	return envdprocess.NewClient(baseURL, s.connection.HTTPClient, s.processHeaders(),
-		envdprocess.WithEnvdVersion(version))
+	return baseURL, version, nil
 }
 
-func (s *Sandbox) processHeaders() http.Header {
+func (s *Sandbox) envdHeaders() http.Header {
 	headers := make(http.Header)
 	if s.connection.AccessToken != "" {
 		headers.Set("X-Access-Token", s.connection.AccessToken)
