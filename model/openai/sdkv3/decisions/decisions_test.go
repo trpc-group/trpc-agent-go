@@ -202,21 +202,29 @@ func TestDecideRejectsMismatchedAnswers(t *testing.T) {
 	}
 }
 
-func TestDecideRejectsFractionalScoreLevelIndex(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"model":"gpt-6-luna","answers":[{"name":"q","type":"score","score":0,
-			"probabilities":[{"value":0.7,"label":"low","probability":1}]}]}`)
-	}))
-	defer server.Close()
+func TestDecideRejectsInvalidScore(t *testing.T) {
 	req := predicateRequest("q")
 	req.Questions[0] = decision.Question{
 		ID: "q", Kind: decision.Score, Instructions: "How severe is the issue?",
 		Options: []decision.Option{{ID: "low"}, {ID: "high"}},
 	}
-	resp, err := openAIClient(t, server, "/v1").Decide(context.Background(), req)
-	require.ErrorContains(t, err, "invalid score level probability")
-	require.Nil(t, resp)
+	for _, tc := range []struct{ name, fields, wantError string }{
+		{"fractional index", `"score":0,"probabilities":[{"value":0.7,"label":"low","probability":1}]`, "invalid score level probability"},
+		{"out of range", `"score":2`, "out-of-range score"},
+		{"invalid confidence", `"score":0,"confidence":2`, "invalid confidence"},
+		{"duplicate level", `"score":0,"probabilities":[{"value":0,"label":"low","probability":0.5},{"value":0,"label":"low","probability":0.5}]`, "duplicate probability for level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"model":"gpt-6-luna","answers":[{"name":"q","type":"score",`+tc.fields+`}]}`)
+			}))
+			defer server.Close()
+			resp, err := openAIClient(t, server, "/v1").Decide(context.Background(), req)
+			require.ErrorContains(t, err, tc.wantError)
+			require.Nil(t, resp)
+		})
+	}
 }
 
 func TestDecideRejectsBooleanForStringChoice(t *testing.T) {

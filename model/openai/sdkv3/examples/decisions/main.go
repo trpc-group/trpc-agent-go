@@ -11,6 +11,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -21,13 +22,21 @@ import (
 )
 
 func main() {
-	backend := flag.String("backend", "openai", "decision backend: openai or systemone")
-	model := flag.String("model", "", "model name (defaults to gpt-6-luna for OpenAI)")
-	flag.Parse()
+	if err := run(flag.CommandLine, os.Args[1:], os.Stdout); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(flags *flag.FlagSet, args []string, out io.Writer) error {
+	backend := flags.String("backend", "openai", "decision backend: openai or systemone")
+	model := flags.String("model", "", "model name (defaults to gpt-6-luna for OpenAI)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
 
 	d, err := newDecider(*backend, *model)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -43,14 +52,15 @@ func main() {
 		}},
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	answer := result.Answers["topic"]
-	fmt.Printf("model=%s request_id=%s status=%s", result.Model, result.RequestID, answer.Status)
+	fmt.Fprintf(out, "model=%s request_id=%s status=%s", result.Model, result.RequestID, answer.Status)
 	if answer.Status == decision.Answered {
-		fmt.Printf(" choice=%q", answer.Choice)
+		fmt.Fprintf(out, " choice=%q", answer.Choice)
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
+	return nil
 }
 
 func newDecider(backend, model string) (decision.Decider, error) {
