@@ -84,6 +84,28 @@ curl -N -X POST http://localhost:8080/history \
 
 For the complete example, see [examples/agui/messagessnapshot](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/messagessnapshot).
 
+## Bound the Initial History Read
+
+For long conversations, configure `agui.WithMessagesSnapshotMaxTrackEvents(limit)` to request only the most recent persisted AG-UI track events for the initial snapshot:
+
+```go
+server, err := agui.New(
+    runner,
+    agui.WithAppName("demo-app"),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotMaxTrackEvents(1000),
+)
+```
+
+The unit is **persisted track events**, not displayed messages, model context events, or conversation turns. A single message can span many events. `1000` is an example, not a universal sizing recommendation; size the limit for your event payloads and available memory.
+
+- The default is `0`, which preserves existing reads. A negative value passed to this server option makes `agui.New` fail. Direct AG-UI runner users can use `aguirunner.WithMessagesSnapshotMaxTrackEvents`; a negative value makes `MessagesSnapshot` fail before reading storage.
+- The limit is passed to storage through `session.WithEventNum`, before reconstruction. Redis's Hash+ZSet reader limits the selected event IDs before loading their payloads. A custom session service must honor this option to bound its read; truncating only after a full read does not provide the same protection.
+- The existing safe-start rule discards leading events before the first retained user message. If the window contains no user-message start, the snapshot is empty and follow is skipped. The reader does not retry with a larger or unbounded window. The option does not guarantee a fixed number of complete messages or turns.
+- Only the initial read is limited. Follow reads keep their existing behavior, and the `/history` request and SSE response formats are unchanged. There is no older-history cursor, `hasMore` field, or pagination route in this option.
+- This is a count bound, not a byte limit or a retention policy. Large individual payloads, follow backlogs, and Redis already at its memory limit can still cause failures. Existing history is not deleted, and model-context loading is unaffected. Configure Redis capacity, retention, and appropriate operational monitoring separately.
+
 ## Session Storage and Event Aggregation
 
 `SessionService` is the data source for messages snapshots. AG-UI events produced by the real-time conversation route are written into session storage. The messages snapshot route then reads persisted AG-UI events from the same `SessionService` and restores historical messages.

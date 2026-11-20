@@ -30,11 +30,13 @@ import (
 )
 
 var (
-	modelName            = flag.String("model", "deepseek-v4-flash", "Model to use")
-	isStream             = flag.Bool("stream", true, "Whether to stream the response")
-	address              = flag.String("address", "127.0.0.1:8080", "Listen address")
-	path                 = flag.String("path", "/agui", "HTTP path")
-	messagesSnapshotPath = flag.String("messages-snapshot-path", "/history", "Messages snapshot HTTP path")
+	modelName                      = flag.String("model", "deepseek-v4-flash", "Model to use")
+	isStream                       = flag.Bool("stream", true, "Whether to stream the response")
+	address                        = flag.String("address", "127.0.0.1:8080", "Listen address")
+	path                           = flag.String("path", "/agui", "HTTP path")
+	messagesSnapshotPath           = flag.String("messages-snapshot-path", "/history", "Messages snapshot HTTP path")
+	messagesSnapshotMaxTrackEvents = flag.Int("messages-snapshot-max-track-events", 0,
+		"Maximum persisted track events for the initial snapshot (0 keeps existing behavior)")
 )
 
 const appName = "demo-app"
@@ -74,6 +76,7 @@ func main() {
 		agui.WithPath(*path),
 		agui.WithMessagesSnapshotPath(*messagesSnapshotPath),
 		agui.WithMessagesSnapshotEnabled(true),
+		agui.WithMessagesSnapshotMaxTrackEvents(*messagesSnapshotMaxTrackEvents),
 		agui.WithAppName(appName),
 		agui.WithSessionService(sessionService),
 		agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(userIDResolver)),

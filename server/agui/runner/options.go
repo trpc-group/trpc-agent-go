@@ -74,6 +74,11 @@ type Options struct {
 	ConcurrentMessageStreamsEnabled           bool                  // ConcurrentMessageStreamsEnabled keeps multiple message streams open by message ID.
 	DistributedCancelEnabled                  bool                  // DistributedCancelEnabled enables best-effort cancel signaling through SessionState.
 	DistributedCancelPollInterval             time.Duration         // DistributedCancelPollInterval controls how often owner runs poll cancel markers.
+
+	// MessagesSnapshotMaxTrackEvents bounds the initial track read through
+	// session.WithEventNum. Zero preserves existing reads; negative values make
+	// MessagesSnapshot return an error. See WithMessagesSnapshotMaxTrackEvents.
+	MessagesSnapshotMaxTrackEvents int
 }
 
 // NewOptions creates a new options instance.
@@ -213,6 +218,20 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 func WithFlushInterval(d time.Duration) Option {
 	return func(o *Options) {
 		o.FlushInterval = d
+	}
+}
+
+// WithMessagesSnapshotMaxTrackEvents requests at most limit recent persisted
+// AG-UI track events for the initial messages snapshot. Zero (the default) keeps
+// existing read behavior; a negative limit makes MessagesSnapshot return an
+// error before reading storage. The session service must honor
+// session.WithEventNum to bound storage reads. Leading events before the first
+// user message are discarded; if none remains, an empty snapshot is emitted and
+// follow is skipped, without retrying a larger read. This does not limit follow
+// reads, payload bytes, or retention, and does not enable history pagination.
+func WithMessagesSnapshotMaxTrackEvents(limit int) Option {
+	return func(o *Options) {
+		o.MessagesSnapshotMaxTrackEvents = limit
 	}
 }
 

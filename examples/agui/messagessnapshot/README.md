@@ -23,6 +23,16 @@ The server listens on `http://127.0.0.1:8080` by default, exposing:
 
 You can override these paths using the `-path` and `-messages-snapshot-path` flags.
 
+To bound the initial history read, start the server with
+`go run . -messages-snapshot-max-track-events 1000`. This counts persisted
+AG-UI track events, not displayed messages. The default `0` preserves the full
+history behavior. A negative value is rejected. The server discards leading
+events before the first retained user message; if no such start remains, it
+returns an empty snapshot without retrying a larger read or starting follow.
+The limit does not apply to follow reads, payload bytes, or stored-history
+retention, and does not enable older-message pagination. For custom session
+stores, bounded storage reads require support for `session.WithEventNum`.
+
 Output:
 
 ```log
