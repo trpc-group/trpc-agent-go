@@ -71,6 +71,7 @@ type turnState struct {
 	textByResponse      map[string]string
 	reasoningByResponse map[string]string
 	activeResponses     map[string]string
+	roleByResponse      map[string]model.Role
 	toolCalls           map[string]toolCallState
 	stopReason          acpsdk.StopReason
 	usage               *acpsdk.Usage
@@ -88,6 +89,7 @@ func newTurnState(reasoningEnabled bool) *turnState {
 		textByResponse:      make(map[string]string),
 		reasoningByResponse: make(map[string]string),
 		activeResponses:     make(map[string]string),
+		roleByResponse:      make(map[string]model.Role),
 		toolCalls:           make(map[string]toolCallState),
 		stopReason:          acpsdk.StopReasonEndTurn,
 		reasoningEnabled:    reasoningEnabled,
@@ -114,13 +116,14 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 	for _, choice := range evt.Response.Choices {
 		streamKey := responseStreamKey(evt, choice.Index)
 		key := s.responseKey(evt, streamKey)
+		assistantContent := s.isAssistantContent(key, choice)
 		if s.reasoningEnabled {
 			if reasoning := s.contentDelta(
 				s.reasoningByResponse,
 				key,
 				choice.Delta.ReasoningContent,
 				choice.Message.ReasoningContent,
-			); reasoning != "" {
+			); assistantContent && reasoning != "" {
 				updates = append(updates, acpsdk.UpdateAgentThoughtText(reasoning))
 			}
 		}
@@ -129,7 +132,10 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 			key,
 			choice.Delta.Content,
 			choice.Message.Content,
-		); text != "" && choice.Delta.ToolID == "" && choice.Message.ToolID == "" {
+		); assistantContent &&
+			text != "" &&
+			choice.Delta.ToolID == "" &&
+			choice.Message.ToolID == "" {
 			updates = append(updates, acpsdk.UpdateAgentMessageText(text))
 		}
 		updates = append(updates, s.translateToolCalls(choice.Delta.ToolCalls)...)
@@ -144,12 +150,26 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 		if !evt.Response.IsPartial {
 			delete(s.textByResponse, key)
 			delete(s.reasoningByResponse, key)
+			delete(s.roleByResponse, key)
 			if s.activeResponses[streamKey] == key {
 				delete(s.activeResponses, streamKey)
 			}
 		}
 	}
 	return updates, nil
+}
+
+func (s *turnState) isAssistantContent(key string, choice model.Choice) bool {
+	role := choice.Delta.Role
+	if role == "" {
+		role = choice.Message.Role
+	}
+	if role != "" {
+		s.roleByResponse[key] = role
+	} else {
+		role = s.roleByResponse[key]
+	}
+	return role == "" || role == model.RoleAssistant
 }
 
 func responseStreamKey(evt *event.Event, choiceIndex int) string {

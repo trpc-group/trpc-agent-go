@@ -242,6 +242,80 @@ func TestTurnStateSeparatesCompletedResponsesWithoutIDs(t *testing.T) {
 	}
 }
 
+func TestTurnStateSkipsNonAssistantContent(t *testing.T) {
+	tests := []struct {
+		name      string
+		role      model.Role
+		streaming bool
+	}{
+		{name: "user message", role: model.RoleUser},
+		{name: "user delta", role: model.RoleUser, streaming: true},
+		{name: "system", role: model.RoleSystem},
+		{name: "tool", role: model.RoleTool},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newTurnState(true)
+			message := model.Message{
+				Role:             test.role,
+				Content:          "internal",
+				ReasoningContent: "internal reasoning",
+			}
+			choice := model.Choice{}
+			if test.streaming {
+				choice.Delta = message
+			} else {
+				choice.Message = message
+			}
+			updates, err := state.translate(&event.Event{
+				InvocationID: "invocation",
+				Response: &model.Response{
+					ID:      "response",
+					Choices: []model.Choice{choice},
+				},
+			})
+			require.NoError(t, err)
+			assert.Empty(t, updates)
+		})
+	}
+}
+
+func TestTurnStateUsesExplicitRoleForEmptyDeltas(t *testing.T) {
+	state := newTurnState(false)
+	events := []*event.Event{
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "hel",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "lo"},
+				}},
+			},
+		},
+	}
+	for index, evt := range events {
+		updates, err := state.translate(evt)
+		require.NoError(t, err)
+		require.Len(t, updates, 1)
+		want := []string{"hel", "lo"}[index]
+		assert.Equal(t, want, updates[0].AgentMessageChunk.Content.Text.Text)
+	}
+}
+
 func TestTurnStateAssociatesIDLessFinalResponseWithStream(t *testing.T) {
 	state := newTurnState(true)
 	events := []*event.Event{
