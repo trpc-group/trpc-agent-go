@@ -2347,12 +2347,131 @@ go run ./tools -streaming=false
 需要恢复未完成的工具轮时，保留该轮的 ProviderData。完整示例和模型包装器要求见
 [适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)。
 
+### 工具搜索
+
+工具搜索（tool search）让模型在需要时再加载工具定义。它需要在 Responses 模型上显式开启，
+并且模型必须支持 `tool_search`；OpenAI 文档列出的是 `gpt-5.4` 及更新的模型。哪些工具延迟
+加载由 Agent 决定。延迟加载的工具仍由 Agent 注册、过滤和执行，变化的只是模型一开始能看到的内容。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
+// 托管搜索：由 API 在请求中声明的延迟工具里搜索。
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billing),
+    }),
+)
+```
+
+客户端搜索配置的 handler 返回 `[]responses.ToolSearchEntry`。下面的 handler 在发票查询时，
+加载 billing namespace 中的候选：
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+)
+
+search := responses.WithClientToolSearch(
+    func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        var entries []responses.ToolSearchEntry
+        if strings.Contains(strings.ToLower(req.Query), "invoice") {
+            for _, entry := range req.Candidates {
+                if entry.Namespace == "billing" {
+                    entries = append(entries, entry)
+                }
+            }
+        }
+        return entries, nil
+    },
+)
+llm := responses.New("gpt-5.4", search)
+// 按上例通过 llmagent.WithModel 注册 llm。
+```
+
+- `deferred.Tool` 和 `deferred.ToolSet` 包装工具后，分别通过 `WithTools`、`WithToolSets` 或
+  `WithActivatableToolSets` 注册。不传选项时全部延迟；需要选择成员时使用 `deferred.WithFilter`。
+  filter 在请求时接收原始工具，返回 true 表示延迟，false 表示立即暴露。可以按成员原始名称选择，
+  策略也适用于刷新后的成员，包括 MCP 工具。`WithFilter(nil)` 恢复全部延迟，多次设置时以最后一次为准。
+- 包装策略会覆盖工具自身的 `tool.DeferredTool` 偏好；未包装的工具保留自身偏好。Agent 和单次
+  运行的工具过滤器仍然生效。关闭包装后的 ToolSet 会关闭原 ToolSet，包装本身不会创建新连接。
+- Agent 和单次运行的过滤器看到的是注册时的包装器，仍可使用 `Declaration()` 和
+  `tool.MetadataOf`；需要断言具体类型时，可通过 `Original() tool.Tool` 逐层取得原工具。
+- 含有延迟成员的 ToolSet 会以同名 namespace 发送，描述取自 `tool.ToolSetDescriber`，MCP ToolSet
+  使用 `ConnectionConfig.Description`。模型返回的调用通过保存的 namespace 和成员名称映射回已注册
+  的工具，不通过拆分注册名确定身份。执行注册名仍需在当前请求中唯一；namespace 分组不会解决注册目录中的重名。
+- 客户端模式下，发起搜索的响应不是最终响应。`LLMAgent` 会调用 handler，并在下一次模型调用前把
+  `tool_search_output` 作为工具消息保存。`req.Candidates` 同样是 `[]responses.ToolSearchEntry`。
+  每个条目包含 `Namespace`、`NamespaceDescription`、`Name`、`Tool`，声明通过
+  `entry.Tool.Declaration()` 读取。候选的 `Name` 已经是模型侧名称，可能与工具声明中的名称不同。
+- 返回原候选即可选中它。也可以复制候选后设置 `entry.Tool = sandboxTool`，换成另一个执行对象，
+  或构造包含外部 `tool.Tool` 的新条目。新条目的 `Name` 可以省略，此时使用工具声明中的名称。
+  没有注册延迟工具时，客户端搜索仍然可用。`Run.ToolFilter` 也会筛选返回的替换对象和外部工具，
+  普通工具执行权限和工具回调继续生效。
+- 当前 Run 借用返回的工具对象，业务负责资源清理。Session 保存模型当时看到的定义。
+  下一次 Run 可以通过 Agent 注册的工具执行原样选回的候选。如果调用的是上一次 Run
+  返回的替身或外部对象，模型会收到提示重新搜索的工具错误，Handler 可以再次提供执行对象。
+- handler 报错时，本次运行结束，同一响应中的普通函数调用保持待执行。在发送下一条用户消息前，
+  用 `model.Message{}` 和 `agent.WithResume(true)` 恢复同一会话。搜索重试成功后，框架执行待处理的函数。
+  搜索没有命中时，handler 可以返回空结果，让模型继续。
+- Graph 的 LLM 节点遇到客户端搜索会报错。托管模式在有延迟工具或搜索历史时发送搜索入口。
+  Chat Completions 继续将注册工具作为普通函数提供。
+- `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索
+  同时使用。
+
+非 MCP 的自定义 ToolSet 可以把描述作为实例字段，并实现可选的 `Description()` 方法。下面是业务
+自己定义的类型；`lookupInvoice` 和 `listInvoices` 是已创建的 `tool.Tool`，生成的 `billing` 可用于
+上面的注册代码：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// 在 Agent 初始化时，注册工具组之前构造：
+billing := staticToolSet{
+    name:        "billing",
+    description: "查询发票、支付和退款状态",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+`deferred.ToolSet` 会保留这段描述，适配器将它写入 `namespace.description`；客户端搜索的
+`ToolSearchEntry.NamespaceDescription` 也使用这段描述。
+
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
+中的 `go run ./toolsearch -mode server` 和 `go run ./toolsearch -mode client` 分别演示两种模式。
+完整契约和尚未验证的边界见
+[适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#tool-search)。
+
 ### 说明
 
 - 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
-- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
+- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本；使用工具搜索还需要 `model.ProviderActionCompleter`、`model.ProviderDataRequestProjector` 和 `tool.ToolSetDescriber`，以上示例还使用了 `tool/deferred`。所需的根模块版本要先于适配器版本发布。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
 - 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
-- 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
+- 通过 `previous_response_id` 或 `conversation` 做服务端续接、工具搜索以外的托管工具、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。
 

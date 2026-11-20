@@ -120,6 +120,11 @@ func (m *hedgeModel) ProjectProviderData(data *model.ProviderData) (model.Messag
 	return providerdata.ProjectFromCandidates(m.candidates, data)
 }
 
+// ProjectProviderDataWithRequest forwards native projection with request tools.
+func (m *hedgeModel) ProjectProviderDataWithRequest(request *model.Request, data *model.ProviderData) (model.Message, error) {
+	return providerdata.ProjectFromCandidatesWithRequest(m.candidates, request, data)
+}
+
 // InputTokenBudget returns the smallest advertised candidate budget so every
 // hedge request receives an input it can accept.
 func (m *hedgeModel) InputTokenBudget(

@@ -207,6 +207,7 @@ func isRecoverablePlaceholderContent(content string) bool {
 
 // ContextCompactionConfig controls request-side history compaction applied
 // while projecting session events into a model request.
+// Tool results with opaque provider-native replay data are preserved in full.
 type ContextCompactionConfig struct {
 	Enabled             bool
 	KeepRecentRequests  int
@@ -723,7 +724,7 @@ func truncateOversizedToolResultMessageWithCounterAndRef(
 	counter model.TokenCounter,
 	ref toolResultRecoveryRef,
 ) (model.Message, bool, int) {
-	if msg.Role != model.RoleTool || msg.ToolID == "" || maxTokens <= 0 {
+	if msg.Role != model.RoleTool || msg.ToolID == "" || msg.ProviderData != nil || maxTokens <= 0 {
 		return msg, false, 0
 	}
 	if msg.Content == "" && len(msg.ContentParts) == 0 {
@@ -853,7 +854,10 @@ func cleanToolResultMessageWithCounter(
 	msg model.Message,
 	counter model.TokenCounter,
 ) (model.Message, bool, int) {
-	if msg.Role != model.RoleTool || msg.ToolID == "" {
+	// Opaque results must remain paired with their native calls. Replacing the
+	// visible content cannot compact their replay payload and discarding that
+	// payload would turn the result into an unrelated ordinary tool response.
+	if msg.Role != model.RoleTool || msg.ToolID == "" || msg.ProviderData != nil {
 		return msg, false, 0
 	}
 	if msg.Content == "" && len(msg.ContentParts) == 0 {
@@ -932,7 +936,7 @@ func compactHistoricalToolResultMessageWithCounterAndRef(
 	counter model.TokenCounter,
 	ref toolResultRecoveryRef,
 ) (model.Message, bool, int) {
-	if msg.Role != model.RoleTool || msg.ToolID == "" || maxTokens <= 0 {
+	if msg.Role != model.RoleTool || msg.ToolID == "" || msg.ProviderData != nil || maxTokens <= 0 {
 		return msg, false, 0
 	}
 	if isRecoverablePlaceholderContent(msg.Content) && len(msg.ContentParts) == 0 {

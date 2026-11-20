@@ -47,6 +47,7 @@ const (
 func (m *Model) handleStreaming(
 	ctx context.Context,
 	params responses.ResponseNewParams,
+	tools *toolPlan,
 	opts []option.RequestOption,
 	emit func(*model.Response) bool,
 ) {
@@ -64,7 +65,10 @@ func (m *Model) handleStreaming(
 	}
 	defer raw.Body.Close()
 
-	acc := &streamAccumulator{doneItems: make(map[int64]responses.ResponseOutputItemUnion)}
+	acc := &streamAccumulator{
+		doneItems: make(map[int64]responses.ResponseOutputItemUnion),
+		tools:     tools,
+	}
 	decoder := ssestream.NewDecoder(raw)
 	for decoder.Next() {
 		if ctx.Err() != nil {
@@ -108,6 +112,9 @@ type streamAccumulator struct {
 	// seen. It is evidence only: it is not a transcript, a native item, or a
 	// tool call.
 	outputObserved bool
+	// tools maps namespaced function calls in the completed response back to
+	// request tools.
+	tools *toolPlan
 }
 
 func handleStreamEvent(
@@ -204,7 +211,7 @@ func handleTerminalStreamEvent(
 			return true, emit(apiErrorResponse(err))
 		}
 		resp.Output = output
-		final, err := projectResponse(&resp, modelName)
+		final, err := projectRequestResponse(&resp, modelName, acc.tools)
 		if err != nil {
 			return true, emit(apiErrorResponse(err))
 		}
