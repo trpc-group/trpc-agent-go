@@ -379,6 +379,43 @@ func TestWorkspaceRegistry_Invalidate_IsConditional(t *testing.T) {
 	require.True(t, r.Invalidate(refreshed))
 }
 
+func TestWorkspaceRegistry_ScopesKeepIndependentEntries(t *testing.T) {
+	ctx := context.Background()
+	root := NewWorkspaceRegistry()
+	left, right := root.NewScope(), root.NewScope()
+	wm := &rotatingWM{instanceID: "instance"}
+	base, err := root.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	first, err := left.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	sibling, err := right.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	require.Equal(t, 3, wm.callCount())
+	require.False(t, right.Invalidate(first))
+	require.False(t, left.Invalidate(base))
+	require.False(t, left.Invalidate(sibling))
+	require.True(t, root.Invalidate(first), "the parent can invalidate its child's entry")
+	current, err := left.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	require.Equal(t, 4, wm.callCount())
+	require.False(t, root.Invalidate(first), "late invalidation must not evict the replacement")
+	reused, err := left.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	require.Equal(t, current, reused)
+	reused, err = root.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	require.Equal(t, base, reused)
+	reused, err = right.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	require.Equal(t, sibling, reused)
+	grandchild := left.NewScope()
+	nested, err := grandchild.AcquireHandle(ctx, wm, "same-id")
+	require.NoError(t, err)
+	require.True(t, root.Invalidate(nested))
+	require.False(t, root.Invalidate(nested))
+	require.False(t, root.Invalidate(WorkspaceHandle{}))
+}
+
 type instanceProbeResult struct {
 	id  WorkspaceInstanceID
 	err error
