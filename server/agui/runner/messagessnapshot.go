@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/reduce"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -96,7 +97,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	messagesSnapshotEvent, trackEvents, err := r.getMessagesSnapshotEvent(ctx, input.key)
+	messagesSnapshotEvent, trackEvents, cursor, err := r.getMessagesSnapshotEvent(ctx, input.key)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -124,7 +125,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 	}
 
 	if r.messagesSnapshotFollowEnabled && r.shouldFollowMessagesSnapshot(input.key, trackEvents) {
-		r.messagesSnapshotFollow(ctx, input, events, trackEvents)
+		r.messagesSnapshotFollow(ctx, input, events, trackEvents, cursor)
 		return
 	}
 	// Emit a RUN_FINISHED event to signal downstream consumers there is no more data.
@@ -136,10 +137,24 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 // getMessagesSnapshotEvent loads AG-UI track events and converts them to an AG-UI MessagesSnapshotEvent.
 // In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
-	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
-	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey)
+	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, *snapshotTrackCursor, error) {
+	var trackEvents *session.TrackEvents
+	var cursor *snapshotTrackCursor
+	var err error
+	if reader, ok := r.tracker.(cursorTrackReader); ok && r.messagesSnapshotFollowEnabled {
+		var next string
+		trackEvents, next, err = reader.GetEventsWithCursor(ctx, sessionKey, "")
+		if !errors.Is(err, track.ErrCursorUnsupported) {
+			cursor = &snapshotTrackCursor{reader: reader, value: next}
+		}
+	}
+	if cursor == nil && trackEvents == nil {
+		trackEvents, err = r.tracker.GetEvents(ctx, sessionKey)
+	} else if cursor == nil && errors.Is(err, track.ErrCursorUnsupported) {
+		err = nil
+	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("get track events: %w", err)
+		return nil, nil, nil, fmt.Errorf("get track events: %w", err)
 	}
 	eventsForReduce, safeForFollow := trimTrackEventsToHistoryStart(trackEvents.Events)
 	if !safeForFollow && len(trackEvents.Events) > 0 {
@@ -171,7 +186,16 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if !safeForFollow {
 		trackEvents = nil
 	}
-	return event, trackEvents, err
+	return event, trackEvents, cursor, err
+}
+
+type cursorTrackReader interface {
+	GetEventsWithCursor(context.Context, session.Key, string) (*session.TrackEvents, string, error)
+}
+
+type snapshotTrackCursor struct {
+	reader cursorTrackReader
+	value  string
 }
 
 func trimTrackEventsToHistoryStart(events []session.TrackEvent) ([]session.TrackEvent, bool) {
@@ -209,6 +233,7 @@ func (r *runner) messagesSnapshotFollow(
 	input *runInput,
 	events chan<- aguievents.Event,
 	initial *session.TrackEvents,
+	cursor *snapshotTrackCursor,
 ) {
 	cursorTime := lastTrackTimestamp(initial)
 	pollInterval := r.flushInterval
@@ -239,7 +264,13 @@ func (r *runner) messagesSnapshotFollow(
 				aguievents.WithRunID(input.runID)), input)
 			return
 		case <-ticker.C:
-			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime) {
+			var keepFollowing bool
+			if cursor != nil {
+				keepFollowing = r.handleCursorFollowTick(ctx, input, events, cursor)
+			} else {
+				keepFollowing = r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime)
+			}
+			if !keepFollowing {
 				return
 			}
 		}
@@ -277,11 +308,44 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 	if trackEvents == nil || len(trackEvents.Events) == 0 {
 		return true
 	}
-	for _, trackEvent := range trackEvents.Events {
-		if !trackEvent.Timestamp.After(*cursorTime) {
-			continue
+	return r.emitFollowTrackEvents(ctx, input, events, trackEvents.Events, cursorTime)
+}
+
+func (r *runner) handleCursorFollowTick(ctx context.Context, input *runInput,
+	events chan<- aguievents.Event, cursor *snapshotTrackCursor) bool {
+	trackEvents, next, err := cursor.reader.GetEventsWithCursor(ctx, input.key, cursor.value)
+	if err == nil && trackEvents != nil && len(trackEvents.Events) > 0 && next == cursor.value {
+		err = errors.New("track cursor did not advance")
+	}
+	if err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("follow track events: %v", err),
+			aguievents.WithRunID(input.runID)), input)
+		return false
+	}
+	if trackEvents != nil && !r.emitFollowTrackEvents(ctx, input, events, trackEvents.Events, nil) {
+		return false
+	}
+	cursor.value = next
+	return true
+}
+
+func (r *runner) emitFollowTrackEvents(ctx context.Context, input *runInput,
+	events chan<- aguievents.Event, trackEvents []session.TrackEvent, cursorTime *time.Time) bool {
+	// Compare every event with the boundary used for this read. Advancing the
+	// filter within the batch would discard distinct events at the same time.
+	var afterTime time.Time
+	if cursorTime != nil {
+		afterTime = *cursorTime
+	}
+	for _, trackEvent := range trackEvents {
+		if cursorTime != nil {
+			if !trackEvent.Timestamp.After(afterTime) {
+				continue
+			}
+			if trackEvent.Timestamp.After(*cursorTime) {
+				*cursorTime = trackEvent.Timestamp
+			}
 		}
-		*cursorTime = trackEvent.Timestamp
 		if len(trackEvent.Payload) == 0 {
 			continue
 		}
