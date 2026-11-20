@@ -126,6 +126,7 @@ func TestStreamEmptyCompletionWithoutOutputStaysValid(t *testing.T) {
 		`{"type":"response.created","response":{"id":"resp_empty","status":"in_progress","created_at":1700000000,"output":[]}}`,
 		`{"type":"response.in_progress","response":{"id":"resp_empty","status":"in_progress","output":[]}}`,
 		`{"type":"keepalive"}`,
+		`{"type":"response.output_item.done","item":{}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{}}`,
 		`{"type":"response.output_text.delta","delta":""}`,
 		`{"type":"response.refusal.delta","delta":""}`,
@@ -147,16 +148,14 @@ func TestStreamEmptyCompletionWithoutOutputStaysValid(t *testing.T) {
 	require.Equal(t, finishReasonStop, *final.Choices[0].FinishReason)
 }
 
-func TestStreamDoneItemCountStillRejectsEmptyCompletion(t *testing.T) {
+func TestStreamDoneItemPreventsEmptyCompletion(t *testing.T) {
 	item := `{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello"}]}`
 	got := collectStream(t,
-		`{"type":"response.output_text.delta","delta":"hello"}`,
 		`{"type":"response.output_item.done","output_index":0,"item":`+item+`}`,
 		emptyCompletedEvent,
 	)
-	require.Equal(t, "hello", got[0].Choices[0].Delta.Content)
 	respErr := requireTerminalError(t, got)
-	require.Contains(t, respErr.Message, "output_item.done covered 1")
+	require.Contains(t, respErr.Message, "response.completed output is empty after streamed output")
 	require.Empty(t, got[len(got)-1].Choices)
 }
 

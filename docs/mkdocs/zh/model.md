@@ -2353,7 +2353,7 @@ go run ./tools -streaming=false
 - 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
 - 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、托管工具、工具搜索、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
-- 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
+- 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。工具名称和参数以完成事件的输出为准，即使之前的事件给出了不同的值。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。
 
 ## Anthropic Model

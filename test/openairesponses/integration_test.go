@@ -10,6 +10,7 @@
 package openairesponses_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -173,6 +174,44 @@ func (m *legacyIntegrationModel) Info() model.Info { return model.Info{Name: "gp
 func (m *legacyIntegrationModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
 	m.calls.Add(1)
 	return nil, fmt.Errorf("legacy model must not receive native history")
+}
+
+func TestRunnerExecutesAndReplaysCompletedStreamArguments(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var requests, toolCalls atomic.Int32
+	nextInput := make(chan json.RawMessage, 1)
+	var output bytes.Buffer
+	require.NoError(t, json.Compact(&output, []byte(nativeToolOutput)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := mustReadJSONBody(t, r)
+		switch requests.Add(1) {
+		case 1:
+			writeSSE(w,
+				`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_tool","call_id":"call_tool","name":"calculator","arguments":"{\"a\":99}"}}`,
+				`{"type":"response.completed","response":{"id":"r","status":"completed","output":`+output.String()+`}}`,
+			)
+		case 2:
+			nextInput <- body["input"]
+			writeSSE(w, `{"type":"response.completed","response":{"id":"next","status":"completed","output":[]}}`)
+		default:
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+	a := llmagent.New("native",
+		llmagent.WithModel(responses.New("gpt-5", responses.WithAPIKey("test"), responses.WithBaseURL(srv.URL))),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+		llmagent.WithTools([]tool.Tool{integrationCalculator(&toolCalls)}),
+	)
+	r := runner.NewRunner("native", a)
+	defer r.Close()
+	for _, evt := range runIntegration(t, r, ctx, "calculate") {
+		require.Nil(t, evt.Error)
+	}
+	require.EqualValues(t, 1, toolCalls.Load())
+	require.EqualValues(t, 2, requests.Load())
+	assertToolProviderDataInput(t, <-nextInput)
 }
 
 func TestRunnerDoesNotExecuteOrPersistUncommittedStreamCalls(t *testing.T) {
