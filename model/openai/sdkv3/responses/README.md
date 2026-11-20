@@ -86,16 +86,18 @@ every definition up front. It is opt-in and requires a model that supports
   the same response, which stays `Done`.
 - `WithClientToolSearch(handler)` leaves deferred tools out of the request and
   adds a client `tool_search` tool whose arguments have a `query` string. When
-  the model searches, `handler` selects tools from the request's deferred
-  tools, and the adapter records a `tool_search_output` with their
-  definitions. A nil handler makes `GenerateContent` fail.
+  the model searches, `handler` returns tool entries to load and execute. It
+  can select deferred candidates, replace their tool objects, or return tools
+  from an external catalog. The adapter records a `tool_search_output` with
+  their definitions. Search is available even when no deferred tools are
+  registered. A nil handler makes `GenerateContent` fail.
 
 The two options are mutually exclusive; the later one wins. Wrap a tool or
 ToolSet with `tool/deferred` to select what is deferred, then register it with
 the agent as usual. Other tools keep their own `tool.DeferredTool` preference.
 Deferred tools stay registered, filtered, and executed by the agent; only the
-request changes. Requests without deferred tools and without tool search
-history are unchanged, and adapters without tool search, such as Chat
+request changes. In hosted mode, requests without deferred tools and without
+tool search history are unchanged. Adapters without tool search, such as Chat
 Completions, ignore deferral.
 
 Tools registered and allowed for the request remain executable even before a
@@ -179,7 +181,7 @@ billing := staticToolSet{
 ```
 
 The deferred wrapper forwards `Description()`, and the adapter uses its value
-as `namespace.description` and `ToolSearchCandidate.NamespaceDescription`.
+as `namespace.description` and `ToolSearchEntry.NamespaceDescription`.
 
 A function call returned with a namespace is mapped back to the tool that the
 agent registered for that member, for example `crm_lookup` for `lookup` in
@@ -197,23 +199,86 @@ against the request's tool bindings, including original-name ToolSets. Direct
 
 ### Client-executed search
 
+The handler returns entries containing both the model-facing identity and the
+tool object to execute:
+
+```go
+type ToolSearchHandler func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error)
+
+type ToolSearchEntry struct {
+    Namespace            string
+    NamespaceDescription string
+    Name                 string
+    Tool                 tool.Tool
+}
+```
+
 The handler receives a `ToolSearchRequest`:
 
 - `CallID` is the `tool_search_call` it answers.
 - `Arguments` holds the raw arguments, and `Query` holds their `query` string.
-- `Candidates` lists the deferred tools of the current request that earlier
-  searches in the history have not loaded, sorted by `ID`.
+- `Candidates` lists deferred tools available to load. A registered candidate
+  becomes available again when its replacement binding expires.
 
-Candidates come from the request tools, so agent and run tool filters apply.
-`ID` is the candidate's key in the current request's tool registry, currently
-the registered tool name. Select candidates using their metadata and return
-`candidate.ID` unchanged; do not construct or parse it from namespace and name.
-`Namespace`, `NamespaceDescription`, `Name`, and `Declaration` describe what
-the model will see.
+Candidates come from the request tools, so agent and run tool filters apply
+before they reach the handler. Read a candidate's declaration through
+`entry.Tool.Declaration()`. The model calls the function by its `Namespace`
+and `Name`. For a ToolSet member such as `billing.lookup_invoice`, `Name`
+is `lookup_invoice` even if the registered tool is named `billing_lookup_invoice`.
+A new entry can omit `Name` to use the tool's declaration name. An empty
+`Namespace` declares a top-level function.
 
-`ToolSearchResult.ToolIDs` selects candidates; unknown or duplicate IDs are
-errors. A nil or empty result loads nothing, and the model sees a search that
-found no tools.
+This handler returns matching invoice candidates or loads an external tool
+when the local catalog has no match.
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+func invoiceSearch(catalogTool tool.Tool) responses.ToolSearchHandler {
+    return func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        if !strings.Contains(strings.ToLower(req.Query), "invoice") {
+            return nil, nil
+        }
+        var entries []responses.ToolSearchEntry
+        for _, entry := range req.Candidates {
+            if strings.Contains(strings.ToLower(entry.Tool.Declaration().Description), "invoice") {
+                entries = append(entries, entry)
+            }
+        }
+        if len(entries) == 0 {
+            entries = append(entries, responses.ToolSearchEntry{
+                Namespace:            "external_billing",
+                NamespaceDescription: "Invoice lookup tools.",
+                Tool:                 catalogTool,
+            })
+        }
+        return entries, nil
+    }
+}
+
+// catalogTool is an application-owned tool.Tool with an invoice declaration.
+llm := responses.New("gpt-5.4", responses.WithClientToolSearch(invoiceSearch(catalogTool)))
+```
+
+To substitute a sandbox implementation, copy a candidate and set
+`entry.Tool = sandboxTool` before returning it. The model calls the same
+namespace and function name with the sandbox tool's schema. The sandbox tool
+receives those arguments through the usual permissions and tool callbacks.
+`Run.ToolFilter` also applies to replacements and external tools. Each returned
+entry needs a tool with a declaration and a distinct model-facing identity.
+A nil or empty slice reports a search with no matches.
+
+The agent borrows returned objects for this Run. The application owns their
+resources. Session history keeps the schema seen by the model. In a later Run,
+an original candidate can execute through the agent's registered tool. A call
+to a replacement or external tool from an earlier Run returns a tool error
+asking the model to search again. The handler can then supply a fresh object.
 
 A search response is not `Done`. LLMAgent completes it through
 `model.ProviderActionCompleter` before running ordinary tool calls in the same

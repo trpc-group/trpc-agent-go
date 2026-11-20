@@ -2369,12 +2369,6 @@ import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 // Hosted search: the API searches the deferred definitions in the request.
 llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 
-// Client-executed search: the handler picks from the deferred tools.
-// llm := responses.New("gpt-5.4", responses.WithClientToolSearch(
-//     func(ctx context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
-//         return &responses.ToolSearchResult{ToolIDs: pick(req.Query, req.Candidates)}, nil
-//     }))
-
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
@@ -2384,6 +2378,35 @@ agent := llmagent.New(
         deferred.ToolSet(billing),
     }),
 )
+```
+
+For client-executed search, configure a handler that returns
+`[]responses.ToolSearchEntry`. The following handler loads billing candidates
+for invoice queries:
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+)
+
+search := responses.WithClientToolSearch(
+    func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        var entries []responses.ToolSearchEntry
+        if strings.Contains(strings.ToLower(req.Query), "invoice") {
+            for _, entry := range req.Candidates {
+                if entry.Namespace == "billing" {
+                    entries = append(entries, entry)
+                }
+            }
+        }
+        return entries, nil
+    },
+)
+llm := responses.New("gpt-5.4", search)
+// Register llm with llmagent.WithModel as above.
 ```
 
 - `deferred.Tool` and `deferred.ToolSet` wrap tools for registration with
@@ -2407,15 +2430,28 @@ agent := llmagent.New(
   collisions in the tool registry.
 - In client mode, a search response is not final. `LLMAgent` runs the handler
   and stores the `tool_search_output` as a tool message before the next model
-  step. The handler selects from `req.Candidates` and returns each selected
-  `candidate.ID` in `ToolSearchResult.ToolIDs`, without constructing or parsing
-  the ID. The loaded definitions stay in history.
+  step. `req.Candidates` is also `[]responses.ToolSearchEntry`. Each entry has
+  `Namespace`, `NamespaceDescription`, `Name`, and `Tool`. Read the declaration
+  through `entry.Tool.Declaration()`. A candidate's `Name` is already the wire
+  name, which can differ from the tool's declaration name.
+- Return a candidate unchanged to select it, copy it and set
+  `entry.Tool = sandboxTool` to substitute an implementation, or return a new
+  entry containing an external `tool.Tool`. A new entry may omit `Name` to use
+  the tool's declaration name. Client search remains available without any
+  registered deferred tools. `Run.ToolFilter` also checks returned replacement
+  and external objects. Execution uses the usual tool permissions and callbacks.
+- Returned objects are borrowed for the current Run, and the application
+  owns their cleanup. Session history retains the loaded definitions. Later
+  Runs can execute original candidates through the registered tools. A call
+  to an expired replacement or external tool returns a tool error asking the
+  model to search again. The handler can then return a fresh object.
 - A handler error ends the run before ordinary functions in the same response
   execute. Before sending another user message, resume the same session with
   `model.Message{}` and `agent.WithResume(true)` to retry the search and run
   the pending functions. An empty search result lets the model continue.
-- Graph LLM nodes report an error for a client search. Requests without
-  deferred tools are unchanged, and Chat Completions ignores deferral.
+- Graph LLM nodes report an error for a client search. Hosted requests without
+  deferred tools or tool search history are unchanged, and Chat Completions
+  ignores deferral.
 - `plugin/toolsearch` has its own deferred-tool registration and does not use
   `tool.DeferredTool`; do not combine it with native tool search.
 

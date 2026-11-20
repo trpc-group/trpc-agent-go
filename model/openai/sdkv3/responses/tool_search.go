@@ -15,11 +15,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -37,17 +39,12 @@ const (
 	toolSetNamespaceDescription = "Tools from the %s tool set."
 )
 
-// ToolSearchHandler selects deferred tools for one client-executed tool
-// search. It must only select tools from req.Candidates and must not modify
-// req. A nil result or an empty ToolIDs list loads no tools; the model is told
-// that the search found nothing. An error stops the agent run without
-// recording a search result. The search call then stays unanswered: a run
-// with agent.WithResume calls the handler again, and other requests that
-// replay the session fail until the call is answered. Return an empty result
-// instead of an error to let the model continue without the tools. The
-// handler should return promptly when ctx is canceled, and may be called
-// concurrently for different requests.
-type ToolSearchHandler func(ctx context.Context, req *ToolSearchRequest) (*ToolSearchResult, error)
+// ToolSearchHandler returns tools to load for one client-executed search. It
+// may return candidates, replace their Tool, or supply entries from its own
+// catalog. A nil or empty slice loads nothing. An error leaves the call
+// unanswered so a run with agent.WithResume can retry it. The handler should
+// honor context cancellation and may be called concurrently by different runs.
+type ToolSearchHandler func(ctx context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error)
 
 // ToolSearchRequest describes one client-executed tool search call.
 type ToolSearchRequest struct {
@@ -57,39 +54,27 @@ type ToolSearchRequest struct {
 	Arguments json.RawMessage
 	// Query is the "query" string of Arguments, or empty when absent.
 	Query string
-	// Candidates lists the deferred tools of the current request that are not
-	// loaded yet, sorted by ID. Only these tools can be loaded.
-	Candidates []ToolSearchCandidate
+	// Candidates lists registered deferred tools not already loaded in the
+	// current history, ordered by their framework registration key. A tool
+	// whose previous run-only binding expired can be offered again. The list
+	// can be empty when the handler searches an external catalog.
+	Candidates []ToolSearchEntry
 }
 
-// ToolSearchCandidate describes one deferred tool that a client-executed tool
-// search can load.
-type ToolSearchCandidate struct {
-	// ID selects this candidate in ToolSearchResult.ToolIDs. It is the tool's
-	// key in the current request's registry. Return it unchanged rather than
-	// constructing or parsing it from Namespace and Name.
-	ID string
-	// Namespace is the name of the ToolSet that provides the tool, or empty
-	// for a standalone tool.
+// ToolSearchEntry describes a candidate or a tool returned by a client search.
+type ToolSearchEntry struct {
+	// Namespace groups the tool in the model's catalog. Empty means top-level.
 	Namespace string
-	// NamespaceDescription describes the namespace, or is empty for a
-	// standalone tool.
+	// NamespaceDescription describes the group to the model.
 	NamespaceDescription string
-	// Name is the tool name sent to the model: the original member name for a
-	// namespace tool, or the declared function name for a standalone tool.
+	// Name is the function name the model sees inside Namespace. Registered
+	// candidates carry their original member name: a ToolSet may prefix the
+	// registered Tool's name, and replacing Tool should preserve the name
+	// offered to the model. An empty Name uses Tool.Declaration().Name.
 	Name string
-	// Declaration is the declaration loaded for the tool, with Name set to
-	// the Name field. Its schema values are shared with the tool and must not
-	// be modified.
-	Declaration tool.Declaration
-}
-
-// ToolSearchResult lists the tools loaded by one client-executed tool search.
-type ToolSearchResult struct {
-	// ToolIDs selects candidates by ToolSearchCandidate.ID from the current
-	// request. Unknown or duplicate IDs are errors. Loaded tools are grouped
-	// by namespace in the order of their first selection.
-	ToolIDs []string
+	// Tool provides the declaration and execution binding. The agent borrows
+	// a returned tool for this run. Its owner manages any connections.
+	Tool tool.Tool
 }
 
 type toolSearchMode int
@@ -111,12 +96,6 @@ type wireFunction struct {
 	name      string
 }
 
-// deferredTool is a request tool that a client tool search can load.
-type deferredTool struct {
-	candidate ToolSearchCandidate
-	function  wireFunction
-}
-
 // toolPlan is the exposure of one request's tools.
 type toolPlan struct {
 	params []responses.ToolUnionParam
@@ -125,10 +104,11 @@ type toolPlan struct {
 	// flat maps the wire names of functions outside namespaces to request
 	// tool keys.
 	flat map[string]string
-	// keys holds every request tool key.
-	keys map[string]struct{}
+	// keyFromSearch reserves each execution key. Registered keys have value
+	// false. Keys first introduced by a client search have value true.
+	keyFromSearch map[string]bool
 	// deferred lists client tool search candidates in request key order.
-	deferred []deferredTool
+	deferred []ToolSearchEntry
 }
 
 // projectionToolPlan resolves stable tool identities without re-evaluating
@@ -138,29 +118,55 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 		return nil
 	}
 	plan := &toolPlan{
-		functions: make(map[wireFunction]string),
-		flat:      make(map[string]string),
-		keys:      make(map[string]struct{}),
+		functions:     make(map[wireFunction]string),
+		flat:          make(map[string]string),
+		keyFromSearch: make(map[string]bool),
 	}
 	for key, tl := range request.Tools {
 		if tl == nil || tl.Declaration() == nil {
 			continue
 		}
-		plan.keys[key] = struct{}{}
+		plan.keyFromSearch[key] = false
 		plan.flat[tl.Declaration().Name] = key
 		if namespace, name, _, ok := itool.ToolSetMember(tl); ok {
 			plan.functions[wireFunction{namespace: namespace, name: name}] = key
 		}
 	}
+	plan.addLoadedFunctions(scanToolSearchHistory(request.Messages).loaded)
 	return plan
 }
 
-// functionName maps a function call to its request tool key. A call outside
-// any namespace keeps its name. A namespaced call that matches no request tool
-// gets a name no request tool has, so the agent reports a missing tool instead
-// of running a tool with the same bare name.
+func (p *toolPlan) addLoadedFunctions(loaded map[wireFunction]bool) {
+	for fn := range loaded {
+		if key, err := p.searchExecutionKey(fn); err == nil {
+			p.rememberSearchTool(fn, key)
+		}
+	}
+}
+
+func (p *toolPlan) rememberSearchTool(fn wireFunction, key string) {
+	if _, known := p.keyFromSearch[key]; !known {
+		p.keyFromSearch[key] = true
+	}
+	if fn.namespace == "" {
+		p.flat[fn.name] = key
+	} else {
+		p.functions[fn] = key
+	}
+}
+
+// functionName maps the model's function identity to the execution key. An
+// unknown identity must not dispatch to a tool registered under another one.
 func (p *toolPlan) functionName(namespace, name string) (string, error) {
 	if namespace == "" {
+		if p != nil {
+			if key, ok := p.flat[name]; ok {
+				return key, nil
+			}
+			if p.keyFromSearch[name] {
+				return "", fmt.Errorf("function call %q does not name a top-level tool", name)
+			}
+		}
 		return name, nil
 	}
 	if p == nil {
@@ -176,18 +182,38 @@ func (p *toolPlan) functionName(namespace, name string) (string, error) {
 		}
 	}
 	unresolved := namespace + "." + name
-	if _, ok := p.keys[unresolved]; ok {
+	if _, ok := p.keyFromSearch[unresolved]; ok {
 		return "", fmt.Errorf("function call %q in namespace %q is ambiguous", name, namespace)
 	}
 	return unresolved, nil
+}
+
+// searchExecutionKey keeps the registered key for an existing function. New
+// namespace members use their qualified wire identity for local dispatch.
+func (p *toolPlan) searchExecutionKey(fn wireFunction) (string, error) {
+	if fn.namespace == "" {
+		if key, ok := p.flat[fn.name]; ok {
+			return key, nil
+		}
+	} else if key, ok := p.functions[fn]; ok {
+		return key, nil
+	}
+	key := fn.name
+	if fn.namespace != "" {
+		key = fn.namespace + "." + fn.name
+	}
+	if _, exists := p.keyFromSearch[key]; exists {
+		return "", fmt.Errorf("tool %q in namespace %q conflicts with execution key %q", fn.name, fn.namespace, key)
+	}
+	return key, nil
 }
 
 // planTools exposes request tools. Without tool search, every tool is a
 // top-level function exactly as before. With tool search, deferred tools are
 // declared with defer_loading (hosted) or offered to the client handler
 // (client), members of a ToolSet with deferred members share one namespace,
-// and the tool_search tool is added when anything is deferred or history
-// already contains tool search items.
+// and client search is available even when its catalog is entirely external.
+// Hosted search is declared when anything is deferred or history contains it.
 func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPlan, error) {
 	if m.toolSearch.mode == toolSearchDisabled {
 		return plainToolPlan(request.Tools)
@@ -195,13 +221,19 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 	if m.toolSearch.mode == toolSearchClient && m.toolSearch.handler == nil {
 		return nil, errors.New("openai/responses: client tool search requires a handler")
 	}
+	if imodelrequest.ToolsDisabled(ctx) {
+		return &toolPlan{}, nil
+	}
 	history := scanToolSearchHistory(request.Messages)
 	entries, namespaced := toolEntries(ctx, request.Tools)
 	p := newToolPlanner(m.toolSearch.mode == toolSearchClient, history.loaded, len(entries))
+	if actions := providerdata.ActionToolsFromContext(ctx); actions != nil {
+		p.unavailable = actions.Unavailable
+	}
 	anyDeferred := false
 	for _, e := range entries {
 		anyDeferred = anyDeferred || e.deferred
-		p.plan.keys[e.key] = struct{}{}
+		p.plan.keyFromSearch[e.key] = false
 		var err error
 		if e.member && namespaced[e.namespace] {
 			err = p.addNamespaced(e)
@@ -212,10 +244,11 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 			return nil, err
 		}
 	}
+	p.plan.addLoadedFunctions(history.loaded)
 	if err := p.finishNamespaces(); err != nil {
 		return nil, err
 	}
-	if anyDeferred || history.seen {
+	if p.client || anyDeferred || history.seen {
 		p.plan.params = append(p.plan.params, m.toolSearchParam())
 	}
 	return p.plan, nil
@@ -237,6 +270,7 @@ func plainToolPlan(tools map[string]tool.Tool) (*toolPlan, error) {
 // toolEntry is a request tool with the identity that tool search exposes.
 type toolEntry struct {
 	key         string
+	tool        tool.Tool
 	decl        *tool.Declaration
 	deferred    bool
 	member      bool
@@ -260,7 +294,7 @@ func toolEntries(ctx context.Context, tools map[string]tool.Tool) ([]toolEntry, 
 	namespaced := make(map[string]bool)
 	for _, key := range keys {
 		t := tools[key]
-		e := toolEntry{key: key, decl: t.Declaration(), deferred: tool.ShouldDefer(ctx, t)}
+		e := toolEntry{key: key, tool: t, decl: t.Declaration(), deferred: tool.ShouldDefer(ctx, t)}
 		e.namespace, e.name, e.description, e.member = itool.ToolSetMember(t)
 		if e.member && e.deferred {
 			namespaced[e.namespace] = true
@@ -279,10 +313,11 @@ type namespaceGroup struct {
 type toolPlanner struct {
 	client bool
 	// loaded holds the functions that history already loaded.
-	loaded   map[wireFunction]bool
-	plan     *toolPlan
-	groups   map[string]*namespaceGroup
-	topLevel map[string]struct{}
+	loaded      map[wireFunction]bool
+	unavailable map[string]bool
+	plan        *toolPlan
+	groups      map[string]*namespaceGroup
+	topLevel    map[string]struct{}
 }
 
 func newToolPlanner(client bool, loaded map[wireFunction]bool, size int) *toolPlanner {
@@ -290,9 +325,9 @@ func newToolPlanner(client bool, loaded map[wireFunction]bool, size int) *toolPl
 		client: client,
 		loaded: loaded,
 		plan: &toolPlan{
-			functions: make(map[wireFunction]string),
-			flat:      make(map[string]string),
-			keys:      make(map[string]struct{}, size),
+			functions:     make(map[wireFunction]string),
+			flat:          make(map[string]string),
+			keyFromSearch: make(map[string]bool, size),
 		},
 		groups:   make(map[string]*namespaceGroup),
 		topLevel: make(map[string]struct{}),
@@ -306,7 +341,7 @@ func (p *toolPlanner) addTopLevel(e toolEntry) error {
 	}
 	p.plan.flat[fn.Name] = e.key
 	if e.deferred && p.client {
-		p.offer(searchCandidate(e.key, fn.Name, "", "", e.decl), wireFunction{name: fn.Name})
+		p.offer(e.key, ToolSearchEntry{Name: fn.Name, Tool: e.tool})
 		return nil
 	}
 	if e.deferred {
@@ -328,7 +363,9 @@ func (p *toolPlanner) addNamespaced(e toolEntry) error {
 		description = fmt.Sprintf(toolSetNamespaceDescription, e.namespace)
 	}
 	if e.deferred && p.client {
-		p.offer(searchCandidate(e.key, e.name, e.namespace, description, e.decl), function)
+		p.offer(e.key, ToolSearchEntry{
+			Namespace: e.namespace, NamespaceDescription: description, Name: e.name, Tool: e.tool,
+		})
 		return nil
 	}
 	member, err := namespaceFunctionParam(e.name, e.decl, e.deferred)
@@ -349,9 +386,9 @@ func (p *toolPlanner) addNamespaced(e toolEntry) error {
 
 // offer makes a deferred tool a client search candidate unless history
 // already loaded it.
-func (p *toolPlanner) offer(candidate ToolSearchCandidate, function wireFunction) {
-	if !p.loaded[function] {
-		p.plan.deferred = append(p.plan.deferred, deferredTool{candidate: candidate, function: function})
+func (p *toolPlanner) offer(key string, entry ToolSearchEntry) {
+	if p.unavailable[key] || !p.loaded[wireFunction{namespace: entry.Namespace, name: entry.Name}] {
+		p.plan.deferred = append(p.plan.deferred, entry)
 	}
 }
 
@@ -411,20 +448,6 @@ func namespaceFunctionParam(name string, decl *tool.Declaration, deferred bool) 
 		fn.DeferLoading = openai.Bool(true)
 	}
 	return fn, nil
-}
-
-func searchCandidate(key, name, namespace, namespaceDescription string, decl *tool.Declaration) ToolSearchCandidate {
-	candidate := ToolSearchCandidate{
-		ID:          key,
-		Namespace:   namespace,
-		Name:        name,
-		Declaration: *decl,
-	}
-	if namespace != "" {
-		candidate.NamespaceDescription = namespaceDescription
-	}
-	candidate.Declaration.Name = name
-	return candidate
 }
 
 // toolSearchHistory summarizes the tool search items in request history.
@@ -516,6 +539,9 @@ func (m *Model) CompleteProviderActions(
 	if m.toolSearch.mode != toolSearchClient || m.toolSearch.handler == nil {
 		return nil, errors.New("openai/responses: the response requests a client tool search, but client tool search is not configured")
 	}
+	if imodelrequest.ToolsDisabled(ctx) {
+		return nil, errors.New("openai/responses: the response requests a client tool search while tools are disabled")
+	}
 	if request == nil {
 		return nil, errors.New("openai/responses: client tool search requires the model request")
 	}
@@ -528,7 +554,7 @@ func (m *Model) CompleteProviderActions(
 		return nil, err
 	}
 	messages := make([]model.Message, 0, len(calls))
-	loaded := make(map[string]struct{})
+	loaded := make(map[wireFunction]bool)
 	for _, call := range calls {
 		if answered[call.CallID] {
 			continue
@@ -536,19 +562,14 @@ func (m *Model) CompleteProviderActions(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		available := make([]deferredTool, 0, len(plan.deferred))
-		for _, candidate := range plan.deferred {
-			if _, ok := loaded[candidate.candidate.ID]; !ok {
-				available = append(available, candidate)
-			}
-		}
 		searchReq := &ToolSearchRequest{
-			CallID:     call.CallID,
-			Arguments:  append(json.RawMessage(nil), clientSearchArguments(call.Arguments)...),
-			Candidates: make([]ToolSearchCandidate, len(available)),
+			CallID:    call.CallID,
+			Arguments: append(json.RawMessage(nil), clientSearchArguments(call.Arguments)...),
 		}
-		for i, candidate := range available {
-			searchReq.Candidates[i] = candidate.candidate
+		for _, entry := range plan.deferred {
+			if !loaded[wireFunction{namespace: entry.Namespace, name: entry.Name}] {
+				searchReq.Candidates = append(searchReq.Candidates, entry)
+			}
 		}
 		var arguments struct {
 			Query string `json:"query"`
@@ -563,14 +584,9 @@ func (m *Model) CompleteProviderActions(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		message, err := m.toolSearchOutputMessage(call.CallID, available, result)
+		message, err := m.toolSearchOutputMessage(ctx, call.CallID, result, plan, loaded)
 		if err != nil {
 			return nil, fmt.Errorf("openai/responses: client tool search %q: %w", call.CallID, err)
-		}
-		if result != nil {
-			for _, id := range result.ToolIDs {
-				loaded[id] = struct{}{}
-			}
 		}
 		messages = append(messages, message)
 	}
@@ -654,14 +670,9 @@ type toolSearchOutputItem struct {
 }
 
 func (m *Model) toolSearchOutputMessage(
-	callID string,
-	available []deferredTool,
-	result *ToolSearchResult,
+	ctx context.Context, callID string, entries []ToolSearchEntry,
+	plan *toolPlan, loaded map[wireFunction]bool,
 ) (model.Message, error) {
-	byID := make(map[string]deferredTool, len(available))
-	for _, candidate := range available {
-		byID[candidate.candidate.ID] = candidate
-	}
 	output := toolSearchOutputItem{
 		Type:      outputTypeToolSearchOutput,
 		Execution: executionClient,
@@ -669,42 +680,59 @@ func (m *Model) toolSearchOutputMessage(
 		Status:    "completed",
 		Tools:     []any{},
 	}
-	var ids []string
-	if result != nil {
-		ids = result.ToolIDs
-	}
+	ids := make([]string, 0, len(entries))
 	namespaces := make(map[string]*loadedNamespace)
-	selected := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		candidate, ok := byID[id]
-		if !ok {
-			return model.Message{}, fmt.Errorf("tool %q is not a search candidate", id)
+	actions := providerdata.ActionToolsFromContext(ctx)
+	for _, entry := range entries {
+		value := reflect.ValueOf(entry.Tool)
+		if !value.IsValid() || (value.Kind() == reflect.Pointer && value.IsNil()) {
+			return model.Message{}, errors.New("search returned a nil tool")
 		}
-		if _, ok := selected[id]; ok {
-			return model.Message{}, fmt.Errorf("tool %q is selected more than once", id)
+		decl := entry.Tool.Declaration()
+		if decl == nil {
+			return model.Message{}, errors.New("search returned a tool without a declaration")
 		}
-		selected[id] = struct{}{}
-		parameters, err := functionParameters(&candidate.candidate.Declaration)
+		fn := wireFunction{namespace: entry.Namespace, name: entry.Name}
+		if fn.name == "" {
+			fn.name = decl.Name
+		}
+		if fn.name == "" {
+			return model.Message{}, errors.New("search returned a tool without a name")
+		}
+		if loaded[fn] {
+			return model.Message{}, fmt.Errorf("tool %q in namespace %q is selected more than once", fn.name, fn.namespace)
+		}
+		key, err := plan.searchExecutionKey(fn)
+		if err != nil {
+			return model.Message{}, err
+		}
+		if actions != nil && !actions.Bind(callID, key, entry.Tool) {
+			continue
+		}
+		plan.rememberSearchTool(fn, key)
+		loaded[fn] = true
+		ids = append(ids, key)
+		parameters, err := functionParameters(decl)
 		if err != nil {
 			return model.Message{}, err
 		}
 		function := loadedFunction{
 			Type:         functionToolType,
-			Name:         candidate.function.name,
-			Description:  candidate.candidate.Declaration.Description,
+			Name:         fn.name,
+			Description:  decl.Description,
 			DeferLoading: true,
 			Parameters:   parameters,
 		}
-		if candidate.function.namespace == "" {
+		if fn.namespace == "" {
 			output.Tools = append(output.Tools, function)
 			continue
 		}
-		namespace, ok := namespaces[candidate.function.namespace]
+		namespace, ok := namespaces[fn.namespace]
 		if !ok {
 			namespace = &loadedNamespace{
 				Type:        "namespace",
-				Name:        candidate.function.namespace,
-				Description: candidate.candidate.NamespaceDescription,
+				Name:        fn.namespace,
+				Description: entry.NamespaceDescription,
 			}
 			namespaces[namespace.Name] = namespace
 			output.Tools = append(output.Tools, namespace)
@@ -715,10 +743,9 @@ func (m *Model) toolSearchOutputMessage(
 	if err != nil {
 		return model.Message{}, fmt.Errorf("marshal tool_search_output: %w", err)
 	}
-	loadedIDs := append([]string{}, ids...)
 	content, err := json.Marshal(struct {
 		LoadedTools []string `json:"loaded_tools"`
-	}{LoadedTools: loadedIDs})
+	}{LoadedTools: ids})
 	if err != nil {
 		return model.Message{}, fmt.Errorf("marshal tool search summary: %w", err)
 	}

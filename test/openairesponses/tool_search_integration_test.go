@@ -132,6 +132,17 @@ func (e *searchExecutions) executed() []string {
 	return append([]string(nil), e.calls...)
 }
 
+func (e *searchExecutions) sandboxTool(name, executor string) tool.Tool {
+	return function.NewFunctionTool(func(_ context.Context, in struct {
+		SandboxID string `json:"sandbox_id"`
+	}) (string, error) {
+		e.mu.Lock()
+		e.calls = append(e.calls, executor)
+		e.mu.Unlock()
+		return executor + ":" + in.SandboxID, nil
+	}, function.WithName(name), function.WithDescription("Look up an invoice in the sandbox."))
+}
+
 // newSearchAgent registers an eager tool, a deferred standalone tool, a
 // partly deferred ToolSet, and a fully deferred ToolSet whose member has the
 // same name as a member of the first ToolSet.
@@ -166,9 +177,14 @@ func newSearchModel(srv *httptest.Server, opts ...responses.Option) *responses.M
 
 func runSearch(t *testing.T, r runner.Runner, message model.Message, opts ...agent.RunOption) ([]*event.Event, []string) {
 	t.Helper()
+	return runSearchSession(t, r, "session", message, opts...)
+}
+
+func runSearchSession(t *testing.T, r runner.Runner, sessionID string, message model.Message, opts ...agent.RunOption) ([]*event.Event, []string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ch, err := r.Run(ctx, "user", "session", message, opts...)
+	ch, err := r.Run(ctx, "user", sessionID, message, opts...)
 	require.NoError(t, err)
 	var events []*event.Event
 	var failures []string
@@ -400,12 +416,12 @@ func TestRunnerClientToolSearch(t *testing.T) {
 			server, srv := newSearchServer(t, clientSearchRound, loadedBillingCall, messageOutput("msg_1", "invoice paid"))
 			executions := &searchExecutions{}
 			var searches []*responses.ToolSearchRequest
-			handler := func(_ context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 				searches = append(searches, req)
 				if len(searches) == 1 {
-					return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
+					return selectSearchCandidates(req, "billing_lookup"), nil
 				}
-				return &responses.ToolSearchResult{}, nil
+				return nil, nil
 			}
 			var pendingSearches int
 			modelCallbacks := model.NewCallbacks().RegisterAfterModel(
@@ -429,10 +445,10 @@ func TestRunnerClientToolSearch(t *testing.T) {
 			require.Len(t, searches, 1)
 			require.Equal(t, "search_1", searches[0].CallID)
 			require.Equal(t, "invoice status", searches[0].Query)
-			require.Equal(t, []string{"billing_lookup", "crm_orders", "eta"}, candidateIDs(searches[0]))
+			require.Equal(t, []string{"billing_lookup", "crm_orders", "eta"}, candidateNames(searches[0]))
 			require.Equal(t, "billing", searches[0].Candidates[0].Namespace)
 			require.Equal(t, "lookup", searches[0].Candidates[0].Name)
-			require.Equal(t, "Look up an invoice.", searches[0].Candidates[0].Declaration.Description)
+			require.Equal(t, "Look up an invoice.", searches[0].Candidates[0].Tool.Declaration().Description)
 
 			var searchResults int
 			for _, evt := range events {
@@ -475,7 +491,7 @@ func TestRunnerClientToolSearch(t *testing.T) {
 			require.Empty(t, failures)
 			require.Equal(t, "nothing else", finalText(events))
 			require.Len(t, searches, 2)
-			require.Equal(t, []string{"crm_orders", "eta"}, candidateIDs(searches[1]))
+			require.Equal(t, []string{"crm_orders", "eta"}, candidateNames(searches[1]))
 			fifth := conversationItems(t, server.requests()[4]["input"])
 			require.Equal(t, []string{
 				"message:user", "reasoning", "tool_search_call", "tool_search_output", "function_call", "function_call_output",
@@ -486,21 +502,293 @@ func TestRunnerClientToolSearch(t *testing.T) {
 	}
 }
 
-func candidateIDs(req *responses.ToolSearchRequest) []string {
+func candidateNames(req *responses.ToolSearchRequest) []string {
 	out := make([]string, len(req.Candidates))
 	for i, candidate := range req.Candidates {
-		out[i] = candidate.ID
+		out[i] = candidate.Name
+		if out[i] == "" {
+			out[i] = candidate.Tool.Declaration().Name
+		}
+		if candidate.Namespace != "" {
+			out[i] = candidate.Namespace + "_" + out[i]
+		}
 	}
 	return out
+}
+
+func selectSearchCandidates(req *responses.ToolSearchRequest, names ...string) []responses.ToolSearchEntry {
+	var selected []responses.ToolSearchEntry
+	for i, name := range candidateNames(req) {
+		for _, want := range names {
+			if name == want {
+				selected = append(selected, req.Candidates[i])
+				break
+			}
+		}
+	}
+	return selected
+}
+
+func TestRunnerClientToolSearchUsesReturnedTool(t *testing.T) {
+	const sandboxCall = `[{"type":"function_call","id":"fc_sandbox","status":"completed","call_id":"sandbox_1","namespace":"billing","name":"lookup","arguments":"{\"sandbox_id\":\"inv-7\"}"}]`
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			server, srv := newSearchServer(t, clientSearchRound, sandboxCall, messageOutput("msg_sandbox", "sandbox paid"))
+			executions := &searchExecutions{}
+			var candidates []responses.ToolSearchEntry
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+				candidates = append([]responses.ToolSearchEntry(nil), req.Candidates...)
+				selected := selectSearchCandidates(req, "billing_lookup")
+				if len(selected) != 1 {
+					return nil, fmt.Errorf("expected one billing candidate, got %d", len(selected))
+				}
+				selected[0].Tool = executions.sandboxTool("sandbox_lookup", "sandbox")
+				return selected, nil
+			}
+			var toolNames []string
+			callbacks := tool.NewCallbacks().RegisterBeforeTool(func(_ context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				toolNames = append(toolNames, args.ToolName)
+				return nil, nil
+			})
+			r := runner.NewRunner("search", newSearchAgent(newSearchModel(srv, responses.WithClientToolSearch(handler)), executions, stream,
+				llmagent.WithToolCallbacks(callbacks)))
+			t.Cleanup(func() { _ = r.Close() })
+			events, failures := runSearch(t, r, model.NewUserMessage("check the sandbox invoice"))
+			require.Empty(t, failures)
+			require.Equal(t, "sandbox paid", finalText(events))
+			require.Equal(t, []string{"sandbox"}, executions.executed(), "the handler's returned object executes instead of the registered candidate")
+			require.Equal(t, []string{"billing_lookup"}, toolNames, "the replacement follows ordinary tool callbacks")
+			require.Equal(t, "lookup", candidates[0].Name)
+			require.Equal(t, "Look up an invoice.", candidates[0].Tool.Declaration().Description,
+				"replacing a copied entry does not modify the original candidate")
+
+			requests := server.requests()
+			require.Len(t, requests, 3)
+			second := conversationItems(t, requests[1]["input"])
+			require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output"}, inputTypes(second))
+			require.Equal(t, []string{"namespace:billing[lookup+defer]"}, toolSummary(t, second[3].Tools))
+			require.Contains(t, string(second[3].Tools), "Look up an invoice in the sandbox.")
+			require.Contains(t, string(second[3].Tools), `"sandbox_id"`, "the replacement schema reaches the model")
+			require.NotContains(t, string(second[3].Tools), "sandbox_lookup", "the declaration name does not replace the protocol identity")
+			require.NotContains(t, string(second[3].Tools), `"id"`, "the candidate's original argument schema is replaced")
+			third := conversationItems(t, requests[2]["input"])
+			require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output", "function_call", "function_call_output"}, inputTypes(third))
+			require.Equal(t, "billing", third[4].Namespace)
+			require.Equal(t, "lookup", third[4].Name)
+			require.Equal(t, "sandbox_1", third[5].CallID)
+			require.Contains(t, string(requests[2]["input"]), "sandbox:inv-7", "the returned object's execution result reaches Responses")
+		})
+	}
+}
+
+func TestRunnerClientToolSearchDiscoversExternalToolWithoutCandidates(t *testing.T) {
+	const externalCall = `[{"type":"function_call","id":"fc_external","status":"completed","call_id":"external_1","namespace":"external","name":"lookup","arguments":"{\"sandbox_id\":\"inv-7\"}"}]`
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			server, srv := newSearchServer(t, clientSearchRound, externalCall, messageOutput("msg_external", "external paid"),
+				externalCall, messageOutput("msg_isolated", "second run done"))
+			executions := &searchExecutions{}
+			var candidates []int
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+				candidates = append(candidates, len(req.Candidates))
+				return []responses.ToolSearchEntry{{
+					Namespace:            "external",
+					NamespaceDescription: "Externally discovered invoice tools.",
+					Name:                 "lookup",
+					Tool:                 executions.sandboxTool("sandbox_lookup", "external"),
+				}}, nil
+			}
+			var callbacks int
+			toolCallbacks := tool.NewCallbacks().RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				callbacks++
+				return nil, nil
+			})
+			shared := llmagent.New("external",
+				llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(handler))),
+				llmagent.WithGenerationConfig(model.GenerationConfig{Stream: stream}),
+				llmagent.WithToolCallbacks(toolCallbacks))
+			r := runner.NewRunner("search", shared)
+			t.Cleanup(func() { _ = r.Close() })
+			events, failures := runSearchSession(t, r, "discovery", model.NewUserMessage("find external invoice tools"))
+			require.Empty(t, failures)
+			require.Equal(t, "external paid", finalText(events))
+			require.Equal(t, []int{0}, candidates, "client discovery starts without local deferred candidates")
+			require.Equal(t, []string{"external"}, executions.executed())
+			require.Equal(t, 1, callbacks, "external tools use the ordinary tool callback path")
+
+			requests := server.requests()
+			require.Len(t, requests, 3)
+			for _, request := range requests {
+				require.Equal(t, []string{"tool_search:client"}, toolSummary(t, request["tools"]))
+			}
+			second := conversationItems(t, requests[1]["input"])
+			require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output"}, inputTypes(second))
+			require.Equal(t, []string{"namespace:external[lookup+defer]"}, toolSummary(t, second[3].Tools))
+			require.Contains(t, string(second[3].Tools), "Externally discovered invoice tools.")
+			require.Contains(t, string(second[3].Tools), `"sandbox_id"`)
+			require.NotContains(t, string(second[3].Tools), "sandbox_lookup")
+			require.Contains(t, string(requests[2]["input"]), "external:inv-7")
+
+			// Reusing the Agent for another session must not register the prior
+			// Run's discovered executable on the shared Agent.
+			events, failures = runSearchSession(t, r, "independent", model.NewUserMessage("call an undiscovered external tool"))
+			require.Empty(t, failures)
+			require.Equal(t, "second run done", finalText(events))
+			require.Equal(t, []string{"external"}, executions.executed(), "another Run cannot execute a prior Run's discovered object")
+			require.Equal(t, []int{0}, candidates, "the second Run did not perform its own discovery")
+			requests = server.requests()
+			require.Len(t, requests, 5)
+			require.Equal(t, []string{"message:user"}, inputTypes(conversationItems(t, requests[3]["input"])))
+			require.Equal(t, []string{"tool_search:client"}, toolSummary(t, requests[3]["tools"]))
+			require.Equal(t, []string{"message:user", "function_call", "function_call_output"}, inputTypes(conversationItems(t, requests[4]["input"])))
+			require.NotContains(t, string(requests[4]["input"]), "external:inv-7")
+		})
+	}
+}
+
+func TestRunnerClientToolSearchExternalToolHonorsCallbacks(t *testing.T) {
+	const externalCall = `[{"type":"function_call","id":"fc_external","status":"completed","call_id":"external_1","name":"sandbox_lookup","arguments":"{\"sandbox_id\":\"inv-7\"}"}]`
+	server, srv := newSearchServer(t, clientSearchRound, externalCall, messageOutput("msg_denied", "tool denied"))
+	var candidates int
+	executions := &searchExecutions{}
+	handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+		candidates = len(req.Candidates)
+		return []responses.ToolSearchEntry{{Tool: executions.sandboxTool("sandbox_lookup", "external")}}, nil
+	}
+	var callbacks int
+	toolCallbacks := tool.NewCallbacks().RegisterBeforeTool(func(_ context.Context, _ *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		callbacks++
+		return nil, errors.New("sandbox execution denied")
+	})
+	r := runner.NewRunner("search", llmagent.New("external",
+		llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(handler))),
+		llmagent.WithToolCallbacks(toolCallbacks)))
+	t.Cleanup(func() { _ = r.Close() })
+	events, failures := runSearch(t, r, model.NewUserMessage("find external invoice tools"))
+	require.Empty(t, failures)
+	require.Equal(t, "tool denied", finalText(events))
+	require.Zero(t, candidates)
+	require.Equal(t, 1, callbacks)
+	require.Empty(t, executions.executed(), "a discovered object cannot bypass a rejecting BeforeTool callback")
+	requests := server.requests()
+	require.Len(t, requests, 3)
+	second := conversationItems(t, requests[1]["input"])
+	require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output"}, inputTypes(second))
+	require.Equal(t, []string{"function:sandbox_lookup+defer"}, toolSummary(t, second[3].Tools),
+		"an entry with no explicit Name uses its declaration's name")
+	require.Contains(t, string(requests[2]["input"]), "sandbox execution denied", "the ordinary tool error reaches Responses")
+}
+
+func TestRunnerClientToolSearchReopenDoesNotReplaceSandboxWithRegisteredTool(t *testing.T) {
+	const sandboxCall = `[{"type":"function_call","id":"fc_sandbox","status":"completed","call_id":"sandbox_1","namespace":"billing","name":"lookup","arguments":"{\"sandbox_id\":\"inv-7\"}"}]`
+	const retrySearch = `[{"type":"tool_search_call","id":"ts_2","execution":"client","call_id":"search_2","status":"completed","arguments":{"query":"find the sandbox invoice tool again"}}]`
+	const recoveredCall = `[{"type":"function_call","id":"fc_recovered","status":"completed","call_id":"sandbox_2","namespace":"billing","name":"lookup","arguments":"{\"sandbox_id\":\"inv-8\"}"}]`
+	server, srv := newSearchServer(t, clientSearchRound, sandboxCall, retrySearch, recoveredCall, messageOutput("msg_recovered", "sandbox recovered"))
+	executions := &searchExecutions{}
+	var handlerCalls int
+	var searchCallIDs, reSearchCandidates, executionsAtReSearch []string
+	var reSearchDescription string
+	handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+		handlerCalls++
+		searchCallIDs = append(searchCallIDs, req.CallID)
+		if req.CallID == "search_2" {
+			reSearchCandidates = candidateNames(req)
+			executionsAtReSearch = executions.executed()
+		}
+		selected := selectSearchCandidates(req, "billing_lookup")
+		if len(selected) != 1 {
+			return nil, fmt.Errorf("expected one billing candidate, got %d", len(selected))
+		}
+		if req.CallID == "search_2" {
+			reSearchDescription = selected[0].Tool.Declaration().Description
+		}
+		selected[0].Tool = executions.sandboxTool(fmt.Sprintf("sandbox_lookup_%d", handlerCalls), fmt.Sprintf("sandbox-%d", handlerCalls))
+		return selected, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "sandbox-search.db")
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	svc, err := sqlite.NewService(db, sqlite.WithEnableAsyncPersist(false),
+		sqlite.WithAppendEventHook(func(c *session.AppendEventContext, next func() error) error {
+			err := next()
+			if err == nil && c.Event.Response != nil && len(c.Event.Choices) > 0 {
+				msg := c.Event.Choices[0].Message
+				if msg.Role == model.RoleTool && msg.ToolID == "search_1" {
+					cancel()
+				}
+			}
+			return err
+		}))
+	require.NoError(t, err)
+	m := newSearchModel(srv, responses.WithClientToolSearch(handler))
+	r := runner.NewRunner("search", newSearchAgent(m, executions, false), runner.WithSessionService(svc))
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("use the sandbox invoice tool"))
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.NoError(t, r.Close())
+	require.NoError(t, svc.Close())
+	require.Len(t, server.requests(), 1, "the selected sandbox definition is persisted before another model call")
+	require.Equal(t, 1, handlerCalls)
+	require.Empty(t, executions.executed())
+
+	svc = openNativeRoutingSQLite(t, path)
+	defer svc.Close()
+	sess, err := svc.GetSession(context.Background(), session.Key{AppName: "search", UserID: "user", SessionID: "session"})
+	require.NoError(t, err)
+	var savedSearchOutputs int
+	for _, evt := range sess.Events {
+		if evt.Response != nil && len(evt.Choices) > 0 {
+			msg := evt.Choices[0].Message
+			if msg.Role == model.RoleTool && msg.ToolID == "search_1" {
+				savedSearchOutputs++
+			}
+		}
+	}
+	require.Equal(t, 1, savedSearchOutputs, "recovery starts from an answered search")
+
+	// Recreate the Agent and its local production tools. The sandbox object
+	// belonged to the prior Run and cannot be reconstructed from its schema.
+	r = runner.NewRunner("search", newSearchAgent(m, executions, false), runner.WithSessionService(svc))
+	defer r.Close()
+	events, failures := runSearch(t, r, model.Message{}, agent.WithResume(true))
+	require.Empty(t, failures)
+	require.Equal(t, "sandbox recovered", finalText(events))
+	require.Equal(t, 2, handlerCalls)
+	require.Equal(t, []string{"search_1", "search_2"}, searchCallIDs, "the model explicitly searches again after the availability error")
+	require.Contains(t, reSearchCandidates, "billing_lookup", "an expired loaded identity becomes a candidate for a fresh search")
+	require.Equal(t, "Look up an invoice.", reSearchDescription, "the handler can replace the existing candidate again")
+	require.Empty(t, executionsAtReSearch, "the stale call cannot execute the production tool or the prior sandbox")
+	require.Equal(t, []string{"sandbox-2"}, executions.executed(), "only the newly returned sandbox object executes")
+	requests := server.requests()
+	require.Len(t, requests, 5)
+	second := conversationItems(t, requests[1]["input"])
+	require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output"}, inputTypes(second))
+	require.Contains(t, string(second[3].Tools), `"sandbox_id"`, "the stored sandbox schema remains in native history")
+	third := conversationItems(t, requests[2]["input"])
+	require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output", "function_call", "function_call_output"}, inputTypes(third))
+	require.Equal(t, "sandbox_1", third[5].CallID)
+	require.Contains(t, string(requests[2]["input"]), "search for it again", "the model receives a recoverable tool availability error")
+	fourth := conversationItems(t, requests[3]["input"])
+	require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output", "function_call", "function_call_output", "tool_search_call", "tool_search_output"}, inputTypes(fourth))
+	require.Equal(t, "search_2", fourth[7].CallID)
+	require.Equal(t, []string{"namespace:billing[lookup+defer]"}, toolSummary(t, fourth[7].Tools))
+	fifth := conversationItems(t, requests[4]["input"])
+	require.Equal(t, []string{"message:user", "reasoning", "tool_search_call", "tool_search_output", "function_call", "function_call_output", "tool_search_call", "tool_search_output", "function_call", "function_call_output"}, inputTypes(fifth))
+	require.Equal(t, "sandbox_2", fifth[9].CallID)
+	require.Contains(t, string(requests[4]["input"]), "sandbox-2:inv-8", "the fresh sandbox result reaches Responses")
 }
 
 func TestRunnerToolSearchHonorsToolFilters(t *testing.T) {
 	t.Run("client candidates", func(t *testing.T) {
 		_, srv := newSearchServer(t, clientSearchRound, messageOutput("msg_1", "done"))
 		var candidates []string
-		handler := func(_ context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
-			candidates = candidateIDs(req)
-			return &responses.ToolSearchResult{}, nil
+		handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+			candidates = candidateNames(req)
+			return nil, nil
 		}
 		r := runner.NewRunner("search", newSearchAgent(newSearchModel(srv, responses.WithClientToolSearch(handler)), &searchExecutions{}, false,
 			llmagent.WithToolFilter(tool.NewExcludeToolNamesFilter("eta"))))
@@ -510,6 +798,26 @@ func TestRunnerToolSearchHonorsToolFilters(t *testing.T) {
 		require.Empty(t, failures)
 		require.Equal(t, []string{"billing_lookup"}, candidates,
 			"agent and run filters remove tools from the search candidates")
+	})
+
+	t.Run("run filter on an external client result", func(t *testing.T) {
+		server, srv := newSearchServer(t, clientSearchRound, messageOutput("msg_done", "done"))
+		executions := &searchExecutions{}
+		handler := func(context.Context, *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+			return []responses.ToolSearchEntry{{Tool: executions.sandboxTool("denied_lookup", "external")}}, nil
+		}
+		r := runner.NewRunner("search", newSearchAgent(newSearchModel(srv, responses.WithClientToolSearch(handler)), executions, false))
+		defer r.Close()
+		_, failures := runSearch(t, r, model.NewUserMessage("lookup"),
+			agent.WithToolFilter(tool.NewExcludeToolNamesFilter("denied_lookup")))
+		require.Empty(t, failures)
+		requests := server.requests()
+		require.Len(t, requests, 2)
+		items := conversationItems(t, requests[1]["input"])
+		result := items[len(items)-1]
+		require.Equal(t, "tool_search_output", result.Type)
+		require.JSONEq(t, `[]`, string(result.Tools))
+		require.Empty(t, executions.executed())
 	})
 
 	t.Run("hosted exposure and execution", func(t *testing.T) {
@@ -537,9 +845,9 @@ func TestRunnerToolSearchIsScopedToTheAgent(t *testing.T) {
 		messageOutput("msg_1", "refund agent done"),
 		messageOutput("msg_2", "plain agent done"))
 	var candidates []string
-	handler := func(_ context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
-		candidates = candidateIDs(req)
-		return &responses.ToolSearchResult{}, nil
+	handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+		candidates = candidateNames(req)
+		return nil, nil
 	}
 	shared := newSearchModel(srv, responses.WithClientToolSearch(handler))
 	executions := &searchExecutions{}
@@ -563,8 +871,8 @@ func TestRunnerToolSearchIsScopedToTheAgent(t *testing.T) {
 	require.Equal(t, "plain agent done", finalText(events))
 	requests := server.requests()
 	require.Len(t, requests, 3)
-	require.Equal(t, []string{"function:weather"}, toolSummary(t, requests[2]["tools"]),
-		"an agent without deferred tools sends an unchanged request")
+	require.Equal(t, []string{"function:weather", "tool_search:client"}, toolSummary(t, requests[2]["tools"]),
+		"client search is available even when this agent has no local candidates")
 }
 
 func TestRunnerClientToolSearchResumeAfterFirstResultPersisted(t *testing.T) {
@@ -574,7 +882,7 @@ func TestRunnerClientToolSearchResumeAfterFirstResultPersisted(t *testing.T) {
 	server, srv := newSearchServer(t, batch, loadedBillingCall, messageOutput("msg_1", "invoice paid"))
 	var mu sync.Mutex
 	handled := map[string]int{}
-	handler := func(_ context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+	handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 		mu.Lock()
 		handled[req.CallID]++
 		mu.Unlock()
@@ -582,7 +890,7 @@ func TestRunnerClientToolSearchResumeAfterFirstResultPersisted(t *testing.T) {
 		if req.CallID == "search_2" {
 			id = "crm_orders"
 		}
-		return &responses.ToolSearchResult{ToolIDs: []string{id}}, nil
+		return selectSearchCandidates(req, id), nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -657,10 +965,10 @@ func TestRunnerClientToolSearchFailureAndResume(t *testing.T) {
 			if failure == "error" {
 				failuresBeforeSuccess = 2
 			}
-			handler := func(handlerCtx context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+			handler := func(handlerCtx context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 				handlerCalls++
 				if handlerCalls > failuresBeforeSuccess {
-					return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
+					return selectSearchCandidates(req, "billing_lookup"), nil
 				}
 				if failure == "cancel" {
 					// Cancel only after the search call is persisted, so the
@@ -769,9 +1077,9 @@ func TestRunnerMixedClientSearchAndFunctionCall(t *testing.T) {
 				server, srv := newSearchServer(t, output, loadedBillingCall, messageOutput("msg_done", "done"))
 				executions := &searchExecutions{}
 				var searches int
-				handler := func(context.Context, *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+				handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 					searches++
-					return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
+					return selectSearchCandidates(req, "billing_lookup"), nil
 				}
 				r := runner.NewRunner("search", newSearchAgent(
 					newSearchModel(srv, responses.WithClientToolSearch(handler)), executions, stream))
@@ -804,12 +1112,12 @@ func TestRunnerMixedClientSearchFailureAndResume(t *testing.T) {
 			server, srv := newSearchServer(t, output, messageOutput("msg_done", "done"))
 			executions := &searchExecutions{}
 			var searches int
-			handler := func(context.Context, *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 				searches++
 				if searches == 1 {
 					return nil, errors.New("search index unavailable")
 				}
-				return &responses.ToolSearchResult{ToolIDs: []string{"billing_lookup"}}, nil
+				return selectSearchCandidates(req, "billing_lookup"), nil
 			}
 			m := newSearchModel(srv, responses.WithClientToolSearch(handler))
 			path := filepath.Join(t.TempDir(), "mixed.db")

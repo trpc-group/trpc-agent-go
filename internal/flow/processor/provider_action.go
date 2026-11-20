@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ProviderActionResponseProcessor completes the provider-native actions that a
@@ -48,8 +49,14 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 	}
 	var messages []model.Message
 	var err error
+	var staged map[string]map[string]tool.Tool
+	state := actionToolsForInvocation(invocation)
 	if completer, ok := invocation.Model.(model.ProviderActionCompleter); ok {
-		messages, err = completer.CompleteProviderActions(ctx, req, rsp)
+		var actionCtx context.Context
+		actionCtx, staged, err = state.collect(ctx, invocation, req)
+		if err == nil {
+			messages, err = completer.CompleteProviderActions(actionCtx, req, rsp)
+		}
 	} else {
 		err = fmt.Errorf("model %q does not complete provider actions", invocation.Model.Info().Name)
 	}
@@ -86,6 +93,8 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 			rsp,
 			[]model.Choice{{Index: 0, Message: message}},
 		)
+		bindings := staged[message.ToolID]
+		recordActionToolKeys(resultEvent, bindings)
 		if _, err := emitFunctionResponseEventAndWait(
 			ctx,
 			invocation,
@@ -94,6 +103,16 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 		); err != nil {
 			invocation.EndInvocation = true
 			return
+		}
+		if len(bindings) > 0 {
+			state.live[message.ToolID] = bindings
+			if rsp.IsToolCallResponse() {
+				if state.response != rsp {
+					state.response = rsp
+					state.justCompleted = nil
+				}
+				state.justCompleted = append(state.justCompleted, message.ToolID)
+			}
 		}
 	}
 }

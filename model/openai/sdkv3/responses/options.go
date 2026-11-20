@@ -106,15 +106,12 @@ func WithHostedToolSearch() Option {
 	}
 }
 
-// WithClientToolSearch enables client-executed tool search with handler.
-// Deferred request tools are left out of the request and offered to handler
-// as candidates; the request declares eager tools, namespaces of ToolSets with
-// eager members, and a client tool_search tool whose arguments have a "query"
-// string. When the model searches, the response is not Done and the LLM agent
-// flow calls Model.CompleteProviderActions, which runs handler and records
-// the resulting tool_search_output, with the loaded tool definitions, as a
-// tool message before the next model step. Loaded tools stay loaded while
-// that message remains in history and execute as ordinary tool calls.
+// WithClientToolSearch enables client-executed tool search even when the
+// agent has no deferred tools. The handler can select deferred
+// tools, replace their implementations, or discover tools in its own catalog.
+// LLMAgent records the returned tools' declarations in tool_search_output
+// before the next model step and borrows their execution bindings for this
+// run. After a restart, an expired binding can be searched for again.
 //
 // Client tool search requires a flow that completes provider actions, such as
 // LLMAgent; Graph LLM nodes report an error for a search call. GenerateContent

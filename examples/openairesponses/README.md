@@ -189,7 +189,10 @@ and loads the matching ones inside the same response, so only the loaded
 tool calls are printed. In client mode, the deferred definitions are not sent.
 `keywordSearch` matches whole words in the namespace name, tool name, and
 tool description. It gives tool-name matches extra weight and returns
-the IDs of candidates scoring close to the best match. A request for a
+the entries of candidates scoring close to the best match. The handler has
+signature `func(context.Context, *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error)`.
+It reads descriptions through `entry.Tool.Declaration()` and returns the
+selected entries unchanged. A request for a
 single invoice selects `billing.lookup_invoice`. A request for orders and
 delivery can select both `crm.list_orders` and `shipping_eta`. The example
 prints the selected IDs in the `tool_search` result, then shows each tool call:
@@ -215,8 +218,19 @@ Support boundaries and fallback semantics:
 - Deferral is exposure only. Deferred tools are still registered, filtered,
   and executed by the agent. With Chat Completions or without a tool search
   option, the same agent sends every tool up front.
-- A loaded tool stays loaded for the rest of the in-memory session. Restarting
-  the process starts over.
+- A loaded definition stays loaded while its search output remains in the
+  session history. Returned executable objects are borrowed for the current
+  Run, and the application owns their cleanup. Registered tools in this example
+  remain available for later Runs. A later Run that calls a replacement or
+  external tool receives a tool error asking the model to search again. Its
+  handler can then return a fresh object.
+- Client handlers can copy a candidate and set `entry.Tool = sandboxTool`, or
+  return a new `responses.ToolSearchEntry{Tool: catalogTool}` for an external
+  tool. Candidates' `Name` values are already wire names. A new entry can omit
+  `Name` to use the tool's declaration name. Client search is available even
+  without registered deferred tools.
+  `Run.ToolFilter` also checks returned replacement and external objects, and
+  normal execution permissions and tool callbacks apply.
 - In client mode, a handler error ends the run before ordinary functions in
   the same response execute. Resume the same session with `model.Message{}`
   and `agent.WithResume(true)` before sending another user message. The

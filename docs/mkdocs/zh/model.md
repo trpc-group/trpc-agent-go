@@ -2312,12 +2312,6 @@ import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 // 托管搜索：由 API 在请求中声明的延迟工具里搜索。
 llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
 
-// 客户端搜索：由 handler 从延迟工具中挑选。
-// llm := responses.New("gpt-5.4", responses.WithClientToolSearch(
-//     func(ctx context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
-//         return &responses.ToolSearchResult{ToolIDs: pick(req.Query, req.Candidates)}, nil
-//     }))
-
 agent := llmagent.New(
     "support",
     llmagent.WithModel(llm),
@@ -2327,6 +2321,34 @@ agent := llmagent.New(
         deferred.ToolSet(billing),
     }),
 )
+```
+
+客户端搜索配置的 handler 返回 `[]responses.ToolSearchEntry`。下面的 handler 在发票查询时，
+加载 billing namespace 中的候选：
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+)
+
+search := responses.WithClientToolSearch(
+    func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        var entries []responses.ToolSearchEntry
+        if strings.Contains(strings.ToLower(req.Query), "invoice") {
+            for _, entry := range req.Candidates {
+                if entry.Namespace == "billing" {
+                    entries = append(entries, entry)
+                }
+            }
+        }
+        return entries, nil
+    },
+)
+llm := responses.New("gpt-5.4", search)
+// 按上例通过 llmagent.WithModel 注册 llm。
 ```
 
 - `deferred.Tool` 和 `deferred.ToolSet` 包装工具后，分别通过 `WithTools`、`WithToolSets` 或
@@ -2341,13 +2363,21 @@ agent := llmagent.New(
   使用 `ConnectionConfig.Description`。模型返回的调用通过保存的 namespace 和成员名称映射回已注册
   的工具，不通过拆分注册名确定身份。执行注册名仍需在当前请求中唯一；namespace 分组不会解决注册目录中的重名。
 - 客户端模式下，发起搜索的响应不是最终响应。`LLMAgent` 会调用 handler，并在下一次模型调用前把
-  `tool_search_output` 作为工具消息保存。handler 从 `req.Candidates` 中选择候选，直接将其 `ID` 放入
-  `ToolSearchResult.ToolIDs`，不需要自行拼接或解析 ID。已加载的工具定义保留在历史中。
+  `tool_search_output` 作为工具消息保存。`req.Candidates` 同样是 `[]responses.ToolSearchEntry`。
+  每个条目包含 `Namespace`、`NamespaceDescription`、`Name`、`Tool`，声明通过
+  `entry.Tool.Declaration()` 读取。候选的 `Name` 已经是模型侧名称，可能与工具声明中的名称不同。
+- 返回原候选即可选中它。也可以复制候选后设置 `entry.Tool = sandboxTool`，换成另一个执行对象，
+  或构造包含外部 `tool.Tool` 的新条目。新条目的 `Name` 可以省略，此时使用工具声明中的名称。
+  没有注册延迟工具时，客户端搜索仍然可用。`Run.ToolFilter` 也会筛选返回的替换对象和外部工具，
+  普通工具执行权限和工具回调继续生效。
+- 当前 Run 借用返回的工具对象，业务负责资源清理。Session 保存模型当时看到的定义。
+  下一次 Run 可以通过 Agent 注册的工具执行原样选回的候选。如果调用的是上一次 Run
+  返回的替身或外部对象，模型会收到提示重新搜索的工具错误，Handler 可以再次提供执行对象。
 - handler 报错时，本次运行结束，同一响应中的普通函数调用保持待执行。在发送下一条用户消息前，
   用 `model.Message{}` 和 `agent.WithResume(true)` 恢复同一会话。搜索重试成功后，框架执行待处理的函数。
   搜索没有命中时，handler 可以返回空结果，让模型继续。
-- Graph 的 LLM 节点遇到客户端搜索会报错。没有延迟工具的请求保持不变，Chat Completions 会忽略
-  延迟策略。
+- Graph 的 LLM 节点遇到客户端搜索会报错。托管模式在有延迟工具或搜索历史时发送搜索入口。
+  Chat Completions 继续将注册工具作为普通函数提供。
 - `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索
   同时使用。
 
@@ -2382,7 +2412,7 @@ billing := staticToolSet{
 ```
 
 `deferred.ToolSet` 会保留这段描述，适配器将它写入 `namespace.description`；客户端搜索的
-`Candidate.NamespaceDescription` 也使用这段描述。
+`ToolSearchEntry.NamespaceDescription` 也使用这段描述。
 
 [`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
 中的 `go run ./toolsearch -mode server` 和 `go run ./toolsearch -mode client` 分别演示两种模式。

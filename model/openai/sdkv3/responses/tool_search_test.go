@@ -21,6 +21,7 @@ import (
 
 	"github.com/openai/openai-go/v3/option"
 	"github.com/stretchr/testify/require"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -115,6 +116,22 @@ func TestToolSearchDisabledKeepsRequestsUnchanged(t *testing.T) {
 	searchWithoutDeferral := captureRequest(t, &model.Request{Messages: user, Tools: plain}, WithHostedToolSearch())
 	require.Equal(t, want.body, searchWithoutDeferral.body,
 		"tool search adds nothing when no tool is deferred and history has no search")
+
+	history := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "gpt-5", Payload: json.RawMessage(`[
+		{"type":"tool_search_call","execution":"server","call_id":null,"status":"completed","arguments":{"paths":[]}},
+		{"type":"tool_search_output","execution":"server","call_id":null,"status":"completed","tools":[]}]`),
+	}}
+	searchWithHistory := captureRequest(t, &model.Request{Messages: append(user, history)}, WithHostedToolSearch())
+	requireJSONField(t, `[{"type":"tool_search"}]`, searchWithHistory.body["tools"])
+
+	m := New("gpt-5", WithClientToolSearch(func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+		return nil, nil
+	}))
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+	params, _, err := m.buildParams(ctx, &model.Request{Messages: user, Tools: marked})
+	require.NoError(t, err)
+	require.Empty(t, params.Tools, "a tool-free final response also disables client search")
 }
 
 func TestHostedToolSearchDeclaresDeferredToolsAndNamespaces(t *testing.T) {
@@ -160,7 +177,7 @@ func TestToolSearchRejectsNamespaceFunctionNameConflicts(t *testing.T) {
 		deferred.ToolSet(crmToolSet(), deferred.WithFilter(tool.NewIncludeToolNamesFilter("orders"))),
 	)
 	srv, calls := rejectingServer(t)
-	for _, opt := range []Option{WithHostedToolSearch(), WithClientToolSearch(func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
+	for _, opt := range []Option{WithHostedToolSearch(), WithClientToolSearch(func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
 		return nil, nil
 	})} {
 		m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), opt)
@@ -200,6 +217,8 @@ func TestToolSearchMapsNamespacedCallsToRequestTools(t *testing.T) {
 	require.Equal(t, "shipping_eta", calls[2].Function.Name)
 	require.Equal(t, "crm.missing", calls[3].Function.Name,
 		"an unknown namespaced call never falls back to a tool with the bare name")
+	require.Equal(t, "billing_lookup", mustFunctionName(t, plan, "", "billing_lookup"),
+		"an unqualified call can still address an agent-registered execution key")
 	payload := string(projected.Choices[0].Message.ProviderData.Payload)
 	require.Contains(t, payload, `"namespace":"crm"`, "the native record keeps the namespace")
 
@@ -213,7 +232,7 @@ func TestClientToolSearchRequestOmitsDeferredDefinitions(t *testing.T) {
 		[]tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"})},
 		deferred.ToolSet(crmToolSet(), deferred.WithFilter(tool.NewIncludeToolNamesFilter("orders"))),
 	)
-	handler := func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) { return nil, nil }
+	handler := func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) { return nil, nil }
 	got := captureRequest(t, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}, Tools: tools}, WithClientToolSearch(handler))
 	requireJSONField(t, `[
 	  {"type":"namespace","name":"crm","description":"CRM tools for customers and orders.","tools":[
@@ -229,6 +248,46 @@ func TestClientToolSearchRequestOmitsDeferredDefinitions(t *testing.T) {
 		Messages: []model.Message{model.NewUserMessage("hi")},
 	})
 	require.ErrorContains(t, err, "requires a handler")
+}
+
+func TestClientToolSearchWithNoCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tools map[string]tool.Tool
+	}{
+		{name: "no tools"},
+		{name: "eager tools", tools: agentTools(t, []tool.Tool{searchTestTool{name: "weather"}})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var handled bool
+			handler := func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
+				handled = true
+				require.Empty(t, req.Candidates)
+				return nil, nil
+			}
+			request := &model.Request{Messages: []model.Message{model.NewUserMessage("orders")}, Tools: tc.tools}
+			got := captureRequest(t, request, WithClientToolSearch(handler))
+			encoded, err := json.Marshal(got.body["tools"])
+			require.NoError(t, err)
+			var tools []map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &tools))
+			require.Len(t, tools, len(tc.tools)+1)
+			require.Equal(t, "tool_search", tools[len(tools)-1]["type"])
+			require.Equal(t, "client", tools[len(tools)-1]["execution"])
+
+			m := New("gpt-5", WithClientToolSearch(handler))
+			_, plan, err := m.buildParams(context.Background(), request)
+			require.NoError(t, err)
+			response, err := projectRequestResponse(decodeResponse(t, clientSearchOutput), "gpt-5", plan)
+			require.NoError(t, err)
+			results, err := m.CompleteProviderActions(context.Background(), request, response)
+			require.NoError(t, err)
+			require.True(t, handled)
+			require.Len(t, results, 1)
+			require.JSONEq(t, `[{"type":"tool_search_output","execution":"client","call_id":"search_1","status":"completed","tools":[]}]`,
+				string(results[0].ProviderData.Payload))
+		})
+	}
 }
 
 func TestToolSearchPreservesDeferralWithDeclarationOverride(t *testing.T) {
@@ -257,9 +316,9 @@ func TestToolSearchPreservesDeferralWithDeclarationOverride(t *testing.T) {
 	]`, hosted.body["tools"])
 
 	var seen *ToolSearchRequest
-	handler := func(_ context.Context, search *ToolSearchRequest) (*ToolSearchResult, error) {
+	handler := func(_ context.Context, search *ToolSearchRequest) ([]ToolSearchEntry, error) {
 		seen = search
-		return &ToolSearchResult{ToolIDs: []string{"find_order"}}, nil
+		return search.Candidates, nil
 	}
 	client := captureRequest(t, req, WithClientToolSearch(handler))
 	requireJSONField(t, `[
@@ -278,8 +337,9 @@ func TestToolSearchPreservesDeferralWithDeclarationOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, seen)
 	require.Len(t, seen.Candidates, 1)
-	require.Equal(t, "find_order", seen.Candidates[0].ID)
-	require.Equal(t, updated, seen.Candidates[0].Declaration)
+	require.Equal(t, "find_order", seen.Candidates[0].Name)
+	require.Equal(t, overlaid[0], seen.Candidates[0].Tool)
+	require.Equal(t, updated, *seen.Candidates[0].Tool.Declaration())
 	require.Len(t, results, 1)
 	require.JSONEq(t, `[{"type":"tool_search_output","execution":"client","call_id":"search_1","status":"completed","tools":[
 	  {"type":"function","name":"find_order","description":"Find an order by customer email.","defer_loading":true,"strict":false,
@@ -298,9 +358,9 @@ func TestClientToolSearchCompletesSearchCalls(t *testing.T) {
 		deferred.ToolSet(billingToolSet()),
 	)
 	var seen *ToolSearchRequest
-	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) (*ToolSearchResult, error) {
+	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
 		seen = req
-		return &ToolSearchResult{ToolIDs: []string{"crm_orders", "shipping_eta", "billing_lookup"}}, nil
+		return []ToolSearchEntry{req.Candidates[1], req.Candidates[2], req.Candidates[0]}, nil
 	}))
 	request := &model.Request{Messages: []model.Message{model.NewUserMessage("orders")}, Tools: tools}
 	_, plan, err := m.buildParams(context.Background(), request)
@@ -317,14 +377,15 @@ func TestClientToolSearchCompletesSearchCalls(t *testing.T) {
 	require.Equal(t, "orders", seen.Query)
 	require.JSONEq(t, `{"query":"orders"}`, string(seen.Arguments))
 	require.Len(t, seen.Candidates, 3)
-	require.Equal(t, ToolSearchCandidate{
-		ID: "billing_lookup", Namespace: "billing", NamespaceDescription: "Tools from the billing tool set.",
-		Name: "lookup", Declaration: seen.Candidates[0].Declaration,
+	require.Equal(t, ToolSearchEntry{
+		Namespace: "billing", NamespaceDescription: "Tools from the billing tool set.",
+		Name: "lookup", Tool: tools["billing_lookup"],
 	}, seen.Candidates[0])
-	require.Equal(t, "lookup", seen.Candidates[0].Declaration.Name)
-	require.Equal(t, "crm_orders", seen.Candidates[1].ID)
+	require.Equal(t, "Look up an invoice.", seen.Candidates[0].Tool.Declaration().Description)
 	require.Equal(t, "orders", seen.Candidates[1].Name)
-	require.Equal(t, "shipping_eta", seen.Candidates[2].ID)
+	require.Equal(t, tools["crm_orders"], seen.Candidates[1].Tool)
+	require.Equal(t, "shipping_eta", seen.Candidates[2].Name)
+	require.Equal(t, tools["shipping_eta"], seen.Candidates[2].Tool)
 	require.Empty(t, seen.Candidates[2].Namespace)
 
 	result := messages[0]
@@ -379,6 +440,59 @@ func mustFunctionName(t *testing.T, plan *toolPlan, namespace, name string) stri
 	return got
 }
 
+func TestClientToolSearchUsesReturnedEntries(t *testing.T) {
+	withSchema := func(name, description, property string) tool.Tool {
+		return itool.ApplyDeclarations([]tool.Tool{searchTestTool{name: name}}, []tool.Declaration{{
+			Name: name, Description: description,
+			InputSchema: &tool.Schema{
+				Type:       "object",
+				Properties: map[string]*tool.Schema{property: {Type: "string"}},
+				Required:   []string{property},
+			},
+		}})[0]
+	}
+	original := deferred.Tool(searchTestTool{name: "shipping_eta", description: "Original ETA."})
+	replacement := withSchema("shipping_eta", "Estimate delivery by postal code.", "postal_code")
+	external := withSchema("catalog_lookup", "Find a product.", "sku")
+	stock := withSchema("inventory_stock", "Check product stock.", "sku")
+	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
+		require.Len(t, req.Candidates, 1)
+		return []ToolSearchEntry{
+			{Namespace: "catalog", NamespaceDescription: "Product tools.", Name: "lookup", Tool: external},
+			{Tool: replacement},
+			{Namespace: "catalog", NamespaceDescription: "Product tools.", Name: "stock", Tool: stock},
+		}, nil
+	}))
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("find a product and estimate delivery")},
+		Tools:    agentTools(t, []tool.Tool{original}),
+	}
+	_, plan, err := m.buildParams(context.Background(), request)
+	require.NoError(t, err)
+	response, err := projectRequestResponse(decodeResponse(t, clientSearchOutput), "gpt-5", plan)
+	require.NoError(t, err)
+	results, err := m.CompleteProviderActions(context.Background(), request, response)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.JSONEq(t, `[{"type":"tool_search_output","execution":"client","call_id":"search_1","status":"completed","tools":[
+	  {"type":"namespace","name":"catalog","description":"Product tools.","tools":[
+	    {"type":"function","name":"lookup","description":"Find a product.","defer_loading":true,"strict":false,
+	     "parameters":{"type":"object","properties":{"sku":{"type":"string"}},"required":["sku"]}},
+	    {"type":"function","name":"stock","description":"Check product stock.","defer_loading":true,"strict":false,
+	     "parameters":{"type":"object","properties":{"sku":{"type":"string"}},"required":["sku"]}}]},
+	  {"type":"function","name":"shipping_eta","description":"Estimate delivery by postal code.","defer_loading":true,"strict":false,
+	   "parameters":{"type":"object","properties":{"postal_code":{"type":"string"}},"required":["postal_code"]}}]}]`,
+		string(results[0].ProviderData.Payload))
+	require.Equal(t, map[string]tool.Tool{"shipping_eta": original}, request.Tools,
+		"completing a search does not modify the input request's tools")
+	request.Messages = append(request.Messages, response.Choices[0].Message, results[0])
+	_, plan, err = m.buildParams(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "catalog.lookup", mustFunctionName(t, plan, "catalog", "lookup"))
+	_, err = plan.functionName("", "catalog.lookup")
+	require.ErrorContains(t, err, "does not name a top-level tool")
+}
+
 func TestClientToolSearchHandlerOutcomes(t *testing.T) {
 	tools := agentTools(t, []tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"})})
 	pending := func(t *testing.T, m *Model) (*model.Request, *model.Response) {
@@ -396,22 +510,43 @@ func TestClientToolSearchHandlerOutcomes(t *testing.T) {
 		want    string
 		tools   string
 	}{
-		{name: "empty", handler: func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
-			return &ToolSearchResult{}, nil
+		{name: "empty", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			return []ToolSearchEntry{}, nil
 		}, tools: `[]`},
-		{name: "nil", handler: func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
+		{name: "nil", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
 			return nil, nil
 		}, tools: `[]`},
-		{name: "error", handler: func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
+		{name: "error", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
 			return nil, errors.New("index unavailable")
 		}, want: "index unavailable"},
-		{name: "unknown", handler: func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
-			return &ToolSearchResult{ToolIDs: []string{"rm_rf"}}, nil
-		}, want: `tool "rm_rf" is not a search candidate`},
-		{name: "duplicate", handler: func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
-			return &ToolSearchResult{ToolIDs: []string{"shipping_eta", "shipping_eta"}}, nil
+		{name: "tools disabled", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			return nil, errors.New("unexpected handler call")
+		}, ctx: func() context.Context {
+			return imodelrequest.WithToolsDisabled(context.Background())
+		}, want: "tools are disabled"},
+		{name: "nil tool", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			return []ToolSearchEntry{{Name: "missing"}}, nil
+		}, want: "nil tool"},
+		{name: "typed nil tool", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			var missing *searchTestTool
+			return []ToolSearchEntry{{Tool: missing}}, nil
+		}, want: "nil tool"},
+		{name: "duplicate", handler: func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			return []ToolSearchEntry{req.Candidates[0], req.Candidates[0]}, nil
 		}, want: "selected more than once"},
-		{name: "canceled", handler: func(ctx context.Context, _ *ToolSearchRequest) (*ToolSearchResult, error) {
+		{name: "duplicate wire identity", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			return []ToolSearchEntry{
+				{Namespace: "catalog", Name: "lookup", Tool: searchTestTool{name: "products_lookup"}},
+				{Namespace: "catalog", Name: "lookup", Tool: searchTestTool{name: "inventory_lookup"}},
+			}, nil
+		}, want: "selected more than once"},
+		{name: "colliding execution names", handler: func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+			return []ToolSearchEntry{
+				{Namespace: "catalog", Name: "lookup", Tool: searchTestTool{name: "products"}},
+				{Name: "catalog.lookup", Tool: searchTestTool{name: "inventory"}},
+			}, nil
+		}, want: "conflicts with execution key"},
+		{name: "canceled", handler: func(ctx context.Context, _ *ToolSearchRequest) ([]ToolSearchEntry, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}, ctx: func() context.Context {
@@ -454,11 +589,11 @@ func TestClientToolSearchHandlerOutcomes(t *testing.T) {
 
 func TestClientToolSearchResumeSkipsSavedResults(t *testing.T) {
 	var handled []string
-	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) (*ToolSearchResult, error) {
+	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
 		handled = append(handled, req.CallID)
 		require.Len(t, req.Candidates, 1, "the saved output already loaded the first tool")
-		require.Equal(t, "second", req.Candidates[0].ID)
-		return &ToolSearchResult{ToolIDs: []string{"second"}}, nil
+		require.Equal(t, "second", req.Candidates[0].Name)
+		return req.Candidates, nil
 	}))
 	response := &model.Response{Choices: []model.Choice{{Message: model.Message{
 		Role: model.RoleAssistant, ProviderData: &model.ProviderData{
@@ -495,7 +630,7 @@ func TestClientToolSearchResumeSkipsSavedResults(t *testing.T) {
 
 func TestClientToolSearchAcceptsStringArguments(t *testing.T) {
 	var handled bool
-	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) (*ToolSearchResult, error) {
+	m := New("gpt-5", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
 		handled = true
 		require.Equal(t, "invoice", req.Query)
 		require.JSONEq(t, `{"query":"invoice"}`, string(req.Arguments))
@@ -517,7 +652,7 @@ func TestClientToolSearchAcceptsStringArguments(t *testing.T) {
 
 func TestClientToolSearchRecoveryRejectsInvalidSavedResults(t *testing.T) {
 	var handled int
-	m := New("gpt-5", WithClientToolSearch(func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) {
+	m := New("gpt-5", WithClientToolSearch(func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
 		handled++
 		return nil, nil
 	}))
@@ -618,7 +753,7 @@ func TestStreamingToolSearchProjection(t *testing.T) {
 	require.True(t, hosted.Done)
 	require.Equal(t, "crm_orders", hosted.Choices[0].Message.ToolCalls[0].Function.Name)
 
-	handler := func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) { return nil, nil }
+	handler := func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) { return nil, nil }
 	client := stream(t, New("gpt-5", WithClientToolSearch(handler)), `[
 	  {"type":"tool_search_call","id":"ts","execution":"client","call_id":"s1","status":"completed","arguments":{"query":"orders"}}]`)
 	require.False(t, client.Done)
@@ -634,7 +769,7 @@ func TestNonStreamingClientToolSearchResponseIsNotDone(t *testing.T) {
 		_, _ = io.WriteString(w, clientSearchOutput)
 	}))
 	defer srv.Close()
-	handler := func(context.Context, *ToolSearchRequest) (*ToolSearchResult, error) { return nil, nil }
+	handler := func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) { return nil, nil }
 	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL), WithClientToolSearch(handler))
 	tools := agentTools(t, []tool.Tool{deferred.Tool(searchTestTool{name: "shipping_eta"})})
 	ch, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("eta")}, Tools: tools})

@@ -106,21 +106,21 @@ func main() {
 }
 
 // keywordSearch scores whole-word matches and gives tool names extra weight.
-func keywordSearch(_ context.Context, req *responses.ToolSearchRequest) (*responses.ToolSearchResult, error) {
+func keywordSearch(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 	query := searchWords(req.Query)
 	scores := make([]int, len(req.Candidates))
 	best := 0
 	for i, candidate := range req.Candidates {
-		keywords := candidate.Namespace + " " + candidate.Name + " " + candidate.Declaration.Description
+		keywords := candidate.Namespace + " " + candidate.Name + " " + candidate.Tool.Declaration().Description
 		scores[i] = countMatches(query, keywords) + countMatches(query, candidate.Name)
 		best = max(best, scores[i])
 	}
 	// Allow a one-point gap for short matches and up to a third of a stronger score.
 	margin := max(1, best/3)
-	result := &responses.ToolSearchResult{}
+	var result []responses.ToolSearchEntry
 	for i, score := range scores {
 		if score > 0 && best-score <= margin {
-			result.ToolIDs = append(result.ToolIDs, req.Candidates[i].ID)
+			result = append(result, req.Candidates[i])
 		}
 	}
 	return result, nil

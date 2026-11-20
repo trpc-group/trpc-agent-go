@@ -344,6 +344,15 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		invocation.MaxToolIterations,
 	)
 
+	req, err := executionRequest(invocation, req, rsp)
+	if err != nil {
+		invocation.EndInvocation = true
+		_ = agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+			invocation.InvocationID, invocation.AgentName, model.ErrorTypeFlowError, err.Error(),
+		))
+		return
+	}
+
 	deferred, executable, unknown := p.toolExecutionDecision(
 		ctx,
 		invocation,

@@ -617,7 +617,7 @@ func (f *Flow) resumePendingToolCalls(
 		Tools: make(map[string]tool.Tool),
 	}
 	f.populateRequestTools(ctx, invocation, req)
-	if isProviderActionResponse(lastResp) {
+	if providerdata.ResponseHasData(lastResp) {
 		req.Messages = persistedProviderDataHistory(invocation)
 	}
 

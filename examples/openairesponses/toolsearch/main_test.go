@@ -19,17 +19,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
-	candidates := []responses.ToolSearchCandidate{
-		{ID: "billing_lookup_invoice", Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
-			Name: "lookup_invoice", Declaration: tool.Declaration{Description: "Look up an invoice and its payment status."}},
-		{ID: "billing_list_invoices", Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
-			Name: "list_invoices", Declaration: tool.Declaration{Description: "List the invoices of a customer."}},
-		{ID: "crm_list_orders", Namespace: "crm", NamespaceDescription: "CRM tools for customer lookup and order management.",
-			Name: "list_orders", Declaration: tool.Declaration{Description: "List the open orders of a customer."}},
-		{ID: "shipping_eta", Name: "shipping_eta", Declaration: tool.Declaration{Description: "Estimate the delivery date of a shipped order."}},
+	candidates := []responses.ToolSearchEntry{
+		{Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
+			Name: "lookup_invoice", Tool: searchTool("billing_lookup_invoice", "Look up an invoice and its payment status.")},
+		{Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
+			Name: "list_invoices", Tool: searchTool("billing_list_invoices", "List the invoices of a customer.")},
+		{Namespace: "crm", NamespaceDescription: "CRM tools for customer lookup and order management.",
+			Name: "list_orders", Tool: searchTool("crm_list_orders", "List the open orders of a customer.")},
+		{Name: "shipping_eta", Tool: searchTool("shipping_eta", "Estimate the delivery date of a shipped order.")},
 	}
 	for _, tc := range []struct {
 		name, query string
@@ -55,11 +56,27 @@ func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got.ToolIDs, tc.want) {
-				t.Errorf("keywordSearch(%q) = %v, want %v", tc.query, got.ToolIDs, tc.want)
+			var want []responses.ToolSearchEntry
+			for _, name := range tc.want {
+				for _, candidate := range candidates {
+					if candidate.Tool.Declaration().Name == name {
+						want = append(want, candidate)
+					}
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("keywordSearch(%q) = %v, want %v", tc.query, got, want)
 			}
 		})
 	}
+}
+
+func searchTool(name, description string) tool.Tool {
+	return function.NewFunctionTool(
+		func(context.Context, struct{}) (string, error) { return "", nil },
+		function.WithName(name),
+		function.WithDescription(description),
+	)
 }
 
 func TestPrintEventsShowsSearchResultAndLoadedCall(t *testing.T) {
