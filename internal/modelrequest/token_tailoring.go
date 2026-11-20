@@ -11,9 +11,28 @@ package modelrequest
 import (
 	"context"
 	"sync"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type tokenTailoringObserverKey struct{}
+type tokenTailoringDisabledKey struct{}
+
+// WithTokenTailoringDisabled exempts only request from token tailoring. Other
+// requests using this context, including auxiliary callback calls, are not
+// exempt. Delegating the approved request requires passing the same pointer.
+func WithTokenTailoringDisabled(ctx context.Context, request *model.Request) context.Context {
+	return context.WithValue(ctx, tokenTailoringDisabledKey{}, request)
+}
+
+// TokenTailoringDisabled reports whether ctx approves this exact request.
+func TokenTailoringDisabled(ctx context.Context, request *model.Request) bool {
+	if ctx == nil || request == nil {
+		return false
+	}
+	approved, _ := ctx.Value(tokenTailoringDisabledKey{}).(*model.Request)
+	return approved == request
+}
 
 // TokenTailoringRecord describes one provider-side request transformation.
 type TokenTailoringRecord struct {
