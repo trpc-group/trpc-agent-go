@@ -249,7 +249,10 @@ by native processes; check HOME/PATH when migrating custom templates.
 
 `WithWorkspacePersistence` defaults to `WorkspacePersistencePerTurn`. Agent
 tools share the workspace within an invocation and acquire a fresh directory
-on the next invocation, including when the `LLMAgent` is reused. Configure
+on the next invocation, including when the `LLMAgent` is reused.
+Parallel tool calls using `Invocation.View()` share the original invocation's
+directory. A child invocation created with `Invocation.Clone()` gets its own
+directory, even within the same user turn. Configure
 `WorkspacePersistencePerSession` to keep the directory for the same session
 across turns while the sandbox remains alive. Both modes use directories
 inside the executor's sandbox and share its Code Interpreter kernel.
