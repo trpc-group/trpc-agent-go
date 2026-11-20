@@ -559,53 +559,95 @@ end
 return id
 `)
 
-// luaLoadTrackEvents loads track events by time range from Hash+ZSet structure.
-// KEYS[1] = trkdata key (Hash)
-// KEYS[2] = trkidx:time key (ZSet)
-// ARGV[1] = minScore (afterTime UnixNano, use "-inf" for no lower bound)
-// ARGV[2] = maxScore (use "+inf" for no upper bound)
-// ARGV[3] = limit (0 = no limit)
-// Returns: list of TrackEvent JSON strings in chronological order.
-var luaLoadTrackEvents = redis.NewScript(`
-local dataKey = KEYS[1]
-local idxKey = KEYS[2]
+// Redis sorts equal-score members by their bytes. Track IDs are decimal
+// integers, so compare by length first without converting to a Lua number.
+const luaTrackIDOrder = `
+local function idLess(a, b)
+    if #a ~= #b then return #a < #b end
+    return a < b
+end
+`
 
-local minScore = ARGV[1]
-local maxScore = ARGV[2]
-local limit = tonumber(ARGV[3])
+const luaTrackReadRange = `
+local function trackReadRange(idxKey, minScore, maxScore, limit)
+    local oldest = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore, 'LIMIT', 0, 1)
+    if #oldest == 0 then return 0, -1 end
 
--- Get event IDs in chronological order (ascending score)
-local eventIDs
-if limit > 0 then
-    -- Get the latest N by reversing, then we reverse the result
-    eventIDs = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, limit)
-    -- Reverse to chronological order
-    local reversed = {}
-    for i = #eventIDs, 1, -1 do
-        table.insert(reversed, eventIDs[i])
+    local newest = redis.call('ZREVRANGEBYSCORE', idxKey, maxScore, minScore, 'LIMIT', 0, 1)
+    local first = redis.call('ZRANK', idxKey, oldest[1])
+    local last = redis.call('ZRANK', idxKey, newest[1])
+    if limit > 0 and last - first + 1 > limit then
+        local cutoff = last - limit + 1
+        local boundary = redis.call('ZRANGE', idxKey, cutoff, cutoff, 'WITHSCORES')
+        local tied = redis.call('ZRANGEBYSCORE', idxKey, boundary[2], boundary[2], 'LIMIT', 0, 1)
+        first = redis.call('ZRANK', idxKey, tied[1])
     end
-    eventIDs = reversed
-else
-    eventIDs = redis.call('ZRANGEBYSCORE', idxKey, minScore, maxScore)
+    return first, last
+end
+`
+
+// luaLoadTrackEvents reads a chronological range atomically. It uses
+// rank batches to bound each unpack call and sorts only equal-score groups.
+var luaLoadTrackEvents = redis.NewScript(luaTrackIDOrder + luaTrackReadRange + `
+local dataKey, idxKey = KEYS[1], KEYS[2]
+local limit, batchSize = tonumber(ARGV[3]), 512
+local first, last = trackReadRange(idxKey, ARGV[1], ARGV[2], limit)
+local eventIDs = {}
+local skip = 0
+if limit > 0 then skip = math.max(0, last - first + 1 - limit) end
+local function collectGroup(group)
+    local count = #group
+    if skip == count - 1 and count > 1 then
+        -- When one member is needed, select the largest ID in one pass.
+        local best = group[1]
+        for i = 2, count do
+            if idLess(best, group[i]) then best = group[i] end
+        end
+        eventIDs[#eventIDs + 1] = best
+    elseif skip < count then
+        if count > 1 then table.sort(group, idLess) end
+        for i = skip + 1, count do eventIDs[#eventIDs + 1] = group[i] end
+    end
+    skip = math.max(0, skip - count)
+end
+
+-- Preserve the Redis score order. Allocate a group only for ties and
+-- carry it across batches when an equal-score run straddles a boundary.
+local score, previousID, group
+for start = first, last, batchSize do
+    local entries = redis.call('ZRANGE', idxKey, start, math.min(start + batchSize - 1, last), 'WITHSCORES')
+    for i = 1, #entries, 2 do
+        if score == entries[i + 1] then
+            if not group then group = {previousID} end
+            group[#group + 1] = entries[i]
+        else
+            if group then
+                collectGroup(group)
+                group = nil
+            elseif previousID then
+                if skip == 0 then
+                    eventIDs[#eventIDs + 1] = previousID
+                else
+                    skip = skip - 1
+                end
+            end
+            score, previousID = entries[i + 1], entries[i]
+        end
+    end
+end
+if group then
+    collectGroup(group)
+elseif previousID and skip == 0 then
+    eventIDs[#eventIDs + 1] = previousID
 end
 
 local result = {}
-if #eventIDs > 0 then
-    local batchSize = 512
-    for startIdx = 1, #eventIDs, batchSize do
-        local batchIDs = {}
-        local endIdx = math.min(startIdx + batchSize - 1, #eventIDs)
-        for i = startIdx, endIdx do
-            table.insert(batchIDs, eventIDs[i])
-        end
-        local dataList = redis.call('HMGET', dataKey, unpack(batchIDs))
-        for _, data in ipairs(dataList) do
-            if data then
-                table.insert(result, data)
-            end
-        end
+for start = 1, #eventIDs, batchSize do
+    local lastID = math.min(start + batchSize - 1, #eventIDs)
+    local payloads = redis.call('HMGET', dataKey, unpack(eventIDs, start, lastID))
+    for _, payload in ipairs(payloads) do
+        if payload then result[#result + 1] = payload end
     end
 end
-
 return result
 `)
