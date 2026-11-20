@@ -12,14 +12,18 @@ package runner
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -28,6 +32,122 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
+
+func TestRunner_GraphAgentReplaysResultAfterToolInterrupt(t *testing.T) {
+	const (
+		agentName = "interrupt-replay"
+		toolName  = "confirm"
+		callID    = "call-confirm"
+		lineage   = "interrupted-turn"
+	)
+	var attempts atomic.Int32
+	confirm := function.NewFunctionTool(
+		func(context.Context, struct{}) (map[string]string, error) {
+			if attempts.Add(1) == 1 {
+				return map[string]string{"result": "pause-preview"}, graph.NewInterruptError("confirm?")
+			}
+			return map[string]string{"result": "completed-output"}, nil
+		},
+		function.WithName(toolName),
+		function.WithDescription("Waits for confirmation."),
+	)
+	modelStub := &sequentialModel{
+		name: "interrupt-replay",
+		responses: []*model.Response{
+			{
+				ID:     "tool-call",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   callID,
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      toolName,
+							Arguments: []byte(`{}`),
+						},
+					}},
+				}}},
+			},
+			{
+				ID:      "resumed",
+				Object:  model.ObjectTypeChatCompletion,
+				Done:    true,
+				Choices: []model.Choice{{Message: model.NewAssistantMessage("confirmed")}},
+			},
+			{
+				ID:      "follow-up",
+				Object:  model.ObjectTypeChatCompletion,
+				Done:    true,
+				Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+			},
+		},
+	}
+	tools := map[string]tool.Tool{toolName: confirm}
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddLLMNode("llm", modelStub, "", tools).
+		AddToolsNode("tools", tools).
+		AddToolsConditionalEdges("llm", "tools", graph.End).
+		AddEdge("tools", "llm").
+		SetEntryPoint("llm").
+		Compile()
+	require.NoError(t, err)
+	saver := checkpointinmemory.NewSaver()
+	t.Cleanup(func() { require.NoError(t, saver.Close()) })
+	ag, err := graphagent.New(agentName, g, graphagent.WithCheckpointSaver(saver))
+	require.NoError(t, err)
+	r := NewRunner("app", ag)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	run := func(message model.Message, state graph.State) {
+		t.Helper()
+		events, err := r.Run(ctx, "user", "session", message,
+			agent.WithRuntimeState(state),
+			agent.WithGraphEmitFinalModelResponses(true))
+		require.NoError(t, err)
+		for evt := range events {
+			require.Nil(t, evt.Error)
+		}
+		require.NoError(t, ctx.Err())
+	}
+	run(model.NewUserMessage("confirm"), graph.State{
+		graph.CfgKeyLineageID: lineage,
+	})
+	require.Len(t, modelStub.Requests(), 1)
+	require.EqualValues(t, 1, attempts.Load())
+	checkpoint, err := saver.GetTuple(ctx, graph.CreateCheckpointConfig(lineage, "", agentName))
+	require.NoError(t, err)
+	require.NotNil(t, checkpoint)
+	require.NotNil(t, checkpoint.Checkpoint)
+	require.NotNil(t, checkpoint.Checkpoint.InterruptState)
+
+	run(model.Message{}, graph.State{
+		graph.CfgKeyLineageID:    lineage,
+		graph.CfgKeyCheckpointID: checkpoint.Checkpoint.ID,
+		graph.StateKeyCommand:    graph.NewResumeCommand().WithResume("approved"),
+	})
+	require.Len(t, modelStub.Requests(), 2)
+	run(model.NewUserMessage("follow up"), graph.State{
+		graph.CfgKeyLineageID: "next-turn",
+	})
+	require.EqualValues(t, 2, attempts.Load())
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 3)
+	want := model.NewToolMessage(callID, toolName, `{"result":"completed-output"}`)
+	for i, request := range requests[1:] {
+		var results []model.Message
+		for _, msg := range request.messages {
+			if msg.Role == model.RoleTool && msg.ToolID == callID {
+				results = append(results, msg)
+			}
+		}
+		require.Equal(t, []model.Message{want}, results, "tool result in model request %d", i+2)
+	}
+}
 
 type perCallResultInput struct{}
 

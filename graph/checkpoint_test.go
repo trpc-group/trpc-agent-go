@@ -521,10 +521,7 @@ func (it *interruptTool) Call(ctx context.Context, jsonArgs []byte) (any, error)
 	return nil, NewInterruptError("ask?")
 }
 
-// When a tool interrupts, executeSingleToolCall should:
-// - emit a tool complete event WITHOUT an error payload, and
-// - return the interrupt error (not wrapped).
-func TestExecuteSingleToolCall_Interrupt_NoErrorInEvent(t *testing.T) {
+func TestExecuteSingleToolCall_Interrupt_CompleteEventMetadata(t *testing.T) {
 	ch := make(chan *event.Event, 4)
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("test-int")
 	ctx, span := tracer.Start(context.Background(), "span")
@@ -554,30 +551,18 @@ func TestExecuteSingleToolCall_Interrupt_NoErrorInEvent(t *testing.T) {
 		require.Equal(t, "ask?", intr.Value)
 	}
 
-	// Drain events; find the tool complete event and assert no error.
-	var complete *event.Event
-	drain := len(ch)
-	for i := 0; i < drain; i++ {
-		e := <-ch
-		if e == nil || e.StateDelta == nil {
-			continue
-		}
-		if b, ok := e.StateDelta[MetadataKeyTool]; ok {
-			var meta ToolExecutionMetadata
-			if json.Unmarshal(b, &meta) == nil &&
-				meta.Phase == ToolExecutionPhaseComplete {
-				complete = e
-				// Meta.Error must be empty for interrupts
-				require.Equal(t, "", meta.Error)
-				break
-			}
-		}
-	}
-	require.NotNil(t, complete, "expected tool complete event")
-	// Response.Error must be nil for interrupt tool completes.
-	if complete.Response != nil {
-		require.Nil(t, complete.Response.Error)
-	}
+	require.Len(t, ch, 2)
+	<-ch // Tool start.
+	complete := <-ch
+	require.Equal(t, ObjectTypeGraphNodeExecution, complete.Object)
+	require.Nil(t, complete.Error)
+	require.Empty(t, complete.Choices)
+	var metadata ToolExecutionMetadata
+	require.NoError(t, json.Unmarshal(complete.StateDelta[MetadataKeyTool], &metadata))
+	require.Equal(t, ToolExecutionPhaseComplete, metadata.Phase)
+	require.Equal(t, cfg.ToolCall.ID, metadata.ToolID)
+	require.Empty(t, metadata.Error)
+	require.JSONEq(t, `"ask?"`, metadata.Output)
 }
 
 func TestExecuteSingleToolCall_ToolErrorPluginPreservesWrappedInterrupt(

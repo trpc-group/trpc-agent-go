@@ -6182,6 +6182,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Error:         eventErr,
 		Arguments:     modifiedArgs,
 		ResponseID:    responseID,
+		interrupted:   interruptErr != nil,
 		resultMessage: resultMessage,
 	})
 	if startedSpan {
@@ -6415,6 +6416,7 @@ type toolCompleteEventConfig struct {
 	Result        any
 	Error         error
 	Arguments     []byte
+	interrupted   bool
 	resultMessage *model.Message
 }
 
@@ -6438,6 +6440,9 @@ func emitToolCompleteEvent(
 		}
 	}
 
+	// Keep pause output in metadata so session replay only sees the result
+	// of the completed tool call for this ID.
+	includeResponse := !config.interrupted
 	toolCompleteEvent := NewToolExecutionEvent(
 		WithToolEventInvocationID(config.InvocationID),
 		WithToolEventToolName(config.ToolName),
@@ -6450,9 +6455,9 @@ func emitToolCompleteEvent(
 		WithToolEventInput(string(config.Arguments)),
 		WithToolEventOutput(outputStr),
 		WithToolEventError(config.Error),
-		WithToolEventIncludeResponse(true),
+		WithToolEventIncludeResponse(includeResponse),
 	)
-	if config.Error == nil && config.resultMessage != nil {
+	if includeResponse && config.Error == nil && config.resultMessage != nil {
 		// Events can be persisted and consumed independently of graph state.
 		// Keep their model-visible payload consistent without sharing media buffers.
 		toolCompleteEvent.Response.Choices[0].Message = statecopy.Message(*config.resultMessage)
