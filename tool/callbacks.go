@@ -374,6 +374,12 @@ func (c *Callbacks) processBeforeToolResult(
 	}
 	if result.Context != nil {
 		*ctx = result.Context
+	} else if *lastResult != nil && (*lastResult).Context != nil {
+		// A nil Context keeps the latest explicit replacement. Copy the result
+		// so callback-owned values can be reused without mutation.
+		merged := *result
+		merged.Context = (*lastResult).Context
+		result = &merged
 	}
 	if result.ModifiedArguments != nil {
 		args.Arguments = result.ModifiedArguments
@@ -458,6 +464,9 @@ func (c *Callbacks) runBeforeToolCallback(
 // RunBeforeTool runs all before tool callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
+// Unless execution stops on a callback error, the returned result retains the
+// latest explicit Context even when later callbacks omit it. Results owned by
+// callbacks are not modified.
 func (c *Callbacks) RunBeforeTool(
 	ctx context.Context,
 	args *BeforeToolArgs,
@@ -474,9 +483,9 @@ func (c *Callbacks) RunBeforeTool(
 
 		if c.processBeforeToolResult(result, &ctx, args, &lastResult) {
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return lastResult, firstErr
 			}
-			return result, nil
+			return lastResult, nil
 		}
 	}
 
