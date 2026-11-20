@@ -32,6 +32,7 @@ const (
 	defaultConnectionTimeout = 5 * time.Second
 
 	addMemoryResultSuccess = 0
+	addMemoryResultForeign = -2
 
 	updateMemoryResultNotFound = 0
 	updateMemoryResultSuccess  = 1
@@ -40,17 +41,54 @@ const (
 
 var _ memory.Service = (*Service)(nil)
 
-// luaAddMemory atomically enforces the per-user limit for new memory IDs while
-// allowing an existing ID to be overwritten idempotently. A positive result is
-// the current memory count when the limit has been reached.
-var luaAddMemory = redis.NewScript(`
+// Escape the field delimiter, hash-tag braces, and the escape character itself.
+// Other bytes, including UTF-8 names, remain readable without expanding the key.
+var userMemKeyEscaper = strings.NewReplacer(
+	"%", "%25",
+	":", "%3A",
+	"{", "%7B",
+	"}", "%7D",
+)
+
+// luaOwnsEntry rejects malformed or unscoped records without mutating them.
+// Ownership must be checked inside the same script as each guarded write.
+const luaOwnsEntry = `
+local function ownsEntry(value, appName, userID)
+    if not value then
+        return false
+    end
+    local ok, entry = pcall(cjson.decode, value)
+    return ok and type(entry) == 'table'
+        and entry.app_name == appName and entry.user_id == userID
+end
+`
+
+// luaAddMemory atomically enforces the per-user limit and protects records of
+// other identities in overlapping legacy hashes. A positive result is the
+// owned memory count when the limit has been reached.
+var luaAddMemory = redis.NewScript(luaOwnsEntry + `
 local key = KEYS[1]
 local memoryID = ARGV[1]
 local entryJSON = ARGV[2]
 local memoryLimit = tonumber(ARGV[3])
+local appName = ARGV[4]
+local userID = ARGV[5]
+local checkIdentity = ARGV[6] == '1'
+local existing = redis.call('HGET', key, memoryID)
 
-if redis.call('HEXISTS', key, memoryID) == 0 then
+if existing and checkIdentity and not ownsEntry(existing, appName, userID) then
+    return -2
+end
+if not existing and memoryLimit > 0 then
     local count = redis.call('HLEN', key)
+    if count >= memoryLimit and checkIdentity then
+        count = 0
+        for _, value in ipairs(redis.call('HVALS', key)) do
+            if ownsEntry(value, appName, userID) then
+                count = count + 1
+            end
+        end
+    end
     if count >= memoryLimit then
         return count
     end
@@ -62,13 +100,13 @@ return 0
 
 // luaUpdateMemory atomically updates a memory hash field and, when its
 // canonical ID changes, rejects an existing target before rotating the field.
-var luaUpdateMemory = redis.NewScript(`
+var luaUpdateMemory = redis.NewScript(luaOwnsEntry + `
 local key = KEYS[1]
 local sourceID = ARGV[1]
 local targetID = ARGV[2]
 local entryJSON = ARGV[3]
 
-if redis.call('HEXISTS', key, sourceID) == 0 then
+if not ownsEntry(redis.call('HGET', key, sourceID), ARGV[4], ARGV[5]) then
     return 0
 end
 if sourceID ~= targetID and redis.call('HEXISTS', key, targetID) == 1 then
@@ -82,10 +120,31 @@ end
 return 1
 `)
 
+// luaDeleteMemory preserves a legacy record belonging to another identity,
+// even if it replaced the requested memory just before deletion.
+var luaDeleteMemory = redis.NewScript(luaOwnsEntry + `
+if ownsEntry(redis.call('HGET', KEYS[1], ARGV[1]), ARGV[2], ARGV[3]) then
+    return redis.call('HDEL', KEYS[1], ARGV[1])
+end
+return 0
+`)
+
+// luaClearMemories removes only owned fields because an escaped key can also
+// be the raw legacy key of a different identity.
+var luaClearMemories = redis.NewScript(luaOwnsEntry + `
+local entries = redis.call('HGETALL', KEYS[1])
+for i = 1, #entries, 2 do
+    if ownsEntry(entries[i + 1], ARGV[1], ARGV[2]) then
+        redis.call('HDEL', KEYS[1], entries[i])
+    end
+end
+return 0
+`)
+
 // Service is the redis memory service.
 // Storage structure:
 //
-//	Memory: appName + userID -> hash [memoryID -> Entry(json)].
+//	Memory: independently escaped appName and userID -> hash [memoryID -> Entry(json)].
 type Service struct {
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
@@ -198,7 +257,8 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	if err != nil {
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
-	if s.opts.memoryLimit > 0 {
+	checkIdentity := needsHashIdentityCheck(userKey)
+	if s.opts.memoryLimit > 0 || checkIdentity {
 		scriptResult, err := luaAddMemory.Run(
 			ctx,
 			s.redisClient,
@@ -206,6 +266,9 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 			entry.ID,
 			string(bytes),
 			s.opts.memoryLimit,
+			userKey.AppName,
+			userKey.UserID,
+			checkIdentity,
 		).Int()
 		if err != nil {
 			return fmt.Errorf("store memory entry failed: %w", err)
@@ -213,6 +276,8 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		switch {
 		case scriptResult == addMemoryResultSuccess:
 			return nil
+		case scriptResult == addMemoryResultForeign:
+			return fmt.Errorf("memory with id %s belongs to another identity", entry.ID)
 		case scriptResult > addMemoryResultSuccess:
 			return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
 				userKey.UserID, s.opts.memoryLimit, scriptResult)
@@ -246,6 +311,9 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	if err := json.Unmarshal(bytes, entry); err != nil {
 		return fmt.Errorf("unmarshal memory entry failed: %w", err)
 	}
+	if entry.AppName != memoryKey.AppName || entry.UserID != memoryKey.UserID {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	}
 	imemory.NormalizeEntry(entry)
 	now := time.Now()
 	ep := memory.ResolveUpdateOptions(opts)
@@ -270,6 +338,8 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		memoryKey.MemoryID,
 		newID,
 		string(updated),
+		memoryKey.AppName,
+		memoryKey.UserID,
 	).Int()
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
@@ -296,7 +366,14 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 		return err
 	}
 	key := s.getUserMemKey(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID})
-	if err := s.redisClient.HDel(ctx, key, memoryKey.MemoryID).Err(); err != nil && err != redis.Nil {
+	var err error
+	if needsHashIdentityCheck(memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID}) {
+		err = luaDeleteMemory.Run(ctx, s.redisClient, []string{key},
+			memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID).Err()
+	} else {
+		err = s.redisClient.HDel(ctx, key, memoryKey.MemoryID).Err()
+	}
+	if err != nil && err != redis.Nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
 	return nil
@@ -308,7 +385,13 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 		return err
 	}
 	key := s.getUserMemKey(userKey)
-	if err := s.redisClient.Del(ctx, key).Err(); err != nil && err != redis.Nil {
+	var err error
+	if needsHashIdentityCheck(userKey) {
+		err = luaClearMemories.Run(ctx, s.redisClient, []string{key}, userKey.AppName, userKey.UserID).Err()
+	} else {
+		err = s.redisClient.Del(ctx, key).Err()
+	}
+	if err != nil && err != redis.Nil {
 		return fmt.Errorf("clear memories failed: %w", err)
 	}
 	return nil
@@ -333,6 +416,9 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		e := &memory.Entry{}
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
+		}
+		if e.AppName != userKey.AppName || e.UserID != userKey.UserID {
+			continue
 		}
 		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
@@ -370,6 +456,9 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
 		e := &memory.Entry{}
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
+		}
+		if e.AppName != userKey.AppName || e.UserID != userKey.UserID {
+			continue
 		}
 		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
@@ -432,20 +521,19 @@ func (s *Service) prefixedKey(base string) string {
 // buildUserMemKey builds the Redis base key (without keyPrefix) for a user's
 // memories.
 //
-// In Redis Cluster, only the substring inside `{...}` determines the hash slot.
-// The hash tag includes both AppName and UserID so that each user's hash is
-// independently distributed across slots.
-//
-// Key format change: the hash tag was changed from {AppName} to {AppName:UserID}
-// for better cluster slot distribution. If you are upgrading from a version that
-// used the old key format "mem:{AppName}:UserID", you must migrate your data.
-// See the memory documentation for migration instructions.
+// Each identity field escapes only %, :, {, and }, preserving readable names
+// while keeping field and hash-tag boundaries unambiguous. Escaping % keeps
+// literal escape sequences distinct from escaped characters.
 func buildUserMemKey(userKey memory.UserKey) string {
-	return fmt.Sprintf(
-		"mem:{%s:%s}",
-		userKey.AppName,
-		userKey.UserID,
-	)
+	appName := userMemKeyEscaper.Replace(userKey.AppName)
+	userID := userMemKeyEscaper.Replace(userKey.UserID)
+	return "mem:{" + appName + ":" + userID + "}"
+}
+
+// needsHashIdentityCheck identifies keys that could overlap a different
+// identity's raw legacy key. Ordinary names retain their direct command paths.
+func needsHashIdentityCheck(userKey memory.UserKey) bool {
+	return strings.ContainsAny(userKey.AppName, "%:{}") || strings.ContainsAny(userKey.UserID, "%:{}")
 }
 
 func (s *Service) getUserMemKey(userKey memory.UserKey) string {
