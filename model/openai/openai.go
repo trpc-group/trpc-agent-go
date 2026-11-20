@@ -657,6 +657,15 @@ func (m *Model) prepareChatRequest(
 	if err := validateLogprobsConfig(request); err != nil {
 		return nil, nil, err
 	}
+	prepared, changed, err := m.prepareProviderHistory(request.Messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	if changed {
+		copyRequest := *request
+		copyRequest.Messages = prepared
+		request = &copyRequest
+	}
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)

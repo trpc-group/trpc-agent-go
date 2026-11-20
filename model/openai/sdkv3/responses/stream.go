@@ -23,6 +23,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -251,7 +252,7 @@ func completedStreamItems(
 		if err := json.Unmarshal([]byte(finalItems[index].RawJSON()), &finalValue); err != nil {
 			return nil, fmt.Errorf("openai/responses: decode response.completed item %d: %w", index, err)
 		}
-		if done.Type == outputTypeReasoning && finalItems[index].Type == outputTypeReasoning {
+		if done.Type == responseshistory.Reasoning && finalItems[index].Type == responseshistory.Reasoning {
 			doneMap, _ := doneValue.(map[string]any)
 			finalMap, _ := finalValue.(map[string]any)
 			if encrypted, ok := doneMap["encrypted_content"].(string); ok && encrypted != "" {

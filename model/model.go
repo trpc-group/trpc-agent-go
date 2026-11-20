@@ -68,6 +68,17 @@ type ProviderDataProjector interface {
 	ProjectProviderData(data *ProviderData) (Message, error)
 }
 
+// ProviderHistoryConsumer is an optional model capability for replaying completed
+// history from a native protocol across configured model names. The adapter
+// prepares the current request without modifying the stored messages and
+// reports an error for history it cannot represent. LLMAgent checks the
+// producer identity separately when resuming a pending native tool call.
+type ProviderHistoryConsumer interface {
+	// SupportsProviderHistory reports whether the adapter accepts completed
+	// history from protocol independently of the producing model name.
+	SupportsProviderHistory(protocol string) bool
+}
+
 // Seq is a callback-based sequence that yields values.
 type Seq[T any] func(yield func(T) bool)
 
@@ -88,9 +99,8 @@ type Info struct {
 	// A non-positive value means the window is unknown for this model instance.
 	ContextWindow int
 	// ProviderDataProtocol identifies the protocol of provider data consumed by this
-	// model. An empty value means ProviderData is unsupported. LLM flows and
-	// Graph LLM nodes reject history from another protocol or configured model
-	// before calling the adapter. Wrappers must preserve this value when
-	// forwarding Info.
+	// model natively. Adapters may also implement ProviderHistoryConsumer to
+	// replay completed history. Otherwise native history must match both this
+	// protocol and Name. Wrappers must forward this value in Info.
 	ProviderDataProtocol string `json:"ProviderDataProtocol,omitempty"`
 }

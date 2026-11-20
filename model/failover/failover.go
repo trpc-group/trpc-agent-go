@@ -59,6 +59,11 @@ func (m *failoverModel) Info() model.Info {
 	return m.candidates[0].Info()
 }
 
+// SupportsProviderHistory reports whether all routing candidates can replay protocol.
+func (m *failoverModel) SupportsProviderHistory(protocol string) bool {
+	return providerdata.CandidatesSupportHistory(m.candidates, protocol)
+}
+
 // ProjectProviderData forwards native message projection to a candidate model.
 func (m *failoverModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
 	return providerdata.ProjectFromCandidates(m.candidates, data)
