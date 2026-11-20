@@ -180,6 +180,7 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 				assertCancelSessionResults(t, svc, tc.knownID, "7", false)
 			}
 
+			var firstInput []json.RawMessage
 			for turn, userText := range []string{cancelFollowUp, "another follow-up"} {
 				var followUpOptions []agent.RunOption
 				if turn == 0 && tc.resumeWithMessage {
@@ -193,7 +194,14 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 				events := runToolResultNative(t, r, userText, followUpOptions...)
 				require.Empty(t, toolResultNativeErrors(events))
 				require.True(t, cancelHasAnswer(events), "the new user turn must complete with a model answer")
-				assertCancelRequestHistory(t, <-rt.requests, tc.output, tc.knownID, userText)
+				items := assertCancelRequestHistory(t, <-rt.requests, tc.output, tc.knownID, userText)
+				if turn == 0 {
+					firstInput = items
+				} else {
+					require.Greater(t, len(items), len(firstInput))
+					require.Equal(t, firstInput, items[:len(firstInput)],
+						"the next input must preserve the first follow-up's wire prefix")
+				}
 				if tc.projectAndRewrite {
 					require.Positive(t, projected.Load(), "the request projector must edit the displayed call")
 				}
@@ -300,24 +308,29 @@ func assertCancelSessionResults(t *testing.T, svc session.Service, knownID, know
 	}
 }
 
-func assertCancelRequestHistory(t *testing.T, input json.RawMessage, nativeOutput, knownID, userText string) {
+func assertCancelRequestHistory(
+	t *testing.T, input json.RawMessage, nativeOutput, knownID, userText string,
+) []json.RawMessage {
 	t.Helper()
-	var items []map[string]json.RawMessage
+	const wantMissingResult = "No result is available for this tool call. " +
+		"The previous run may have been interrupted before the result was recorded. " +
+		"The tool may already have run, and its outcome is unknown."
+	var items []json.RawMessage
 	require.NoError(t, json.Unmarshal(input, &items))
 	var native []json.RawMessage
 	callIndexes := map[string]int{}
 	outputIndexes := map[string]int{}
 	outputs := map[string]string{}
 	userIndex, firstUserIndex := -1, -1
-	for i, item := range items {
+	for i, raw := range items {
+		var item map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &item))
 		var kind, role, callID string
 		_ = json.Unmarshal(item["type"], &kind)
 		_ = json.Unmarshal(item["role"], &role)
 		_ = json.Unmarshal(item["call_id"], &callID)
 		if kind == "reasoning" || kind == "function_call" || string(item["id"]) == `"msg_progress"` {
-			encoded, err := json.Marshal(item)
-			require.NoError(t, err)
-			native = append(native, encoded)
+			native = append(native, raw)
 		}
 		if kind == "function_call" {
 			_, duplicate := callIndexes[callID]
@@ -355,11 +368,12 @@ func assertCancelRequestHistory(t *testing.T, input json.RawMessage, nativeOutpu
 		outputIndex, ok := outputIndexes[id]
 		require.True(t, ok, "missing output for %s", id)
 		if id != knownID {
-			require.Contains(t, strings.ToLower(outputs[id]), "unknown", "unrecorded result for %s", id)
+			require.Equal(t, wantMissingResult, outputs[id], "unrecorded result for %s", id)
 		}
 		require.Less(t, callIndex, outputIndex, "call must precede its result")
 		require.Less(t, outputIndex, firstUserIndex, "all prior results must precede the first new user turn")
 	}
+	return items
 }
 
 // A native record can retain calls after its editable display projection changes.

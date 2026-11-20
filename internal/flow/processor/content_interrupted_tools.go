@@ -173,6 +173,9 @@ func (history projectedHistory) withInterruptedToolResults(
 }
 
 func missingResponsesToolResults(calls []model.ToolCall, results []model.Message) []model.Message {
+	const missingResult = "No result is available for this tool call. " +
+		"The previous run may have been interrupted before the result was recorded. " +
+		"The tool may already have run, and its outcome is unknown."
 	reported := make(map[string]bool, len(results))
 	for _, result := range results {
 		reported[result.ToolID] = true
@@ -180,8 +183,7 @@ func missingResponsesToolResults(calls []model.ToolCall, results []model.Message
 	var missing []model.Message
 	for _, call := range calls {
 		if !reported[call.ID] {
-			missing = append(missing, model.NewToolMessage(call.ID, call.Function.Name,
-				"No result is available for this tool call. Its execution status is unknown."))
+			missing = append(missing, model.NewToolMessage(call.ID, call.Function.Name, missingResult))
 		}
 	}
 	return missing
