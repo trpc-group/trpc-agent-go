@@ -418,3 +418,19 @@ also pass per-run `agent.RunOption` values through `SpawnRequest.RunOptions`;
 this is for in-process runner configuration and should not be serialized as a
 cross-node contract. `SpawnRequest.RunContext` can add local context values to
 the child runner context for the same in-process use case.
+
+`tool/taskrun` uses these existing fields to inherit the calling invocation's
+`ToolPermissionPolicy` and mark model-generated task text as delegated input.
+With a parent policy, it also captures visible host user inputs at spawn time
+for approval review. The snapshot does not retain the parent context or live
+session and is not added to the worker's model messages. Both sync and async
+workers enforce the inherited policy on each tool call; approving
+`start_task_run` does not approve the worker's later actions. Parent prompt,
+model, and cancellation overrides are not inherited by this mechanism.
+
+The built-in in-process service applies `RunOptions` and `RunContext`. Custom
+local controllers must also apply them. Distributed controllers need an
+explicit equivalent permission/provenance contract rather than serializing Go
+functions. The snapshot is not a live authorization feed: later parent-session
+restrictions do not automatically revoke background work. Use the worker's
+steering or cancellation controls to change an active task.

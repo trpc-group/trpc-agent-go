@@ -398,3 +398,15 @@ taskRunTools := taskruntool.NewTools(
 这属于进程内 runner 配置，不应作为跨节点序列化协议。
 `SpawnRequest.RunContext` 可用于把本地 context value 注入子 runner
 context，适用范围同样是进程内实现。
+
+`tool/taskrun` 通过这些已有字段继承调用方 invocation 的
+`ToolPermissionPolicy`，并将模型生成的任务文本标记为 agent 委派输入。
+父级存在权限策略时，还会在启动时快照可见的真实用户输入，供 approval reviewer
+使用。快照不保留父请求的 context 或活跃 session，也不会加入 worker 的模型消息。
+sync 和 async worker 都会在每次工具执行前检查继承的策略；批准
+`start_task_run` 不代表批准 worker 后续所有操作。该机制不继承父级 prompt、模型或取消信号。
+
+内置 in-process service 会应用 `RunOptions` 和 `RunContext`，自定义本地 controller
+也需要应用这两个字段。分布式 controller 应明确设计等价的权限与来源传递协议，
+不能直接序列化 Go 函数。快照反映启动时的授权，不会实时同步父 session 后续的限制；
+需要通过 worker 自己的 steer 或取消机制调整运行中的任务。

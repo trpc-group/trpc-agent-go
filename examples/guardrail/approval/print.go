@@ -33,19 +33,21 @@ func (a *demoApp) printHelp() {
 	fmt.Println(`  - "Run go test ./... and summarize failures."`)
 	fmt.Println("Guardrail behavior:")
 	fmt.Printf("  - %s requires approval review.\n", toolExecCommand)
-	fmt.Printf("  - %s bypasses approval.\n", toolWriteStdin)
+	fmt.Printf("  - %s requires approval review.\n", toolWriteStdin)
 	fmt.Printf("  - %s is denied by policy.\n", toolKillSession)
 }
 
 func (a *demoApp) printEvents(eventCh <-chan *event.Event) error {
 	fmt.Print("🤖 Assistant: ")
 	assistantStarted := false
+	var runErr error
 	for evt := range eventCh {
 		if evt == nil {
 			continue
 		}
 		if evt.Error != nil {
 			fmt.Printf("\n❌ Error: %s\n", evt.Error.Message)
+			runErr = fmt.Errorf("agent run: %s", evt.Error.Message)
 			continue
 		}
 		if evt.IsToolCallResponse() {
@@ -61,7 +63,7 @@ func (a *demoApp) printEvents(eventCh <-chan *event.Event) error {
 			continue
 		}
 		if evt.IsRunnerCompletion() {
-			break
+			continue
 		}
 		if evt.Response == nil || len(evt.Response.Choices) == 0 {
 			continue
@@ -80,7 +82,7 @@ func (a *demoApp) printEvents(eventCh <-chan *event.Event) error {
 	if assistantStarted {
 		fmt.Println()
 	}
-	return nil
+	return runErr
 }
 
 func printToolCalls(evt *event.Event) {

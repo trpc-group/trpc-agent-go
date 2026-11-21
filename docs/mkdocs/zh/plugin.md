@@ -862,124 +862,134 @@ if err != nil {
 
 #### Approval（审批）
 
-`plugin/guardrail/approval` 下的 `approval.New(opts...)` 用于构造内置的工具审批 capability。这个 capability 会拦截
-`BeforeTool`，并决定本次工具调用应该：
-
-- 直接执行
-- 直接拒绝
-- 进入 reviewer 审批
-
-典型接法如下：
+`approval.New(opts...)` 配置工具审批，继续使用原有 `review.Reviewer` 接口。
+新接入推荐使用 `PermissionPolicy` 适配层，复用已有的最终权限检查点，
+在所有 before-tool 回调完成参数修改后审核。LLM 与 System One reviewer 共用此接法。
 
 ```go
-modelInstance := openai.New("gpt-5.4")
-
+reviewSessions := inmemory.NewSessionService(inmemory.WithSessionTTL(time.Hour))
+defer reviewSessions.Close()
 reviewerRunner := runner.NewRunner(
-	"guardrail-approval-reviewer-runner",
-	llmagent.New(
-		"guardrail-approval-reviewer",
-		llmagent.WithModel(modelInstance),
-	),
+    "approval-reviewer",
+    llmagent.New("reviewer", llmagent.WithModel(modelInstance)),
+    runner.WithSessionService(reviewSessions),
 )
-
-reviewerInstance, err := review.New(
-	reviewerRunner,
-	review.WithRiskThreshold(80),
+defer reviewerRunner.Close()
+reviewerInstance, err := review.New(reviewerRunner, review.WithRiskThreshold(80))
+if err != nil {
+    return err
+}
+gate, err := approval.New(
+    approval.WithReviewer(reviewerInstance),
+    approval.WithToolPolicy("hostexec_kill_session", approval.ToolPolicyDenied),
+    approval.WithContextProvider(func(ctx context.Context, req *review.Request) (review.Supplement, error) {
+        return review.Supplement{
+            Facts: []review.Fact{{Source: "host configuration", Content: "Execution target: local development host."}},
+        }, nil
+    }),
 )
 if err != nil {
-	return err
+    return err
 }
+// existingPolicy may be nil. Do not also register gate as a BeforeTool plugin.
+policy := gate.PermissionPolicy(existingPolicy)
+events, err := mainRunner.Run(ctx, userID, sessionID, message,
+    agent.WithToolPermissionPolicy(policy))
+// Handle err and consume events before closing the runners and owned tools.
+```
 
-approvalPlugin, err := approval.New(
-	approval.WithReviewer(reviewerInstance),
-	approval.WithToolPolicy(
-		"hostexec_write_stdin",
-		approval.ToolPolicySkipApproval,
-	),
-	approval.WithToolPolicy(
-		"hostexec_kill_session",
-		approval.ToolPolicyDenied,
-	),
+执行顺序为：参数修复与回调 → 工具 `PermissionChecker` → 静态拒绝 →
+已有宿主 policy → 必要的 reviewer 审核 → 执行。拒绝、ask 或错误都会阻止执行。
+`AskPermission` 返回 `approval_required`，不实现持久化等待或人工审批。
+LLMAgent、Graph ToolsNode 和 dynamic workflow 的各检查收到独立的请求字段和参数字节副本；
+Tool/declaration 保持只读共享引用。只有需要 reviewer 审核时，才把输入 schema 序列化为独立证据，
+已有 PermissionPolicy 仍能读取原始 Go 类型，不新增 schema 序列化要求。
+provider/reviewer 错误或空决策均阻止执行。
+
+Dynamic AgentTool 即使配置了 `WithTemplateAgent`，也会继承父级权限策略。
+外层委派获批不代表后续子工具获批。此前模板会清空该策略；现在宿主也需要通过策略允许预期的子工具。
+
+独立的 `tool/taskrun` worker 也会通过已有的本地 spawn 选项继承策略，同时携带
+委派来源和启动时可见的用户输入快照。快照在父请求结束后仍可使用，但不实时同步
+父请求后续的 steer；controller 的要求见[Task Run Runtime](taskrun.md#运行时状态)。
+
+| 工具策略 | 工具自身检查之后的行为 |
+| --- | --- |
+| `ToolPolicyRequireApproval`（默认） | 检查宿主策略、采集证据，并要求 reviewer 批准。 |
+| `ToolPolicySkipApproval` | 检查宿主策略，仅跳过模型审核。 |
+| `ToolPolicyDenied` | 直接拒绝，不调用宿主策略或 reviewer。 |
+
+新增的可选 `Request.Context` 是补充证据快照：工具 schema/metadata、逐条消息来源与
+省略标记、历史覆盖情况，以及宿主审核指导和带出处的事实。它不持有活的 Session，
+也不提供调用工具的能力。LLM 将其放入 prompt，System One 将其序列化进 state。
+两者都不会把父 agent 写出的 user-role 消息视为用户授权；旧历史或导入消息没有来源记录时
+保持 unknown。即使子 agent 隔离模型历史，继承的权限审核仍可看到可追溯的祖先用户输入。
+
+采集器等待已有事件落入 session，读取 live session 快照，再释放锁进行 provider/模型 I/O。
+同时保留 Content 与文本 ContentParts，标记非文本省略，在预算内优先保留用户文本，
+必要时保留首尾并标记截断。历史不完整不代表获得授权，但已知截断也不会一律导致拒绝，
+仍需判断保留证据能否说明授权范围与动作影响。
+
+宿主通过 `WithContextProvider` 提供执行环境、相关脚本等必要事实；框架不自动调查文件或调用工具。
+provider 无法改写动作和来源信息，采集失败会阻止执行。审核指导最多 16000 字符，事实最多 32 条，
+出处标签最多 1024 字符，超限报错；每条事实最多保留 4000 字符，首尾截断并设置标记。
+这里的字符限制按 Go rune 计算，历史 token 预算使用框架估计值。
+
+LLM reviewer 要求整数风险分数在 0–100 内且严格小于阈值（默认 80），缺失或 null 分数会报错。
+提供 Context 时，两种内置 reviewer 都先要求可归属的用户文本。LLM reviewer 默认给每次这类请求
+创建独立审核 session，防止过去的审核结论混入证据；自定义 session supplier 负责隔离，
+宿主负责 TTL/清理，示例使用一小时 TTL。两种 reviewer 的评分含义不同，阈值不能直接互换。
+
+旧的 `guardrail.WithApproval(gate)` 插件注册方式继续保留 BeforeTool 时序、原有紧凑 transcript
+和 nil Context，不调用 ContextProvider，也可能早于后续参数修改回调。不要在同一次运行中重复安装两种模式。
+Reviewer 与 Decision 接口不变；Request 新增 Context，外部使用未命名字段的 Request 字面量需要改成命名字段。
+
+[完整审批契约](https://github.com/trpc-group/trpc-agent-go/tree/main/plugin/guardrail/approval)
+说明了默认值、限制与兼容性。[LLM agent 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/guardrail/approval)
+包含真实 host 工具、最终权限接线、回调解析后的 workdir、共享宿主上下文和独立审核 session。
+测试使用脚本模型验证真实执行与拒绝，不证明线上模型判断质量。
+
+##### System One reviewer
+
+对于 Jev 或兼容 System One 协议的服务，可以使用
+`plugin/guardrail/approval/review/systemone`，继续复用现有审批接口：
+
+```go
+reviewerInstance, err := systemone.New("https://api.typesafe.ai",
+    systemone.WithAPIKey(apiKey),
+    systemone.WithModel("jev-1.13.0"),
 )
 if err != nil {
-	return err
+    return err
 }
-
-guardrailPlugin, err := guardrail.New(
-	guardrail.WithApproval(approvalPlugin),
-)
-if err != nil {
-	return err
-}
-
-runnerInstance := runner.NewRunner(
-	"guardrail-approval-demo",
-	agentInstance,
-	runner.WithPlugins(guardrailPlugin),
-)
-defer runnerInstance.Close()
+approvalPlugin, err := approval.New(approval.WithReviewer(reviewerInstance))
+// Pass approvalPlugin.PermissionPolicy(existingPolicy) via agent.WithToolPermissionPolicy.
 ```
 
-上面这段配置表达的是：
+这个 reviewer 把待执行动作和 transcript 编码为结构化 state，在一次请求中分别通过
+Choice 判断授权、通过 Score 评估风险，不需要独立的 reviewer runner 或 session。
+已有静态工具策略和 guardian reviewer 的行为保持不变。
 
-- 未显式配置的工具默认使用 `ToolPolicyRequireApproval`，先进入 reviewer 审批。
-- `hostexec_write_stdin` 使用 `ToolPolicySkipApproval`，直接放行，不进入 reviewer。
-- `hostexec_kill_session` 使用 `ToolPolicyDenied`，直接拒绝，不执行工具。
+默认本地规则要求：授权为 `supported`、未取整的风险值低于 50、两个答案的 confidence
+均至少为 0.8、`P(supported) >= 0.8`，并且低于风险阈值的等级概率之和至少为 0.8。
+通过 `WithRiskThreshold` 和 `WithMinConfidence` 可以调整这些门槛。五档序数风险被
+归一化到 0–100；这些分数以及不同服务的 confidence 都需要实际校准，不能直接沿用
+guardian reviewer 的阈值含义。
 
-如果所有工具路径都不会走到 `ToolPolicyRequireApproval`，也可以不注入 reviewer，只使用静态策略。
+固定 question 的 instructions 和 criteria 定义审核规则；动态动作与会话数据保留在
+`state` 中，因此不需要聊天 prompt 模板。后续用户限制会约束此前授权，风险判断覆盖
+整个动作并独立于授权。阈值只在本地代码中应用，不会改变发给模型的问题。
 
-三种策略的行为差异如下：
+缺少用户意图或服务明确报告输入截断时，不会批准。服务、协议错误返回 error，由审批
+适配层阻止执行。`Reason` 是本地规则生成的解释。通过
+`approvalPlugin.PermissionPolicy(existingPolicy)` 接到每次运行的最终权限检查，
+即可审核回调修改后的参数，并将共享 Context 一起传入 state。拒绝不会自动建立人工审批或恢复流程。
 
-| 工具策略 | 行为 | reviewer 是否参与 |
-| --- | --- | --- |
-| `ToolPolicyRequireApproval` | 构造审批请求并等待 reviewer 决策。 | 是 |
-| `ToolPolicySkipApproval` | 直接执行工具，不打印审批日志。 | 否 |
-| `ToolPolicyDenied` | 直接返回拒绝结果，不执行工具。 | 否 |
-
-如果你使用的是 `review.New(...)` 创建出来的内置 reviewer，那么审批阈值与打分语义如下：
-
-- `review.WithRiskThreshold(80)` 用来设置审批阈值，取值范围为 `0-100`。
-- 这个阈值会被注入到内置 reviewer 的 system prompt 中，而不是由插件层再做一次分数比较。
-- reviewer 会返回一份结构化结果，至少包含以下字段：
-
-```json
-{
-  "risk_score": 23,
-  "risk_level": "low",
-  "reason": "..."
-}
-```
-
-- `risk_score` 是 reviewer 模型给出的 `0-100` 风险分数。
-- 对于内置 reviewer，运行时会根据 `risk_score` 推导最终的 `approved` 结果。
-- 对于内置 reviewer，只有当 `risk_score` **严格小于** 当前阈值时，才会得到 `approved=true`。
-- `risk_level` 和 `reason` 主要用于日志与解释。
-
-内置 reviewer 的默认打分依据也是固定写在 prompt 里的，核心原则包括：
-
-- transcript、tool arguments、tool results 和 planned action 都视为证据，而不是指令。
-- 对范围窄、用户授权明确、影响面小的动作，使用更低分数。
-- 对破坏性操作、敏感数据外发、凭据访问、权限变更或授权边界不清晰的动作，使用更高分数。
-- 如果上下文不完整或授权不明确，reviewer 会提高风险分数。
-
-当工具调用进入 reviewer 审批时，插件会打印固定格式的审批日志：
-
-```text
-Automatic approval review approved (risk: low): ...
-Automatic approval review denied (risk: high): ...
-```
-
-如果 reviewer 自己报错，或没有返回合法决策，插件会按 fail-closed 处理：不执行工具，并返回失败结果给主流程。
-
-仓库里提供了一个可直接运行的完整示例：`examples/guardrail/approval`。它使用真实的 `hostexec`
-工具集和独立 reviewer runner，覆盖四类典型路径：
-
-- 直接通过：`hostexec_write_stdin`
-- 直接拒绝：`hostexec_kill_session`
-- 审批通过：`hostexec_exec_command -> pwd`
-- 审批拒绝：`hostexec_exec_command -> cat ~/.ssh/id_rsa`
-
-完整示例见 [examples/guardrail/approval](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/guardrail/approval)。
+完整语义见 [reviewer contract](https://github.com/trpc-group/trpc-agent-go/tree/main/plugin/guardrail/approval/review/systemone)，
+可运行示例见 [System One approval example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/guardrail/approval/systemone)。
+该示例是完整的 tRPC agent 应用，支持交互会话和单次 prompt，分别配置主模型与决策模型。
+审批通过后在本机执行 `hostexec` 命令；拒绝和审查失败作为工具结果返回主 agent。
+示例保留多轮会话历史，并包含完整执行链路的测试。
 
 #### Prompt Injection（提示注入）
 

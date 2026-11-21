@@ -164,7 +164,8 @@ type DetailedCapabilitySurfaceProvider func(
 
 // WithTemplateAgent sets the base/template agent that defines the execution
 // boundary for the dynamic sub-agent (default model, executor, callbacks,
-// permission policy, max calls, ...).
+// max calls, ...). The parent's ToolPermissionPolicy is still inherited and
+// checked before each child tool execution; a template cannot bypass it.
 //
 // When omitted, the dynamic tool lazily derives the base agent from the parent
 // invocation at call time. The model can never select an arbitrary agent; it
@@ -1113,10 +1114,12 @@ func (at *Tool) dynamicChildInvocationOptions(
 //   - prompt: Instruction/GlobalInstruction outrank the template prompt — a
 //     model-provided instruction still applies because it travels via the
 //     surface patch, which is resolved before RunOptions;
-//   - execution: CodeExecutor, plus the execution-policy filters
-//     (ToolExecutionFilter defers tool calls, ToolPermissionPolicy gates them)
-//     which have no natural external-continuation channel for a synchronous
-//     sub-agent. Inheriting these requires an explicit future Option.
+//   - execution: CodeExecutor and ToolExecutionFilter, which defers tool calls
+//     to an external continuation unavailable to a synchronous sub-agent.
+//
+// ToolPermissionPolicy is always inherited: a template cannot bypass the
+// parent's execution permissions. Its deny/ask results prevent child tool
+// execution without requiring an external continuation.
 func (at *Tool) sanitizeChildRunOptions(
 	runOpts *agent.RunOptions,
 	enforceTemplateBoundary bool,
@@ -1143,7 +1146,6 @@ func (at *Tool) sanitizeChildRunOptions(
 	runOpts.GlobalInstruction = ""
 	runOpts.CodeExecutor = nil
 	runOpts.ToolExecutionFilter = nil
-	runOpts.ToolPermissionPolicy = nil
 }
 
 // buildDynamicChildFilterKey constructs the child filter key honoring the
