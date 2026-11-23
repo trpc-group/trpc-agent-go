@@ -12,6 +12,7 @@ package acp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,6 +63,65 @@ func TestToolCallIDMapperWarnsOnlyOnActiveProviderIDConflict(t *testing.T) {
 		warnings[0][0],
 		"ACP tool call ID conflict",
 	)
+}
+
+func TestToolCallIDMapperFillsLateNameAndNotifiesPermissionWaiter(t *testing.T) {
+	originalDebugContext := log.DebugContext
+	var waitingOnce sync.Once
+	waiting := make(chan struct{})
+	log.DebugContext = func(_ context.Context, args ...any) {
+		if len(args) > 0 && args[0] == "Waiting for ACP tool call ID before permission check" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}
+	t.Cleanup(func() {
+		log.DebugContext = originalDebugContext
+	})
+
+	mapper := newToolCallIDMapper(func() acpsdk.ToolCallId {
+		return "tool-1"
+	})
+	ctx := context.Background()
+	acpToolCallID := mapper.resolve(ctx, "auto_call_0", "")
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), acpToolCallID)
+
+	result := make(chan acpsdk.ToolCallId, 1)
+	errs := make(chan error, 1)
+	claimCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		claimed, err := mapper.claimPermission(
+			claimCtx,
+			"auto_call_0",
+			clientWriteTextFileToolName,
+		)
+		if err != nil {
+			errs <- err
+			return
+		}
+		result <- claimed
+	}()
+
+	select {
+	case got := <-result:
+		t.Fatalf("permission was claimed before the tool name arrived: %q", got)
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("permission waiter did not reach the wait path")
+	}
+
+	got := mapper.resolve(ctx, "auto_call_0", clientWriteTextFileToolName)
+	assert.Equal(t, acpToolCallID, got)
+	select {
+	case claimed := <-result:
+		assert.Equal(t, acpToolCallID, claimed)
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("permission claim did not resume after the tool name arrived")
+	}
 }
 
 func TestToolCallIDMapperUsesSessionUniqueSequenceAcrossPrompts(t *testing.T) {

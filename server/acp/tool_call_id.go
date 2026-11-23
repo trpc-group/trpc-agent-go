@@ -53,8 +53,30 @@ func (m *toolCallIDMapper) resolve(
 	if call := m.active[providerID]; call != nil {
 		acpToolCallID := call.acpToolCallID
 		activeToolName := call.toolName
+		filledName := false
+		conflict := false
+		switch {
+		case activeToolName == "" && toolName != "":
+			call.toolName = toolName
+			filledName = true
+			m.notifyLocked()
+		case activeToolName != "" && toolName != "" && activeToolName != toolName:
+			conflict = true
+		}
 		m.mu.Unlock()
-		if activeToolName != toolName {
+		if filledName {
+			log.DebugContext(
+				ctx,
+				"Filled late ACP tool call name",
+				"provider_tool_call_id",
+				providerID,
+				"acp_tool_call_id",
+				acpToolCallID,
+				"tool_name",
+				toolName,
+			)
+		}
+		if conflict {
 			log.WarnContext(
 				ctx,
 				"ACP tool call ID conflict: provider tool call ID reused while active",
