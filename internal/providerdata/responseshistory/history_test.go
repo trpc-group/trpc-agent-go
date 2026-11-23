@@ -43,7 +43,7 @@ func TestReadCompletedRejectsInvalidHistory(t *testing.T) {
 		{"missing payload", "", "payload is empty"},
 		{"null array", "null", "must be an item array"},
 		{"object instead of array", "{}", "must be an item array"},
-		{"invalid second item", `[{"type":"reasoning","id":"r"},42]`, "decode item 1"},
+		{"invalid second item", `[{"type":"reasoning","id":"r"},42]`, "item 1: decode:"},
 		{"unknown type", `[{"type":"other"}]`, "unsupported native item type"},
 		{"missing reasoning id", `[{"type":"reasoning"}]`, "empty id"},
 		{"unfinished call", `[{"type":"function_call","status":"in_progress"}]`, "want completed"},

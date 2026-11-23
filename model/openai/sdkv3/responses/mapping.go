@@ -10,6 +10,7 @@
 package responses
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -382,6 +383,10 @@ func convertAssistantMessage(msg model.Message, called map[string]struct{}) (res
 		}
 	}
 	for _, call := range msg.ToolCalls {
+		// Chat history may omit arguments for a completed no-argument call.
+		if len(bytes.TrimSpace(call.Function.Arguments)) == 0 {
+			call.Function.Arguments = []byte("{}")
+		}
 		if err := validateLegacyToolCall(call); err != nil {
 			return nil, err
 		}

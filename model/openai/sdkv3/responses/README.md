@@ -329,7 +329,9 @@ messages that follow a function call in the same output. Those cases need
 content, metadata or ordering that this conversion cannot preserve.
 Switching back replays the original Responses items and converts the
 intervening Chat messages and tool rounds without Chat-specific reasoning.
-Completed tools are replayed as history.
+Completed tools are replayed as history. If a Chat tool call has empty or
+whitespace-only arguments, the Responses request sends `{}` for that call
+and preserves its recorded result and call ID.
 
 LLM flows and Graph LLM nodes allow adapters implementing
 `model.ProviderHistoryConsumer` to handle the protocols they declare. Other

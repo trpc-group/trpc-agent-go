@@ -72,7 +72,7 @@ func ReadCompleted(payload json.RawMessage) ([]Item, error) {
 	for i, encoded := range raw {
 		item, err := ReadCompletedItem(encoded)
 		if err != nil {
-			return nil, fmt.Errorf("decode item %d: %w", i, err)
+			return nil, fmt.Errorf("item %d: %w", i, err)
 		}
 		items[i] = item
 	}
@@ -84,7 +84,7 @@ func ReadCompleted(payload json.RawMessage) ([]Item, error) {
 func ReadCompletedItem(encoded json.RawMessage) (Item, error) {
 	var item Item
 	if err := json.Unmarshal(encoded, &item); err != nil {
-		return Item{}, err
+		return Item{}, fmt.Errorf("decode: %w", err)
 	}
 	if err := item.validate(); err != nil {
 		return Item{}, err
