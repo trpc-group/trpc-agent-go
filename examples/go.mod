@@ -15,6 +15,7 @@ replace (
 )
 
 require (
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/go-openapi/testify/v2 v2.0.2
 	github.com/google/uuid v1.6.0
@@ -46,7 +47,6 @@ require (
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coder/acp-go-sdk v0.13.5 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect

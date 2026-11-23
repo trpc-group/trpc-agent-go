@@ -3,11 +3,20 @@
 This example exposes a tRPC Agent runner as an Agent Client Protocol (ACP) v1
 agent over line-delimited JSON-RPC on standard input and output.
 
+## Examples
+
+- [`mcp/`](mcp/) shows an ACP client starting an ACP server with a
+  session-scoped stdio MCP server. The example client launches the ACP server
+  and the MCP server so the complete tool-call flow runs with one command.
+- [`clientfiles/`](clientfiles/) shows ACP client file reads and writes. The
+  client advertises filesystem capabilities, handles permission requests, and
+  verifies a file copied through the ACP file tools.
+
 ## Run
 
 ```bash
 export OPENAI_API_KEY="..."
-cd examples/acp
+cd examples/acpserver
 go run . -model gpt-4o-mini
 ```
 
@@ -15,11 +24,15 @@ Normally an ACP client starts this command and owns its standard streams. For
 example, configure the client command as:
 
 ```text
-go run /absolute/path/to/trpc-agent-go/examples/acp
+go run /absolute/path/to/trpc-agent-go/examples/acpserver
 ```
 
 Do not print application logs to standard output because it carries the ACP
 protocol. Send diagnostics to standard error.
+
+The feature examples in `mcp/` and `clientfiles/` also use standard input and
+output for the ACP connection. Their README files show the recommended
+one-command client flow.
 
 ## Initial capability scope
 
