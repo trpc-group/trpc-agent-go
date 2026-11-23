@@ -113,6 +113,8 @@ func WithHostedToolSearch() Option {
 // before the next model step and borrows their execution bindings for this
 // run. After a restart, an expired binding can be searched for again.
 //
+// Built-in search handlers are available in the responses/toolsearch package.
+//
 // Client tool search requires a flow that completes provider actions, such as
 // LLMAgent; Graph LLM nodes report an error for a search call. GenerateContent
 // returns an error when handler is nil. WithHostedToolSearch and

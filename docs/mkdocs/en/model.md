@@ -2441,7 +2441,9 @@ deferred tools by model-facing name, namespace, and tool description. By
 default it returns up to five matching entries.
 
 ```go
-llm := responses.New("gpt-5.4", responses.WithClientToolSearch(responses.NewKeywordToolSearch()))
+import "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+
+llm := responses.New("gpt-5.4", responses.WithClientToolSearch(toolsearch.NewKeyword()))
 ```
 
 For custom retrieval, pass a handler that returns `[]responses.ToolSearchEntry`.

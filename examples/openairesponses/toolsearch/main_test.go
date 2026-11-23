@@ -18,12 +18,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
-	search := responses.NewKeywordToolSearch()
+	search := toolsearch.NewKeyword()
 	candidates := []responses.ToolSearchEntry{
 		{Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
 			Name: "lookup_invoice", Tool: searchTool("billing_lookup_invoice", "Look up an invoice and its payment status.")},

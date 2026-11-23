@@ -212,7 +212,9 @@ ranker with `plugin/toolsearch` and returns up to five matching entries by defau
 The following configuration loads at most three tools per search.
 
 ```go
-search := responses.NewKeywordToolSearch(responses.WithKeywordMaxResults(3))
+import "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+
+search := toolsearch.NewKeyword(toolsearch.WithKeywordMaxResults(3))
 llm := responses.New("gpt-5.4", responses.WithClientToolSearch(search))
 ```
 

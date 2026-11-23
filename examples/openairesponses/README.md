@@ -190,10 +190,13 @@ function in `tools/main.go`.
 The program only configures the model, the tools, and the deferral policy:
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+)
 
 search := responses.WithHostedToolSearch() // -mode server
-// search := responses.WithClientToolSearch(responses.NewKeywordToolSearch()) // -mode client
+// search := responses.WithClientToolSearch(toolsearch.NewKeyword()) // -mode client
 agent := llmagent.New(
     "responses-tool-search-agent",
     llmagent.WithModel(responses.New(modelName, search)),

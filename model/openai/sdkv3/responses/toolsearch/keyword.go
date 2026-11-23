@@ -7,20 +7,21 @@
 //
 //
 
-package responses
+package toolsearch
 
 import (
 	"context"
 	"strings"
 	"unicode"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/toolsearch"
+	searchrank "trpc.group/trpc-go/trpc-agent-go/internal/toolsearch"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 )
 
 const defaultKeywordMaxResults = 5
 
-// KeywordSearchOption configures NewKeywordToolSearch.
-type KeywordSearchOption func(*keywordSearchOptions)
+// KeywordOption configures NewKeyword.
+type KeywordOption func(*keywordSearchOptions)
 
 type keywordSearchOptions struct {
 	maxResults int
@@ -28,7 +29,7 @@ type keywordSearchOptions struct {
 
 // WithKeywordMaxResults limits the number of tools returned by keyword search.
 // Non-positive values use the default of 5. The last option wins.
-func WithKeywordMaxResults(limit int) KeywordSearchOption {
+func WithKeywordMaxResults(limit int) KeywordOption {
 	return func(o *keywordSearchOptions) {
 		o.maxResults = limit
 		if limit <= 0 {
@@ -37,7 +38,7 @@ func WithKeywordMaxResults(limit int) KeywordSearchOption {
 	}
 }
 
-// NewKeywordToolSearch returns a local keyword search handler for request
+// NewKeyword returns a local keyword search handler for request
 // candidates. It searches the model-visible names, namespaces, and tool
 // descriptions, and returns the original entries in relevance order. It makes
 // no network or model calls. The default result limit is 5.
@@ -46,14 +47,14 @@ func WithKeywordMaxResults(limit int) KeywordSearchOption {
 // query, a nil request, or a query with no matches returns no tools. Candidates
 // without a tool declaration are skipped. Nil options are ignored. The handler
 // can be shared by concurrent runs and returns the context error if canceled.
-func NewKeywordToolSearch(opts ...KeywordSearchOption) ToolSearchHandler {
+func NewKeyword(opts ...KeywordOption) responses.ToolSearchHandler {
 	o := keywordSearchOptions{maxResults: defaultKeywordMaxResults}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&o)
 		}
 	}
-	return func(ctx context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
+	return func(ctx context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -64,7 +65,7 @@ func NewKeywordToolSearch(opts ...KeywordSearchOption) ToolSearchHandler {
 		if query == "" {
 			return nil, nil
 		}
-		docs := make([]toolsearch.Document, len(req.Candidates))
+		docs := make([]searchrank.Document, len(req.Candidates))
 		exact := false
 		for i, candidate := range req.Candidates {
 			if err := ctx.Err(); err != nil {
@@ -84,7 +85,7 @@ func NewKeywordToolSearch(opts ...KeywordSearchOption) ToolSearchHandler {
 			exact = exact || strings.EqualFold(name, query)
 			// The namespace is searchable even when the declaration has a
 			// different local execution name. Its description remains a bias.
-			docs[i] = toolsearch.NewDocument(name,
+			docs[i] = searchrank.NewDocument(name,
 				decl.Description+" "+candidate.Namespace,
 				candidate.Namespace, candidate.NamespaceDescription)
 		}
@@ -97,7 +98,7 @@ func NewKeywordToolSearch(opts ...KeywordSearchOption) ToolSearchHandler {
 		if query == "" {
 			return nil, nil
 		}
-		matches := toolsearch.Rank([]string{query}, docs)
+		matches := searchrank.Rank([]string{query}, docs)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -106,7 +107,7 @@ func NewKeywordToolSearch(opts ...KeywordSearchOption) ToolSearchHandler {
 			best = max(best, keywordEvidence(match))
 		}
 		margin := max(1, best/3)
-		var result []ToolSearchEntry
+		var result []responses.ToolSearchEntry
 		for _, match := range matches {
 			if best-keywordEvidence(match) > margin {
 				continue
@@ -126,7 +127,7 @@ func NewKeywordToolSearch(opts ...KeywordSearchOption) ToolSearchHandler {
 // Compare independent lexical evidence rather than the ranker's larger name
 // bonus: a description-only second capability can still be useful in a query
 // that asks for several tools. Names receive one additional vote.
-func keywordEvidence(match toolsearch.Match) int {
+func keywordEvidence(match searchrank.Match) int {
 	return match.MatchedTerms + match.NameMatches
 }
 

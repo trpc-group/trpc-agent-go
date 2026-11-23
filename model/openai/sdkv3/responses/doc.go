@@ -20,7 +20,7 @@
 // WithHostedToolSearch and WithClientToolSearch opt in to tool search for the
 // tools that the agent defers. A client search handler returns ToolSearchEntry
 // values to select candidates, substitute executable tools, or load tools from
-// an external catalog, even without deferred candidates. [NewKeywordToolSearch]
+// an external catalog, even without deferred candidates. The responses/toolsearch package
 // supplies a local keyword handler for the request's deferred candidates.
 // Each Run borrows returned tool objects. The application owns their
 // resources and any bindings it needs to recover across Runs.

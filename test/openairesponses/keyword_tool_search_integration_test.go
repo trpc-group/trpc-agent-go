@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	responses "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
@@ -42,7 +43,7 @@ func TestRunnerKeywordToolSearchNamespaces(t *testing.T) {
 				server, srv := newSearchServer(t, search, call, messageOutput("msg_keyword", answer))
 				executions := &searchExecutions{}
 				agt := llmagent.New("keyword",
-					llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(responses.NewKeywordToolSearch()))),
+					llmagent.WithModel(newSearchModel(srv, responses.WithClientToolSearch(toolsearch.NewKeyword()))),
 					llmagent.WithGenerationConfig(model.GenerationConfig{Stream: stream}),
 					llmagent.WithToolSets([]tool.ToolSet{
 						deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{
