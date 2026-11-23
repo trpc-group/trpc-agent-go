@@ -141,37 +141,36 @@ MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
 
 ## 过期清理查询开销
 
-清理先找出包含 `updated_at` 不晚于 TTL 截止时间的未删除记录的会话，再利用
-原有会话前缀 cleanup 索引，以最多 8 个并发查询检查是否存在更新的未删除记录。
-只要存在新记录，整个会话的历史都会保留，包括旧记录。Track 仍按会话整组判断，覆盖该会话全部 track。
+每个集合通过一次聚合识别过期会话组。查询匹配未删除记录，并增加覆盖
+`app_name` 全部字符串取值的条件，使 MongoDB 可以使用已有的 partial
+`cleanup` 索引 `(app_name, user_id, session_id, updated_at)`。
+本后端写入的应用名均为字符串。聚合仍按会话求最大的 `updated_at`，仅清理
+不晚于 TTL 截止时间的组；存在更新记录时保留全部历史，Track 仍覆盖会话内所有 track。
 
-初始化为两个事件集合新增非唯一 partial `cleanup_candidates` 索引。历史文档、
-旧 cleanup 索引、TTL 配置和删除模式不变。外部管理索引时，可在部署前执行
-以下命令，并按实际前缀修改集合和索引名称：
+此优化不新增索引、不迁移数据，也不强制 hint。已有索引和外部管理的数据库
+可以继续使用，缺少索引只影响性能，不影响清理结果。索引计划可以跳过软删除
+历史；MongoDB 7.0 可以使用覆盖查询，6.0 仍可能读取活跃文档来判断
+`deleted_at: null`。活跃历史占多数时，索引遍历加回表可能比原来的全表扫描更慢，尤其是在 6.0 上。
+应在实际数据库版本上核对执行计划、文档和索引扫描数以及耗时。
 
-```javascript
-for (const name of ["session_events", "session_tracks"]) {
-  db.getCollection(name).createIndex(
-    {updated_at: 1, app_name: 1, user_id: 1, session_id: 1},
-    {name: "idx_" + name + "_cleanup_candidates",
-     partialFilterExpression: {deleted_at: null}}
-  )
-}
+每批最多删除 500 个过期组，遍历结束后提交剩余不足一批的组；后续失败不影响
+已经完成的批次。事件与 Track 依次清理，各自拥有 30 秒预算（合计最多 60 秒），
+父 context 取消或服务关闭会停止清理。软/硬删除模式和 TTL 值保持不变。
+每个实例仍每轮执行全量分组；检查与删除也没有和并发追加构成原子操作。
+本优化不引入水位、租约或基于会话状态 TTL 的级联删除。
+
+在 `session/mongodb` 目录下，对本地测试副本集运行可选基准：
+
+```bash
+MONGODB_INTEGRATION_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -tags=integration -run '^$' \
+  -bench '^BenchmarkIntegrationCleanupIdentification$' -benchtime=3x -count=3
 ```
 
-该方案避免为了寻找候选而扫描大量近期历史，代价是新增索引，以及每个候选会话
-一次短查询。历史大部分已旧时，候选扫描仍可能较大，应同时观察查询次数、耗时
-和扫描量。缺少索引不影响正确性，旧版本也可以继续使用同一份数据。
-大集合建议提前建索引，避免启动时集中产生建索引负载。
-
-候选按每批最多 500 个处理，每批完成后即提交其中已过期的组，不需要凑满
-500 个过期组；后续批次失败不会丢失前面批次已完成的删除。事件与 Track
-清理依次执行，各自拥有 30 秒预算（合计最多 60 秒），避免事件清理超时后
-Track 没有剩余预算。更短的父 context 截止时间或服务关闭仍会取消两者，
-清理返回前会等待所有查询工作协程退出。
-
-清理仍沿用先检查、再删除的并发模型：候选检查与后续删除没有和并发追加构成
-原子操作。本优化不增加跨服务实例协调，也不改变清理间隔。
+数据包含 1 KiB 负载，覆盖软删除历史多、近期历史多、短活跃会话、全部过期及
+长会话场景。原聚合和索引聚合都会完整消费并校验结果。计时不含数据准备、
+删除和结果校验；10ms 延迟仅注入在 Aggregate 调用前，不含 getMore。
+本地基准不代表线上延迟。
 
 ## 事件排序索引升级
 

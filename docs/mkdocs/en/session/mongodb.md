@@ -153,46 +153,47 @@ MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
 
 ## Expiration cleanup query costs
 
-Cleanup first selects session groups containing non-deleted rows whose
-`updated_at` is at or before the TTL cutoff. It then checks each candidate for
-a non-deleted row newer than the cutoff, using the existing session-leading
-cleanup index with at most eight concurrent probes. A group with any newer
-row is retained, including its older rows. Track groups still span all tracks in the same session.
+Cleanup identifies expired session groups in one aggregation per collection.
+It matches non-deleted rows and the full string range of `app_name`, allowing
+MongoDB to use the existing partial `cleanup` index on
+`(app_name, user_id, session_id, updated_at)`. Application names stored by this
+backend are strings. The aggregation still selects groups whose maximum
+`updated_at` is at or before the TTL cutoff. A group with a newer row retains
+all of its history, and track groups still span every track in the session.
 
-Initialization adds a non-unique partial `cleanup_candidates` index to both
-event collections. Existing documents, cleanup indexes, TTL settings and
-delete modes remain unchanged. For externally managed indexes, create these
-before rollout, adjusting collection/index names for any prefix:
+This change needs no new index or data migration and does not force an index
+hint. Existing indexes and externally managed databases remain usable; missing
+indexes affect performance, not cleanup results. An indexed plan avoids
+scanning soft-deleted history. MongoDB 7.0 can cover this query from the index;
+MongoDB 6.0 may still fetch active documents to check `deleted_at: null`.
+When active histories dominate, index traversal plus document fetches can be
+slower than the original collection scan, particularly on MongoDB 6.0. Verify the execution
+plan, document/key scans and latency on the deployed database version.
 
-```javascript
-for (const name of ["session_events", "session_tracks"]) {
-  db.getCollection(name).createIndex(
-    {updated_at: 1, app_name: 1, user_id: 1, session_id: 1},
-    {name: "idx_" + name + "_cleanup_candidates",
-     partialFilterExpression: {deleted_at: null}}
-  )
-}
+Expired groups are deleted in batches of at most 500, with the remaining
+partial batch committed at the end. Completed batches survive a later failure.
+Event and track cleanup run sequentially with separate 30-second budgets (up
+to 60 seconds combined); parent cancellation or service shutdown stops both.
+Soft/hard deletion modes and TTL values are unchanged. Cleanup still repeats
+full grouping on each instance and retains the existing non-atomic
+check-then-delete window with concurrent appends; it introduces no watermark,
+lease or cascade from session-state TTL expiration.
+
+To compare identification costs on different history distributions, run the
+opt-in benchmark from `session/mongodb` against a local test replica set:
+
+```bash
+MONGODB_INTEGRATION_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -tags=integration -run '^$' \
+  -bench '^BenchmarkIntegrationCleanupIdentification$' -benchtime=3x -count=3
 ```
 
-This avoids scanning recent histories to find candidates, at the cost of an
-additional index and one short query per candidate session. When most history
-is already old, candidate enumeration can still be large; measure query counts
-and latency as well as scanned documents. Missing indexes affect performance,
-not correctness, and older service versions can continue using the same data.
-Prebuild indexes on large collections to avoid startup-time index build load.
-
-Candidates are processed in batches of at most 500. Each completed batch
-commits its expired groups, even if fewer than 500 have expired; a failure in a
-later batch does not discard earlier deletions. Event and track cleanup run
-sequentially with separate 30-second budgets (up to 60 seconds combined), so
-an event cleanup timeout does not consume the track cleanup budget. A shorter
-parent deadline or service shutdown still cancels both, and cleanup waits for
-all probe workers to exit.
-
-Cleanup keeps the existing scan-then-delete concurrency model: the candidate
-probe and subsequent deletion are not atomic with concurrent event appends.
-It does not add coordination between service instances or change the cleanup
-interval.
+The fixtures include 1 KiB payloads, deleted-heavy/recent-heavy histories,
+short active sessions, expired sessions and long-lived sessions. Both original
+and indexed aggregations consume and validate the complete result set. Setup,
+deletes and result validation are excluded from timing. The 10 ms delay applies
+once before the Aggregate call, not to getMore. These local measurements do
+not predict production latency.
 
 ## Event ordering index upgrades
 

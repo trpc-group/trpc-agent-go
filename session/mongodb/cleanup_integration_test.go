@@ -32,7 +32,7 @@ func originalCleanupPipeline(cutoff time.Time) bson.A {
 	}
 }
 
-func TestIntegrationCleanupCandidatesPreserveGroups(t *testing.T) {
+func TestIntegrationCleanupPreservesGroups(t *testing.T) {
 	for _, soft := range []bool{true, false} {
 		for _, indexed := range []bool{true, false} {
 			t.Run(fmt.Sprintf("soft=%t/indexed=%t", soft, indexed), func(t *testing.T) {
@@ -41,7 +41,7 @@ func TestIntegrationCleanupCandidatesPreserveGroups(t *testing.T) {
 				cutoff := now.Add(-time.Hour)
 				for _, name := range []string{svc.collSessionEvents, svc.collSessionTracks} {
 					coll := db.Collection(name)
-					index := "idx_" + name + "_cleanup_candidates"
+					index := "idx_" + name + "_cleanup"
 					_, err := coll.Indexes().DropOne(ctx, index)
 					require.NoError(t, err)
 					specs := []struct {
@@ -56,6 +56,9 @@ func TestIntegrationCleanupCandidatesPreserveGroups(t *testing.T) {
 						{"app", "u", "deleted-recent", 2 * time.Hour, false}, {"app", "u", "deleted-recent", 0, true},
 						{"app", "u", "deleted-old", 2 * time.Hour, true},
 						{"other-app", "u", "expired", 0, false}, {"app", "other-user", "expired", 0, false},
+						{"", "u", "legacy-empty-app", 2 * time.Hour, false},
+						{"中文", "u", "unicode-app", 2 * time.Hour, false},
+						{" ", "u", "space-app", 2 * time.Hour, false},
 					}
 					var docs []any
 					for i, sp := range specs {
@@ -80,7 +83,7 @@ func TestIntegrationCleanupCandidatesPreserveGroups(t *testing.T) {
 						ID bson.M `bson:"_id"`
 					}
 					require.NoError(t, cursor.All(ctx, &expired))
-					require.Len(t, expired, 3)
+					require.Len(t, expired, 6)
 					require.NoError(t, svc.cleanupExpiredCollection(ctx, now, time.Hour, name, "history"))
 					for _, sp := range specs {
 						filter := bson.M{"app_name": sp.app, "user_id": sp.user, "session_id": sp.id}
@@ -125,23 +128,12 @@ func TestIntegrationCleanupCandidatesPreserveGroups(t *testing.T) {
 	}
 }
 
-func TestIntegrationCleanupCandidateScanCost(t *testing.T) {
+func TestIntegrationCleanupSkipsSoftDeletedHistory(t *testing.T) {
 	ctx, svc, db := newIntegrationService(t, WithSoftDelete(false))
 	coll := db.Collection(svc.collSessionTracks)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	for batch := 0; batch < 40; batch++ {
-		docs := make([]any, 0, 1000)
-		for j := 0; j < 1000; j++ {
-			i := batch*1000 + j
-			updated := now
-			if i < 500 {
-				updated = now.Add(-2 * time.Hour)
-			}
-			docs = append(docs, bson.M{"app_name": "app", "user_id": "user", "session_id": fmt.Sprint(i % 100), "updated_at": updated, "event": make([]byte, 1024)})
-		}
-		_, err := coll.InsertMany(ctx, docs)
-		require.NoError(t, err)
-	}
+	fixture := cleanupFixture{name: "mostly_deleted", groups: 100, rows: 200, oldRows: 1, deleted: 200000}
+	seedCleanupFixture(t, ctx, coll, now, fixture)
 	require.NoError(t, db.RunCommand(ctx, bson.D{{Key: "profile", Value: 2}}).Err())
 	defer db.RunCommand(ctx, bson.D{{Key: "profile", Value: 0}})
 	started := time.Now()
@@ -175,11 +167,12 @@ func TestIntegrationCleanupCandidateScanCost(t *testing.T) {
 	require.NoError(t, cursor.All(ctx, &stats))
 	require.Len(t, stats, 1)
 	require.Less(t, stats[0].Docs, before.Docs)
-	require.LessOrEqual(t, stats[0].Keys, int64(1000))
-	t.Logf("original docs=%d keys=%d duration=%s; candidates docs=%d keys=%d operations=%d duration=%s", before.Docs, before.Keys, beforeTime, stats[0].Docs, stats[0].Keys, stats[0].Operations, afterTime)
+	require.EqualValues(t, fixture.groups*fixture.rows, stats[0].Keys)
+	require.EqualValues(t, 1, stats[0].Operations, "identify groups with a single aggregation")
+	t.Logf("original docs=%d keys=%d duration=%s; indexed aggregation docs=%d keys=%d operations=%d duration=%s", before.Docs, before.Keys, beforeTime, stats[0].Docs, stats[0].Keys, stats[0].Operations, afterTime)
 	count, err := coll.CountDocuments(ctx, bson.M{})
 	require.NoError(t, err)
-	require.EqualValues(t, 40000, count)
+	require.EqualValues(t, fixture.deleted+fixture.groups*fixture.rows, count)
 }
 
 // delayedCleanupClient adds a cancellable round-trip delay to cleanup calls.
@@ -259,4 +252,5 @@ func TestIntegrationCleanupProgressWithManyActiveCandidates(t *testing.T) {
 	count, err := db.Collection(svc.collSessionEvents).CountDocuments(ctx, bson.M{})
 	require.NoError(t, err)
 	require.EqualValues(t, 2*activeGroups, count, "active histories must remain intact")
+	require.EqualValues(t, 4, delayed.calls.Load(), "each collection needs one aggregate and one delete, independent of active session count")
 }

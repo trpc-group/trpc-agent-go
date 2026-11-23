@@ -39,10 +39,7 @@ var _ session.TrackService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
 
-const (
-	cleanupBatchSize        = 500
-	cleanupProbeConcurrency = 8
-)
+const cleanupBatchSize = 500
 
 type mongoClient interface {
 	storage.Client
@@ -1256,17 +1253,17 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 	if ttl <= 0 {
 		return nil
 	}
-	// Each collection gets its own budget so event cleanup cannot consume
-	// the time available to tracks. Parent cancellation still stops both.
+	// Reserve a separate budget for each collection while honoring parent cancellation.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cutoff := now.Add(-ttl)
-	// Only sessions containing an old row can expire. The time-leading index
-	// avoids scanning every recent row just to discover these candidates.
 	pipeline := bson.A{
+		// Session writers store app_name as a string. Its full string range
+		// gives the planner bounds on the existing partial cleanup index,
+		// avoiding reads of soft-deleted history without a forced hint.
 		bson.M{"$match": bson.M{
 			"deleted_at": nil,
-			"updated_at": bson.M{"$lte": cutoff},
+			"app_name":   bson.M{"$gte": ""},
 		}},
 		bson.M{"$group": bson.M{
 			"_id": bson.M{
@@ -1274,7 +1271,9 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 				"user_id":    "$user_id",
 				"session_id": "$session_id",
 			},
+			"max_updated_at": bson.M{"$max": "$updated_at"},
 		}},
+		bson.M{"$match": bson.M{"max_updated_at": bson.M{"$lte": cutoff}}},
 	}
 
 	cursor, err := s.client.Aggregate(ctx, s.database, collection, pipeline)
@@ -1288,18 +1287,13 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 		UserID    string `bson:"user_id"`
 		SessionID string `bson:"session_id"`
 	}
-	candidates := make(bson.A, 0, cleanupBatchSize)
+	or := make(bson.A, 0, cleanupBatchSize)
 	flush := func() error {
-		expired, err := s.expiredCleanupCandidates(ctx, collection, cutoff, candidates)
-		if err != nil {
-			return fmt.Errorf("check recent %s: %w", label, err)
-		}
-		candidates = candidates[:0]
-		if len(expired) == 0 {
+		if len(or) == 0 {
 			return nil
 		}
 		filter := bson.M{
-			"$or":        expired,
+			"$or":        or,
 			"deleted_at": nil,
 		}
 		if s.opts.softDelete {
@@ -1312,6 +1306,7 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 				return fmt.Errorf("hard delete expired %s: %w", label, err)
 			}
 		}
+		or = or[:0]
 		return nil
 	}
 	for cursor.Next(ctx) {
@@ -1321,14 +1316,12 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 		if err := cursor.Decode(&row); err != nil {
 			return fmt.Errorf("decode aggregate row: %w", err)
 		}
-		candidates = append(candidates, bson.M{
+		or = append(or, bson.M{
 			"app_name":   row.ID.AppName,
 			"user_id":    row.ID.UserID,
 			"session_id": row.ID.SessionID,
 		})
-		// Flush by candidates processed, even when only a few have expired.
-		// Later probes must not hold all confirmed deletions until EOF.
-		if len(candidates) >= cleanupBatchSize {
+		if len(or) >= cleanupBatchSize {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -1338,61 +1331,6 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 		return fmt.Errorf("iterate aggregate: %w", err)
 	}
 	return flush()
-}
-
-// expiredCleanupCandidates bounds concurrent probes while retaining the short,
-// indexed lookup for each session. A bulk match/group would scan every recent
-// row in candidate sessions, including arbitrarily large active histories.
-func (s *Service) expiredCleanupCandidates(ctx context.Context, collection string,
-	cutoff time.Time, candidates bson.A) (bson.A, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	expired := make([]bool, len(candidates))
-	var wg sync.WaitGroup
-	var once sync.Once
-	var probeErr error
-	for worker := 0; worker < cleanupProbeConcurrency && worker < len(candidates); worker++ {
-		wg.Add(1)
-		go func(start int) {
-			defer wg.Done()
-			for i := start; i < len(candidates); i += cleanupProbeConcurrency {
-				if ctx.Err() != nil {
-					return
-				}
-				key := candidates[i].(bson.M)
-				filter := bson.M{
-					"app_name": key["app_name"], "user_id": key["user_id"],
-					"session_id": key["session_id"], "deleted_at": nil,
-					"updated_at": bson.M{"$gt": cutoff},
-				}
-				err := s.client.FindOne(ctx, s.database, collection, filter,
-					options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
-				if errors.Is(err, mongo.ErrNoDocuments) {
-					expired[i] = true
-				} else if err != nil {
-					once.Do(func() {
-						probeErr = err
-						cancel()
-					})
-					return
-				}
-			}
-		}(worker)
-	}
-	wg.Wait()
-	if probeErr != nil {
-		return nil, probeErr
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	var groups bson.A
-	for i, isExpired := range expired {
-		if isExpired {
-			groups = append(groups, candidates[i])
-		}
-	}
-	return groups, nil
 }
 
 // startCleanupRoutine starts the background cleanup routine.
