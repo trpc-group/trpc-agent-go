@@ -242,7 +242,15 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 // WithOptions sets additional options for Ollama API.
 func WithOptions(opt map[string]any) Option {
 	return func(opts *options) {
-		opts.options = opt
+		if opt == nil {
+			opts.options = nil
+			return
+		}
+		cloned := make(map[string]any, len(opt))
+		for k, v := range opt {
+			cloned[k] = v
+		}
+		opts.options = cloned
 	}
 }
 

@@ -342,15 +342,17 @@ func (m *Model) buildChatRequest(request *model.Request) (*api.ChatRequest, erro
 		return nil, fmt.Errorf("request must include at least one message")
 	}
 
-	// Build chat request.
+	// Build chat request with a per-request copy of model options so
+	// concurrent or subsequent requests do not mutate m.options.
+	reqOptions := make(map[string]any, len(m.options))
+	for k, v := range m.options {
+		reqOptions[k] = v
+	}
 	chatRequest := &api.ChatRequest{
 		Model:    m.name,
 		Messages: messages,
 		Tools:    convertTools(request.Tools),
-		Options:  m.options,
-	}
-	if chatRequest.Options == nil {
-		chatRequest.Options = make(map[string]any)
+		Options:  reqOptions,
 	}
 
 	// Set stream option.
