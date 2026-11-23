@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/finalization"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -560,10 +561,22 @@ func emitFunctionResponseEventAndWait(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	functionResponseEvent *event.Event,
-) (*event.Event, error) {
+) (result *event.Event, returnErr error) {
 	if functionResponseEvent == nil {
 		return nil, nil
 	}
+	if c := finalization.FromInvocation(invocation); c != nil {
+		defer func() {
+			if ctx.Err() != nil {
+				persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+				defer cancel()
+				if err := c.Append(persistCtx, functionResponseEvent); err != nil {
+					returnErr = errors.Join(returnErr, err)
+				}
+			}
+		}()
+	}
+
 	functionResponseEvent.RequiresCompletion = true
 	emitErr := agent.EmitEvent(
 		ctx,
@@ -571,7 +584,7 @@ func emitFunctionResponseEventAndWait(
 		eventChan,
 		functionResponseEvent,
 	)
-	if errors.Is(emitErr, context.DeadlineExceeded) {
+	if errors.Is(emitErr, context.DeadlineExceeded) && finalization.FromInvocation(invocation) == nil {
 		if persistErr := persistFunctionResponseAfterDeadline(
 			ctx,
 			invocation,
@@ -607,6 +620,9 @@ func emitFunctionResponseEventAndWait(
 			"Wait for tool response persistence failed: %v",
 			err,
 		)
+	}
+	if err := finalization.Acknowledged(invocation, functionResponseEvent.ID); err != nil {
+		return nil, errors.Join(err, agent.NewStopError("tool response persistence failed"))
 	}
 	return functionResponseEvent, nil
 }

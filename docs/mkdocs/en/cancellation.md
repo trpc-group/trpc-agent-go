@@ -329,3 +329,26 @@ that ignores them. Absence of evidence does not prove absence of execution.
 This option covers LLMAgent's standard tool processor, not custom agent tasks
 or Graph checkpoint recovery. Tracking adds synchronous storage operations to
 tool dispatch; it does not provide external exactly-once execution.
+
+## Cancellation finalization
+
+When execution tracking is enabled, normal event persistence, explicit-cancel
+fallback and deadline fallback share a per-run coordinator. Completion notices
+are checked against the actual append result. A one-second independent context
+allows a completed tool response to be saved after cancellation. Repeated
+submissions of the same event ID share the first append acknowledgement; an
+ambiguous failure is retained and not automatically retried. This is local
+submission deduplication, not backend exactly-once persistence.
+
+Session restoration and framework event appends are serialized within this
+Runner. Starting another run advances its session generation. A stale run's
+late result retains its original IDs and result text; application StateDelta
+is retained in `trpc_agent.stale_state_delta.v1` audit metadata instead of
+applying over the newer state. Unique execution-record keys still update the
+old run's evidence. Unknown routed sessions are first claimed on append; a
+session already owned by another generation is treated conservatively as stale.
+Generation metadata lasts for this Runner's lifetime.
+
+This cannot fence writes made directly by a user tool or another Runner/process.
+For those, use backend conditional updates and external idempotency. It also
+does not restart the old model loop or send late events to closed output.
