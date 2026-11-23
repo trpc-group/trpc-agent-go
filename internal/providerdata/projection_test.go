@@ -41,13 +41,18 @@ func TestReprojectResponseUsesRequestAwareProjection(t *testing.T) {
 	response.Choices[0].Message.ProviderData.Payload = json.RawMessage(`{"content":"edited"}`)
 	require.NoError(t, ReprojectResponse(before, response, producer, request))
 	require.Equal(t, "request-binding:edited", response.Choices[0].Message.Content)
-	projected, err := ProjectFromCandidatesWithRequest([]model.Model{producer}, request,
-		response.Choices[0].Message.ProviderData)
+	legacy := producer.projectingModel
+	candidates := []model.Model{legacy, producer}
+	data := response.Choices[0].Message.ProviderData
+	projected, err := ProjectFromCandidatesWithRequest(candidates, request, data)
 	require.NoError(t, err)
 	require.Equal(t, "request-binding:edited", projected.Content)
-	projected, err = ProjectFromCandidates([]model.Model{producer}, response.Choices[0].Message.ProviderData)
+	projected, err = ProjectFromCandidates(candidates, data)
 	require.NoError(t, err)
 	require.Equal(t, "edited", projected.Content, "request-free callers retain their existing behavior")
+	projected, err = ProjectFromCandidatesWithRequest([]model.Model{legacy}, request, data)
+	require.NoError(t, err)
+	require.Equal(t, "edited", projected.Content, "legacy-only candidates still project with a request")
 }
 
 func TestReprojectResponseUsesEditedPayload(t *testing.T) {
@@ -66,6 +71,8 @@ func TestReprojectResponseUsesEditedPayload(t *testing.T) {
 	require.Equal(t, "stop", *response.Choices[0].FinishReason)
 	require.Same(t, message.ProviderData, response.Choices[0].Message.ProviderData)
 
+	// A response can contain both a provider action and an ordinary tool call.
+	response.Done = false
 	before = SnapshotResponse(response)
 	response.Choices[0].Message.ProviderData.Payload = json.RawMessage(
 		`{"content":"calling","reasoning_content":"updated","tool_calls":[{"id":"new","type":"function","function":{"name":"f","arguments":"{\"a\":9}"}}]}`)
@@ -74,6 +81,12 @@ func TestReprojectResponseUsesEditedPayload(t *testing.T) {
 	require.Equal(t, "updated", response.Choices[0].Message.ReasoningContent)
 	require.Equal(t, "new", response.Choices[0].Message.ToolCalls[0].ID)
 	require.Equal(t, "tool_calls", *response.Choices[0].FinishReason)
+
+	before = SnapshotResponse(response)
+	response.Choices[0].Message.ProviderData.Payload = json.RawMessage(`{"content":"search pending"}`)
+	require.NoError(t, ReprojectResponse(before, response, producer, nil))
+	require.Empty(t, response.Choices[0].Message.ToolCalls)
+	require.Nil(t, response.Choices[0].FinishReason, "the provider action is still pending")
 }
 
 func TestReprojectResponsePreservesProjectionOnlyEdits(t *testing.T) {

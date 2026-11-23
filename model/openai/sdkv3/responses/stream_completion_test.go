@@ -144,7 +144,7 @@ func TestStreamEmptyCompletionWithoutOutputStaysValid(t *testing.T) {
 	require.Empty(t, final.Choices[0].Message.ToolCalls)
 	require.Nil(t, final.Choices[0].Message.ProviderData)
 	require.NotNil(t, final.Choices[0].FinishReason)
-	require.Equal(t, finishReasonStop, *final.Choices[0].FinishReason)
+	require.Equal(t, "stop", *final.Choices[0].FinishReason)
 }
 
 func TestStreamDoneItemCountStillRejectsEmptyCompletion(t *testing.T) {

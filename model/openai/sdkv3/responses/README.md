@@ -297,10 +297,12 @@ configuration, LLMAgent includes its tool guidance from the first request,
 even with an entirely external catalog. Search results append tool definitions
 to the input history.
 
-A search response is not `Done`. LLMAgent completes it through
-`model.ProviderActionCompleter` before running ordinary tool calls in the same
-response. `CompleteProviderActions` runs the handler and returns one tool
-message per search:
+When using `GenerateContent` directly, check `IsFinalResponse()` for completion.
+A pending client search has `Done == false`. Its choice has a nil `FinishReason`
+unless it also contains ordinary function calls, which use `"tool_calls"`.
+LLMAgent completes the search through `model.ProviderActionCompleter` before
+running those functions. `CompleteProviderActions` runs the handler and returns
+one tool message per search:
 
 - `ToolID` is the call ID and `ToolName` is `ToolSearchToolName`.
 - `Content` is a display summary such as `{"loaded_tools":["billing_lookup"]}`.

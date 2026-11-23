@@ -2484,7 +2484,9 @@ llm := responses.New("gpt-5.4", search)
   namespace and member name, without parsing registered names. Registered
   names must remain unique in the request; namespaces do not resolve naming
   collisions in the tool registry.
-- In client mode, a search response is not final. `LLMAgent` runs the handler
+- Direct `GenerateContent` callers can check `IsFinalResponse()` for completion.
+  A pending client search has `Done == false`. Its choice has a nil `FinishReason`
+  unless it also contains ordinary function calls. `LLMAgent` runs the handler
   and stores the `tool_search_output` as a tool message before the next model
   step. `req.Candidates` is also `[]responses.ToolSearchEntry`. Each entry has
   `Namespace`, `NamespaceDescription`, `Name`, and `Tool`. Read the declaration
@@ -2505,7 +2507,8 @@ llm := responses.New("gpt-5.4", search)
   execute. Before sending another user message, resume the same session with
   `model.Message{}` and `agent.WithResume(true)` to retry the search and run
   the pending functions. An empty search result lets the model continue.
-- Graph LLM nodes report an error for a client search. Hosted requests without
+- Graph LLM nodes and the current failover and hedge wrappers report an error
+  for a pending client search. Hosted requests without
   deferred tools or tool search history are unchanged, and Chat Completions
   ignores deferral.
 - `plugin/toolsearch` has its own deferred-tool registration and does not use

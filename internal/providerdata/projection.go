@@ -124,14 +124,25 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 		edit.target.ReasoningSignature = edit.projection.ReasoningSignature
 		edit.target.ToolCalls = edit.projection.ToolCalls
 		if edit.choice != nil {
-			reason := "stop"
-			if len(edit.target.ToolCalls) > 0 {
-				reason = "tool_calls"
-			}
-			edit.choice.FinishReason = &reason
+			edit.choice.FinishReason = ProjectedFinishReason(response.Done, edit.target.ToolCalls)
 		}
 	}
 	return nil
+}
+
+// ProjectedFinishReason returns the finish reason for a completed native
+// response. A response waiting only on provider actions has no finish reason.
+func ProjectedFinishReason(done bool, calls []model.ToolCall) *string {
+	var reason string
+	switch {
+	case len(calls) > 0:
+		reason = "tool_calls"
+	case done:
+		reason = "stop"
+	default:
+		return nil
+	}
+	return &reason
 }
 
 // ProjectFromCandidates forwards projection through routing wrappers. Native
@@ -141,13 +152,17 @@ func ProjectFromCandidates(candidates []model.Model, data *model.ProviderData) (
 	return ProjectFromCandidatesWithRequest(candidates, nil, data)
 }
 
-// ProjectFromCandidatesWithRequest forwards native projection with the request
-// tool bindings when the candidate supports request-aware projection.
+// ProjectFromCandidatesWithRequest prefers a candidate that can use the
+// request's tool bindings, falling back to request-free projection.
 func ProjectFromCandidatesWithRequest(candidates []model.Model, request *model.Request, data *model.ProviderData) (model.Message, error) {
-	for _, candidate := range candidates {
-		if projector, ok := candidate.(model.ProviderDataRequestProjector); ok && request != nil {
-			return projector.ProjectProviderDataWithRequest(request, data)
+	if request != nil {
+		for _, candidate := range candidates {
+			if projector, ok := candidate.(model.ProviderDataRequestProjector); ok {
+				return projector.ProjectProviderDataWithRequest(request, data)
+			}
 		}
+	}
+	for _, candidate := range candidates {
 		if projector, ok := candidate.(model.ProviderDataProjector); ok {
 			return projector.ProjectProviderData(data)
 		}

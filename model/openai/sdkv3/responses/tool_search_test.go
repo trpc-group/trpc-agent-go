@@ -797,6 +797,7 @@ func TestStreamingToolSearchProjection(t *testing.T) {
 	require.False(t, client.Done)
 	require.False(t, client.IsPartial)
 	require.NotNil(t, client.Choices[0].Message.ProviderData)
+	require.Nil(t, client.Choices[0].FinishReason)
 }
 
 func TestNonStreamingClientToolSearchResponseIsNotDone(t *testing.T) {
@@ -817,6 +818,8 @@ func TestNonStreamingClientToolSearchResponseIsNotDone(t *testing.T) {
 	require.Nil(t, got[0].Error)
 	require.False(t, got[0].Done)
 	require.False(t, got[0].IsFinalResponse())
+	require.False(t, got[0].IsToolCallResponse())
+	require.Nil(t, got[0].Choices[0].FinishReason)
 	requireJSONField(t, `[{"type":"tool_search","execution":"client",
 	  "description":"`+clientToolSearchDescription+`",
 	  "parameters":{"type":"object","properties":{"query":{"type":"string","description":"The capability or task that the needed tools must support."}},

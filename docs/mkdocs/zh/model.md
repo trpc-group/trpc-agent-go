@@ -2409,7 +2409,9 @@ llm := responses.New("gpt-5.4", search)
 - 含有延迟成员的 ToolSet 会以同名 namespace 发送，描述取自 `tool.ToolSetDescriber`，MCP ToolSet
   使用 `ConnectionConfig.Description`。模型返回的调用通过保存的 namespace 和成员名称映射回已注册
   的工具，不通过拆分注册名确定身份。执行注册名仍需在当前请求中唯一；namespace 分组不会解决注册目录中的重名。
-- 客户端模式下，发起搜索的响应不是最终响应。`LLMAgent` 会调用 handler，并在下一次模型调用前把
+- 直接调用 `GenerateContent` 时，用 `IsFinalResponse()` 判断是否得到最终回复。
+  客户端搜索待执行时，`Done` 为 `false`。若同一条消息中没有普通函数调用，`FinishReason` 为 `nil`。
+  `LLMAgent` 会调用 handler，并在下一次模型调用前把
   `tool_search_output` 作为工具消息保存。`req.Candidates` 同样是 `[]responses.ToolSearchEntry`。
   每个条目包含 `Namespace`、`NamespaceDescription`、`Name`、`Tool`，声明通过
   `entry.Tool.Declaration()` 读取。候选的 `Name` 已经是模型侧名称，可能与工具声明中的名称不同。
@@ -2423,7 +2425,8 @@ llm := responses.New("gpt-5.4", search)
 - handler 报错时，本次运行结束，同一响应中的普通函数调用保持待执行。在发送下一条用户消息前，
   用 `model.Message{}` 和 `agent.WithResume(true)` 恢复同一会话。搜索重试成功后，框架执行待处理的函数。
   搜索没有命中时，handler 可以返回空结果，让模型继续。
-- Graph 的 LLM 节点遇到客户端搜索会报错。托管模式在有延迟工具或搜索历史时发送搜索入口。
+- Graph 的 LLM 节点以及当前的 failover、hedge 包装器遇到待执行的客户端搜索会报错。
+  托管模式在有延迟工具或搜索历史时发送搜索入口。
   Chat Completions 继续将注册工具作为普通函数提供。
 - `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索
   同时使用。

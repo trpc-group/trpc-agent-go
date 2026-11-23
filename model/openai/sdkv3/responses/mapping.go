@@ -32,9 +32,6 @@ const (
 	responseProvider = "openai.responses"
 	functionToolType = "function"
 
-	finishReasonStop      = "stop"
-	finishReasonToolCalls = "tool_calls"
-
 	incompleteReasonContentFilter = "content_filter"
 
 	outputTypeMessage          = "message"
@@ -982,21 +979,18 @@ func projectRequestResponse(resp *responses.Response, modelName string, tools *t
 			Payload:  payload,
 		}
 	}
-	finish := finishReasonStop
-	if len(projected.toolCalls) > 0 {
-		finish = finishReasonToolCalls
-	}
+	done := !projected.pendingSearch
 	return &model.Response{
 		ID:        resp.ID,
 		Object:    model.ObjectTypeChatCompletion,
 		Created:   createdUnix(resp),
 		Model:     firstNonEmpty(modelName, string(resp.Model)),
 		Timestamp: time.Now(),
-		Done:      !projected.pendingSearch,
+		Done:      done,
 		Choices: []model.Choice{{
 			Index:        0,
 			Message:      message,
-			FinishReason: &finish,
+			FinishReason: providerdata.ProjectedFinishReason(done, message.ToolCalls),
 		}},
 		Usage: mapUsage(resp),
 	}, nil
