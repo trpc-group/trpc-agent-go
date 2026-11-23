@@ -33,11 +33,13 @@ const recorderKey = "__tool_execution_recorder__"
 // Call is one logical call, including the number of admitted raw attempts.
 // Dispatch includes callbacks, which can themselves perform external work.
 type Call struct {
-	Tool     model.ToolCall `json:"tool"`
-	Status   string         `json:"status"`
-	Attempts int            `json:"attempts,omitempty"`
-	Choices  []model.Choice `json:"choices,omitempty"`
-	Error    string         `json:"error,omitempty"`
+	DispatchRequestID    string         `json:"dispatch_request_id,omitempty"`
+	DispatchInvocationID string         `json:"dispatch_invocation_id,omitempty"`
+	Tool                 model.ToolCall `json:"tool"`
+	Status               string         `json:"status"`
+	Attempts             int            `json:"attempts,omitempty"`
+	Choices              []model.Choice `json:"choices,omitempty"`
+	Error                string         `json:"error,omitempty"`
 }
 
 // Record is a versioned snapshot; its source event disambiguates reused call IDs.
@@ -53,6 +55,8 @@ type Record struct {
 
 // Recorder owns writes for one run. Its append function outlives output closure.
 type Recorder struct {
+	claims  *Claims
+	load    func(context.Context) (*session.Session, error)
 	mu      sync.Mutex
 	changed func()
 	flows   atomic.Int64
@@ -67,11 +71,14 @@ func Attach(inv *agent.Invocation, appendEvent func(context.Context, *event.Even
 
 // Round owns serialized updates for one model tool-call response.
 type Round struct {
-	mu        sync.Mutex
-	recorder  *Recorder
-	record    Record
-	author    string
-	filterKey string
+	release               func()
+	executionRequestID    string
+	executionInvocationID string
+	mu                    sync.Mutex
+	recorder              *Recorder
+	record                Record
+	author                string
+	filterKey             string
 }
 type roundKey struct{}
 type sourceKey struct{}
@@ -99,38 +106,20 @@ func Begin(ctx context.Context, inv *agent.Invocation, rsp *model.Response) (con
 	if err := ctx.Err(); err != nil {
 		return ctx, err
 	}
+	if prepared, ok := agent.GetStateValue[*Round](inv, resumeKey); ok && prepared != nil {
+		inv.DeleteState(resumeKey)
+		return context.WithValue(ctx, roundKey{}, prepared), nil
+	}
+
 	if inv.Session == nil {
 		return ctx, errors.New("tool tracking requires a session")
 	}
-	calls := providerdata.ToolCallsForExecution(rsp.Choices[0].Message)
-	encoded, err := json.Marshal(calls)
+	source, err := sourceEvent(ctx, inv, rsp)
 	if err != nil {
 		return ctx, err
 	}
-	var source event.Event
-	inv.Session.EventMu.RLock()
-	for i := len(inv.Session.Events) - 1; i >= 0; i-- {
-		e := inv.Session.Events[i]
-		if !e.IsToolCallResponse() || e.IsPartial {
-			continue
-		}
-		b, _ := json.Marshal(providerdata.ToolCallsForExecution(e.Choices[0].Message))
-		if string(b) == string(encoded) && e.RequestID == inv.RunOptions.RequestID {
-			source = e
-			break
-		}
-	}
-	inv.Session.EventMu.RUnlock()
-	if id, ok := ctx.Value(sourceKey{}).(string); ok && id != "" {
-		source = *event.NewResponseEvent(inv.InvocationID, inv.AgentName, rsp.Clone())
-		source.ID = id
-		source.RequestID = inv.RunOptions.RequestID
-		source.Branch = inv.Branch
-		source.FilterKey = inv.GetEventFilterKey()
-	}
-	if source.ID == "" {
-		return ctx, errors.New("tool tracking requires a persisted tool-call event")
-	}
+	calls := providerdata.ToolCallsForExecution(rsp.Choices[0].Message)
+
 	// Persist the source before work can cancel the output loop. The shared
 	// coordinator deduplicates this with normal event consumption by event ID.
 	sourceCtx, sourceCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
@@ -140,13 +129,23 @@ func Begin(ctx context.Context, inv *agent.Invocation, rsp *model.Response) (con
 		return ctx, fmt.Errorf("persist tool-call source: %w", sourceErr)
 	}
 
-	round := &Round{recorder: recorder, author: source.Author, filterKey: source.FilterKey,
+	round := &Round{recorder: recorder, executionRequestID: inv.RunOptions.RequestID, executionInvocationID: inv.InvocationID, author: source.Author, filterKey: source.FilterKey,
 		record: Record{Version: 1, ID: uuid.NewString(), SourceEventID: source.ID, Response: rsp.Clone(),
 			RequestID: inv.RunOptions.RequestID, InvocationID: inv.InvocationID}}
 	for _, c := range calls {
 		round.record.Calls = append(round.record.Calls, Call{Tool: c, Status: "not_started"})
 	}
+	if recorder.claims != nil {
+		release, err := recorder.claims.acquire(round.record.ID)
+		if err != nil {
+			return ctx, err
+		}
+		round.release = release
+	}
 	if err := round.save(ctx); err != nil {
+		if round.release != nil {
+			round.release()
+		}
 		return ctx, err
 	}
 	return context.WithValue(ctx, roundKey{}, round), nil
@@ -156,7 +155,13 @@ func fromContext(ctx context.Context) *Round { r, _ := ctx.Value(roundKey{}).(*R
 
 // Dispatch records conservative admission before any callback or tool work.
 func Dispatch(ctx context.Context, id string) error {
-	err := update(ctx, id, func(c *Call) { c.Status = "dispatched" })
+	err := update(ctx, id, func(c *Call) {
+		c.Status = "dispatched"
+		if r := fromContext(ctx); r != nil {
+			c.DispatchRequestID = r.executionRequestID
+			c.DispatchInvocationID = r.executionInvocationID
+		}
+	})
 	if err == nil {
 		if r := fromContext(ctx); r != nil {
 			r.recorder.active.Add(1)
@@ -295,4 +300,41 @@ func (r *Recorder) notify() {
 	if callback != nil {
 		callback()
 	}
+}
+
+func sourceEvent(ctx context.Context, inv *agent.Invocation, rsp *model.Response) (event.Event, error) {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return event.Event{}, errors.New("tool source response is missing")
+	}
+
+	calls := providerdata.ToolCallsForExecution(rsp.Choices[0].Message)
+	encoded, err := json.Marshal(calls)
+	if err != nil {
+		return event.Event{}, err
+	}
+	var source event.Event
+	inv.Session.EventMu.RLock()
+	for i := len(inv.Session.Events) - 1; i >= 0; i-- {
+		e := inv.Session.Events[i]
+		if !e.IsToolCallResponse() || e.IsPartial {
+			continue
+		}
+		b, _ := json.Marshal(providerdata.ToolCallsForExecution(e.Choices[0].Message))
+		if string(b) == string(encoded) && e.RequestID == inv.RunOptions.RequestID {
+			source = e
+			break
+		}
+	}
+	inv.Session.EventMu.RUnlock()
+	if id, ok := ctx.Value(sourceKey{}).(string); ok && id != "" {
+		source = *event.NewResponseEvent(inv.InvocationID, inv.AgentName, rsp.Clone())
+		source.ID = id
+		source.RequestID = inv.RunOptions.RequestID
+		source.Branch = inv.Branch
+		source.FilterKey = inv.GetEventFilterKey()
+	}
+	if source.ID == "" {
+		return event.Event{}, errors.New("tool tracking requires a persisted tool-call event")
+	}
+	return source, nil
 }

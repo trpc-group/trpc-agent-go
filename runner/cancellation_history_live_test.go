@@ -12,6 +12,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,4 +93,56 @@ func TestCancellationLive_ProjectedHistory(t *testing.T) {
 	require.Contains(t, first, "first-write-evidence")
 	require.True(t, strings.Contains(second, "not dispatched"))
 	t.Log("live provider accepted projected completed sibling plus explicit not-dispatched tool response")
+}
+
+func TestCancellationLive_SafeResume(t *testing.T) {
+	if os.Getenv("TRPC_CANCEL_LIVE") != "1" {
+		t.Skip("set TRPC_CANCEL_LIVE=1 to enable paid provider validation")
+	}
+	for _, key := range []string{"OPENAI_BASE_URL", "OPENAI_API_KEY", "MODEL_NAME"} {
+		require.NotEmpty(t, os.Getenv(key), "missing %s", key)
+	}
+	svc := inmemory.NewSessionService()
+	defer svc.Close()
+	seedInterruptedRound(t, svc)
+	var callsA, callsB atomic.Int32
+	a := function.NewFunctionTool(func(context.Context, struct{}) (string, error) { callsA.Add(1); return "duplicate", nil }, function.WithName("a"))
+	b := function.NewFunctionTool(func(context.Context, struct{}) (string, error) { callsB.Add(1); return "second evidence", nil }, function.WithName("b"))
+	live := &historyLiveModel{Model: openai.New(os.Getenv("MODEL_NAME"), openai.WithBaseURL(os.Getenv("OPENAI_BASE_URL")), openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")), openai.WithExtraFields(map[string]any{"tool_choice": "none"})), requests: make(chan *model.Request, 4)}
+	maxTokens := 4096
+	resumed := NewRunner("execution-test", llmagent.New("agent", llmagent.WithModel(live), llmagent.WithTools([]tool.Tool{a, b}), llmagent.WithInstruction("Respond exactly with the word done. Do not call any more tools."), llmagent.WithGenerationConfig(model.GenerationConfig{MaxTokens: &maxTokens})), WithSessionService(svc), WithToolExecutionTracking(true))
+	defer resumed.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	ch, err := resumed.Run(ctx, "u", "s", model.Message{}, agent.WithResume(true), agent.WithStrictToolResume(true))
+	require.NoError(t, err)
+	var text string
+	var finishReasons []string
+	for e := range ch {
+		if e.Response == nil {
+			continue
+		}
+		require.Nil(t, e.Error)
+		for _, c := range e.Choices {
+			if c.FinishReason != nil {
+				finishReasons = append(finishReasons, *c.FinishReason)
+			}
+			if c.Message.Role == model.RoleAssistant {
+				text += c.Message.Content
+			}
+		}
+	}
+	require.NotEmpty(t, text, "provider finish reasons: %v", finishReasons)
+	require.Zero(t, callsA.Load())
+	require.EqualValues(t, 1, callsB.Load())
+	request := <-live.requests
+	results := map[string]string{}
+	for _, m := range request.Messages {
+		if m.ToolID != "" {
+			results[m.ToolID] = m.Content
+		}
+	}
+	require.Contains(t, results["0"], "first evidence")
+	require.Contains(t, results["1"], "second evidence")
+	t.Log("live provider continued after evidence-based Resume: completed A reused, only not-started B executed")
 }
