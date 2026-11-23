@@ -214,11 +214,11 @@ func (m *Model) handleNonStreamingRequest(
 	// Make HTTP request.
 	hfResponse, err := m.makeRequest(ctx, hfRequest)
 	if err != nil {
-		responseChan <- &model.Response{
+		sendResponse(ctx, responseChan, &model.Response{
 			Error: &model.ResponseError{
 				Message: fmt.Sprintf("failed to make request: %v", err),
 			},
-		}
+		})
 		return
 	}
 
@@ -227,7 +227,7 @@ func (m *Model) handleNonStreamingRequest(
 
 	// Convert HuggingFace response to model.Response.
 	response := m.convertResponse(hfResponse)
-	responseChan <- response
+	sendResponse(ctx, responseChan, response)
 }
 
 // handleStreamingRequest handles streaming chat completion requests.
@@ -300,13 +300,38 @@ func (m *Model) handleStreamingRequest(
 
 			// Convert chunk to model.Response.
 			response := m.convertChunk(&chunk)
-			responseChan <- response
+			if ctx.Err() != nil {
+				streamErr = ctx.Err()
+				break
+			}
+			if !sendResponse(ctx, responseChan, response) {
+				streamErr = ctx.Err()
+				break
+			}
 		}
 	}
 
 	m.runChatStreamCompleteCallback(ctx, hfRequest, streamErr)
 	if terminalResponse != nil {
-		responseChan <- terminalResponse
+		sendResponse(ctx, responseChan, terminalResponse)
+	}
+}
+
+func sendResponse(
+	ctx context.Context,
+	responseChan chan<- *model.Response,
+	response *model.Response,
+) bool {
+	select {
+	case responseChan <- response:
+		return true
+	default:
+	}
+	select {
+	case responseChan <- response:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
