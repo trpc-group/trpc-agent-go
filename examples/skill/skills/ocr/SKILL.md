@@ -81,15 +81,15 @@ PNG, JPG, JPEG, GIF, BMP, TIFF, WEBP
 ## Dependencies
 
 - Python 3.8+
-- pytesseract
-- Pillow (PIL)
+- pytesseract 0.3.13 (pinned; latest release on PyPI as of 2026-11)
+- Pillow 13.0.0 (pinned; latest release on PyPI as of 2026-11)
 - tesseract-ocr (system package)
 
 ## Installation
 
 ```bash
 # Python packages
-pip install pytesseract Pillow
+pip install "pytesseract==0.3.13" "Pillow==13.0.0"
 
 # Tesseract OCR engine
 sudo apt-get install tesseract-ocr  # Ubuntu/Debian

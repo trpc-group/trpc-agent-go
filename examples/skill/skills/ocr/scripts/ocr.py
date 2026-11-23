@@ -14,7 +14,7 @@ try:
     from PIL import Image, ImageEnhance, ImageFilter
 except ImportError as e:
     print(f"Error: Required package not installed: {e}", file=sys.stderr)
-    print("Run: pip install pytesseract Pillow", file=sys.stderr)
+    print("Run: pip install \"pytesseract==0.3.13\" \"Pillow==13.0.0\"", file=sys.stderr)
     sys.exit(1)
 
 
