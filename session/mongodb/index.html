@@ -1921,6 +1921,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#expiration-cleanup-query-costs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expiration cleanup query costs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#event-ordering-index-upgrades" class="md-nav__link">
     <span class="md-ellipsis">
       Event ordering index upgrades
@@ -3826,6 +3835,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#expiration-cleanup-query-costs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expiration cleanup query costs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#event-ordering-index-upgrades" class="md-nav__link">
     <span class="md-ellipsis">
       Event ordering index upgrades
@@ -4188,6 +4206,44 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
 <span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://user:pass@host:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./...
 </span></code></pre></div></td></tr></table></div>
+<h2 id="expiration-cleanup-query-costs">Expiration cleanup query costs</h2>
+<p>Cleanup identifies expired session groups in one aggregation per collection.
+It matches non-deleted rows and the full string range of <code>app_name</code>, allowing
+MongoDB to use the existing partial <code>cleanup</code> index on
+<code>(app_name, user_id, session_id, updated_at)</code>. Application names stored by this
+backend are strings. The aggregation still selects groups whose maximum
+<code>updated_at</code> is at or before the TTL cutoff. A group with a newer row retains
+all of its history, and track groups still span every track in the session.</p>
+<p>This change needs no new index or data migration and does not force an index
+hint. Existing indexes and externally managed databases remain usable; missing
+indexes affect performance, not cleanup results. An indexed plan avoids
+scanning soft-deleted history. MongoDB 7.0 can cover this query from the index;
+MongoDB 6.0 may still fetch active documents to check <code>deleted_at: null</code>.
+When active histories dominate, index traversal plus document fetches can be
+slower than the original collection scan, particularly on MongoDB 6.0. Verify the execution
+plan, document/key scans and latency on the deployed database version.</p>
+<p>Expired groups are deleted in batches of at most 500, with the remaining
+partial batch committed at the end. Completed batches survive a later failure.
+Event and track cleanup run sequentially with separate 30-second budgets (up
+to 60 seconds combined); parent cancellation or service shutdown stops both.
+Soft/hard deletion modes and TTL values are unchanged. Cleanup still repeats
+full grouping on each instance and retains the existing non-atomic
+check-then-delete window with concurrent appends; it introduces no watermark,
+lease or cascade from session-state TTL expiration.</p>
+<p>To compare identification costs on different history distributions, run the
+opt-in benchmark from <code>session/mongodb</code> against a local test replica set:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-run<span class="w"> </span><span class="s1">'^$'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span>-bench<span class="w"> </span><span class="s1">'^BenchmarkIntegrationCleanupIdentification$'</span><span class="w"> </span>-benchtime<span class="o">=</span>3x<span class="w"> </span>-count<span class="o">=</span><span class="m">3</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The fixtures include 1 KiB payloads, deleted-heavy/recent-heavy histories,
+short active sessions, expired sessions and long-lived sessions. Both original
+and indexed aggregations consume and validate the complete result set. Setup,
+deletes and result validation are excluded from timing. The 10 ms delay applies
+once before the Aggregate call, not to getMore. These local measurements do
+not predict production latency.</p>
 <h2 id="event-ordering-index-upgrades">Event ordering index upgrades</h2>
 <p>New services create <code>idx_session_events_ordered_lookup</code>, a non-unique partial
 index on <code>(app_name, user_id, session_id, created_at, _id)</code> for documents matching
@@ -4199,15 +4255,15 @@ existing documents and older writers need no conversion.</p>
 For large collections, build the index before deploying the new service. If
 using <code>WithSkipDBInit(true)</code>, manage the index explicitly (adjust names for your
 collection prefix):</p>
-<div class="language-javascript highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
-<span class="normal"><a href="#__codelineno-4-2">2</a></span>
-<span class="normal"><a href="#__codelineno-4-3">3</a></span>
-<span class="normal"><a href="#__codelineno-4-4">4</a></span>
-<span class="normal"><a href="#__codelineno-4-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">db</span><span class="p">.</span><span class="nx">session_events</span><span class="p">.</span><span class="nx">createIndex</span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span><span class="p">{</span><span class="nx">app_name</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">user_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">session_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">created_at</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">},</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span><span class="p">{</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"idx_session_events_ordered_lookup"</span><span class="p">,</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">   </span><span class="nx">partialFilterExpression</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="nx">deleted_at</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}}</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="p">)</span>
+<div class="language-javascript highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">db</span><span class="p">.</span><span class="nx">session_events</span><span class="p">.</span><span class="nx">createIndex</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">  </span><span class="p">{</span><span class="nx">app_name</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">user_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">session_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">created_at</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">},</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">  </span><span class="p">{</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"idx_session_events_ordered_lookup"</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">   </span><span class="nx">partialFilterExpression</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="nx">deleted_at</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}}</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Reads remain correct without this index, but may need a blocking sort. Keeping
 both indexes adds storage and write overhead. This index alone does not limit
@@ -4239,13 +4295,13 @@ the integrity of the entire session history.</p>
 <p>An optional live-model smoke test verifies a three-turn conversation, event
 window truncation and history reloading after recreating the service. It sends
 synthetic prompts to the configured endpoint and is skipped by default:</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
-<span class="normal"><a href="#__codelineno-5-2">2</a></span>
-<span class="normal"><a href="#__codelineno-5-3">3</a></span>
-<span class="normal"><a href="#__codelineno-5-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="c1"># Configure OPENAI_API_KEY, OPENAI_BASE_URL and MODEL_NAME in your environment.</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="nv">MONGODB_LIVE_MODEL_TEST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">MONGO_TEST_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-run<span class="w"> </span><span class="s1">'^TestMongoDBHistoryLiveModel$'</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>-v<span class="w"> </span>.
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="c1"># Configure OPENAI_API_KEY, OPENAI_BASE_URL and MODEL_NAME in your environment.</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="nv">MONGODB_LIVE_MODEL_TEST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">MONGO_TEST_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-run<span class="w"> </span><span class="s1">'^TestMongoDBHistoryLiveModel$'</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>-v<span class="w"> </span>.
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -4269,7 +4325,7 @@ synthetic prompts to the configured endpoint and is skipped by default:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 19, 2026 09:22:38 UTC">2026-11-19 09:22:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 23, 2026 10:00:02 UTC">2026-11-23 10:00:02</span>
   </span>
 
     

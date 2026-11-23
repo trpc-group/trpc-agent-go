@@ -1923,7 +1923,7 @@
         <li class="md-nav__item">
   <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
-      事件排序索引升级
+      过期清理查询开销
     </span>
   </a>
   
@@ -1931,6 +1931,15 @@
       
         <li class="md-nav__item">
   <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件排序索引升级
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
     <span class="md-ellipsis">
       上下文窗口读取开销
     </span>
@@ -3828,7 +3837,7 @@
         <li class="md-nav__item">
   <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
-      事件排序索引升级
+      过期清理查询开销
     </span>
   </a>
   
@@ -3836,6 +3845,15 @@
       
         <li class="md-nav__item">
   <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件排序索引升级
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
     <span class="md-ellipsis">
       上下文窗口读取开销
     </span>
@@ -4176,7 +4194,34 @@
 <span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://user:pass@host:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./...
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_15">事件排序索引升级</h2>
+<h2 id="_15">过期清理查询开销</h2>
+<p>每个集合通过一次聚合识别过期会话组。查询匹配未删除记录，并增加覆盖
+<code>app_name</code> 全部字符串取值的条件，使 MongoDB 可以使用已有的 partial
+<code>cleanup</code> 索引 <code>(app_name, user_id, session_id, updated_at)</code>。
+本后端写入的应用名均为字符串。聚合仍按会话求最大的 <code>updated_at</code>，仅清理
+不晚于 TTL 截止时间的组；存在更新记录时保留全部历史，Track 仍覆盖会话内所有 track。</p>
+<p>此优化不新增索引、不迁移数据，也不强制 hint。已有索引和外部管理的数据库
+可以继续使用，缺少索引只影响性能，不影响清理结果。索引计划可以跳过软删除
+历史；MongoDB 7.0 可以使用覆盖查询，6.0 仍可能读取活跃文档来判断
+<code>deleted_at: null</code>。活跃历史占多数时，索引遍历加回表可能比原来的全表扫描更慢，尤其是在 6.0 上。
+应在实际数据库版本上核对执行计划、文档和索引扫描数以及耗时。</p>
+<p>每批最多删除 500 个过期组，遍历结束后提交剩余不足一批的组；后续失败不影响
+已经完成的批次。事件与 Track 依次清理，各自拥有 30 秒预算（合计最多 60 秒），
+父 context 取消或服务关闭会停止清理。软/硬删除模式和 TTL 值保持不变。
+每个实例仍每轮执行全量分组；检查与删除也没有和并发追加构成原子操作。
+本优化不引入水位、租约或基于会话状态 TTL 的级联删除。</p>
+<p>在 <code>session/mongodb</code> 目录下，对本地测试副本集运行可选基准：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-run<span class="w"> </span><span class="s1">'^$'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span>-bench<span class="w"> </span><span class="s1">'^BenchmarkIntegrationCleanupIdentification$'</span><span class="w"> </span>-benchtime<span class="o">=</span>3x<span class="w"> </span>-count<span class="o">=</span><span class="m">3</span>
+</span></code></pre></div></td></tr></table></div>
+<p>数据包含 1 KiB 负载，覆盖软删除历史多、近期历史多、短活跃会话、全部过期及
+长会话场景。原聚合和索引聚合都会完整消费并校验结果。计时不含数据准备、
+删除和结果校验；10ms 延迟仅注入在 Aggregate 调用前，不含 getMore。
+本地基准不代表线上延迟。</p>
+<h2 id="_16">事件排序索引升级</h2>
 <p>新服务初始化时新增 <code>idx_session_events_ordered_lookup</code> 非唯一 partial 索引，
 字段为 <code>(app_name, user_id, session_id, created_at, _id)</code>，条件为
 <code>{deleted_at: null}</code>。集合前缀同样应用于索引名称。该索引支持正序事件读取及
@@ -4184,19 +4229,19 @@
 历史文档及旧版本写入无需转换。</p>
 <p>初始化建索引会增加启动时间和数据库负载。大集合建议在部署前完成索引创建；
 使用 <code>WithSkipDBInit(true)</code> 时请手工管理索引（按实际集合前缀调整名称）：</p>
-<div class="language-javascript highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
-<span class="normal"><a href="#__codelineno-4-2">2</a></span>
-<span class="normal"><a href="#__codelineno-4-3">3</a></span>
-<span class="normal"><a href="#__codelineno-4-4">4</a></span>
-<span class="normal"><a href="#__codelineno-4-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">db</span><span class="p">.</span><span class="nx">session_events</span><span class="p">.</span><span class="nx">createIndex</span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span><span class="p">{</span><span class="nx">app_name</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">user_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">session_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">created_at</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">},</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span><span class="p">{</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"idx_session_events_ordered_lookup"</span><span class="p">,</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">   </span><span class="nx">partialFilterExpression</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="nx">deleted_at</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}}</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="p">)</span>
+<div class="language-javascript highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">db</span><span class="p">.</span><span class="nx">session_events</span><span class="p">.</span><span class="nx">createIndex</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">  </span><span class="p">{</span><span class="nx">app_name</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">user_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">session_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">created_at</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">,</span><span class="w"> </span><span class="nx">_id</span><span class="o">:</span><span class="w"> </span><span class="mf">1</span><span class="p">},</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">  </span><span class="p">{</span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"idx_session_events_ordered_lookup"</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">   </span><span class="nx">partialFilterExpression</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="nx">deleted_at</span><span class="o">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}}</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>未创建该索引不影响读取正确性，但可能需要阻塞排序。同时保留两个索引会增加
 存储和写入开销。仅增加索引不会限制上下文窗口实际加载的事件数量。</p>
-<h2 id="_16">上下文窗口读取开销</h2>
+<h2 id="_17">上下文窗口读取开销</h2>
 <p>单个会话设置正数事件上限时，MongoDB 按倒序分批读取最新事件。首批文档数
 最多为事件上限与 128 中的较小值，后续每批最多 128 条文档，包括跳过空
 payload 和向前查找用户消息的情况。获得窗口及所需用户消息后关闭游标，
@@ -4213,13 +4258,13 @@ payload 和向前查找用户消息的情况。获得窗口及所需用户消息
 时仍会解码全部历史。有界读取不保证校验整个会话历史的完整性。</p>
 <p>可选的真实模型测试会验证三轮对话、窗口截取及重建服务后的历史重载。
 该测试只发送合成提示词，默认跳过，需显式启用：</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
-<span class="normal"><a href="#__codelineno-5-2">2</a></span>
-<span class="normal"><a href="#__codelineno-5-3">3</a></span>
-<span class="normal"><a href="#__codelineno-5-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="c1"># 在环境中配置 OPENAI_API_KEY、OPENAI_BASE_URL 和 MODEL_NAME。</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="nv">MONGODB_LIVE_MODEL_TEST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">MONGO_TEST_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-run<span class="w"> </span><span class="s1">'^TestMongoDBHistoryLiveModel$'</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>-v<span class="w"> </span>.
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="c1"># 在环境中配置 OPENAI_API_KEY、OPENAI_BASE_URL 和 MODEL_NAME。</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="nv">MONGODB_LIVE_MODEL_TEST</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">MONGO_TEST_URI</span><span class="o">=</span><span class="s1">'mongodb://localhost:27017/?replicaSet=rs0'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-run<span class="w"> </span><span class="s1">'^TestMongoDBHistoryLiveModel$'</span><span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>-v<span class="w"> </span>.
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -4243,7 +4288,7 @@ payload 和向前查找用户消息的情况。获得窗口及所需用户消息
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月19日 09:22:38 UTC">2026-11-19 09:22:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月23日 10:00:02 UTC">2026-11-23 10:00:02</span>
   </span>
 
     
