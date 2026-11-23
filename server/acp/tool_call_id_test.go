@@ -66,18 +66,6 @@ func TestToolCallIDMapperWarnsOnlyOnActiveProviderIDConflict(t *testing.T) {
 }
 
 func TestToolCallIDMapperFillsLateNameAndNotifiesPermissionWaiter(t *testing.T) {
-	originalDebugContext := log.DebugContext
-	var waitingOnce sync.Once
-	waiting := make(chan struct{})
-	log.DebugContext = func(_ context.Context, args ...any) {
-		if len(args) > 0 && args[0] == "Waiting for ACP tool call ID before permission check" {
-			waitingOnce.Do(func() { close(waiting) })
-		}
-	}
-	t.Cleanup(func() {
-		log.DebugContext = originalDebugContext
-	})
-
 	mapper := newToolCallIDMapper(func() acpsdk.ToolCallId {
 		return "tool-1"
 	})
@@ -85,32 +73,12 @@ func TestToolCallIDMapperFillsLateNameAndNotifiesPermissionWaiter(t *testing.T) 
 	acpToolCallID := mapper.resolve(ctx, "auto_call_0", "")
 	assert.Equal(t, acpsdk.ToolCallId("tool-1"), acpToolCallID)
 
-	result := make(chan acpsdk.ToolCallId, 1)
-	errs := make(chan error, 1)
-	claimCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		claimed, err := mapper.claimPermission(
-			claimCtx,
-			"auto_call_0",
-			clientWriteTextFileToolName,
-		)
-		if err != nil {
-			errs <- err
-			return
-		}
-		result <- claimed
-	}()
-
-	select {
-	case got := <-result:
-		t.Fatalf("permission was claimed before the tool name arrived: %q", got)
-	case err := <-errs:
-		require.NoError(t, err)
-	case <-waiting:
-	case <-time.After(time.Second):
-		t.Fatal("permission waiter did not reach the wait path")
-	}
+	result, errs := startClaimPermissionWait(
+		t,
+		mapper,
+		"auto_call_0",
+		clientWriteTextFileToolName,
+	)
 
 	got := mapper.resolve(ctx, "auto_call_0", clientWriteTextFileToolName)
 	assert.Equal(t, acpToolCallID, got)
@@ -142,28 +110,12 @@ func TestToolCallIDMapperClaimPermissionWaitsForCurrentCall(t *testing.T) {
 	mapper := newToolCallIDMapper(func() acpsdk.ToolCallId {
 		return acpsdk.ToolCallId(fmt.Sprintf("tool-%d", nextID.Add(1)))
 	})
-	result := make(chan acpsdk.ToolCallId, 1)
-	errs := make(chan error, 1)
-	go func() {
-		acpToolCallID, err := mapper.claimPermission(
-			context.Background(),
-			"auto_call_0",
-			clientWriteTextFileToolName,
-		)
-		if err != nil {
-			errs <- err
-			return
-		}
-		result <- acpToolCallID
-	}()
-
-	select {
-	case <-result:
-		t.Fatal("permission was claimed before the tool call was observed")
-	case err := <-errs:
-		require.NoError(t, err)
-	case <-time.After(20 * time.Millisecond):
-	}
+	result, errs := startClaimPermissionWait(
+		t,
+		mapper,
+		"auto_call_0",
+		clientWriteTextFileToolName,
+	)
 
 	acpToolCallID := mapper.resolve(
 		context.Background(),
@@ -198,23 +150,12 @@ func TestToolCallIDMapperClaimPermissionWaitsForNextGeneration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first, claimed)
 
-	result := make(chan acpsdk.ToolCallId, 1)
-	go func() {
-		acpToolCallID, claimErr := mapper.claimPermission(
-			context.Background(),
-			"auto_call_0",
-			clientWriteTextFileToolName,
-		)
-		if claimErr == nil {
-			result <- acpToolCallID
-		}
-	}()
-
-	select {
-	case got := <-result:
-		t.Fatalf("permission for a new generation reused %q", got)
-	case <-time.After(20 * time.Millisecond):
-	}
+	result, errs := startClaimPermissionWait(
+		t,
+		mapper,
+		"auto_call_0",
+		clientWriteTextFileToolName,
+	)
 
 	mapper.complete(context.Background(), "auto_call_0")
 	second := mapper.resolve(
@@ -226,9 +167,62 @@ func TestToolCallIDMapperClaimPermissionWaitsForNextGeneration(t *testing.T) {
 	case got := <-result:
 		assert.Equal(t, second, got)
 		assert.NotEqual(t, first, got)
+	case err := <-errs:
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("permission claim did not resume for the next tool call generation")
 	}
+}
+
+func startClaimPermissionWait(
+	t *testing.T,
+	mapper *toolCallIDMapper,
+	providerID string,
+	toolName string,
+) (<-chan acpsdk.ToolCallId, <-chan error) {
+	t.Helper()
+	originalDebugContext := log.DebugContext
+	entered := make(chan struct{})
+	var enteredOnce sync.Once
+	log.DebugContext = func(_ context.Context, args ...any) {
+		if len(args) > 0 && args[0] == "Waiting for ACP tool call ID before permission check" {
+			enteredOnce.Do(func() { close(entered) })
+		}
+	}
+
+	claimCtx, cancel := context.WithCancel(context.Background())
+	result := make(chan acpsdk.ToolCallId, 1)
+	errs := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		acpToolCallID, err := mapper.claimPermission(claimCtx, providerID, toolName)
+		if err != nil {
+			errs <- err
+			return
+		}
+		result <- acpToolCallID
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("permission claim goroutine did not stop")
+		}
+		log.DebugContext = originalDebugContext
+	})
+
+	select {
+	case got := <-result:
+		t.Fatalf("permission was claimed before entering the wait path: %q", got)
+	case err := <-errs:
+		t.Fatalf("permission claim returned before entering the wait path: %v", err)
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("permission claim did not enter the wait path")
+	}
+	return result, errs
 }
 
 func TestToolCallIDMapperClaimPermissionHonorsCancellation(t *testing.T) {

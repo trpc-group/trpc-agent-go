@@ -161,7 +161,7 @@ func TestClientReadTextFileTool(t *testing.T) {
 	assert.Equal(t, "file content", result)
 	require.Len(t, connection.readRequests(), 1)
 	request := connection.readRequests()[0]
-	assert.Equal(t, filepath.Join("/workspace", "README.md"), request.Path)
+	assert.Equal(t, filepath.Join(session.cwd, "README.md"), request.Path)
 	assert.Equal(t, &line, request.Line)
 	assert.Equal(t, &limit, request.Limit)
 	assert.Equal(t, acpsdk.SessionId(session.id), request.SessionId)
@@ -200,6 +200,11 @@ func TestClientReadTextFileToolValidation(t *testing.T) {
 	)
 	readTool := findTool(session.tools, clientReadTextFileToolName)
 	require.NotNil(t, readTool)
+	outsidePath := filepath.Join(
+		filepath.Dir(session.cwd),
+		filepath.Base(session.cwd)+"-other",
+		"secret.txt",
+	)
 	tests := []struct {
 		name      string
 		arguments string
@@ -216,7 +221,7 @@ func TestClientReadTextFileToolValidation(t *testing.T) {
 		{name: "parent traversal", arguments: `{"path":"../secret.txt"}`, wantError: "outside the session workspace"},
 		{
 			name:      "absolute outside",
-			arguments: `{"path":"/workspace-other/secret.txt"}`,
+			arguments: fmt.Sprintf(`{"path":%q}`, outsidePath),
 			wantError: "outside the session workspace",
 		},
 	}
@@ -243,8 +248,9 @@ func TestClientReadTextFileInputSchema(t *testing.T) {
 	require.NotNil(t, readTool)
 	schema := readTool.Declaration().InputSchema
 	require.NotNil(t, schema)
-	assert.Contains(t, readTool.Declaration().Description, "Session workspace: /workspace")
-	assert.Contains(t, schema.Properties["path"].Description, "Session workspace: /workspace")
+	workspaceDescription := "Session workspace: " + session.cwd
+	assert.Contains(t, readTool.Declaration().Description, workspaceDescription)
+	assert.Contains(t, schema.Properties["path"].Description, workspaceDescription)
 	assert.NotContains(t, schema.Properties, "cwd")
 	require.Contains(t, schema.Properties, "line")
 	require.Contains(t, schema.Properties, "limit")
@@ -278,8 +284,9 @@ func TestClientWriteTextFileTool(t *testing.T) {
 	require.NotNil(t, writeTool)
 	writeSchema := writeTool.Declaration().InputSchema
 	require.NotNil(t, writeSchema)
-	assert.Contains(t, writeTool.Declaration().Description, "Session workspace: /workspace")
-	assert.Contains(t, writeSchema.Properties["path"].Description, "Session workspace: /workspace")
+	workspaceDescription := "Session workspace: " + session.cwd
+	assert.Contains(t, writeTool.Declaration().Description, workspaceDescription)
+	assert.Contains(t, writeSchema.Properties["path"].Description, workspaceDescription)
 	assert.NotContains(t, writeSchema.Properties, "cwd")
 
 	result, err := writeTool.(tool.CallableTool).Call(
@@ -287,19 +294,22 @@ func TestClientWriteTextFileTool(t *testing.T) {
 		[]byte(`{"path":"docs/new.txt","content":"hello"}`),
 	)
 	require.NoError(t, err)
+	expectedPath := filepath.Join(session.cwd, "docs/new.txt")
 	assert.Equal(t, clientWriteTextFileResult{
-		Path:    filepath.Join("/workspace", "docs/new.txt"),
+		Path:    expectedPath,
 		Message: "file written successfully",
 	}, result)
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{
-		"path": "/workspace/docs/new.txt",
-		"message": "file written successfully"
-	}`, string(resultJSON))
+	var resultMap map[string]string
+	require.NoError(t, json.Unmarshal(resultJSON, &resultMap))
+	assert.Equal(t, map[string]string{
+		"path":    expectedPath,
+		"message": "file written successfully",
+	}, resultMap)
 	require.Len(t, connection.writeRequests(), 1)
 	request := connection.writeRequests()[0]
-	assert.Equal(t, filepath.Join("/workspace", "docs/new.txt"), request.Path)
+	assert.Equal(t, expectedPath, request.Path)
 	assert.Equal(t, "hello", request.Content)
 	assert.Equal(t, acpsdk.SessionId(session.id), request.SessionId)
 	result, err = writeTool.(tool.CallableTool).Call(
@@ -308,7 +318,7 @@ func TestClientWriteTextFileTool(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, clientWriteTextFileResult{
-		Path:    filepath.Join("/workspace", "docs/empty.txt"),
+		Path:    filepath.Join(session.cwd, "docs/empty.txt"),
 		Message: "file written successfully",
 	}, result)
 	require.Len(t, connection.writeRequests(), 2)
@@ -381,7 +391,7 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	request := connection.permissionRequests()[0]
 	assert.Equal(t, firstACPToolCallID, request.ToolCall.ToolCallId)
 	assert.Equal(t, acpsdk.ToolKindEdit, *request.ToolCall.Kind)
-	assert.Equal(t, filepath.Join("/workspace", "docs/new.txt"), request.ToolCall.Locations[0].Path)
+	assert.Equal(t, filepath.Join(session.cwd, "docs/new.txt"), request.ToolCall.Locations[0].Path)
 	assert.Len(t, request.Options, 3)
 	var optionKinds []acpsdk.PermissionOptionKind
 	for _, option := range request.Options {
@@ -565,7 +575,7 @@ func TestClientWritePermissionCacheIsScopedToSession(t *testing.T) {
 	)
 	secondSession, err := protocolAgent.NewSession(
 		context.Background(),
-		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+		acpsdk.NewSessionRequest{Cwd: firstSession.cwd},
 	)
 	require.NoError(t, err)
 	secondState := protocolAgent.sessions[string(secondSession.SessionId)]
@@ -615,6 +625,11 @@ func TestClientWritePermissionCacheIsScopedToSession(t *testing.T) {
 }
 
 func TestResolveSessionPath(t *testing.T) {
+	root := t.TempDir()
+	sibling := filepath.Join(
+		filepath.Dir(root),
+		filepath.Base(root)+"-other",
+	)
 	tests := []struct {
 		name    string
 		cwd     string
@@ -622,11 +637,26 @@ func TestResolveSessionPath(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{name: "relative", cwd: "/workspace", path: "src/main.go", want: "/workspace/src/main.go"},
-		{name: "absolute inside", cwd: "/workspace", path: "/workspace/README.md", want: "/workspace/README.md"},
-		{name: "parent traversal", cwd: "/workspace", path: "../secret", wantErr: "outside the session workspace"},
-		{name: "component prefix", cwd: "/workspace", path: "/workspace-other/secret", wantErr: "outside the session workspace"},
-		{name: "empty", cwd: "/workspace", path: "", wantErr: "path is required"},
+		{
+			name: "relative",
+			cwd:  root,
+			path: "src/main.go",
+			want: filepath.Join(root, "src", "main.go"),
+		},
+		{
+			name: "absolute inside",
+			cwd:  root,
+			path: filepath.Join(root, "README.md"),
+			want: filepath.Join(root, "README.md"),
+		},
+		{name: "parent traversal", cwd: root, path: "../secret", wantErr: "outside the session workspace"},
+		{
+			name:    "component prefix",
+			cwd:     root,
+			path:    filepath.Join(sibling, "secret"),
+			wantErr: "outside the session workspace",
+		},
+		{name: "empty", cwd: root, path: "", wantErr: "path is required"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -771,7 +801,7 @@ func newClientFileTestAgentWithRunner(
 	require.NoError(t, err)
 	session, err := protocolAgent.NewSession(
 		context.Background(),
-		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+		acpsdk.NewSessionRequest{Cwd: t.TempDir()},
 	)
 	require.NoError(t, err)
 	sessionState := protocolAgent.sessions[string(session.SessionId)]

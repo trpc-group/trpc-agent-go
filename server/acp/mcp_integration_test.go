@@ -37,6 +37,7 @@ const (
 	mcpHelperValueEnv  = "ACP_TEST_MCP_VALUE"
 	mcpHelperSecretEnv = "ACP_TEST_MCP_SECRET"
 	mcpHelperToolEnv   = "ACP_TEST_MCP_TOOL_NAME"
+	mcpHelperBlockEnv  = "ACP_TEST_MCP_BLOCK_FILE"
 )
 
 func TestMain(m *testing.M) {
@@ -86,6 +87,11 @@ func runMCPTestServer() {
 	server.RegisterTool(
 		mcp.NewTool("block", mcp.WithDescription("Block until the server stops")),
 		func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if blockFile := os.Getenv(mcpHelperBlockEnv); blockFile != "" {
+				if err := os.WriteFile(blockFile, []byte("started"), 0o600); err != nil {
+					return nil, err
+				}
+			}
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
@@ -425,16 +431,21 @@ func TestMCPPromptCancellationCancelsToolCall(t *testing.T) {
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)
+	blockFile := filepath.Join(t.TempDir(), "block.started")
+	blockingServer := testStdioMCPServer("Blocking", "value", "")
+	blockingServer.Stdio.Env = append(blockingServer.Stdio.Env, acpsdk.EnvVariable{
+		Name:  mcpHelperBlockEnv,
+		Value: blockFile,
+	})
 	session, err := protocolAgent.NewSession(
 		context.Background(),
 		acpsdk.NewSessionRequest{
 			Cwd:        "/workspace",
-			McpServers: []acpsdk.McpServer{testStdioMCPServer("Blocking", "value", "")},
+			McpServers: []acpsdk.McpServer{blockingServer},
 		},
 	)
 	require.NoError(t, err)
 	t.Cleanup(protocolAgent.shutdown)
-	started := make(chan struct{})
 	callDone := make(chan error, 1)
 	run.run = func(ctx context.Context) <-chan *event.Event {
 		events := make(chan *event.Event)
@@ -446,7 +457,6 @@ func TestMCPPromptCancellationCancelsToolCall(t *testing.T) {
 				callDone <- errors.New("blocking tool not found")
 				return
 			}
-			close(started)
 			_, callErr := blocking.(tool.CallableTool).Call(ctx, []byte(`{}`))
 			callDone <- callErr
 		}()
@@ -470,11 +480,7 @@ func TestMCPPromptCancellationCancelsToolCall(t *testing.T) {
 			err      error
 		}{response: response, err: promptErr}
 	}()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("MCP tool call did not start")
-	}
+	waitForBlockSignal(t, blockFile, callDone)
 	require.NoError(t, protocolAgent.Cancel(
 		context.Background(),
 		acpsdk.CancelNotification{SessionId: session.SessionId},
@@ -509,6 +515,27 @@ func testStdioMCPServer(name, value, pidFile string) acpsdk.McpServer {
 			Command: os.Args[0],
 			Env:     env,
 		},
+	}
+}
+
+func waitForBlockSignal(t *testing.T, path string, callDone <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-callDone:
+			t.Fatalf("MCP tool returned before blocking: %v", err)
+		default:
+		}
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat MCP block signal: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("MCP block handler did not signal request acceptance")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
