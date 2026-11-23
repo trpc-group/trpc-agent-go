@@ -275,9 +275,9 @@ func decodeJSONArgument(argument string) any {
 	if argument == "" {
 		return nil
 	}
-	var decoded any
-	if json.Unmarshal([]byte(argument), &decoded) == nil {
-		return decoded
+	raw := json.RawMessage(argument)
+	if json.Valid(raw) {
+		return raw
 	}
 	return argument
 }
