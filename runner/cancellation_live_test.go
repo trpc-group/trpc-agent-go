@@ -11,9 +11,14 @@ package runner_test
 import (
 	"context"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/tooljournal"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -93,4 +98,34 @@ func TestCancellationLive_ModelStream(t *testing.T) {
 	require.NoError(t, err)
 	closedAfter := cancelModelStreamOnPartial(t, events, cancel, 90*time.Second)
 	t.Logf("live stream cancelled; runner output closed in %s (not a remote-termination assertion)", closedAfter)
+}
+
+func TestCancellationLive_TrackedLateResult(t *testing.T) {
+	m := cancellationLiveModel(t, true)
+	svc := inmemory.NewSessionService()
+	defer svc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	var calls atomic.Int32
+	probe := function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
+		calls.Add(1)
+		cancel()
+		return "durable live evidence", nil
+	}, function.WithName("cancel_probe"), function.WithDescription("Increment a local test counter once."))
+	r := runner.NewRunner("cancel-journal", llmagent.New("agent", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{probe})), runner.WithSessionService(svc), runner.WithToolExecutionTracking(true))
+	defer r.Close()
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("Call cancel_probe exactly once."))
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Eventually(t, func() bool {
+		sess, err := svc.GetSession(context.Background(), session.Key{AppName: "cancel-journal", UserID: "user", SessionID: "session"})
+		if err != nil {
+			return false
+		}
+		records, err := tooljournal.Records(sess)
+		return err == nil && len(records) == 1 && records[0].Calls[0].Status == "completed" && strings.Contains(records[0].Calls[0].Choices[0].Message.Content, "durable live evidence")
+	}, 2*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 1, calls.Load())
+	t.Log("live tool result persisted after cancellation independently of Runner output")
 }

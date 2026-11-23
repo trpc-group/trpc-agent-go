@@ -46,6 +46,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tooljournal"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -344,6 +345,7 @@ type runner struct {
 	awaitUserReplyRouting              bool
 	executionTraceEnabledDefault       bool
 	persistInterruptedAssistantDefault bool
+	toolExecutionTracking              bool
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -377,6 +379,7 @@ type Options struct {
 	awaitUserReplyRouting              bool
 	executionTraceEnabledDefault       bool
 	persistInterruptedAssistantDefault bool
+	toolExecutionTracking              bool
 }
 
 // newOptions creates a new Options.
@@ -435,6 +438,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		executionTraceEnabledDefault:       options.executionTraceEnabledDefault,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		toolExecutionTracking:              options.toolExecutionTracking,
 		ownedSessionService:                ownedSessionService,
 	}
 }
@@ -492,6 +496,7 @@ func NewRunnerWithAgentFactory(
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		executionTraceEnabledDefault:       options.executionTraceEnabledDefault,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		toolExecutionTracking:              options.toolExecutionTracking,
 		ownedSessionService:                ownedSessionService,
 	}
 }
@@ -858,7 +863,7 @@ func (r *runner) attachSessionAppender(
 	invocation *agent.Invocation,
 	defaultSession *session.Session,
 ) {
-	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
+	appendEvent := func(ctx context.Context, e *event.Event) error {
 		if e == nil {
 			return nil
 		}
@@ -875,7 +880,11 @@ func (r *runner) attachSessionAppender(
 		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
 		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		return err
-	})
+	}
+	appender.Attach(invocation, appendEvent)
+	if r.toolExecutionTracking {
+		tooljournal.Attach(invocation, appendEvent)
+	}
 }
 
 func (r *runner) persistAgentRunError(
@@ -4506,4 +4515,13 @@ func (r *runner) defaultIngestOptions(
 		opts = append(opts, session.WithIngestAgentID(agentName))
 	}
 	return opts
+}
+
+// WithToolExecutionTracking enables durable admission and outcome records for
+// LLMAgent tools. It defaults to false. Each admission waits for SessionService
+// acknowledgement; a failed append prevents dispatch. Records contain tool
+// arguments/results and live in session state for the session's lifetime.
+// Custom agents and Graph checkpoint execution are not tracked by this option.
+func WithToolExecutionTracking(enabled bool) Option {
+	return func(o *Options) { o.toolExecutionTracking = enabled }
 }

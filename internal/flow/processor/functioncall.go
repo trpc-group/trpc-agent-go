@@ -36,6 +36,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tooljournal"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -484,6 +485,12 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
+	var err error
+	ctx, err = tooljournal.Begin(ctx, invocation, llmResponse)
+	if err != nil {
+		emitToolIterationLimitError(ctx, invocation, eventChan, err.Error())
+		return nil, errors.Join(err, agent.NewStopError("tool tracking admission failed"))
+	}
 	var tools map[string]tool.Tool
 	if req != nil {
 		tools = req.Tools
@@ -2855,8 +2862,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	tools map[string]tool.Tool,
 	index int,
 	eventChan chan<- *event.Event,
-) (toolCallExecution, error) {
-	execution := toolCallExecution{
+) (execution toolCallExecution, returnErr error) {
+	execution = toolCallExecution{
 		ctx:          ctx,
 		modifiedArgs: toolCall.Function.Arguments,
 	}
@@ -2875,6 +2882,12 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return execution, admissionError(err)
 	}
 	defer release()
+
+	finish, err := beginToolExecution(ctx, toolCall.ID)
+	defer finish(&execution, &returnErr)
+	if err != nil {
+		return execution, err
+	}
 
 	log.DebugfContext(
 		ctx,
@@ -3639,6 +3652,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if err := ctx.Err(); err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, admissionError(err)
 	}
+	journalCtx := ctx
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	// Repair tool call arguments in place when needed.
@@ -3701,6 +3715,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, *permissionResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
+	ctx = tooljournal.Inherit(ctx, journalCtx)
 	// Callbacks may replace the context. Only the effective context controls
 	// admission, and rejection before execution does not invoke after callbacks.
 	ctx, toolResult, suppressDefaultToolMessage, started, toolErr := p.executeTool(
@@ -3938,6 +3953,12 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	}
 	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
 	if p.toolRetryPolicy == nil {
+		if err := tooljournal.Attempt(ctx, toolCall.ID); err != nil {
+			return ctx, nil, false, err
+		}
+		if err := ctx.Err(); err != nil {
+			return ctx, nil, false, err
+		}
 		result, err := tl.Call(callCtx, toolCall.Function.Arguments)
 		if err != nil {
 			log.ErrorfContext(
@@ -3957,6 +3978,12 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 		Arguments:  toolCall.Function.Arguments,
 		Policy:     p.toolRetryPolicy,
 		Call: func(_ context.Context, args []byte) (any, error) {
+			if err := tooljournal.Attempt(ctx, toolCall.ID); err != nil {
+				return nil, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			started = true
 			return tl.Call(callCtx, args)
 		},
@@ -4144,6 +4171,9 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, bool, error) {
 	if err := ctx.Err(); err != nil {
+		return ctx, nil, false, false, err
+	}
+	if err := tooljournal.Attempt(ctx, toolCall.ID); err != nil {
 		return ctx, nil, false, false, err
 	}
 	callCtx := streamableToolCallContext(
@@ -5086,4 +5116,17 @@ func acquireToolCapacity(ctx context.Context, name string) (func(), error) {
 func toolCallCanceledBeforeStart(started bool, err error) bool {
 	return !started && (errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded))
+}
+
+func beginToolExecution(ctx context.Context, id string) (func(*toolCallExecution, *error), error) {
+	if err := tooljournal.Dispatch(ctx, id); err != nil {
+		return func(*toolCallExecution, *error) {}, err
+	}
+	finish := func(execution *toolCallExecution, returnErr *error) {
+		if err := tooljournal.Finish(ctx, id, execution.choices, *returnErr); err != nil {
+			execution.shouldIgnoreError = false
+			*returnErr = errors.Join(*returnErr, err)
+		}
+	}
+	return finish, ctx.Err()
 }
