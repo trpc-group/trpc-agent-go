@@ -122,13 +122,24 @@ func Begin(ctx context.Context, inv *agent.Invocation, rsp *model.Response) (con
 	}
 	inv.Session.EventMu.RUnlock()
 	if id, ok := ctx.Value(sourceKey{}).(string); ok && id != "" {
+		source = *event.NewResponseEvent(inv.InvocationID, inv.AgentName, rsp.Clone())
 		source.ID = id
-		source.Author = inv.AgentName
+		source.RequestID = inv.RunOptions.RequestID
+		source.Branch = inv.Branch
 		source.FilterKey = inv.GetEventFilterKey()
 	}
 	if source.ID == "" {
 		return ctx, errors.New("tool tracking requires a persisted tool-call event")
 	}
+	// Persist the source before work can cancel the output loop. The shared
+	// coordinator deduplicates this with normal event consumption by event ID.
+	sourceCtx, sourceCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	sourceErr := recorder.append(sourceCtx, &source)
+	sourceCancel()
+	if sourceErr != nil {
+		return ctx, fmt.Errorf("persist tool-call source: %w", sourceErr)
+	}
+
 	round := &Round{recorder: recorder, author: source.Author, filterKey: source.FilterKey,
 		record: Record{Version: 1, ID: uuid.NewString(), SourceEventID: source.ID, Response: rsp.Clone(),
 			RequestID: inv.RunOptions.RequestID, InvocationID: inv.InvocationID}}

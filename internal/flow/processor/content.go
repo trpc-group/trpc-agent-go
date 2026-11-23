@@ -694,6 +694,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if invocation == nil {
 		return
 	}
+	invocation.DeleteState(executionProjectionErrorKey)
 	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 	summaryview.Clear(invocation)
 	summaryinject.Clear(invocation)
@@ -712,6 +713,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		true,
 	)
 
+	if projectionError, ok := agent.GetStateValue[string](invocation, executionProjectionErrorKey); ok {
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(invocation.InvocationID, invocation.AgentName, "tool_history_projection", projectionError))
+		return
+	}
 	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
 		msg := p.projectEventMessage(
 			invocation,
@@ -1570,6 +1575,11 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.applyToolTranscriptMode(events, inv)
+	resultEvents, projectionErr := completeTrackedToolRounds(resultEvents, inv)
+	if projectionErr != nil {
+		executionProjectionFailed(inv, projectionErr)
+		return projectedHistory{}
+	}
 	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	// Apply compaction to the already timeline-filtered projection. Tool-result
@@ -2799,6 +2809,12 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	var projectionErr error
+	events, projectionErr = completeTrackedToolRounds(events, inv)
+	if projectionErr != nil {
+		executionProjectionFailed(inv, projectionErr)
+		return projectedHistory{}
+	}
 	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
