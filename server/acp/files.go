@@ -40,8 +40,8 @@ type clientReadTextFileArgs struct {
 }
 
 type clientWriteTextFileArgs struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path    string  `json:"path"`
+	Content *string `json:"content"`
 }
 
 type clientWriteTextFileResult struct {
@@ -184,7 +184,7 @@ func clientWriteTextFileInputSchema(workspace string) *tool.Schema {
 			},
 			"content": {
 				Type:        "string",
-				Description: "Text content to write to the file.",
+				Description: "Text content to write. An explicit empty string writes an empty file.",
 			},
 		},
 	}
@@ -276,6 +276,9 @@ func (a *protocolAgent) writeClientTextFile(
 	session *sessionState,
 	args clientWriteTextFileArgs,
 ) (clientWriteTextFileResult, error) {
+	if args.Content == nil {
+		return clientWriteTextFileResult{}, errors.New("content is required")
+	}
 	path, err := resolveSessionPath(session.cwd, args.Path)
 	if err != nil {
 		return clientWriteTextFileResult{}, err
@@ -291,11 +294,11 @@ func (a *protocolAgent) writeClientTextFile(
 		"path",
 		path,
 		"content_bytes",
-		len(args.Content),
+		len(*args.Content),
 	)
 	if _, err := a.connection.WriteTextFile(ctx, acpsdk.WriteTextFileRequest{
 		Path:      path,
-		Content:   args.Content,
+		Content:   *args.Content,
 		SessionId: acpsdk.SessionId(session.id),
 	}); err != nil {
 		log.WarnContext(
@@ -359,6 +362,29 @@ func (t *clientWriteTextFileTool) CheckPermission(
 	if t.agent == nil || t.agent.connection == nil {
 		return tool.PermissionDecision{}, errors.New("acp client connection is not available")
 	}
+	var args clientWriteTextFileArgs
+	if err := json.Unmarshal(request.Arguments, &args); err != nil {
+		log.DebugContext(
+			ctx,
+			"Denied ACP file write with invalid arguments",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
+		return tool.DenyPermission("invalid file write arguments"), nil
+	}
+	if args.Content == nil {
+		log.DebugContext(
+			ctx,
+			"Denied ACP file write without content",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
+		return tool.DenyPermission("file content is required"), nil
+	}
 	t.session.mu.Lock()
 	allowed := t.session.writeAllowed
 	t.session.mu.Unlock()
@@ -374,18 +400,6 @@ func (t *clientWriteTextFileTool) CheckPermission(
 		return tool.AllowPermission(), nil
 	}
 
-	var args clientWriteTextFileArgs
-	if err := json.Unmarshal(request.Arguments, &args); err != nil {
-		log.DebugContext(
-			ctx,
-			"Denied ACP file write with invalid arguments",
-			"session_id",
-			t.session.id,
-			"provider_tool_call_id",
-			request.ToolCallID,
-		)
-		return tool.DenyPermission("invalid file write arguments"), nil
-	}
 	path, err := resolveSessionPath(t.session.cwd, args.Path)
 	if err != nil {
 		log.DebugContext(

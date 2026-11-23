@@ -302,10 +302,44 @@ func TestClientWriteTextFileTool(t *testing.T) {
 	assert.Equal(t, filepath.Join("/workspace", "docs/new.txt"), request.Path)
 	assert.Equal(t, "hello", request.Content)
 	assert.Equal(t, acpsdk.SessionId(session.id), request.SessionId)
+	result, err = writeTool.(tool.CallableTool).Call(
+		context.Background(),
+		[]byte(`{"path":"docs/empty.txt","content":""}`),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, clientWriteTextFileResult{
+		Path:    filepath.Join("/workspace", "docs/empty.txt"),
+		Message: "file written successfully",
+	}, result)
+	require.Len(t, connection.writeRequests(), 2)
+	assert.Empty(t, connection.writeRequests()[1].Content)
 	assert.Equal(t, tool.ToolMetadata{
 		Destructive:     true,
 		ConcurrencySafe: false,
 	}, tool.MetadataOf(writeTool))
+}
+
+func TestClientWriteTextFileToolRequiresContent(t *testing.T) {
+	_, connection, session := newClientFileTestAgent(
+		t,
+		[]Option{WithClientFileWriteEnabled(true)},
+		false,
+		true,
+	)
+	writeTool := findTool(session.tools, clientWriteTextFileToolName)
+	require.NotNil(t, writeTool)
+
+	for _, arguments := range []string{
+		`{"path":"docs/missing.txt"}`,
+		`{"path":"docs/null.txt","content":null}`,
+	} {
+		_, err := writeTool.(tool.CallableTool).Call(
+			context.Background(),
+			[]byte(arguments),
+		)
+		require.ErrorContains(t, err, "content is required")
+	}
+	assert.Empty(t, connection.writeRequests())
 }
 
 func TestClientWriteTextFilePermission(t *testing.T) {
@@ -491,6 +525,34 @@ func TestClientWriteTextFilePermissionRejectsPathBeforeRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
 	assert.Contains(t, decision.Reason, "outside the session workspace")
+	assert.Empty(t, connection.permissionRequests())
+}
+
+func TestClientWriteTextFilePermissionRejectsMissingContentBeforeRequest(t *testing.T) {
+	_, connection, session := newClientFileTestAgent(
+		t,
+		[]Option{WithClientFileWriteEnabled(true)},
+		false,
+		true,
+	)
+	writeTool := findTool(session.tools, clientWriteTextFileToolName)
+	require.NotNil(t, writeTool)
+
+	for _, arguments := range []string{
+		`{"path":"docs/missing.txt"}`,
+		`{"path":"docs/null.txt","content":null}`,
+	} {
+		decision, err := writeTool.(tool.PermissionChecker).CheckPermission(
+			context.Background(),
+			&tool.PermissionRequest{
+				ToolCallID: "call-missing-content",
+				Arguments:  []byte(arguments),
+			},
+		)
+		require.NoError(t, err)
+		assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+		assert.Contains(t, decision.Reason, "file content is required")
+	}
 	assert.Empty(t, connection.permissionRequests())
 }
 
