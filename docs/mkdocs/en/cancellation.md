@@ -352,3 +352,27 @@ Generation metadata lasts for this Runner's lifetime.
 This cannot fence writes made directly by a user tool or another Runner/process.
 For those, use backend conditional updates and external idempotency. It also
 does not restart the old model loop or send late events to closed output.
+
+## Observe and wait for execution settlement
+
+With tracking enabled, type-assert the returned Runner to the optional
+`runner.ExecutionObserver`. `ExecutionStatus(requestID)` reports cancellation
+requested, output closed, upstream execution settled, active logical tools and
+any failed/uncertain persistence acknowledgement separately. `WaitExecution`
+waits using the caller's own context; timing out only stops the wait. A successful
+wait can still return a status with `PersistenceError`.
+
+`Cancel` remains a fast request, and `ManagedRunner` is unchanged. A tool that
+ignores context can keep execution unsettled after public output closes. The
+observer continues draining the agent's event channel until it closes. Custom
+agents must keep that channel open until their workers finish; the framework
+cannot observe hidden goroutines or remote operations. `Close` requests
+cancellation and releases owned services; it does not wait for arbitrary tools.
+Wait before Close when acknowledged finalization is needed.
+
+Snapshots last up to ten minutes after settlement, with a maximum of 128 tracked
+runs per Runner. Capacity evicts the oldest settled snapshot; if all slots are
+unsettled, new tracked runs fail explicitly. Request IDs cannot be reused while
+a snapshot is retained. Unknown, disabled or expired observation returns false;
+waiting returns `ErrExecutionNotFound`. Observation is in memory; durable tool
+records are the source for restart recovery.

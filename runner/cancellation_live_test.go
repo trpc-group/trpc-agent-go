@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -114,7 +115,7 @@ func TestCancellationLive_TrackedLateResult(t *testing.T) {
 	}, function.WithName("cancel_probe"), function.WithDescription("Increment a local test counter once."))
 	r := runner.NewRunner("cancel-journal", llmagent.New("agent", llmagent.WithModel(m), llmagent.WithTools([]tool.Tool{probe})), runner.WithSessionService(svc), runner.WithToolExecutionTracking(true))
 	defer r.Close()
-	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("Call cancel_probe exactly once."))
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("Call cancel_probe exactly once."), agent.WithRequestID("live-tracked"))
 	require.NoError(t, err)
 	for range ch {
 	}
@@ -135,5 +136,14 @@ func TestCancellationLive_TrackedLateResult(t *testing.T) {
 		return false
 	}, 2*time.Second, 10*time.Millisecond)
 	require.EqualValues(t, 1, calls.Load())
-	t.Log("live tool result persisted after cancellation independently of Runner output")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	status, err := r.(runner.ExecutionObserver).WaitExecution(waitCtx, "live-tracked")
+	require.NoError(t, err)
+	require.True(t, status.ExecutionSettled)
+	require.True(t, status.OutputClosed)
+	require.True(t, status.CancellationRequested)
+	require.Zero(t, status.ActiveTools)
+	require.Empty(t, status.PersistenceError)
+	t.Log("live cancelled run settled with persisted tool evidence and no active tools")
 }

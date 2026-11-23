@@ -330,6 +330,8 @@ type RunStatus struct {
 
 // runner runs agents.
 type runner struct {
+	observationsMu                     sync.Mutex
+	observations                       map[string]*executionObservation
 	persistenceOnce                    sync.Once
 	persistence                        *cancellationPersistence
 	appName                            string
@@ -359,8 +361,9 @@ type runner struct {
 }
 
 type runHandle struct {
-	cancel context.CancelFunc
-	queue  *steer.Queue
+	observation *executionObservation
+	cancel      context.CancelFunc
+	queue       *steer.Queue
 
 	mu     sync.RWMutex
 	status RunStatus
@@ -760,6 +763,7 @@ func (r *runner) Run(
 		ro,
 	); err != nil {
 		finishRunnerLatencySpan(persistSpan, persistStarted, err)
+		handle.completeFailedStart(execCtx)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -793,6 +797,7 @@ func (r *runner) Run(
 	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
 	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
+		handle.completeFailedStart(execCtx)
 		r.persistAgentRunError(execCtx, currentTurnSession, invocation, ag, err)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
@@ -1178,10 +1183,15 @@ func (r *runner) registerRun(
 			requestID,
 		)
 	}
+	observation, err := r.reserveExecution(requestID)
+	if err != nil {
+		return nil, err
+	}
 	handle := &runHandle{
-		cancel: cancel,
-		queue:  queue,
-		status: status,
+		observation: observation,
+		cancel:      cancel,
+		queue:       queue,
+		status:      status,
 	}
 	r.runs[requestID] = handle
 	return handle, nil
@@ -1489,6 +1499,9 @@ func (r *runner) processAgentEvents(
 	executionTraceInput *trace.Snapshot,
 	globalAfterRun *globalAfterRunState,
 ) chan *event.Event {
+	if handle != nil {
+		agentEventCh = observeExecution(ctx, invocation, agentEventCh, handle.observation)
+	}
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
 		sess:                      sess,
@@ -1563,9 +1576,13 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
+		cancellationRequested := ctx.Err() != nil
 		loop.invocation.CleanupNotice(ctx)
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
+			if loop.runHandle.observation != nil {
+				loop.runHandle.observation.complete(false, true, cancellationRequested)
+			}
 		}
 	}()
 	for {
@@ -4539,4 +4556,10 @@ func (r *runner) appendRunEvent(ctx context.Context, inv *agent.Invocation, sess
 		return err
 	}
 	return r.sessionService.AppendEvent(ctx, sess, e)
+}
+
+func (h *runHandle) completeFailedStart(ctx context.Context) {
+	if h.observation != nil {
+		h.observation.complete(true, true, ctx.Err() != nil)
+	}
 }
