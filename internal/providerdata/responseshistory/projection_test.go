@@ -226,3 +226,33 @@ func TestProjectMessageRejectsMissingOrForeignRecords(t *testing.T) {
 	_, _, err = ProjectMessage(message)
 	require.ErrorContains(t, err, "do not match")
 }
+
+func TestProjectMessageRejectsIncompleteNativeCallWithValidProjection(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw, want string
+	}{
+		{"missing call ID", `[{"type":"function_call","id":"fc","name":"lookup","arguments":"{}"}]`, "empty call_id"},
+		{"missing name", `[{"type":"function_call","id":"fc","call_id":"c1","arguments":"{}"}]`, "empty name"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			message := responsesHistory(tt.raw)
+			message.ToolCalls = []model.ToolCall{{ID: "c1", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte("{}")}}}
+			_, include, err := ProjectMessage(message)
+			require.ErrorContains(t, err, tt.want)
+			require.False(t, include)
+		})
+	}
+}
+
+func TestProjectMessagePreservesFileEditWithoutRestoringCitation(t *testing.T) {
+	message := responsesHistory(`[{"type":"message","role":"assistant","status":"completed","id":"m1","content":[
+		{"type":"output_text","text":"notes","annotations":[{"type":"url_citation","url":"https://example.test/private-source"}]}]}]`)
+	message.Content = "notes"
+	message.AddFileData("visible.txt", []byte("edited file"), "text/plain")
+	projected, include, err := ProjectMessage(message)
+	require.NoError(t, err)
+	require.True(t, include)
+	require.Equal(t, "notes", projected.Content)
+	require.Equal(t, message.ContentParts, projected.ContentParts)
+	require.Nil(t, projected.ProviderData)
+}

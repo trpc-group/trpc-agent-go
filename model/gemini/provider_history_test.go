@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -263,4 +264,101 @@ func TestResponsesHistoryRejectsUnsupportedToolContentAfterTailoring(t *testing.
 	}
 	_, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{call, model.NewToolMessage("c1", "lookup", "result")}})
 	require.ErrorContains(t, err, "tool result content type")
+}
+
+func TestResponsesHistorySendsMediaInOrder(t *testing.T) {
+	const audioURL = "https://example.test/clip.wav"
+	const videoURL = "https://example.test/clip.mp4"
+	const fileURL = "https://example.test/notes.pdf"
+	media := model.NewUserMessage("review these attachments")
+	media.AddAudioURL(audioURL, "wav")
+	media.AddAudioData([]byte("audio"), "audio/wav")
+	media.AddVideoURL(videoURL, "mp4")
+	media.AddVideoData([]byte("video"), "video/mp4")
+	media.AddFileURL("notes.pdf", fileURL, "application/pdf")
+	media.AddFileData("notes.pdf", []byte("file"), "application/pdf")
+	request := &model.Request{Messages: []model.Message{
+		media,
+		responsesHistoryMessage(`[{"type":"reasoning","id":"r1","encrypted_content":"private"}]`, ""),
+		model.NewUserMessage("continue"),
+	}}
+	wire := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		wire <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)
+	}))
+	t.Cleanup(server.Close)
+	m, err := New(context.Background(), "gemini-test", WithGeminiClientConfig(&genai.ClientConfig{
+		APIKey: "test", Backend: genai.BackendGeminiAPI, HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+	}))
+	require.NoError(t, err)
+	responses, err := m.GenerateContent(context.Background(), request)
+	require.NoError(t, err)
+	for response := range responses {
+		require.Nil(t, response.Error)
+	}
+	require.Len(t, wire, 1)
+	var body struct{ Contents json.RawMessage }
+	require.NoError(t, json.Unmarshal(<-wire, &body))
+	require.JSONEq(t, `[
+		{"role":"user","parts":[
+			{"text":"review these attachments"},
+			{"fileData":{"fileUri":"https://example.test/clip.wav","mimeType":"audio/wav"}},
+			{"inlineData":{"data":"YXVkaW8=","mimeType":"audio/wav"}},
+			{"fileData":{"fileUri":"https://example.test/clip.mp4","mimeType":"video/mp4"}},
+			{"inlineData":{"data":"dmlkZW8=","mimeType":"video/mp4"}},
+			{"text":"File URL: notes.pdf (application/pdf): https://example.test/notes.pdf"},
+			{"inlineData":{"data":"ZmlsZQ==","mimeType":"application/pdf"}}
+		]},
+		{"role":"user","parts":[{"text":"continue"}]}
+	]`, string(body.Contents))
+}
+
+func TestResponsesHistoryRejectsInvalidMediaAndCallsBeforeDispatch(t *testing.T) {
+	native := responsesHistoryMessage(`[]`, "source answer")
+	calls := func(role model.Role, id, name string) model.Message {
+		return model.Message{Role: role, ToolCalls: []model.ToolCall{historyCall(id, name, "{}")}}
+	}
+	media := func(part model.ContentPart) model.Message {
+		return model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{part}}
+	}
+	tests := []struct {
+		name    string
+		message model.Message
+		want    string
+	}{
+		{"missing call ID", calls(model.RoleAssistant, "", "lookup"), "empty call_id"},
+		{"missing function name", calls(model.RoleAssistant, "c1", ""), `invalid function call "c1"`},
+		{"call in user message", calls(model.RoleUser, "c1", "lookup"), "function calls require the assistant role"},
+		{"unknown role", calls("custom", "c1", "lookup"), `unsupported role "custom"`},
+		{"audio without source", media(model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{Format: "wav"}}), `content type "audio" cannot be represented`},
+		{"video without source", media(model.ContentPart{Type: model.ContentTypeVideo, Video: &model.Video{Format: "mp4"}}), `content type "video" cannot be represented`},
+		{"file without source", media(model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "notes.pdf"}}), `content type "file" cannot be represented`},
+		{"audio with video payload", media(model.ContentPart{Type: model.ContentTypeAudio, Video: &model.Video{URL: "https://example.test/clip.mp4"}}), "mismatched payload"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, afterTailoring := range []bool{false, true} {
+				t.Run(fmt.Sprintf("afterTailoring=%t", afterTailoring), func(t *testing.T) {
+					m := &Model{client: NewMockClient(gomock.NewController(t))}
+					messages := []model.Message{native, tt.message}
+					if afterTailoring {
+						m.enableTokenTailoring = true
+						m.maxInputTokens = 100
+						m.tailoringStrategy = overflowTailoringStrategy{tailored: []model.Message{tt.message}}
+						messages = []model.Message{native}
+					}
+					responses, err := m.GenerateContent(context.Background(), &model.Request{Messages: messages})
+					require.ErrorContains(t, err, tt.want)
+					require.Nil(t, responses)
+				})
+			}
+		})
+	}
 }
