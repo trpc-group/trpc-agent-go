@@ -688,7 +688,7 @@ func newClientFileTestAgentWithRunner(
 	t.Helper()
 	nextSessionID := 0
 	allOptions := append([]Option(nil), options...)
-	allOptions = append(allOptions, WithSessionIDGenerator(func() string {
+	allOptions = append(allOptions, withSessionIDGenerator(func() string {
 		nextSessionID++
 		return fmt.Sprintf("session-files-%d", nextSessionID)
 	}))

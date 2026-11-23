@@ -26,6 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+func withSessionIDGenerator(generator func() string) Option {
+	return func(options *options) {
+		options.sessionIDGenerator = generator
+	}
+}
+
 func TestServerPromptOverACP(t *testing.T) {
 	fakeRunner := &testRunner{
 		run: func(_ context.Context) <-chan *event.Event {
@@ -64,7 +70,7 @@ func TestServerPromptOverACP(t *testing.T) {
 		fakeRunner,
 		WithUserID("editor-user"),
 		WithImplementation("test-agent", "1.0.0"),
-		WithSessionIDGenerator(func() string { return "session-1" }),
+		withSessionIDGenerator(func() string { return "session-1" }),
 		WithRunOptionsFunc(func(session Session) []agent.RunOption {
 			return []agent.RunOption{agent.WithRuntimeState(map[string]any{
 				"cwd": session.CWD,
@@ -197,7 +203,7 @@ func TestServerPromptReassignsReusedProviderToolCallID(t *testing.T) {
 	}
 	server, err := New(
 		fakeRunner,
-		WithSessionIDGenerator(func() string { return "session-1" }),
+		withSessionIDGenerator(func() string { return "session-1" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)
@@ -244,7 +250,7 @@ func TestServerCancellation(t *testing.T) {
 	}
 	server, err := New(
 		fakeRunner,
-		WithSessionIDGenerator(func() string { return "session-cancel" }),
+		withSessionIDGenerator(func() string { return "session-cancel" }),
 	)
 	require.NoError(t, err)
 	clientConnection, cleanup := connectTestClient(t, server, &testClient{})
@@ -325,7 +331,7 @@ func TestServeCleansUpOnExit(t *testing.T) {
 			}
 			server, err := New(
 				fakeRunner,
-				WithSessionIDGenerator(func() string { return "session-serve-exit" }),
+				withSessionIDGenerator(func() string { return "session-serve-exit" }),
 			)
 			require.NoError(t, err)
 
@@ -417,7 +423,7 @@ func TestProtocolAgentRejectsConcurrentPromptUntilRunFinishes(t *testing.T) {
 	}
 	server, err := New(
 		runner,
-		WithSessionIDGenerator(func() string { return "session-serialized" }),
+		withSessionIDGenerator(func() string { return "session-serialized" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)
@@ -463,10 +469,10 @@ func TestProtocolAgentRejectsConcurrentPromptUntilRunFinishes(t *testing.T) {
 	require.NoError(t, <-firstResult)
 }
 
-func TestServerSessionIDsAreUniqueAcrossConnectionsAndLifetime(t *testing.T) {
+func TestServerSessionIDsAreUniqueAcrossActiveConnections(t *testing.T) {
 	server, err := New(
 		&testRunner{},
-		WithSessionIDGenerator(func() string { return "shared-session" }),
+		withSessionIDGenerator(func() string { return "shared-session" }),
 	)
 	require.NoError(t, err)
 	agents := []*protocolAgent{newProtocolAgent(server), newProtocolAgent(server)}
@@ -514,11 +520,68 @@ func TestServerSessionIDsAreUniqueAcrossConnectionsAndLifetime(t *testing.T) {
 		acpsdk.CloseSessionRequest{SessionId: succeeded.response.SessionId},
 	)
 	require.NoError(t, err)
-	_, err = newProtocolAgent(server).NewSession(
+	reuseAgent := newProtocolAgent(server)
+	reused, err := reuseAgent.NewSession(
 		context.Background(),
 		acpsdk.NewSessionRequest{Cwd: "/workspace"},
 	)
-	assert.ErrorContains(t, err, "duplicate session ID")
+	require.NoError(t, err)
+	assert.Equal(t, succeeded.response.SessionId, reused.SessionId)
+
+	_, err = reuseAgent.CloseSession(
+		context.Background(),
+		acpsdk.CloseSessionRequest{SessionId: reused.SessionId},
+	)
+	require.NoError(t, err)
+	assert.Zero(t, activeSessionIDCount(server))
+}
+
+func TestServerSessionIDActiveSetStaysBounded(t *testing.T) {
+	server, err := New(
+		&testRunner{},
+		withSessionIDGenerator(func() string { return "reusable-session" }),
+	)
+	require.NoError(t, err)
+	agentInstance := newProtocolAgent(server)
+	ctx := context.Background()
+
+	for i := 0; i < 100; i++ {
+		response, newSessionErr := agentInstance.NewSession(
+			ctx,
+			acpsdk.NewSessionRequest{Cwd: "/workspace"},
+		)
+		require.NoError(t, newSessionErr)
+		_, closeErr := agentInstance.CloseSession(
+			ctx,
+			acpsdk.CloseSessionRequest{SessionId: response.SessionId},
+		)
+		require.NoError(t, closeErr)
+		assert.Zero(t, activeSessionIDCount(server))
+	}
+}
+
+func TestServerShutdownReleasesSessionIDs(t *testing.T) {
+	server, err := New(
+		&testRunner{},
+		withSessionIDGenerator(func() string { return "shutdown-session" }),
+	)
+	require.NoError(t, err)
+	agentInstance := newProtocolAgent(server)
+	_, err = agentInstance.NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, activeSessionIDCount(server))
+
+	agentInstance.shutdown()
+	assert.Zero(t, activeSessionIDCount(server))
+}
+
+func activeSessionIDCount(server *Server) int {
+	server.sessionMu.Lock()
+	defer server.sessionMu.Unlock()
+	return len(server.activeSessionIDs)
 }
 
 func TestServerValidation(t *testing.T) {
@@ -550,7 +613,7 @@ func TestServerValidation(t *testing.T) {
 		},
 		{
 			name:   "session ID generator",
-			option: WithSessionIDGenerator(nil),
+			option: withSessionIDGenerator(nil),
 			err:    "session ID generator is required",
 		},
 	}
@@ -568,7 +631,7 @@ func TestProtocolAgentSessionValidation(t *testing.T) {
 		&testRunner{},
 		WithRunOptions(agent.WithRuntimeState(map[string]any{"static": true})),
 		WithReasoningContentEnabled(true),
-		WithSessionIDGenerator(func() string {
+		withSessionIDGenerator(func() string {
 			sessionID := sessionIDs[0]
 			sessionIDs = sessionIDs[1:]
 			return sessionID
@@ -614,7 +677,7 @@ func TestProtocolAgentSessionValidation(t *testing.T) {
 func TestProtocolAgentCloseSessionIsIdempotent(t *testing.T) {
 	server, err := New(
 		&testRunner{},
-		WithSessionIDGenerator(func() string { return "session-close" }),
+		withSessionIDGenerator(func() string { return "session-close" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)

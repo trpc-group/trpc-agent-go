@@ -101,7 +101,7 @@ func TestMCPPromptUsesStdioToolsAndEnvironment(t *testing.T) {
 	run := &testRunner{}
 	server, err := New(
 		run,
-		WithSessionIDGenerator(func() string { return "mcp-session" }),
+		withSessionIDGenerator(func() string { return "mcp-session" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)
@@ -184,7 +184,7 @@ func TestMCPMultipleServersUsePrefixedIsolatedTools(t *testing.T) {
 	skipRealMCPProcessTestUnderRace(t)
 	server, err := New(
 		&testRunner{},
-		WithSessionIDGenerator(func() string { return "mcp-multiple" }),
+		withSessionIDGenerator(func() string { return "mcp-multiple" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)
@@ -249,7 +249,7 @@ func TestMCPSessionsUseSeparateProcesses(t *testing.T) {
 	nextSessionID := 0
 	server, err := New(
 		&testRunner{},
-		WithSessionIDGenerator(func() string {
+		withSessionIDGenerator(func() string {
 			nextSessionID++
 			return fmt.Sprintf("mcp-session-%d", nextSessionID)
 		}),
@@ -309,7 +309,7 @@ func TestMCPInitializationFailureCleansUpAndDoesNotUseSessionID(t *testing.T) {
 	skipRealMCPProcessTestUnderRace(t)
 	server, err := New(
 		&testRunner{},
-		WithSessionIDGenerator(func() string { return "mcp-after-failure" }),
+		withSessionIDGenerator(func() string { return "mcp-after-failure" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)
@@ -354,7 +354,7 @@ func TestMCPPromptCancellationCancelsToolCall(t *testing.T) {
 	run := &testRunner{}
 	server, err := New(
 		run,
-		WithSessionIDGenerator(func() string { return "mcp-cancel" }),
+		withSessionIDGenerator(func() string { return "mcp-cancel" }),
 	)
 	require.NoError(t, err)
 	protocolAgent := newProtocolAgent(server)

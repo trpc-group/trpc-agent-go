@@ -76,15 +76,6 @@ func WithImplementation(name, version string) Option {
 	}
 }
 
-// WithSessionIDGenerator replaces the default UUID session ID generator.
-// The Server serializes calls to generator and rejects IDs that it has used
-// previously, including IDs from closed sessions and other connections.
-func WithSessionIDGenerator(generator func() string) Option {
-	return func(options *options) {
-		options.sessionIDGenerator = generator
-	}
-}
-
 // WithRunOptions adds static options to every runner invocation.
 func WithRunOptions(runOptions ...agent.RunOption) Option {
 	return func(options *options) {
@@ -137,7 +128,7 @@ type Server struct {
 	clientFileReadEnabled  bool
 	clientFileWriteEnabled bool
 	sessionMu              sync.Mutex
-	usedSessionIDs         map[string]struct{}
+	activeSessionIDs       map[string]struct{}
 }
 
 // New creates an ACP server backed by a runner.
@@ -176,7 +167,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		reasoningEnabled:       options.reasoningEnabled,
 		clientFileReadEnabled:  options.clientFileReadEnabled,
 		clientFileWriteEnabled: options.clientFileWriteEnabled,
-		usedSessionIDs:         make(map[string]struct{}),
+		activeSessionIDs:       make(map[string]struct{}),
 	}
 	server.managedRunner, _ = r.(runner.ManagedRunner)
 	return server, nil
@@ -352,7 +343,7 @@ func (a *protocolAgent) NewSession(
 		)
 		return acpsdk.NewSessionResponse{}, err
 	}
-	sessionID, err := a.server.newSessionID()
+	sessionID, err := a.server.reserveSessionID()
 	if err != nil {
 		log.ErrorContext(ctx, "Failed to allocate ACP session ID", "error", err)
 		closeMCPServers(ctx, toolSets)
@@ -384,18 +375,24 @@ func (a *protocolAgent) NewSession(
 	return acpsdk.NewSessionResponse{SessionId: acpsdk.SessionId(sessionID)}, nil
 }
 
-func (s *Server) newSessionID() (string, error) {
+func (s *Server) reserveSessionID() (string, error) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	sessionID := s.sessionIDGenerator()
 	if sessionID == "" {
 		return "", errors.New("acp: generated empty session ID")
 	}
-	if _, exists := s.usedSessionIDs[sessionID]; exists {
+	if _, exists := s.activeSessionIDs[sessionID]; exists {
 		return "", fmt.Errorf("acp: generated duplicate session ID %q", sessionID)
 	}
-	s.usedSessionIDs[sessionID] = struct{}{}
+	s.activeSessionIDs[sessionID] = struct{}{}
 	return sessionID, nil
+}
+
+func (s *Server) releaseSessionID(sessionID string) {
+	s.sessionMu.Lock()
+	delete(s.activeSessionIDs, sessionID)
+	s.sessionMu.Unlock()
 }
 
 func (a *protocolAgent) Prompt(
@@ -598,6 +595,7 @@ func (a *protocolAgent) CloseSession(
 		return acpsdk.CloseSessionResponse{}, nil
 	}
 	a.closeSession(session)
+	a.server.releaseSessionID(sessionID)
 	log.DebugContext(ctx, "ACP session closed", "session_id", sessionID)
 	return acpsdk.CloseSessionResponse{}, nil
 }
@@ -803,6 +801,7 @@ func (a *protocolAgent) shutdownWithTimeout(timeout time.Duration) {
 		waitGroup.Add(1)
 		go func(session *sessionState, promptDone <-chan struct{}) {
 			defer waitGroup.Done()
+			defer a.server.releaseSessionID(session.id)
 			waitForPromptAndCloseResources(
 				session,
 				promptDone,
