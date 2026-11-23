@@ -49,6 +49,7 @@ func initializeMCPServers(
 
 	var tools []tool.Tool
 	var toolSets []tool.ToolSet
+	usedToolNames := make(map[string]string)
 	for _, config := range configs {
 		log.DebugContext(
 			ctx,
@@ -83,6 +84,18 @@ func initializeMCPServers(
 			})
 		}
 		serverTools := internaltool.NewNamedToolSet(toolSet).Tools(ctx)
+		if err := validateMCPToolNames(config.name, serverTools, usedToolNames); err != nil {
+			log.WarnContext(
+				ctx,
+				"Rejected ACP MCP server with conflicting tool names",
+				"mcp_server",
+				config.name,
+				"error",
+				err,
+			)
+			closeMCPServers(ctx, toolSets)
+			return nil, nil, err
+		}
 		tools = append(tools, serverTools...)
 		log.DebugContext(
 			ctx,
@@ -102,6 +115,29 @@ func initializeMCPServers(
 		len(tools),
 	)
 	return tools, toolSets, nil
+}
+
+func validateMCPToolNames(
+	serverName string,
+	serverTools []tool.Tool,
+	used map[string]string,
+) error {
+	for _, serverTool := range serverTools {
+		declaration := serverTool.Declaration()
+		if declaration == nil {
+			continue
+		}
+		if previousServer, exists := used[declaration.Name]; exists {
+			return acpsdk.NewInvalidParams(map[string]any{
+				"mcpServer":      serverName,
+				"previousServer": previousServer,
+				"toolName":       declaration.Name,
+				"reason":         "MCP tool names conflict after server prefixing",
+			})
+		}
+		used[declaration.Name] = serverName
+	}
+	return nil
 }
 
 func validateMCPServer(

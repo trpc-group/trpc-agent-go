@@ -16,6 +16,8 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -150,4 +152,32 @@ func TestMCPEnv(t *testing.T) {
 		{Name: "FIRST", Value: "one"},
 		{Name: "SECOND", Value: "two"},
 	}))
+}
+
+func TestValidateMCPToolNamesDetectsCrossServerCollisions(t *testing.T) {
+	used := make(map[string]string)
+	require.NoError(t, validateMCPToolNames(
+		"foo_bar",
+		[]tool.Tool{namedDeclarationTool{name: "foo_bar_baz"}},
+		used,
+	))
+
+	err := validateMCPToolNames(
+		"foo",
+		[]tool.Tool{namedDeclarationTool{name: "foo_bar_baz"}},
+		used,
+	)
+	require.Error(t, err)
+	var requestError *acpsdk.RequestError
+	require.ErrorAs(t, err, &requestError)
+	assert.Equal(t, jsonRPCInvalidParamsCode, requestError.Code)
+	assert.Contains(t, err.Error(), "conflict after server prefixing")
+}
+
+type namedDeclarationTool struct {
+	name string
+}
+
+func (t namedDeclarationTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
 }

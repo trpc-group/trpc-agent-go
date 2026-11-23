@@ -36,6 +36,7 @@ const (
 	mcpHelperPIDEnv    = "ACP_TEST_MCP_PID_FILE"
 	mcpHelperValueEnv  = "ACP_TEST_MCP_VALUE"
 	mcpHelperSecretEnv = "ACP_TEST_MCP_SECRET"
+	mcpHelperToolEnv   = "ACP_TEST_MCP_TOOL_NAME"
 )
 
 func TestMain(m *testing.M) {
@@ -89,6 +90,14 @@ func runMCPTestServer() {
 			return nil, ctx.Err()
 		},
 	)
+	if toolName := os.Getenv(mcpHelperToolEnv); toolName != "" {
+		server.RegisterTool(
+			mcp.NewTool(toolName, mcp.WithDescription("Test collision tool")),
+			func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return mcp.NewTextResult(toolName), nil
+			},
+		)
+	}
 
 	if err := server.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -242,6 +251,37 @@ func TestMCPMultipleServersUsePrefixedIsolatedTools(t *testing.T) {
 	require.NoError(t, err)
 	requireProcessExited(t, alphaPIDNumber)
 	requireProcessExited(t, betaPIDNumber)
+}
+
+func TestMCPToolNameCollisionClosesAllServers(t *testing.T) {
+	skipRealMCPProcessTestUnderRace(t)
+	server, err := New(
+		&testRunner{},
+		withSessionIDGenerator(func() string { return "mcp-tool-collision" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	t.Cleanup(protocolAgent.shutdown)
+	firstPIDFile := filepath.Join(t.TempDir(), "first.pid")
+	secondPIDFile := filepath.Join(t.TempDir(), "second.pid")
+
+	_, err = protocolAgent.NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{
+			Cwd: "/workspace",
+			McpServers: []acpsdk.McpServer{
+				testStdioMCPServerWithTool("foo_bar", "first", firstPIDFile, "baz"),
+				testStdioMCPServerWithTool("foo", "second", secondPIDFile, "bar_baz"),
+			},
+		},
+	)
+	require.ErrorContains(t, err, "conflict after server prefixing")
+	var requestError *acpsdk.RequestError
+	require.ErrorAs(t, err, &requestError)
+	assert.Equal(t, jsonRPCInvalidParamsCode, requestError.Code)
+	assert.Empty(t, protocolAgent.sessions)
+	requireProcessExited(t, readPIDFile(t, firstPIDFile))
+	requireProcessExited(t, readPIDFile(t, secondPIDFile))
 }
 
 func TestMCPSessionsUseSeparateProcesses(t *testing.T) {
@@ -470,6 +510,20 @@ func testStdioMCPServer(name, value, pidFile string) acpsdk.McpServer {
 			Env:     env,
 		},
 	}
+}
+
+func testStdioMCPServerWithTool(
+	name string,
+	value string,
+	pidFile string,
+	toolName string,
+) acpsdk.McpServer {
+	server := testStdioMCPServer(name, value, pidFile)
+	server.Stdio.Env = append(server.Stdio.Env, acpsdk.EnvVariable{
+		Name:  mcpHelperToolEnv,
+		Value: toolName,
+	})
+	return server
 }
 
 func findTool(tools []tool.Tool, name string) tool.Tool {
