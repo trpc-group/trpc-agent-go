@@ -2448,6 +2448,7 @@ func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
 			require.Len(t, stages, 3)
 			match := stages[0].(bson.M)["$match"].(bson.M)
 			assert.Equal(t, nil, match["deleted_at"])
+			assert.Equal(t, bson.M{"$gte": ""}, match["app_name"])
 			group := stages[1].(bson.M)["$group"].(bson.M)
 			assert.Contains(t, group, "max_updated_at")
 			return docsCursor([]any{
