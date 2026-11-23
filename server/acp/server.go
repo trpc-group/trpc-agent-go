@@ -222,6 +222,7 @@ type protocolAgent struct {
 	clientFileMu    sync.RWMutex
 	clientFileRead  bool
 	clientFileWrite bool
+	shuttingDown    bool
 	mu              sync.Mutex
 }
 
@@ -329,6 +330,15 @@ func (a *protocolAgent) NewSession(
 			map[string]any{"additionalDirectories": "additional directories are not supported"},
 		)
 	}
+	if a.isShuttingDown() {
+		log.DebugContext(
+			ctx,
+			"Rejected ACP session because the connection is shutting down",
+			"cwd",
+			request.Cwd,
+		)
+		return acpsdk.NewSessionResponse{}, protocolShuttingDownError()
+	}
 	tools, toolSets, err := initializeMCPServers(ctx, request.McpServers)
 	if err != nil {
 		log.DebugContext(
@@ -358,6 +368,18 @@ func (a *protocolAgent) NewSession(
 	session.toolCallIDs = newToolCallIDMapper(session.allocateToolCallID)
 	session.tools = append(session.tools, a.newClientFileTools(session)...)
 	a.mu.Lock()
+	if a.shuttingDown {
+		a.mu.Unlock()
+		closeMCPServers(ctx, toolSets)
+		a.server.releaseSessionID(sessionID)
+		log.DebugContext(
+			ctx,
+			"Rejected ACP session because the connection is shutting down",
+			"session_id",
+			sessionID,
+		)
+		return acpsdk.NewSessionResponse{}, protocolShuttingDownError()
+	}
 	a.sessions[sessionID] = session
 	a.mu.Unlock()
 	log.DebugContext(
@@ -373,6 +395,18 @@ func (a *protocolAgent) NewSession(
 		len(session.toolSets),
 	)
 	return acpsdk.NewSessionResponse{SessionId: acpsdk.SessionId(sessionID)}, nil
+}
+
+func (a *protocolAgent) isShuttingDown() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.shuttingDown
+}
+
+func protocolShuttingDownError() error {
+	return acpsdk.NewInternalError(map[string]any{
+		"reason": "ACP server is shutting down",
+	})
 }
 
 func (s *Server) reserveSessionID() (string, error) {
@@ -791,6 +825,7 @@ func (a *protocolAgent) shutdown() {
 
 func (a *protocolAgent) shutdownWithTimeout(timeout time.Duration) {
 	a.mu.Lock()
+	a.shuttingDown = true
 	sessions := make([]*sessionState, 0, len(a.sessions))
 	for _, session := range a.sessions {
 		sessions = append(sessions, session)

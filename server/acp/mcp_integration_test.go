@@ -349,6 +349,33 @@ func TestMCPInitializationFailureCleansUpAndDoesNotUseSessionID(t *testing.T) {
 	protocolAgent.shutdown()
 }
 
+func TestMCPNewSessionRejectedDuringShutdownSkipsToolsetInitialization(t *testing.T) {
+	server, err := New(
+		&testRunner{},
+		withSessionIDGenerator(func() string { return "mcp-shutdown-session" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	t.Cleanup(protocolAgent.shutdown)
+	protocolAgent.shutdownWithTimeout(time.Second)
+
+	pidFile := filepath.Join(t.TempDir(), "server.pid")
+	_, err = protocolAgent.NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{
+			Cwd:        "/workspace",
+			McpServers: []acpsdk.McpServer{testStdioMCPServer("Shutdown", "value", pidFile)},
+		},
+	)
+	require.ErrorContains(t, err, "shutting down")
+	assert.Empty(t, protocolAgent.sessions)
+	_, statErr := os.Stat(pidFile)
+	assert.True(t, os.IsNotExist(statErr))
+	server.sessionMu.Lock()
+	defer server.sessionMu.Unlock()
+	assert.Empty(t, server.activeSessionIDs)
+}
+
 func TestMCPPromptCancellationCancelsToolCall(t *testing.T) {
 	skipRealMCPProcessTestUnderRace(t)
 	run := &testRunner{}

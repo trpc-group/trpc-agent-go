@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -98,6 +99,26 @@ func TestCloseSessionForcesMCPCloseAfterPromptTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("session close did not finish")
 	}
+}
+
+func TestNewSessionRejectedAfterShutdownStarts(t *testing.T) {
+	server, err := New(
+		&testRunner{},
+		withSessionIDGenerator(func() string { return "session-after-shutdown" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	protocolAgent.shutdownWithTimeout(time.Second)
+
+	_, err = protocolAgent.NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.ErrorContains(t, err, "shutting down")
+	assert.Empty(t, protocolAgent.sessions)
+	server.sessionMu.Lock()
+	defer server.sessionMu.Unlock()
+	assert.Empty(t, server.activeSessionIDs)
 }
 
 type blockingToolSet struct {
