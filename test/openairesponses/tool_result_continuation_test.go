@@ -242,6 +242,91 @@ func (p *toolResultNativePlugin) Register(r *plugin.Registry) {
 	r.AfterToolMessages(p.afterToolMessages)
 }
 
+func TestToolResultNativeDeadlineRetainsCompletedAndUnstartedCallsAfterSQLiteReopen(t *testing.T) {
+	rt := newToolResultNativeTransport(toolResultNativeMultiOutput)
+	var calls, afterTools atomic.Int32
+	calculator := function.NewFunctionTool(func(ctx context.Context, input struct {
+		A int `json:"a"`
+	}) (int, error) {
+		calls.Add(1)
+		if input.A != 1 {
+			return 0, fmt.Errorf("unstarted call B was executed")
+		}
+		<-ctx.Done()
+		return 7, nil
+	}, function.WithName("calculator"))
+	callbacks := tool.NewCallbacks().RegisterAfterTool(func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		afterTools.Add(1)
+		if args.ToolCallID != "call_a" {
+			return nil, fmt.Errorf("unexpected AfterTool for %s", args.ToolCallID)
+		}
+		return nil, nil
+	})
+	const notExecuted = `{"status":"not_executed","reason":"deadline_exceeded"}`
+	p := &toolResultNativePlugin{
+		name: "deadline-retention-fixture",
+		afterToolMessages: func(ctx context.Context, args *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+			if ctx.Err() != nil || len(args.ToolResultMessages) != 2 {
+				return nil, fmt.Errorf("expected both messages on a live finalization context")
+			}
+			msgs := append([]model.Message(nil), args.ToolResultMessages...)
+			if msgs[0].ToolID != "call_a" || msgs[0].Content != "7" || msgs[1].ToolID != "call_b" || msgs[1].Content != notExecuted {
+				return nil, fmt.Errorf("unexpected retained messages: %#v", msgs)
+			}
+			msgs[0].Content = "display-A: 7"
+			return &plugin.AfterToolMessagesResult{ToolResultMessages: msgs}, nil
+		},
+	}
+	a := llmagent.New("native", llmagent.WithModel(toolResultNativeModel(rt)),
+		llmagent.WithTools([]tool.Tool{calculator}), llmagent.WithToolCallbacks(callbacks))
+	path := filepath.Join(t.TempDir(), "deadline-retention.db")
+	svc := openToolResultNativeSQLite(t, path)
+	r := runner.NewRunner("native", a, runner.WithSessionService(svc), runner.WithPlugins(p))
+	t.Cleanup(func() { _ = r.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("calculate both"))
+	require.NoError(t, err)
+	for range ch {
+	}
+	// Closing public output does not acknowledge background persistence.
+	key := session.Key{AppName: "native", UserID: "user", SessionID: "session"}
+	require.Eventually(t, func() bool {
+		sess, err := svc.GetSession(context.Background(), key)
+		if err != nil {
+			return false
+		}
+		for _, evt := range sess.Events {
+			for _, choice := range evt.Choices {
+				if choice.Message.ToolID == "call_b" && choice.Message.Content == notExecuted {
+					return true
+				}
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 1, calls.Load())
+	require.EqualValues(t, 1, afterTools.Load())
+	require.EqualValues(t, 1, rt.calls.Load())
+	<-rt.requests
+
+	require.NoError(t, r.Close())
+	require.NoError(t, svc.Close())
+	svc = openToolResultNativeSQLite(t, path)
+	sess, err := svc.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	assertToolResultNativeMultiProviderData(t, sess)
+	r = runner.NewRunner("native", a, runner.WithSessionService(svc))
+	t.Cleanup(func() { _ = r.Close() })
+	continued := runToolResultNative(t, r, "continue")
+	require.Empty(t, toolResultNativeErrors(continued))
+	require.EqualValues(t, 1, calls.Load(), "loading history must not replay either tool")
+	require.EqualValues(t, 2, rt.calls.Load())
+	assertToolResultNativeOutputs(t, <-rt.requests,
+		map[string]string{"call_a": `{"a":1}`, "call_b": `{"a":2}`},
+		map[string]string{"call_a": "display-A: 7", "call_b": notExecuted})
+}
+
 func TestToolResultNativeAfterToolReplacementContinuesAfterSQLiteReopen(t *testing.T) {
 	rt := newToolResultNativeTransport(nativeToolOutput)
 	m := toolResultNativeModel(rt)

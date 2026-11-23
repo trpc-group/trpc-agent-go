@@ -889,6 +889,9 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		)
 		if err != nil {
 			if !isAdmissionCancellation(ctx, err) || len(toolResults) == 0 {
+				// A callback can cancel only its child context. Preserve prior
+				// execution metadata without enabling batch finalization.
+				recordExecutionTraceToolResultsWithoutOutput(ctx, invocation, toolResults)
 				recordExecutionTraceToolResult(ctx, invocation, result)
 				return nil, err
 			}
@@ -924,9 +927,10 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	if callErr != nil {
 		if err := p.rewriteRetainedToolMessages(
 			ctx, invocation, req, llmResponse, mergedEvent,
+			toolCalls, len(toolResults),
 		); err != nil {
-			// Never persist raw output when the application rewrite fails.
-			recordExecutionTraceToolResults(ctx, invocation, toolResults, nil)
+			// Neither history nor the trace may retain unapproved output.
+			recordExecutionTraceToolResultsWithoutOutput(ctx, invocation, toolResults)
 			recordExecutionTraceToolResult(ctx, invocation, rejectedResult)
 			return nil, callErr
 		}
@@ -955,9 +959,22 @@ func (p *FunctionCallResponseProcessor) rewriteRetainedToolMessages(
 	req *model.Request,
 	llmResponse *model.Response,
 	mergedEvent *event.Event,
+	toolCalls []model.ToolCall,
+	firstUnstarted int,
 ) error {
 	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return nil
+	}
+	// Pair every remaining call with a framework status so history keeps the
+	// completed results and tells the next model which calls never started.
+	// These messages do not run tool callbacks or collect tool state changes.
+	for i := firstUnstarted; i < len(toolCalls); i++ {
+		tc := toolCalls[i]
+		mergedEvent.Choices = append(mergedEvent.Choices, model.Choice{
+			Index: i,
+			Message: model.NewToolMessage(tc.ID, tc.Function.Name,
+				`{"status":"not_executed","reason":"deadline_exceeded"}`),
+		})
 	}
 	// Bound finalization without admitting any further tool calls.
 	finalCtx, cancel := context.WithTimeout(

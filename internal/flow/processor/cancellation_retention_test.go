@@ -11,12 +11,14 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -34,7 +36,8 @@ func TestCancellationRetention_RewritesBeforePersistence(t *testing.T) {
 				name = timing + "/rewrite_error"
 			}
 			t.Run(name, func(t *testing.T) {
-				watchdog, stop := context.WithTimeout(context.Background(), 5*time.Second)
+				inv, traceCtx := newExecutionTraceProcessorInvocation(t)
+				watchdog, stop := context.WithTimeout(traceCtx, 5*time.Second)
 				defer stop()
 				parent, expire := context.WithCancel(watchdog)
 				defer expire()
@@ -54,9 +57,13 @@ func TestCancellationRetention_RewritesBeforePersistence(t *testing.T) {
 						return nil, errors.New("redaction unavailable")
 					}
 					msgs := append([]model.Message(nil), args.ToolResultMessages...)
+					require.Len(t, msgs, 2)
 					for i := range msgs {
 						if msgs[i].ToolID == "call-A" {
 							msgs[i].Content = "display-A"
+						}
+						if msgs[i].ToolID == "call-B" && timing != "attempted" {
+							require.JSONEq(t, `{"status":"not_executed","reason":"deadline_exceeded"}`, msgs[i].Content)
 						}
 					}
 					return &plugin.AfterToolMessagesResult{ToolResultMessages: msgs}, nil
@@ -66,7 +73,8 @@ func TestCancellationRetention_RewritesBeforePersistence(t *testing.T) {
 				key := session.Key{AppName: "test", UserID: "user", SessionID: "session"}
 				sess, err := svc.CreateSession(watchdog, key, nil)
 				require.NoError(t, err)
-				inv := agent.NewInvocation(agent.WithInvocationAgent(&mockAgentWithTools{name: "tester"}), agent.WithInvocationSession(sess), agent.WithInvocationPlugins(mgr))
+				inv.Session = sess
+				inv.Plugins = mgr
 				inv.SessionService = svc
 				second := &cancellationStreamTool{selectStream: func() bool {
 					if timing == "stream_selection" {
@@ -125,6 +133,17 @@ func TestCancellationRetention_RewritesBeforePersistence(t *testing.T) {
 				if rewriteFails {
 					if timing != "attempted" {
 						require.ErrorIs(t, err, context.DeadlineExceeded)
+						trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+						require.Len(t, trace.Steps, 1)
+						require.Len(t, trace.Steps[0].Tools, 2)
+						require.Equal(t, "call-A", trace.Steps[0].Tools[0].ID)
+						require.Equal(t, "A", trace.Steps[0].Tools[0].Name)
+						require.Nil(t, trace.Steps[0].Tools[0].Result)
+						require.Nil(t, trace.Steps[0].Tools[0].Arguments)
+						require.Empty(t, trace.Steps[0].Tools[0].Error)
+						encoded, encodeErr := json.Marshal(trace)
+						require.NoError(t, encodeErr)
+						require.NotContains(t, string(encoded), "raw-A")
 					} else {
 						require.ErrorContains(t, err, "redaction unavailable")
 					}
@@ -134,26 +153,42 @@ func TestCancellationRetention_RewritesBeforePersistence(t *testing.T) {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				require.Len(t, reloaded.Events, 3)
 				saved := reloaded.Events[2]
+				require.Equal(t, []string{"call-A", "call-B"}, saved.GetToolResultIDs())
 				if timing == "attempted" {
-					require.Equal(t, []string{"call-A", "call-B"}, saved.GetToolResultIDs())
+					require.Contains(t, saved.Choices[1].Message.Content, context.DeadlineExceeded.Error())
+					require.NotContains(t, saved.Choices[1].Message.Content, "not_executed")
 				} else {
-					require.Equal(t, []string{"call-A"}, saved.GetToolResultIDs())
+					require.JSONEq(t, `{"status":"not_executed","reason":"deadline_exceeded"}`, saved.Choices[1].Message.Content)
 				}
 				require.Equal(t, "display-A", saved.Choices[0].Message.Content)
 				require.Equal(t, []byte(`"A"`), saved.StateDelta["completed"])
-				next := agent.NewInvocation(agent.WithInvocationAgent(&mockAgentWithTools{name: "tester"}), agent.WithInvocationSession(reloaded), agent.WithInvocationMessage(model.NewUserMessage("continue")))
+				trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+				require.Equal(t, "display-A", trace.Steps[0].Tools[0].Result)
+				next := agent.NewInvocation(agent.WithInvocationAgent(&mockAgentWithTools{name: inv.AgentName}), agent.WithInvocationSession(reloaded), agent.WithInvocationMessage(model.NewUserMessage("continue")))
 				req := &model.Request{Tools: tools}
 				NewContentRequestProcessor().ProcessRequest(watchdog, next, req, nil)
 				req.Messages = toolcall.SanitizeMessagesWithTools(watchdog, req.Messages, tools)
-				found := false
+				var callIDs, resultIDs []string
 				for _, msg := range req.Messages {
 					require.NotContains(t, msg.Content, "raw-A")
+					for _, call := range msg.ToolCalls {
+						callIDs = append(callIDs, call.ID)
+					}
+					if msg.Role == model.RoleTool {
+						resultIDs = append(resultIDs, msg.ToolID)
+					}
+					if msg.Role == model.RoleUser {
+						require.Contains(t, []string{"run A and B", "continue"}, msg.Content, "no unmatched call should be downgraded to an orphan user message")
+					}
 					if msg.ToolID == "call-A" {
-						found = true
 						require.Equal(t, "display-A", msg.Content)
 					}
+					if msg.ToolID == "call-B" {
+						require.Equal(t, saved.Choices[1].Message.Content, msg.Content)
+					}
 				}
-				require.True(t, found, "completed result must remain in the next model request")
+				require.Equal(t, []string{"call-A", "call-B"}, callIDs)
+				require.Equal(t, callIDs, resultIDs, "completed results and unstarted statuses must remain paired in the next model request")
 			})
 		}
 	}
@@ -178,4 +213,40 @@ func TestCancellationRetention_AdmissionClassification(t *testing.T) {
 			require.Equal(t, !started, errors.As(err, &rejected))
 		})
 	}
+}
+
+func TestCancellationRetention_RewriteFailureOmitsErrorOutputFromTrace(t *testing.T) {
+	inv, traceCtx := newExecutionTraceProcessorInvocation(t)
+	parent, expire := context.WithCancel(traceCtx)
+	defer expire()
+	ctx := controlledDeadlineContext{parent}
+	inv.Plugins = plugin.MustNewManager(afterToolMessagesTestPlugin{hook: func(context.Context, *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+		return nil, errors.New("redaction unavailable")
+	}})
+	first := &mockCallableTool{declaration: &tool.Declaration{Name: "A"},
+		callFn: func(context.Context, []byte) (any, error) {
+			expire()
+			return "private output", errors.New("private failure details")
+		}}
+	calls := []model.ToolCall{
+		{ID: "call-A", Function: model.FunctionDefinitionParam{Name: "A", Arguments: []byte(`{"value":"private input"}`)}},
+		{ID: "call-B", Function: model.FunctionDefinitionParam{Name: "B"}},
+	}
+	got, err := NewFunctionCallResponseProcessor(false, nil).handleFunctionCallsAndSendEvent(
+		ctx, inv, newToolCallResponseWithCalls(calls), map[string]tool.Tool{"A": first}, make(chan *event.Event, 4),
+	)
+	require.Nil(t, got)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	require.Len(t, trace.Steps, 1)
+	require.Len(t, trace.Steps[0].Tools, 2)
+	completed := trace.Steps[0].Tools[0]
+	require.Equal(t, "call-A", completed.ID)
+	require.Equal(t, "A", completed.Name)
+	require.NotEmpty(t, completed.Error, "omitting output must preserve the failure status")
+	require.Nil(t, completed.Result)
+	require.Nil(t, completed.Arguments)
+	encoded, err := json.Marshal(trace)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "private")
 }

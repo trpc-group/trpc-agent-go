@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // controlledDeadlineContext expires when its parent is cancelled so tests can
@@ -63,7 +64,13 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 				}
 				return nil
 			})
-			var executed, afterTools []string
+			var executed, beforeTools, afterTools []string
+			third := &statefulFunctionTool[struct{}, string]{
+				FunctionTool: function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
+					executed = append(executed, "third")
+					return "unexpected", nil
+				}, function.WithName("third")),
+			}
 			tools := map[string]tool.Tool{
 				"first": &mockInvocationStateDeltaTool{
 					declaration: &tool.Declaration{Name: "first"},
@@ -82,8 +89,14 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 						return "unexpected", nil
 					},
 				},
+				"third": third,
 			}
-			callbacks := tool.NewCallbacks().RegisterAfterTool(func(
+			callbacks := tool.NewCallbacks().RegisterBeforeTool(func(
+				_ context.Context, args *tool.BeforeToolArgs,
+			) (*tool.BeforeToolResult, error) {
+				beforeTools = append(beforeTools, args.ToolName)
+				return nil, nil
+			}).RegisterAfterTool(func(
 				_ context.Context, args *tool.AfterToolArgs,
 			) (*tool.AfterToolResult, error) {
 				afterTools = append(afterTools, args.ToolName)
@@ -92,6 +105,7 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 			calls := []model.ToolCall{
 				{ID: "call-first", Function: model.FunctionDefinitionParam{Name: "first"}},
 				{ID: "call-second", Function: model.FunctionDefinitionParam{Name: "second"}},
+				{ID: "call-third", Function: model.FunctionDefinitionParam{Name: "third"}},
 			}
 			eventChan := make(chan *event.Event, 4)
 			got, err := NewFunctionCallResponseProcessor(false, callbacks).handleFunctionCallsAndSendEvent(
@@ -100,11 +114,18 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			require.Nil(t, got)
 			require.Equal(t, []string{"first"}, executed)
+			require.Equal(t, []string{"first"}, beforeTools)
 			require.Equal(t, []string{"first"}, afterTools)
+			require.Zero(t, third.stateDeltaCalls)
 			require.Len(t, persisted, 1)
-			require.Equal(t, []string{"call-first"}, persisted[0].GetToolResultIDs())
+			require.Equal(t, []string{"call-first", "call-second", "call-third"}, persisted[0].GetToolResultIDs())
+			for i, choice := range persisted[0].Choices[1:] {
+				require.Equal(t, i+1, choice.Index)
+				require.JSONEq(t, `{"status":"not_executed","reason":"deadline_exceeded"}`, choice.Message.Content)
+			}
 			require.Contains(t, persisted[0].Choices[0].Message.Content, "committed")
 			require.Equal(t, []byte("first"), persisted[0].StateDelta["completed"])
+			require.NotContains(t, persisted[0].StateDelta, "state")
 			require.True(t, persisted[0].RequiresCompletion)
 			require.Empty(t, eventChan)
 			executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
@@ -115,6 +136,70 @@ func TestCancellationDispatch_PersistsCompletedSequentialResult(t *testing.T) {
 			require.Equal(t, "committed", executionTrace.Steps[0].Tools[0].Result)
 			require.Equal(t, "call-second", executionTrace.Steps[0].Tools[1].ID)
 			require.Contains(t, executionTrace.Steps[0].Tools[1].Error, context.DeadlineExceeded.Error())
+		})
+	}
+}
+
+func TestCancellationDispatch_ChildContextPreservesCompletedTrace(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			inv, ctx := newExecutionTraceProcessorInvocation(t)
+			first := &statefulFunctionTool[struct{}, string]{
+				FunctionTool: function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
+					return "completed-A", nil
+				}, function.WithName("first")),
+			}
+			var executed, afterTools []string
+			second := &mockCallableTool{declaration: &tool.Declaration{Name: "second"},
+				callFn: func(context.Context, []byte) (any, error) {
+					executed = append(executed, "second")
+					return "unexpected", nil
+				}}
+			callbacks := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+				if args.ToolName != "second" {
+					return nil, nil
+				}
+				var child context.Context
+				var cancel context.CancelFunc
+				if cause == context.Canceled {
+					child, cancel = context.WithCancel(ctx)
+				} else {
+					child, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				}
+				cancel()
+				return &tool.BeforeToolResult{Context: child}, nil
+			}).RegisterAfterTool(func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+				afterTools = append(afterTools, args.ToolName)
+				return nil, nil
+			})
+			appends := 0
+			appender.Attach(inv, func(context.Context, *event.Event) error { appends++; return nil })
+			events := make(chan *event.Event, 4)
+			calls := []model.ToolCall{
+				{ID: "call-first", Function: model.FunctionDefinitionParam{Name: "first", Arguments: []byte(`{}`)}},
+				{ID: "call-second", Function: model.FunctionDefinitionParam{Name: "second", Arguments: []byte(`{}`)}},
+			}
+			got, err := NewFunctionCallResponseProcessor(false, callbacks).handleFunctionCallsAndSendEvent(
+				ctx, inv, newToolCallResponseWithCalls(calls), map[string]tool.Tool{"first": first, "second": second}, events,
+			)
+			require.ErrorIs(t, err, cause)
+			require.Nil(t, got)
+			require.NoError(t, ctx.Err())
+			require.Empty(t, executed)
+			require.Equal(t, []string{"first"}, afterTools)
+			require.Zero(t, appends)
+			require.Zero(t, first.stateDeltaCalls, "a child deadline must not enable batch finalization")
+			require.Len(t, events, 1)
+			require.Equal(t, cause.Error(), (<-events).Error.Message)
+			trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+			require.Len(t, trace.Steps, 1)
+			require.Len(t, trace.Steps[0].Tools, 2)
+			require.Equal(t, "call-first", trace.Steps[0].Tools[0].ID)
+			require.Equal(t, "first", trace.Steps[0].Tools[0].Name)
+			require.Empty(t, trace.Steps[0].Tools[0].Error)
+			require.Nil(t, trace.Steps[0].Tools[0].Result)
+			require.Equal(t, "call-second", trace.Steps[0].Tools[1].ID)
+			require.Contains(t, trace.Steps[0].Tools[1].Error, cause.Error())
 		})
 	}
 }

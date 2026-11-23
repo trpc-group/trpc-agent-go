@@ -229,22 +229,51 @@ alone proves all the later events. The observation, persistence, and safe Resume
 features discussed in #2757 are separate draft changes, not implied guarantees
 of context cancellation.
 
-For LLMFlow sequential tool batches in the default merged-result mode (parallel
-execution and per-call result events disabled), a deadline that rejects a later
-call allows already-completed results to use the existing bounded persistence
-fallback. This is a storage attempt, not successful delivery to the public event
-stream, and the caller still receives `context.DeadlineExceeded`. Retained
+For LLMFlow sequential tool batches using the merged-result path, when the
+batch context itself reaches `context.DeadlineExceeded` and that deadline
+rejects a later call before execution, already-completed results can use the
+existing bounded persistence fallback. A deadline only in a callback-provided child
+context does not qualify while the batch context is still live. This is a
+storage attempt, not successful delivery to the public event stream. Retained
 messages pass through `AfterToolMessages` before persistence. For this deadline
 finalization, the hook receives a context that preserves values and has a fresh
 one-second timeout; the append has its own bounded timeout. If message rewriting
-fails, the raw messages are not persisted. Persistence can also fail.
+fails, the raw messages are not persisted, and completed tool trace records
+keep only identity and success/failure metadata, without arguments or output.
+Persistence can also fail.
+
+For example, if A completes and the deadline blocks B, the retained batch
+contains A's result and a framework-generated tool message for B:
+
+```json
+{"status":"not_executed","reason":"deadline_exceeded"}
+```
+
+The same status is added for each remaining call that never starts. These
+messages pass through `AfterToolMessages` together with A's result, so the
+application's rewriting still applies. If persisted, the next model request
+can use A's result and see that B did not execute in this batch, with each tool
+call paired to a tool message. Native provider payloads are preserved.
+Generating a status does not invoke B, run its `AfterTool`, collect its state
+changes, or schedule a retry. A tool that already started and returned a
+cancellation error retains its ordinary error-result behavior instead of this
+status. This representation describes this batch, not the outcome of an
+earlier invocation of the same tool.
 
 Explicit cancellation does not enable that fallback: when a later call is
 rejected, the accumulated merged result is neither published nor persisted by
-this path, and the caller receives `context.Canceled`. Per-call result mode
-publishes results individually as they complete and has separate round handling.
-These LLMFlow persistence rules do not establish Graph checkpoint or Resume
-guarantees.
+this path. The internal handler preserves the cancellation error, but
+`ProcessResponse` does not return a Go error to the public caller. The public
+event stream may contain an error event with the error text, rather than a Go
+`context.Canceled` or `context.DeadlineExceeded` sentinel value. Delivery of that
+event is not guaranteed after the context ends.
+
+Per-call publication requires the per-call result option to be enabled, more
+than one tool call, no deferred or external call, and no called `LongRunner`
+whose `LongRunning()` returns `true`. When eligible, both parallel and sequential
+execution publish results individually as they complete and use separate round
+handling. Otherwise the merged-result path runs. These LLMFlow persistence rules
+do not establish Graph checkpoint or Resume guarantees.
 
 Tools should check the effective context before side effects, pass it to HTTP,
 database, and other I/O APIs, and observe Done in long waits. Already-running
