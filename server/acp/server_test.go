@@ -406,16 +406,25 @@ func TestServeCleansUpOnExit(t *testing.T) {
 	}
 }
 
-func TestProtocolAgentRejectsConcurrentPromptUntilRunFinishes(t *testing.T) {
+func TestProtocolAgentNewerPromptReplacesActivePrompt(t *testing.T) {
 	started := make(chan struct{})
-	release := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	var first sync.Once
 	runner := &testRunner{
 		run: func(ctx context.Context) <-chan *event.Event {
 			events := make(chan *event.Event)
-			close(started)
+			isFirst := false
+			first.Do(func() {
+				isFirst = true
+				close(started)
+			})
+			if !isFirst {
+				close(events)
+				return events
+			}
 			go func() {
 				<-ctx.Done()
-				<-release
+				close(firstCanceled)
 				close(events)
 			}()
 			return events
@@ -433,40 +442,132 @@ func TestProtocolAgentRejectsConcurrentPromptUntilRunFinishes(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	firstResult := make(chan error, 1)
+	firstResult := make(chan struct {
+		response acpsdk.PromptResponse
+		err      error
+	}, 1)
 	go func() {
-		_, promptErr := protocolAgent.Prompt(
+		response, promptErr := protocolAgent.Prompt(
 			context.Background(),
 			acpsdk.PromptRequest{
 				SessionId: session.SessionId,
 				Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("first")},
 			},
 		)
-		firstResult <- promptErr
+		firstResult <- struct {
+			response acpsdk.PromptResponse
+			err      error
+		}{response: response, err: promptErr}
 	}()
 	<-started
 
-	_, err = protocolAgent.Prompt(
+	second, err := protocolAgent.Prompt(
 		context.Background(),
 		acpsdk.PromptRequest{
 			SessionId: session.SessionId,
 			Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("second")},
 		},
 	)
-	assert.ErrorContains(t, err, "prompt already in progress")
-	assert.Equal(t, 1, runner.callCount())
-
-	require.NoError(t, protocolAgent.Cancel(
-		context.Background(),
-		acpsdk.CancelNotification{SessionId: session.SessionId},
-	))
+	require.NoError(t, err)
+	assert.Equal(t, acpsdk.StopReasonEndTurn, second.StopReason)
 	select {
-	case err := <-firstResult:
-		t.Fatalf("prompt returned before the runner finished: %v", err)
-	default:
+	case <-firstCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("previous prompt was not canceled")
 	}
-	close(release)
-	require.NoError(t, <-firstResult)
+	select {
+	case first := <-firstResult:
+		require.NoError(t, first.err)
+		assert.Equal(t, acpsdk.StopReasonCancelled, first.response.StopReason)
+	case <-time.After(time.Second):
+		t.Fatal("previous prompt did not return")
+	}
+	assert.Equal(t, 2, runner.callCount())
+}
+
+func TestServerNewerPromptReplacesActivePrompt(t *testing.T) {
+	started := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	var first sync.Once
+	runner := &testRunner{
+		run: func(ctx context.Context) <-chan *event.Event {
+			events := make(chan *event.Event)
+			isFirst := false
+			first.Do(func() {
+				isFirst = true
+				close(started)
+			})
+			if !isFirst {
+				close(events)
+				return events
+			}
+			go func() {
+				<-ctx.Done()
+				close(firstCanceled)
+				close(events)
+			}()
+			return events
+		},
+	}
+	server, err := New(
+		runner,
+		withSessionIDGenerator(func() string { return "session-overlap" }),
+	)
+	require.NoError(t, err)
+	clientConnection, cleanup := connectTestClient(t, server, &testClient{})
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = clientConnection.Initialize(ctx, acpsdk.InitializeRequest{
+		ProtocolVersion: acpsdk.ProtocolVersionNumber,
+	})
+	require.NoError(t, err)
+	session, err := clientConnection.NewSession(ctx, acpsdk.NewSessionRequest{
+		Cwd:        "/workspace",
+		McpServers: []acpsdk.McpServer{},
+	})
+	require.NoError(t, err)
+
+	firstResult := make(chan struct {
+		response acpsdk.PromptResponse
+		err      error
+	}, 1)
+	go func() {
+		response, promptErr := clientConnection.Prompt(context.Background(), acpsdk.PromptRequest{
+			SessionId: session.SessionId,
+			Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("first")},
+		})
+		firstResult <- struct {
+			response acpsdk.PromptResponse
+			err      error
+		}{response: response, err: promptErr}
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("first prompt did not start")
+	}
+
+	second, err := clientConnection.Prompt(ctx, acpsdk.PromptRequest{
+		SessionId: session.SessionId,
+		Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("second")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, acpsdk.StopReasonEndTurn, second.StopReason)
+	select {
+	case <-firstCanceled:
+	case <-ctx.Done():
+		t.Fatal("previous prompt was not canceled")
+	}
+	select {
+	case result := <-firstResult:
+		require.NoError(t, result.err)
+		assert.Equal(t, acpsdk.StopReasonCancelled, result.response.StopReason)
+	case <-ctx.Done():
+		t.Fatal("previous prompt did not complete")
+	}
+	assert.Equal(t, 2, runner.callCount())
 }
 
 func TestServerSessionIDsAreUniqueAcrossActiveConnections(t *testing.T) {

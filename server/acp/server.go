@@ -625,17 +625,31 @@ func (a *protocolAgent) beginPrompt(
 			map[string]any{"sessionId": "session is closed"},
 		)
 	}
-	if session.requestID != "" {
-		session.mu.Unlock()
-		return acpsdk.NewInvalidParams(
-			map[string]any{"sessionId": "prompt already in progress"},
-		)
-	}
+	previousCancel := session.cancel
+	previousRequestID := session.requestID
 	session.cancel = cancel
 	session.requestID = requestID
 	session.promptDone = make(chan struct{})
 	session.toolCallIDs = toolCallIDs
 	session.mu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+	}
+	if previousRequestID != "" && a.server.managedRunner != nil {
+		a.server.managedRunner.Cancel(previousRequestID)
+	}
+	if previousRequestID != "" {
+		log.DebugContext(
+			context.Background(),
+			"Replaced active ACP prompt",
+			"session_id",
+			session.id,
+			"previous_request_id",
+			previousRequestID,
+			"request_id",
+			requestID,
+		)
+	}
 	return nil
 }
 
