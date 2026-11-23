@@ -18,7 +18,10 @@ import (
 	"os"
 	"os/signal"
 
+	"go.uber.org/zap"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	acpserver "trpc.group/trpc-go/trpc-agent-go/server/acp"
@@ -32,6 +35,9 @@ func main() {
 }
 
 func run() error {
+	if err := configureLogging(); err != nil {
+		return err
+	}
 	modelName := flag.String("model", "gpt-4o-mini", "OpenAI model name")
 	flag.Parse()
 
@@ -62,5 +68,17 @@ func run() error {
 		!errors.Is(err, context.Canceled) {
 		return err
 	}
+	return nil
+}
+
+func configureLogging() error {
+	config := zap.NewProductionConfig()
+	logger, err := config.Build()
+	if err != nil {
+		return fmt.Errorf("configure logging: %w", err)
+	}
+	sugar := logger.Sugar()
+	log.Default = sugar
+	log.ContextDefault = sugar
 	return nil
 }

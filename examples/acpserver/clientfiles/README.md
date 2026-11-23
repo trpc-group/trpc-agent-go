@@ -13,11 +13,12 @@ examples/acpserver/clientfiles/
 └── server/  # ACP agent server; enables client file tools
 ```
 
-The client creates a temporary session workspace with `input.txt`, passes that
-absolute path as `session/new.cwd`, and asks the agent to copy the file with
+The client creates a fresh run directory with `input.txt`, passes that absolute
+path as `session/new.cwd`, and asks the agent to copy the file with
 `acp_read_text_file` and `acp_write_text_file`. The write tool requests
 permission first; the example client approves it once and verifies the resulting
-`copied.txt`.
+`copied.txt`. When no `-workspace` is supplied, the temporary run directory is
+removed after verification.
 
 ## Prerequisites
 
@@ -38,7 +39,7 @@ go run ./acpserver/clientfiles/client
 ```
 
 The client starts `go run ./server`, runs the complete read, permission, and
-write flow, and removes the temporary workspace after verification.
+write flow, and removes the temporary run directory after verification.
 
 The feature directory can also be used directly:
 
@@ -53,7 +54,7 @@ go run ./client
 | --- | --- | --- |
 | `-model` | `gpt-4o-mini` | Model passed to the ACP server. |
 | `-prompt` | Built-in file-copy prompt | Prompt sent to the ACP agent. |
-| `-workspace` | Temporary directory | Workspace to use when it should be inspected after the run. |
+| `-workspace` | Temporary directory | Base directory for a new run directory when the result should be inspected after the run. |
 
 ## Expected Output
 
@@ -64,5 +65,10 @@ permission request. A successful run ends with:
 [client] verified copied.txt
 ```
 
-The server keeps relative paths inside the session workspace. The client also
-checks the path before performing real filesystem operations.
+The server rejects paths that are lexically outside the session workspace. It
+cannot determine where client-side links resolve. The client must enforce
+workspace containment when opening files; this example uses `os.OpenRoot` for
+all reads, directory creation, and writes.
+
+Client file reads stream line ranges incrementally and limit the response to
+1 MiB so the escaped JSON stays below the ACP SDK frame limit.

@@ -11,10 +11,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -30,6 +32,11 @@ const (
 	outputFilename = "copied.txt"
 	inputContent   = "Hello from the ACP client files example.\n" +
 		"This file is copied through fs/read_text_file and fs/write_text_file.\n"
+	// JSON escaping can expand control bytes by six times. A 1 MiB response
+	// limit leaves ample room below the ACP SDK's 10 MiB frame limit.
+	maxReadTextFileBytes = 1 << 20
+	readTextFileBuffer   = 32 << 10
+
 	defaultPrompt = "Read input.txt from the session workspace and write its exact " +
 		"content to copied.txt. Use the ACP client file tools. Do not ask for " +
 		"confirmation before writing."
@@ -162,13 +169,22 @@ func prepareWorkspace(configured string) (string, func(), error) {
 		if err := os.MkdirAll(workspace, 0o755); err != nil {
 			return "", nil, fmt.Errorf("create workspace: %w", err)
 		}
-		return workspace, func() {}, nil
+		runWorkspace, err := os.MkdirTemp(workspace, "run-*")
+		if err != nil {
+			return "", nil, fmt.Errorf("create run workspace: %w", err)
+		}
+		return runWorkspace, func() {}, nil
 	}
 	workspace, err := os.MkdirTemp("", "acp-client-files-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("create temporary workspace: %w", err)
 	}
-	return workspace, func() {
+	runWorkspace, err := os.MkdirTemp(workspace, "run-*")
+	if err != nil {
+		_ = os.RemoveAll(workspace)
+		return "", nil, fmt.Errorf("create run workspace: %w", err)
+	}
+	return runWorkspace, func() {
 		_ = os.RemoveAll(workspace)
 	}, nil
 }
@@ -247,26 +263,23 @@ func (c *exampleClient) ReadTextFile(
 	if err := ctx.Err(); err != nil {
 		return acpsdk.ReadTextFileResponse{}, err
 	}
-	path, err := resolveClientPath(c.workspace, request.Path)
+	relativePath, path, err := resolveClientPath(c.workspace, request.Path)
 	if err != nil {
 		return acpsdk.ReadTextFileResponse{}, err
 	}
-	data, err := os.ReadFile(path)
+	root, err := os.OpenRoot(c.workspace)
+	if err != nil {
+		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("open workspace root: %w", err)
+	}
+	defer root.Close()
+	file, err := root.Open(relativePath)
 	if err != nil {
 		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	content := string(data)
-	if request.Line != nil || request.Limit != nil {
-		lines := strings.Split(content, "\n")
-		start := 0
-		if request.Line != nil && *request.Line > 0 {
-			start = min(*request.Line-1, len(lines))
-		}
-		end := len(lines)
-		if request.Limit != nil && *request.Limit > 0 {
-			end = min(start+*request.Limit, len(lines))
-		}
-		content = strings.Join(lines[start:end], "\n")
+	defer file.Close()
+	content, err := readTextFile(file, request.Line, request.Limit)
+	if err != nil {
+		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	fmt.Printf("[client] read %s (%d bytes)\n", path, len(content))
 	return acpsdk.ReadTextFileResponse{Content: content}, nil
@@ -279,23 +292,42 @@ func (c *exampleClient) WriteTextFile(
 	if err := ctx.Err(); err != nil {
 		return acpsdk.WriteTextFileResponse{}, err
 	}
-	path, err := resolveClientPath(c.workspace, request.Path)
+	relativePath, path, err := resolveClientPath(c.workspace, request.Path)
 	if err != nil {
 		return acpsdk.WriteTextFileResponse{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	root, err := os.OpenRoot(c.workspace)
+	if err != nil {
+		return acpsdk.WriteTextFileResponse{}, fmt.Errorf("open workspace root: %w", err)
+	}
+	defer root.Close()
+	if directory := filepath.Dir(relativePath); directory != "." {
+		if err := mkdirAllInRoot(root, directory, 0o755); err != nil {
+			return acpsdk.WriteTextFileResponse{}, fmt.Errorf("create %s: %w", path, err)
+		}
+	}
+	file, err := root.OpenFile(
+		relativePath,
+		os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		0o644,
+	)
+	if err != nil {
 		return acpsdk.WriteTextFileResponse{}, fmt.Errorf("create %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, []byte(request.Content), 0o644); err != nil {
+	if _, err := io.WriteString(file, request.Content); err != nil {
+		_ = file.Close()
 		return acpsdk.WriteTextFileResponse{}, fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return acpsdk.WriteTextFileResponse{}, fmt.Errorf("close %s: %w", path, err)
 	}
 	fmt.Printf("[client] wrote %s (%d bytes)\n", path, len(request.Content))
 	return acpsdk.WriteTextFileResponse{}, nil
 }
 
-func resolveClientPath(workspace, path string) (string, error) {
+func resolveClientPath(workspace, path string) (string, string, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", errors.New("path is required")
+		return "", "", errors.New("path is required")
 	}
 	root := filepath.Clean(workspace)
 	candidate := path
@@ -305,14 +337,104 @@ func resolveClientPath(workspace, path string) (string, error) {
 	candidate = filepath.Clean(candidate)
 	relative, err := filepath.Rel(root, candidate)
 	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
+		return "", "", fmt.Errorf("resolve path: %w", err)
 	}
 	if relative == ".." ||
 		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
 		filepath.IsAbs(relative) {
-		return "", errors.New("path is outside the workspace")
+		return "", "", errors.New("path is outside the workspace")
 	}
-	return candidate, nil
+	return relative, candidate, nil
+}
+
+func readTextFile(reader io.Reader, line, limit *int) (string, error) {
+	buffered := bufio.NewReaderSize(reader, readTextFileBuffer)
+	startLine := 0
+	if line != nil && *line > 0 {
+		startLine = *line - 1
+	}
+	maxLines := 0
+	if limit != nil && *limit > 0 {
+		maxLines = *limit
+	}
+
+	var lines []string
+	var current strings.Builder
+	lineIndex := 0
+	selectedBytes := 0
+	for {
+		fragment, readErr := buffered.ReadSlice('\n')
+		hasNewline := len(fragment) > 0 && fragment[len(fragment)-1] == '\n'
+		if hasNewline {
+			fragment = fragment[:len(fragment)-1]
+		}
+		selecting := lineIndex >= startLine &&
+			(maxLines == 0 || len(lines) < maxLines)
+		if selecting {
+			separatorBytes := 0
+			if len(lines) > 0 {
+				separatorBytes = 1
+			}
+			if selectedBytes+current.Len()+separatorBytes+len(fragment) >
+				maxReadTextFileBytes {
+				return "", fmt.Errorf(
+					"requested text exceeds the %d-byte response limit",
+					maxReadTextFileBytes,
+				)
+			}
+			_, _ = current.Write(fragment)
+		}
+		if hasNewline {
+			if selecting {
+				if len(lines) > 0 {
+					selectedBytes++
+				}
+				selectedBytes += current.Len()
+				lines = append(lines, current.String())
+				current.Reset()
+				if maxLines > 0 && len(lines) == maxLines {
+					return strings.Join(lines, "\n"), nil
+				}
+			}
+			lineIndex++
+		}
+
+		switch {
+		case readErr == nil || errors.Is(readErr, bufio.ErrBufferFull):
+			continue
+		case errors.Is(readErr, io.EOF):
+			if selecting && !hasNewline {
+				if len(lines) > 0 {
+					selectedBytes++
+				}
+				selectedBytes += current.Len()
+				lines = append(lines, current.String())
+			}
+			return strings.Join(lines, "\n"), nil
+		default:
+			return "", fmt.Errorf("read requested text: %w", readErr)
+		}
+	}
+}
+
+func mkdirAllInRoot(root *os.Root, directory string, permission os.FileMode) error {
+	current := "."
+	for _, component := range strings.Split(filepath.Clean(directory), string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		if err := root.Mkdir(current, permission); err == nil {
+			continue
+		} else {
+			info, statErr := root.Stat(current)
+			if statErr == nil && info.IsDir() {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func (*exampleClient) CreateTerminal(

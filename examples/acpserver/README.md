@@ -24,7 +24,7 @@ Normally an ACP client starts this command and owns its standard streams. For
 example, configure the client command as:
 
 ```text
-go run /absolute/path/to/trpc-agent-go/examples/acpserver
+go -C /absolute/path/to/trpc-agent-go/examples/acpserver run .
 ```
 
 Do not print application logs to standard output because it carries the ACP
