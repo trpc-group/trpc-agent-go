@@ -346,10 +346,9 @@ func (s *turnState) applyFinishReason(finishReason *string) {
 	}
 }
 
-func (s *turnState) response(messageID *string) acpsdk.PromptResponse {
+func (s *turnState) response() acpsdk.PromptResponse {
 	return acpsdk.PromptResponse{
-		StopReason:    s.stopReason,
-		Usage:         s.usage,
-		UserMessageId: messageID,
+		StopReason: s.stopReason,
+		Usage:      s.usage,
 	}
 }

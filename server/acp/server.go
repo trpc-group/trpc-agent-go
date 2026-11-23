@@ -501,7 +501,7 @@ func (a *protocolAgent) Prompt(
 	if err != nil {
 		if runCtx.Err() != nil {
 			a.stopPrompt(requestID, cancel)
-			return canceledPromptResponse(request.MessageId), nil
+			return canceledPromptResponse(), nil
 		}
 		return acpsdk.PromptResponse{}, err
 	}
@@ -512,13 +512,13 @@ func (a *protocolAgent) Prompt(
 		case <-runCtx.Done():
 			a.stopPrompt(requestID, cancel)
 			drainEvents(events)
-			return canceledPromptResponse(request.MessageId), nil
+			return canceledPromptResponse(), nil
 		case event, ok := <-events:
 			if !ok {
 				if runCtx.Err() != nil {
-					return canceledPromptResponse(request.MessageId), nil
+					return canceledPromptResponse(), nil
 				}
-				return turn.response(request.MessageId), nil
+				return turn.response(), nil
 			}
 			updates, err := turn.translate(runCtx, event)
 			if err != nil {
@@ -534,7 +534,7 @@ func (a *protocolAgent) Prompt(
 					if runCtx.Err() != nil {
 						a.stopPrompt(requestID, cancel)
 						drainEvents(events)
-						return canceledPromptResponse(request.MessageId), nil
+						return canceledPromptResponse(), nil
 					}
 					a.stopPrompt(requestID, cancel)
 					drainEvents(events)
@@ -553,10 +553,9 @@ func drainEvents(events <-chan *event.Event) {
 	}
 }
 
-func canceledPromptResponse(messageID *string) acpsdk.PromptResponse {
+func canceledPromptResponse() acpsdk.PromptResponse {
 	return acpsdk.PromptResponse{
-		StopReason:    acpsdk.StopReasonCancelled,
-		UserMessageId: messageID,
+		StopReason: acpsdk.StopReasonCancelled,
 	}
 }
 
@@ -851,6 +850,15 @@ func (*protocolAgent) ListSessions(
 ) (acpsdk.ListSessionsResponse, error) {
 	return acpsdk.ListSessionsResponse{}, acpsdk.NewMethodNotFound(
 		acpsdk.AgentMethodSessionList,
+	)
+}
+
+func (*protocolAgent) DeleteSession(
+	context.Context,
+	acpsdk.DeleteSessionRequest,
+) (acpsdk.DeleteSessionResponse, error) {
+	return acpsdk.DeleteSessionResponse{}, acpsdk.NewMethodNotFound(
+		acpsdk.AgentMethodSessionDelete,
 	)
 }
 

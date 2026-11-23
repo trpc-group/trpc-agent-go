@@ -184,7 +184,7 @@ func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
 	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[5].ToolCallUpdate.ToolCallId)
 	assert.Equal(t, acpsdk.ToolCallStatusCompleted, *updates[5].ToolCallUpdate.Status)
 
-	response := state.response(nil)
+	response := state.response()
 	assert.Equal(t, acpsdk.StopReasonMaxTokens, response.StopReason)
 	require.NotNil(t, response.Usage)
 	assert.Equal(t, 8, response.Usage.TotalTokens)
@@ -230,7 +230,7 @@ func TestTurnStateAccumulatesUsageAcrossModelCalls(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	response := state.response(nil)
+	response := state.response()
 	require.NotNil(t, response.Usage)
 	assert.Equal(t, 6, response.Usage.InputTokens)
 	assert.Equal(t, 4, response.Usage.OutputTokens)
@@ -604,7 +604,7 @@ func TestTurnStateMapsFinishReasons(t *testing.T) {
 			state := newTestTurnState(false)
 			state.applyFinishReason(nil)
 			state.applyFinishReason(&test.reason)
-			assert.Equal(t, test.want, state.response(nil).StopReason)
+			assert.Equal(t, test.want, state.response().StopReason)
 		})
 	}
 }

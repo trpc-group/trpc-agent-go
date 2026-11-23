@@ -107,15 +107,12 @@ func TestServerPromptOverACP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, acpsdk.SessionId("session-1"), session.SessionId)
 
-	messageID := "9a27ea91-a754-40cc-a557-105011523714"
 	promptResponse, err := clientConnection.Prompt(ctx, acpsdk.PromptRequest{
 		SessionId: session.SessionId,
-		MessageId: &messageID,
 		Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("hi")},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, acpsdk.StopReasonEndTurn, promptResponse.StopReason)
-	assert.Equal(t, &messageID, promptResponse.UserMessageId)
 	require.NotNil(t, promptResponse.Usage)
 	assert.Equal(t, 3, promptResponse.Usage.TotalTokens)
 

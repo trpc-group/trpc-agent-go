@@ -15,7 +15,7 @@ replace (
 )
 
 require (
-	github.com/coder/acp-go-sdk v0.13.5
+	github.com/coder/acp-go-sdk v0.14.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/go-openapi/testify/v2 v2.0.2
 	github.com/google/uuid v1.6.0
