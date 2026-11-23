@@ -190,9 +190,28 @@ func (s *Server) connect(input io.Reader, output io.Writer) (*connection, error)
 		return nil, errors.New("acp: output is required")
 	}
 	protocolAgent := newProtocolAgent(s)
-	sdkConnection := acpsdk.NewAgentSideConnection(protocolAgent, output, input)
+	// The SDK starts its receive goroutine before storing the connection field
+	// it later reads when a prompt registers. Gate reads until construction and
+	// our connection wiring are complete.
+	ready := make(chan struct{})
+	sdkConnection := acpsdk.NewAgentSideConnection(
+		protocolAgent,
+		output,
+		&connectionReadyReader{reader: input, ready: ready},
+	)
 	protocolAgent.connection = sdkConnection
+	close(ready)
 	return &connection{conn: sdkConnection, agent: protocolAgent}, nil
+}
+
+type connectionReadyReader struct {
+	reader io.Reader
+	ready  <-chan struct{}
+}
+
+func (r *connectionReadyReader) Read(buffer []byte) (int, error) {
+	<-r.ready
+	return r.reader.Read(buffer)
 }
 
 // Serve connects an ACP client and blocks until the peer disconnects or ctx is
