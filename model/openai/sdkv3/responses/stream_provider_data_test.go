@@ -71,24 +71,61 @@ func TestStreamProviderDataUsesDoneReasoningCiphertext(t *testing.T) {
 	require.JSONEq(t, doneReasoning, string(input[1]), "the full done reasoning item is replayed without editing or re-encrypting it")
 }
 
-func TestStreamReasoningStillRejectsSemanticChanges(t *testing.T) {
-	for _, tc := range []struct{ name, done, final string }{
-		{"id", `{"type":"reasoning","id":"a","summary":[],"encrypted_content":"one"}`, `{"type":"reasoning","id":"b","summary":[],"encrypted_content":"two"}`},
-		{"summary", `{"type":"reasoning","id":"a","summary":[],"encrypted_content":"one"}`, `{"type":"reasoning","id":"a","summary":[{"type":"summary_text","text":"changed"}],"encrypted_content":"two"}`},
-		{"unknown field", `{"type":"reasoning","id":"a","summary":[],"encrypted_content":"one","future":1}`, `{"type":"reasoning","id":"a","summary":[],"encrypted_content":"two","future":2}`},
-		{"missing done state", `{"type":"reasoning","id":"a","summary":[]}`, `{"type":"reasoning","id":"a","summary":[],"encrypted_content":"two"}`},
-		{"tool arguments", `{"type":"function_call","id":"f","call_id":"c","name":"calculator","arguments":"{\"a\":1}"}`, `{"type":"function_call","id":"f","call_id":"c","name":"calculator","arguments":"{\"a\":2}"}`},
+func TestStreamUsesCompletedOutput(t *testing.T) {
+	const message = `{"type":"message","id":"final","role":"assistant","status":"completed","content":[{"type":"output_text","text":"answer"}]}`
+	const preview = `{"type":"message","id":"preview","role":"assistant","status":"completed","content":[]}`
+	const reason = `{"type":"reasoning","id":"rs","summary":[]}`
+	const other = `{"type":"reasoning","id":"other","summary":[],"encrypted_content":"other-state"}`
+	const first = `{"type":"reasoning","id":"rs","summary":[],"encrypted_content":"state-1"}`
+	const second = `{"type":"reasoning","id":"rs","summary":[],"encrypted_content":"state-2"}`
+	const changed = `{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"done summary"}],"encrypted_content":"state","extension":{"v":1}}`
+	const largeDone = `{"type":"reasoning","id":"rs","summary":[],"extension":9007199254740993,"encrypted_content":"first"}`
+	const largeFinal = `{"type":"reasoning","id":"rs","summary":[],"extension":9007199254740992,"encrypted_content":"final"}`
+	const pending = `{"type":"reasoning","id":"rs","status":"in_progress","summary":[],"encrypted_content":"unfinished"}`
+	const call = `{"type":"function_call","call_id":"call","name":"calculator","arguments":"{}"}`
+	done := func(index int, item string) string {
+		return fmt.Sprintf(`{"type":"response.output_item.done","output_index":%d,"item":%s}`, index, item)
+	}
+	completed := func(output string) string {
+		return `{"type":"response.completed","response":{"id":"r","status":"completed","output":[` + output + `]}}`
+	}
+	for _, tc := range []struct {
+		name                 string
+		events               []string
+		final, want, summary string
+	}{
+		{"duplicate index and changed reasoning ID", []string{done(0, other), done(0, preview)}, reason + "," + message, reason + "," + message, ""},
+		{"missing done item and changed message ID", []string{done(0, preview)}, reason + "," + message, reason + "," + message, ""},
+		{"done-only tool call", []string{done(-1, call)}, message, message, ""},
+		{"unique reasoning ID across slots", []string{done(1, changed)}, reason + "," + message, changed + "," + message, "done summary"},
+		{"repeated ID in distinct slots", []string{done(1, second), done(0, first)}, reason + "," + reason + "," + message, first + "," + second + "," + message, ""},
+		{"same ID and slot is ambiguous", []string{done(0, first), done(0, second)}, reason + "," + message, reason + "," + message, ""},
+		{"indexed and unindexed candidates", []string{done(0, first), `{"type":"response.output_item.done","item":` + second + `}`}, reason + "," + message, reason + "," + message, ""},
+		{"negative index before indexed candidate", []string{done(-1, first), done(0, second)}, reason + "," + message, reason + "," + message, ""},
+		{"overlapping but shifted slots", []string{done(0, preview), done(1, first), done(2, second)}, reason + "," + reason + "," + message, reason + "," + reason + "," + message, ""},
+		{"terminal omits one repeated ID", []string{done(0, first), done(1, second)}, reason + "," + message, reason + "," + message, ""},
+		{"duplicate slot invalidates other slots", []string{done(1, second), done(0, first), done(0, first)}, reason + "," + reason + "," + message, reason + "," + reason + "," + message, ""},
+		{"slot matches but summary differs", []string{done(0, changed), done(1, second)}, reason + "," + reason + "," + message, reason + "," + second + "," + message, ""},
+		{"distinct large extension values", []string{done(0, largeDone), done(1, second)}, largeFinal + "," + reason + "," + message, largeFinal + "," + second + "," + message, ""},
+		{"missing index cannot disambiguate", []string{`{"type":"response.output_item.done","item":` + first + `}`}, reason + "," + reason + "," + message, reason + "," + reason + "," + message, ""},
+		{"invalid done reasoning", []string{done(0, pending)}, reason + "," + message, reason + "," + message, ""},
+		{"done reasoning lacks ciphertext", []string{done(0, reason)}, first + "," + message, first + "," + message, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				writeSSE(w, fmt.Sprintf(`{"type":"response.output_item.done","output_index":0,"item":%s}`, tc.done), fmt.Sprintf(`{"type":"response.completed","response":{"id":"r","status":"completed","output":[%s]}}`, tc.final))
-			}))
-			defer srv.Close()
-			m := New("test-model", WithAPIKey("offline"), WithBaseURL(srv.URL), WithOpenAIOptions(option.WithMaxRetries(0)))
-			ch, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("start")}, GenerationConfig: model.GenerationConfig{Stream: true}})
-			require.NoError(t, err)
-			respErr := requireTerminalError(t, collect(t, ch))
-			require.Contains(t, respErr.Message, "differs from response.completed")
+			got := collectStream(t, append(tc.events, completed(tc.final))...)
+			require.Len(t, got, 1)
+			require.Nil(t, got[0].Error)
+			require.True(t, got[0].Done)
+			msg := got[0].Choices[0].Message
+			require.Equal(t, "answer", msg.Content)
+			require.Equal(t, tc.summary, msg.ReasoningContent)
+			require.Empty(t, msg.ToolCalls)
+			require.NotNil(t, msg.ProviderData)
+			require.JSONEq(t, "["+tc.want+"]", string(msg.ProviderData.Payload))
 		})
 	}
+	t.Run("invalid terminal reasoning cannot be repaired", func(t *testing.T) {
+		got := collectStream(t, done(0, first), completed(pending))
+		require.Contains(t, requireTerminalError(t, got).Message, "in_progress")
+	})
 }

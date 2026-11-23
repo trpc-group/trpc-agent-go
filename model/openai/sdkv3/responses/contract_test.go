@@ -17,7 +17,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -570,15 +569,6 @@ func TestNonStreamResponseAndCancellationEndsWithoutResponse(t *testing.T) {
 }
 
 func TestStreamProtocolViolationsAreTerminalErrors(t *testing.T) {
-	message := func(text string) string {
-		return `{"type":"message","id":"m","status":"completed","role":"assistant","content":[{"type":"output_text","text":"` + text + `"}]}`
-	}
-	done := func(index int, item string) string {
-		return fmt.Sprintf(`{"type":"response.output_item.done","output_index":%d,"item":%s}`, index, item)
-	}
-	completed := func(items ...string) string {
-		return `{"type":"response.completed","response":{"id":"r","status":"completed","output":[` + strings.Join(items, ",") + `]}}`
-	}
 	for _, tc := range []struct {
 		name   string
 		status int
@@ -589,20 +579,11 @@ func TestStreamProtocolViolationsAreTerminalErrors(t *testing.T) {
 		{name: "error event", events: []string{`{"type":"error","message":"rate limited"}`}, want: "rate limited"},
 		{name: "error event without message", events: []string{`{"type":"error"}`},
 			want: "responses stream did not complete"},
-		{name: "negative output index", events: []string{done(-1, message("a"))}, want: "negative output_index"},
-		{name: "duplicate output item", events: []string{done(0, message("a")), done(0, message("a"))},
-			want: "duplicate output_item.done at index 0"},
-		{name: "completed item differs", events: []string{done(0, message("a")), completed(message("b"))},
-			want: "output_item.done at index 0 differs from response.completed"},
-		{name: "completed item count", events: []string{done(0, message("a")), completed(message("a"), message("b"))},
-			want: "output_item.done covered 1"},
-		{name: "completed index outside", events: []string{done(1, message("a")), completed(message("a"))},
-			want: "output_item.done index 1 is outside response.completed output"},
 		{name: "completed with another status", events: []string{
 			`{"type":"response.completed","response":{"id":"r","status":"incomplete","output":[]}}`,
 		}, want: "responses request was incomplete"},
 		{name: "completed with unsupported output", events: []string{
-			completed(`{"type":"web_search_call","id":"ws","status":"completed"}`),
+			`{"type":"response.completed","response":{"status":"completed","output":[{"type":"web_search_call","id":"ws","status":"completed"}]}}`,
 		}, want: `unsupported native item type "web_search_call"`},
 		{name: "event without type", events: []string{`{"delta":"x"}`}, want: "stream event has no type"},
 	} {

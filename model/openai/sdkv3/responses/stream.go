@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go/v3/option"
@@ -64,7 +65,7 @@ func (m *Model) handleStreaming(
 	}
 	defer raw.Body.Close()
 
-	acc := &streamAccumulator{doneItems: make(map[int64]responses.ResponseOutputItemUnion)}
+	acc := &streamAccumulator{}
 	decoder := ssestream.NewDecoder(raw)
 	for decoder.Next() {
 		if ctx.Err() != nil {
@@ -103,7 +104,7 @@ var errNilStreamBody = errors.New("openai/responses: empty stream body")
 type streamAccumulator struct {
 	id        string
 	created   int64
-	doneItems map[int64]responses.ResponseOutputItemUnion
+	reasoning map[string]*reasoningCandidates
 	// outputObserved means a non-empty preview or native output event was
 	// seen. It is evidence only: it is not a transcript, a native item, or a
 	// tool call.
@@ -136,14 +137,10 @@ func handleStreamEvent(
 		acc.outputObserved = true
 		return false, emit(projectPartial(modelName, acc, "", event.Delta))
 	case eventResponseOutputItemDone:
-		index := event.OutputIndex
-		if index < 0 {
-			return true, emit(apiErrorResponse(errors.New("openai/responses: output_item.done has a negative output_index")))
+		if outputItemObserved(event.Item) {
+			acc.outputObserved = true
 		}
-		if _, exists := acc.doneItems[index]; exists {
-			return true, emit(apiErrorResponse(fmt.Errorf("openai/responses: duplicate output_item.done at index %d", index)))
-		}
-		acc.doneItems[index] = event.Item
+		acc.recordReasoning(event)
 		return false, true
 	case eventResponseCompleted, eventResponseIncomplete, eventResponseFailed, eventResponseCancelled, eventError:
 		return handleTerminalStreamEvent(modelName, acc, event, emit)
@@ -193,17 +190,10 @@ func handleTerminalStreamEvent(
 		if resp.Status != responses.ResponseStatusCompleted {
 			return true, emit(responseStatusError(&resp))
 		}
-		// Done-item mismatches keep their existing errors. When no done item
-		// was recorded, an empty snapshot cannot override output already seen.
-		// The preview is not promoted into a message, native item, or tool call.
-		if len(acc.doneItems) == 0 && len(resp.Output) == 0 && acc.outputObserved {
+		if len(resp.Output) == 0 && acc.outputObserved {
 			return true, emit(apiErrorResponse(errors.New("openai/responses: response.completed output is empty after streamed output")))
 		}
-		output, err := completedStreamItems(acc.doneItems, resp.Output)
-		if err != nil {
-			return true, emit(apiErrorResponse(err))
-		}
-		resp.Output = output
+		acc.selectReplayReasoning(resp.Output)
 		final, err := projectResponse(&resp, modelName)
 		if err != nil {
 			return true, emit(apiErrorResponse(err))
@@ -226,45 +216,106 @@ func handleTerminalStreamEvent(
 	}
 }
 
-// completedStreamItems validates the terminal snapshot and selects replayable
-// reasoning from output_item.done, as required by the streaming API. Opaque
-// ciphertext can differ in the terminal response; every other field must agree.
-func completedStreamItems(
-	doneItems map[int64]responses.ResponseOutputItemUnion,
-	finalItems []responses.ResponseOutputItemUnion,
-) ([]responses.ResponseOutputItemUnion, error) {
-	if len(doneItems) == 0 {
-		return finalItems, nil
+// unique is set for a single candidate. A missing or repeated index disables
+// positional matching for the entire ID by clearing byIndex.
+type reasoningCandidates struct {
+	unique  *responses.ResponseOutputItemUnion
+	byIndex map[int64]*responses.ResponseOutputItemUnion
+}
+
+func validReasoning(item *responses.ResponseOutputItemUnion) bool {
+	var native nativeItem
+	return json.Unmarshal([]byte(item.RawJSON()), &native) == nil && validateNativeItem(native, true) == nil
+}
+
+func (acc *streamAccumulator) recordReasoning(event *responses.ResponseStreamEventUnion) {
+	if event.Item.Type != outputTypeReasoning || event.Item.EncryptedContent == "" ||
+		!event.Item.JSON.EncryptedContent.Valid() || !validReasoning(&event.Item) {
+		return
 	}
-	if len(doneItems) != len(finalItems) {
-		return nil, fmt.Errorf("openai/responses: response.completed has %d output items, but output_item.done covered %d", len(finalItems), len(doneItems))
+	if acc.reasoning == nil {
+		acc.reasoning = make(map[string]*reasoningCandidates)
 	}
-	output := append([]responses.ResponseOutputItemUnion(nil), finalItems...)
-	for index, done := range doneItems {
-		if index < 0 || int64(len(finalItems)) <= index {
-			return nil, fmt.Errorf("openai/responses: output_item.done index %d is outside response.completed output", index)
+	item := event.Item
+	candidates := acc.reasoning[item.ID]
+	if candidates == nil {
+		candidates = &reasoningCandidates{unique: &item, byIndex: make(map[int64]*responses.ResponseOutputItemUnion)}
+		acc.reasoning[item.ID] = candidates
+	} else {
+		candidates.unique = nil
+	}
+	if candidates.byIndex == nil {
+		return
+	}
+	index := event.OutputIndex
+	_, duplicate := candidates.byIndex[index]
+	if !event.JSON.OutputIndex.Valid() || index < 0 || duplicate {
+		candidates.byIndex = nil
+		return
+	}
+	candidates.byIndex[index] = &item
+}
+
+// selectReplayReasoning keeps the terminal order and replaces only complete,
+// identifiable reasoning items with the provider's replayable done items.
+func (acc *streamAccumulator) selectReplayReasoning(output []responses.ResponseOutputItemUnion) {
+	if len(acc.reasoning) == 0 {
+		return
+	}
+	positions := make(map[string][]int)
+	for i := range output {
+		id := output[i].ID
+		if output[i].Type == outputTypeReasoning && acc.reasoning[id] != nil {
+			positions[id] = append(positions[id], i)
 		}
-		var doneValue, finalValue any
-		if err := json.Unmarshal([]byte(done.RawJSON()), &doneValue); err != nil {
-			return nil, fmt.Errorf("openai/responses: decode output_item.done at index %d: %w", index, err)
+	}
+	for id, indices := range positions {
+		candidates := acc.reasoning[id]
+		if len(indices) == 1 && candidates.unique != nil {
+			final := &output[indices[0]]
+			if validReasoning(final) {
+				*final = *candidates.unique
+			}
+			continue
 		}
-		if err := json.Unmarshal([]byte(finalItems[index].RawJSON()), &finalValue); err != nil {
-			return nil, fmt.Errorf("openai/responses: decode response.completed item %d: %w", index, err)
+		if !candidates.covers(indices) {
+			continue
 		}
-		if done.Type == outputTypeReasoning && finalItems[index].Type == outputTypeReasoning {
-			doneMap, _ := doneValue.(map[string]any)
-			finalMap, _ := finalValue.(map[string]any)
-			if encrypted, ok := doneMap["encrypted_content"].(string); ok && encrypted != "" {
-				delete(doneMap, "encrypted_content")
-				delete(finalMap, "encrypted_content")
-				output[index] = done
+		for _, i := range indices {
+			done := candidates.byIndex[int64(i)]
+			if validReasoning(&output[i]) && sameReasoningExceptCiphertext(done, &output[i]) {
+				output[i] = *done
 			}
 		}
-		if !reflect.DeepEqual(doneValue, finalValue) {
-			return nil, fmt.Errorf("openai/responses: output_item.done at index %d differs from response.completed", index)
+	}
+}
+
+// An overlapping subset of positions cannot identify items with a repeated ID.
+func (c *reasoningCandidates) covers(indices []int) bool {
+	if len(indices) != len(c.byIndex) {
+		return false
+	}
+	for _, i := range indices {
+		if c.byIndex[int64(i)] == nil {
+			return false
 		}
 	}
-	return output, nil
+	return true
+}
+
+func sameReasoningExceptCiphertext(a, b *responses.ResponseOutputItemUnion) bool {
+	fields := func(item *responses.ResponseOutputItemUnion) map[string]any {
+		var values map[string]any
+		decoder := json.NewDecoder(strings.NewReader(item.RawJSON()))
+		decoder.UseNumber()
+		if err := decoder.Decode(&values); err != nil {
+			return nil
+		}
+		delete(values, "encrypted_content")
+		return values
+	}
+	left, right := fields(a), fields(b)
+	return left != nil && right != nil && reflect.DeepEqual(left, right)
 }
 
 func outputItemObserved(item responses.ResponseOutputItemUnion) bool {
