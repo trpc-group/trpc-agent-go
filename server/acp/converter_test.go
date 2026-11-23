@@ -302,7 +302,7 @@ func TestTurnStateUsesExplicitRoleForEmptyDeltas(t *testing.T) {
 				Choices: []model.Choice{{
 					Delta: model.Message{
 						Role:    model.RoleAssistant,
-						Content: "hel",
+						Content: "hello ",
 					},
 				}},
 			},
@@ -313,7 +313,7 @@ func TestTurnStateUsesExplicitRoleForEmptyDeltas(t *testing.T) {
 				ID:        "response",
 				IsPartial: true,
 				Choices: []model.Choice{{
-					Delta: model.Message{Content: "lo"},
+					Delta: model.Message{Content: "world"},
 				}},
 			},
 		},
@@ -322,7 +322,7 @@ func TestTurnStateUsesExplicitRoleForEmptyDeltas(t *testing.T) {
 		updates, err := state.translate(context.Background(), evt)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
-		want := []string{"hel", "lo"}[index]
+		want := []string{"hello ", "world"}[index]
 		assert.Equal(t, want, updates[0].AgentMessageChunk.Content.Text.Text)
 	}
 }
