@@ -482,6 +482,44 @@ func TestProtocolAgentNewerPromptReplacesActivePrompt(t *testing.T) {
 	assert.Equal(t, 2, runner.callCount())
 }
 
+func TestHandlePromptTerminalErrorReturnsCancelledAfterPromptCancel(t *testing.T) {
+	server, err := New(&testRunner{})
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	events := make(chan *event.Event)
+	close(events)
+
+	response, err := protocolAgent.handlePromptTerminalError(
+		runCtx,
+		"request-canceled",
+		func() {},
+		events,
+		errors.New("runner failed during cancellation"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, acpsdk.StopReasonCancelled, response.StopReason)
+}
+
+func TestHandlePromptTerminalErrorPreservesErrorWithoutCancel(t *testing.T) {
+	server, err := New(&testRunner{})
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	events := make(chan *event.Event)
+	close(events)
+	promptErr := errors.New("runner failed")
+
+	_, err = protocolAgent.handlePromptTerminalError(
+		context.Background(),
+		"request-failed",
+		func() {},
+		events,
+		promptErr,
+	)
+	require.ErrorIs(t, err, promptErr)
+}
+
 func TestServerNewerPromptReplacesActivePrompt(t *testing.T) {
 	started := make(chan struct{})
 	firstCanceled := make(chan struct{})

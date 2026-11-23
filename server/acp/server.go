@@ -575,9 +575,13 @@ func (a *protocolAgent) Prompt(
 			}
 			updates, err := turn.translate(runCtx, event)
 			if err != nil {
-				a.stopPrompt(requestID, cancel)
-				drainEvents(events)
-				return acpsdk.PromptResponse{}, err
+				return a.handlePromptTerminalError(
+					runCtx,
+					requestID,
+					cancel,
+					events,
+					err,
+				)
 			}
 			for _, update := range updates {
 				if err := a.connection.SessionUpdate(runCtx, acpsdk.SessionNotification{
@@ -604,6 +608,22 @@ func drainEvents(events <-chan *event.Event) {
 	}
 	for range events {
 	}
+}
+
+func (a *protocolAgent) handlePromptTerminalError(
+	runCtx context.Context,
+	requestID string,
+	cancel context.CancelFunc,
+	events <-chan *event.Event,
+	promptErr error,
+) (acpsdk.PromptResponse, error) {
+	canceled := runCtx.Err() != nil
+	a.stopPrompt(requestID, cancel)
+	drainEvents(events)
+	if canceled {
+		return canceledPromptResponse(), nil
+	}
+	return acpsdk.PromptResponse{}, promptErr
 }
 
 func canceledPromptResponse() acpsdk.PromptResponse {
