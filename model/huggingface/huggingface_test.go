@@ -4387,3 +4387,93 @@ func TestModel_HandleNonStreamingRequest_ContextCancelDoesNotBlock(t *testing.T)
 		assert.False(t, ok)
 	})
 }
+
+func TestModel_GenerateContent_StreamingCanceledInChunkCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 2; i++ {
+			fmt.Fprintf(w,
+				`data: {"id":"s","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"chunk-%d"}}]}`+"\n\n",
+				i,
+			)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	streamCompleteErrCh := make(chan error, 1)
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithChatChunkCallback(func(_ context.Context, _ *ChatCompletionRequest, _ *ChatCompletionChunk) {
+			cancel()
+		}),
+		WithChatStreamCompleteCallback(func(_ context.Context, _ *ChatCompletionRequest, streamErr error) {
+			streamCompleteErrCh <- streamErr
+		}),
+	)
+	require.NoError(t, err)
+
+	ch, err := m.GenerateContent(ctx, &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range ch {
+		responses = append(responses, resp)
+	}
+	assert.Empty(t, responses)
+
+	select {
+	case streamErr := <-streamCompleteErrCh:
+		require.ErrorIs(t, streamErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream complete callback")
+	}
+}
+
+func TestSendResponse_BlockingSendSucceeds(t *testing.T) {
+	ch := make(chan *model.Response, 1)
+	prefill := &model.Response{ID: "prefill"}
+	ch <- prefill
+
+	want := &model.Response{ID: "second"}
+	started := make(chan struct{})
+	sent := make(chan bool, 1)
+	go func() {
+		close(started)
+		sent <- sendResponse(context.Background(), ch, want)
+	}()
+
+	<-started
+	time.Sleep(10 * time.Millisecond)
+
+	require.Same(t, prefill, <-ch)
+
+	select {
+	case ok := <-sent:
+		assert.True(t, ok)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocking sendResponse")
+	}
+
+	select {
+	case got := <-ch:
+		assert.Same(t, want, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out reading second response")
+	}
+}
