@@ -314,6 +314,24 @@ func (t *clientWriteTextFileTool) CheckPermission(
 	if err != nil {
 		return tool.DenyPermission(err.Error()), nil
 	}
+	mapper := t.session.currentToolCallIDMapper()
+	if mapper == nil {
+		return tool.PermissionDecision{}, errors.New(
+			"acp tool call ID mapper is not available",
+		)
+	}
+	toolName := request.ToolName
+	if toolName == "" {
+		toolName = clientWriteTextFileToolName
+	}
+	acpToolCallID, err := mapper.claimPermission(
+		ctx,
+		request.ToolCallID,
+		toolName,
+	)
+	if err != nil {
+		return tool.PermissionDecision{}, err
+	}
 	title := "Write file"
 	kind := acpsdk.ToolKindEdit
 	status := acpsdk.ToolCallStatusInProgress
@@ -322,7 +340,7 @@ func (t *clientWriteTextFileTool) CheckPermission(
 		acpsdk.RequestPermissionRequest{
 			SessionId: acpsdk.SessionId(t.session.id),
 			ToolCall: acpsdk.ToolCallUpdate{
-				ToolCallId: acpsdk.ToolCallId(request.ToolCallID),
+				ToolCallId: acpToolCallID,
 				Title:      &title,
 				Kind:       &kind,
 				Status:     &status,

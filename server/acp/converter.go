@@ -10,6 +10,7 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -73,6 +75,7 @@ type turnState struct {
 	activeResponses     map[string]string
 	roleByResponse      map[string]model.Role
 	toolCalls           map[string]toolCallState
+	toolCallIDs         *toolCallIDMapper
 	stopReason          acpsdk.StopReason
 	usage               *acpsdk.Usage
 	reasoningEnabled    bool
@@ -84,19 +87,26 @@ type toolCallState struct {
 	arguments string
 }
 
-func newTurnState(reasoningEnabled bool) *turnState {
+func newTurnState(
+	reasoningEnabled bool,
+	toolCallIDs *toolCallIDMapper,
+) *turnState {
 	return &turnState{
 		textByResponse:      make(map[string]string),
 		reasoningByResponse: make(map[string]string),
 		activeResponses:     make(map[string]string),
 		roleByResponse:      make(map[string]model.Role),
 		toolCalls:           make(map[string]toolCallState),
+		toolCallIDs:         toolCallIDs,
 		stopReason:          acpsdk.StopReasonEndTurn,
 		reasoningEnabled:    reasoningEnabled,
 	}
 }
 
-func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) {
+func (s *turnState) translate(
+	ctx context.Context,
+	evt *event.Event,
+) ([]acpsdk.SessionUpdate, error) {
 	if evt == nil || evt.Response == nil {
 		return nil, nil
 	}
@@ -113,6 +123,7 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 	}
 
 	var updates []acpsdk.SessionUpdate
+	terminal := !evt.Response.IsPartial
 	for _, choice := range evt.Response.Choices {
 		streamKey := responseStreamKey(evt, choice.Index)
 		key := s.responseKey(evt, streamKey)
@@ -138,12 +149,12 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 			choice.Message.ToolID == "" {
 			updates = append(updates, acpsdk.UpdateAgentMessageText(text))
 		}
-		updates = append(updates, s.translateToolCalls(choice.Delta.ToolCalls)...)
-		updates = append(updates, s.translateToolCalls(choice.Message.ToolCalls)...)
-		if update, ok := translateToolResult(choice.Delta); ok {
+		updates = append(updates, s.translateToolCalls(ctx, choice.Delta.ToolCalls)...)
+		updates = append(updates, s.translateToolCalls(ctx, choice.Message.ToolCalls)...)
+		if update, ok := s.translateToolResult(ctx, choice.Delta, terminal); ok {
 			updates = append(updates, update)
 		}
-		if update, ok := translateToolResult(choice.Message); ok {
+		if update, ok := s.translateToolResult(ctx, choice.Message, terminal); ok {
 			updates = append(updates, update)
 		}
 		s.applyFinishReason(choice.FinishReason)
@@ -213,6 +224,7 @@ func (*turnState) contentDelta(
 }
 
 func (s *turnState) translateToolCalls(
+	ctx context.Context,
 	toolCalls []model.ToolCall,
 ) []acpsdk.SessionUpdate {
 	var updates []acpsdk.SessionUpdate
@@ -226,11 +238,19 @@ func (s *turnState) translateToolCalls(
 		}
 		arguments := string(toolCall.Function.Arguments)
 		current := toolCallState{title: title, arguments: arguments}
-		previous, exists := s.toolCalls[toolCall.ID]
+		acpToolCallID := s.toolCallIDs.resolve(
+			ctx,
+			toolCall.ID,
+			toolCall.Function.Name,
+		)
+		if acpToolCallID == "" {
+			continue
+		}
+		previous, exists := s.toolCalls[string(acpToolCallID)]
 		if !exists {
-			s.toolCalls[toolCall.ID] = current
+			s.toolCalls[string(acpToolCallID)] = current
 			updates = append(updates, acpsdk.StartToolCall(
-				acpsdk.ToolCallId(toolCall.ID),
+				acpToolCallID,
 				title,
 				acpsdk.WithStartKind(acpsdk.ToolKindOther),
 				acpsdk.WithStartStatus(acpsdk.ToolCallStatusInProgress),
@@ -241,9 +261,9 @@ func (s *turnState) translateToolCalls(
 		if previous == current {
 			continue
 		}
-		s.toolCalls[toolCall.ID] = current
+		s.toolCalls[string(acpToolCallID)] = current
 		updates = append(updates, acpsdk.UpdateToolCall(
-			acpsdk.ToolCallId(toolCall.ID),
+			acpToolCallID,
 			acpsdk.WithUpdateTitle(title),
 			acpsdk.WithUpdateRawInput(decodeJSONArgument(arguments)),
 		))
@@ -262,12 +282,32 @@ func decodeJSONArgument(argument string) any {
 	return argument
 }
 
-func translateToolResult(message model.Message) (acpsdk.SessionUpdate, bool) {
+func (s *turnState) translateToolResult(
+	ctx context.Context,
+	message model.Message,
+	terminal bool,
+) (acpsdk.SessionUpdate, bool) {
 	if message.ToolID == "" {
 		return acpsdk.SessionUpdate{}, false
 	}
+	acpToolCallID, ok := s.toolCallIDs.current(message.ToolID)
+	if !ok {
+		log.WarnContext(
+			ctx,
+			"ACP tool result update has no active tool call mapping",
+			"provider_tool_call_id",
+			message.ToolID,
+			"terminal",
+			terminal,
+		)
+		return acpsdk.SessionUpdate{}, false
+	}
+	status := acpsdk.ToolCallStatusInProgress
+	if terminal {
+		status = acpsdk.ToolCallStatusCompleted
+	}
 	options := []acpsdk.ToolCallUpdateOpt{
-		acpsdk.WithUpdateStatus(acpsdk.ToolCallStatusCompleted),
+		acpsdk.WithUpdateStatus(status),
 		acpsdk.WithUpdateRawOutput(message.Content),
 	}
 	if message.Content != "" {
@@ -275,7 +315,12 @@ func translateToolResult(message model.Message) (acpsdk.SessionUpdate, bool) {
 			acpsdk.ToolContent(acpsdk.TextBlock(message.Content)),
 		}))
 	}
-	return acpsdk.UpdateToolCall(acpsdk.ToolCallId(message.ToolID), options...), true
+	update := acpsdk.UpdateToolCall(acpToolCallID, options...)
+	if terminal {
+		s.toolCallIDs.complete(ctx, message.ToolID)
+		delete(s.toolCalls, string(acpToolCallID))
+	}
+	return update, true
 }
 
 func (s *turnState) applyFinishReason(finishReason *string) {

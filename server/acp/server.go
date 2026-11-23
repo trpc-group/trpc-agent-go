@@ -17,6 +17,7 @@ import (
 	"io"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -244,9 +245,12 @@ type sessionState struct {
 	cancel       context.CancelFunc
 	requestID    string
 	promptDone   chan struct{}
+	toolCallIDs  *toolCallIDMapper
 	writeAllowed bool
 	closed       bool
 	mu           sync.Mutex
+
+	nextToolCallID atomic.Uint64
 }
 
 func newProtocolAgent(server *Server) *protocolAgent {
@@ -308,6 +312,7 @@ func (a *protocolAgent) NewSession(
 		tools:    tools,
 		toolSets: toolSets,
 	}
+	session.toolCallIDs = newToolCallIDMapper(session.allocateToolCallID)
 	session.tools = append(session.tools, a.newClientFileTools(session)...)
 	a.mu.Lock()
 	a.sessions[sessionID] = session
@@ -345,7 +350,8 @@ func (a *protocolAgent) Prompt(
 	}
 	requestID := uuid.NewString()
 	runCtx, cancel := context.WithCancel(ctx)
-	if err := a.beginPrompt(session, requestID, cancel); err != nil {
+	toolCallIDs := newToolCallIDMapper(session.allocateToolCallID)
+	if err := a.beginPrompt(session, requestID, cancel, toolCallIDs); err != nil {
 		cancel()
 		return acpsdk.PromptResponse{}, err
 	}
@@ -376,7 +382,7 @@ func (a *protocolAgent) Prompt(
 		return acpsdk.PromptResponse{}, err
 	}
 
-	turn := newTurnState(a.server.reasoningEnabled)
+	turn := newTurnState(a.server.reasoningEnabled, toolCallIDs)
 	for {
 		select {
 		case <-runCtx.Done():
@@ -390,7 +396,7 @@ func (a *protocolAgent) Prompt(
 				}
 				return turn.response(request.MessageId), nil
 			}
-			updates, err := turn.translate(event)
+			updates, err := turn.translate(runCtx, event)
 			if err != nil {
 				a.stopPrompt(requestID, cancel)
 				drainEvents(events)
@@ -476,6 +482,7 @@ func (a *protocolAgent) beginPrompt(
 	session *sessionState,
 	requestID string,
 	cancel context.CancelFunc,
+	toolCallIDs *toolCallIDMapper,
 ) error {
 	session.mu.Lock()
 	if session.closed {
@@ -493,6 +500,7 @@ func (a *protocolAgent) beginPrompt(
 	session.cancel = cancel
 	session.requestID = requestID
 	session.promptDone = make(chan struct{})
+	session.toolCallIDs = toolCallIDs
 	session.mu.Unlock()
 	return nil
 }
@@ -502,12 +510,26 @@ func (a *protocolAgent) finishPrompt(session *sessionState, requestID string) {
 	if session.requestID == requestID {
 		session.cancel = nil
 		session.requestID = ""
+		session.toolCallIDs = nil
 		if session.promptDone != nil {
 			close(session.promptDone)
 			session.promptDone = nil
 		}
 	}
 	session.mu.Unlock()
+}
+
+func (s *sessionState) allocateToolCallID() acpsdk.ToolCallId {
+	return acpsdk.ToolCallId(fmt.Sprintf(
+		"tool-%d",
+		s.nextToolCallID.Add(1),
+	))
+}
+
+func (s *sessionState) currentToolCallIDMapper() *toolCallIDMapper {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolCallIDs
 }
 
 func (a *protocolAgent) cancelPrompt(session *sessionState) {

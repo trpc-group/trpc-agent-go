@@ -130,6 +130,100 @@ func TestServerPromptOverACP(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServerPromptReassignsReusedProviderToolCallID(t *testing.T) {
+	const providerID = "auto_call_0"
+	fakeRunner := &testRunner{
+		run: func(_ context.Context) <-chan *event.Event {
+			events := make(chan *event.Event, 4)
+			events <- &event.Event{
+				InvocationID: "invocation",
+				Response: &model.Response{
+					ID: "response-1",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								ID: providerID,
+								Function: model.FunctionDefinitionParam{
+									Name: "search",
+								},
+							}},
+						},
+					}},
+				},
+			}
+			events <- &event.Event{
+				InvocationID: "invocation",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleTool,
+							ToolID:  providerID,
+							Content: "first result",
+						},
+					}},
+				},
+			}
+			events <- &event.Event{
+				InvocationID: "invocation",
+				Response: &model.Response{
+					ID: "response-2",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								ID: providerID,
+								Function: model.FunctionDefinitionParam{
+									Name: "search",
+								},
+							}},
+						},
+					}},
+				},
+			}
+			events <- &event.Event{
+				InvocationID: "invocation",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleTool,
+							ToolID:  providerID,
+							Content: "second result",
+						},
+					}},
+				},
+			}
+			close(events)
+			return events
+		},
+	}
+	server, err := New(
+		fakeRunner,
+		WithSessionIDGenerator(func() string { return "session-1" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	client := &testClient{}
+	protocolAgent.connection = client
+	ctx := context.Background()
+	_, err = protocolAgent.NewSession(
+		ctx,
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.NoError(t, err)
+
+	_, err = protocolAgent.Prompt(ctx, acpsdk.PromptRequest{
+		SessionId: "session-1",
+		Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("run tools")},
+	})
+	require.NoError(t, err)
+
+	updates := client.allUpdates()
+	require.Len(t, updates, 4)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[0].Update.ToolCall.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[1].Update.ToolCallUpdate.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallId("tool-2"), updates[2].Update.ToolCall.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallId("tool-2"), updates[3].Update.ToolCallUpdate.ToolCallId)
+}
+
 func TestServerCancellation(t *testing.T) {
 	started := make(chan struct{})
 	cancelObserved := make(chan struct{})

@@ -321,6 +321,11 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	arguments := []byte(`{"path":"docs/new.txt","content":"hello"}`)
 
 	connection.queuePermission(acpsdk.PermissionOptionKindAllowOnce)
+	firstACPToolCallID := session.toolCallIDs.resolve(
+		context.Background(),
+		"call-1",
+		clientWriteTextFileToolName,
+	)
 	decision, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{
 		ToolCallID: "call-1",
 		Arguments:  arguments,
@@ -328,6 +333,11 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
 	connection.queuePermission(acpsdk.PermissionOptionKindAllowOnce)
+	session.toolCallIDs.resolve(
+		context.Background(),
+		"call-2",
+		clientWriteTextFileToolName,
+	)
 	_, err = checker.CheckPermission(context.Background(), &tool.PermissionRequest{
 		ToolCallID: "call-2",
 		Arguments:  arguments,
@@ -335,7 +345,7 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, connection.permissionRequests(), 2)
 	request := connection.permissionRequests()[0]
-	assert.Equal(t, acpsdk.ToolCallId("call-1"), request.ToolCall.ToolCallId)
+	assert.Equal(t, firstACPToolCallID, request.ToolCall.ToolCallId)
 	assert.Equal(t, acpsdk.ToolKindEdit, *request.ToolCall.Kind)
 	assert.Equal(t, filepath.Join("/workspace", "docs/new.txt"), request.ToolCall.Locations[0].Path)
 	assert.Len(t, request.Options, 3)
@@ -350,6 +360,11 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	}, optionKinds)
 
 	connection.queuePermission(acpsdk.PermissionOptionKindRejectOnce)
+	session.toolCallIDs.resolve(
+		context.Background(),
+		"call-3",
+		clientWriteTextFileToolName,
+	)
 	decision, err = checker.CheckPermission(context.Background(), &tool.PermissionRequest{
 		ToolCallID: "call-3",
 		Arguments:  arguments,
@@ -358,6 +373,11 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
 
 	connection.queuePermission(acpsdk.PermissionOptionKindAllowAlways)
+	session.toolCallIDs.resolve(
+		context.Background(),
+		"call-4",
+		clientWriteTextFileToolName,
+	)
 	_, err = checker.CheckPermission(context.Background(), &tool.PermissionRequest{
 		ToolCallID: "call-4",
 		Arguments:  arguments,
@@ -370,6 +390,52 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
 	assert.Len(t, connection.permissionRequests(), 4)
+}
+
+func TestClientWriteTextFilePermissionUsesPerCallACPToolCallID(t *testing.T) {
+	_, connection, session := newClientFileTestAgent(
+		t,
+		[]Option{WithClientFileWriteEnabled(true)},
+		false,
+		true,
+	)
+	writeTool := findTool(session.tools, clientWriteTextFileToolName)
+	require.NotNil(t, writeTool)
+	checker := writeTool.(tool.PermissionChecker)
+	arguments := []byte(`{"path":"docs/new.txt","content":"hello"}`)
+
+	first := session.toolCallIDs.resolve(
+		context.Background(),
+		"auto_call_0",
+		clientWriteTextFileToolName,
+	)
+	connection.queuePermission(acpsdk.PermissionOptionKindAllowOnce)
+	_, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{
+		ToolCallID: "auto_call_0",
+		ToolName:   clientWriteTextFileToolName,
+		Arguments:  arguments,
+	})
+	require.NoError(t, err)
+	session.toolCallIDs.complete(context.Background(), "auto_call_0")
+
+	second := session.toolCallIDs.resolve(
+		context.Background(),
+		"auto_call_0",
+		clientWriteTextFileToolName,
+	)
+	connection.queuePermission(acpsdk.PermissionOptionKindAllowOnce)
+	_, err = checker.CheckPermission(context.Background(), &tool.PermissionRequest{
+		ToolCallID: "auto_call_0",
+		ToolName:   clientWriteTextFileToolName,
+		Arguments:  arguments,
+	})
+	require.NoError(t, err)
+
+	requests := connection.permissionRequests()
+	require.Len(t, requests, 2)
+	assert.Equal(t, first, requests[0].ToolCall.ToolCallId)
+	assert.Equal(t, second, requests[1].ToolCall.ToolCallId)
+	assert.NotEqual(t, first, second)
 }
 
 func TestClientWriteTextFilePermissionCancelled(t *testing.T) {
@@ -388,6 +454,11 @@ func TestClientWriteTextFilePermissionCancelled(t *testing.T) {
 		cancelled = true
 	}
 	session.mu.Unlock()
+	session.toolCallIDs.resolve(
+		context.Background(),
+		"call-cancel",
+		clientWriteTextFileToolName,
+	)
 
 	_, err := writeTool.(tool.PermissionChecker).CheckPermission(
 		context.Background(),
@@ -450,6 +521,11 @@ func TestClientWritePermissionCacheIsScopedToSession(t *testing.T) {
 	arguments := []byte(`{"path":"README.md","content":"hello"}`)
 
 	connection.queuePermission(acpsdk.PermissionOptionKindAllowAlways)
+	firstSession.toolCallIDs.resolve(
+		context.Background(),
+		"first",
+		clientWriteTextFileToolName,
+	)
 	_, err = firstTool.(tool.PermissionChecker).CheckPermission(
 		context.Background(),
 		&tool.PermissionRequest{ToolCallID: "first", Arguments: arguments},
@@ -463,6 +539,11 @@ func TestClientWritePermissionCacheIsScopedToSession(t *testing.T) {
 	assert.Len(t, connection.permissionRequests(), 1)
 
 	connection.queuePermission(acpsdk.PermissionOptionKindAllowOnce)
+	secondState.toolCallIDs.resolve(
+		context.Background(),
+		"second",
+		clientWriteTextFileToolName,
+	)
 	_, err = secondTool.(tool.PermissionChecker).CheckPermission(
 		context.Background(),
 		&tool.PermissionRequest{ToolCallID: "second", Arguments: arguments},
