@@ -657,12 +657,23 @@ func (m *Model) prepareChatRequest(
 	if err := validateLogprobsConfig(request); err != nil {
 		return nil, nil, err
 	}
+	var maxInputTokens int
+	if (m.optimizeForCache || m.enableTokenTailoring) && len(request.Messages) > 0 {
+		if m.enableTokenTailoring {
+			maxInputTokens = m.InputTokenBudget(ctx, request)
+		}
+		finishObservation := modeltailoring.ObserveChanges(
+			ctx, "openai.Model", request, maxInputTokens,
+		)
+		defer finishObservation()
+	}
+
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)
 	}
 	// Apply token tailoring if configured.
-	m.applyTokenTailoring(ctx, request)
+	m.applyTokenTailoringWithBudget(ctx, request, maxInputTokens)
 	chatRequest, opts := m.buildChatRequestWithToolControl(
 		request,
 		imodelrequest.ToolsDisabled(ctx) && !m.preserveToolsWhenDisabled,
@@ -783,11 +794,26 @@ func (m *Model) optimizeMessagesForCache(messages []model.Message) []model.Messa
 // It uses the token tailoring strategy defined in imodel package.
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
 	// Early return if token tailoring is disabled or no messages to process.
-	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+	if request == nil || !m.enableTokenTailoring || len(request.Messages) == 0 {
 		return
 	}
 
 	maxInputTokens := m.InputTokenBudget(ctx, request)
+	finishObservation := modeltailoring.ObserveChanges(
+		ctx, "openai.Model", request, maxInputTokens,
+	)
+	defer finishObservation()
+	m.applyTokenTailoringWithBudget(ctx, request, maxInputTokens)
+}
+
+func (m *Model) applyTokenTailoringWithBudget(
+	ctx context.Context,
+	request *model.Request,
+	maxInputTokens int,
+) {
+	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+		return
+	}
 	if m.maxInputTokens <= 0 {
 		log.DebugfContext(
 			ctx,
@@ -797,10 +823,6 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			maxInputTokens,
 		)
 	}
-	finishObservation := modeltailoring.ObserveChanges(
-		ctx, "openai.Model", request, maxInputTokens,
-	)
-	defer finishObservation()
 
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)

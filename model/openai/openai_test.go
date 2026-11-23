@@ -10262,6 +10262,138 @@ func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
 	)
 }
 
+func TestPrepareChatRequestObservesCacheReordering(t *testing.T) {
+	m := New(
+		"gpt-4o",
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(false),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("hello"),
+		model.NewSystemMessage("system"),
+	}}
+	var changes []imodelrequest.TokenTailoringChange
+	ctx, observer := imodelrequest.ObserveTokenTailoring(
+		context.Background(),
+		func(change imodelrequest.TokenTailoringChange) {
+			changes = append(changes, change)
+		},
+	)
+
+	_, _, err := m.prepareChatRequest(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, observer.Snapshot(), 1)
+	require.Len(t, changes, 1)
+	require.Equal(
+		t,
+		imodelrequest.TokenTailoringProvenanceUnknown,
+		changes[0].Record.Provenance,
+	)
+	require.Zero(t, changes[0].Record.MaxInputTokens)
+	require.Nil(t, changes[0].Before)
+	require.Nil(t, changes[0].After)
+}
+
+type wrappedTailoringStrategy struct {
+	inner model.TailoringStrategy
+}
+
+func (w *wrappedTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return w.inner.TailorMessages(ctx, messages, maxTokens)
+}
+
+func TestPrepareChatRequestClassifiesNormalizationAsPreserved(t *testing.T) {
+	strategies := []struct {
+		name     string
+		strategy model.TailoringStrategy
+	}{
+		{name: "built-in default", strategy: nil},
+		{
+			name: "wrapped strategy decorator",
+			strategy: &wrappedTailoringStrategy{
+				inner: model.NewMiddleOutStrategy(model.NewSimpleTokenCounter()),
+			},
+		},
+	}
+
+	for _, tt := range strategies {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []Option{
+				WithAPIKey("test-key"),
+				WithEnableTokenTailoring(true),
+				WithMaxInputTokens(10_000),
+			}
+			if tt.strategy != nil {
+				opts = append(opts, WithTailoringStrategy(tt.strategy))
+			}
+			m := New("gpt-4o", opts...)
+			req := &model.Request{Messages: []model.Message{
+				model.NewSystemMessage("system"),
+				model.NewUserMessage("old question"),
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call_1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "search",
+							Arguments: []byte(`{"q":"x"}`),
+						},
+					}},
+				},
+				model.NewToolMessage("call_1", "search", "result"),
+				model.NewUserMessage("current question"),
+			}}
+			var changes []imodelrequest.TokenTailoringChange
+			ctx, _ := imodelrequest.ObserveTokenTailoring(
+				context.Background(),
+				func(change imodelrequest.TokenTailoringChange) {
+					changes = append(changes, change)
+				},
+			)
+
+			_, _, err := m.prepareChatRequest(ctx, req)
+			require.NoError(t, err)
+			require.Len(t, changes, 1)
+			require.Equal(
+				t,
+				imodelrequest.TokenTailoringProvenancePreserved,
+				changes[0].Record.Provenance,
+			)
+			require.Empty(t, changes[0].Before[2].Content)
+			require.Equal(t, " ", changes[0].After[2].Content)
+		})
+	}
+}
+
+func TestPrepareChatRequestSkipsObservationWhenDisabled(t *testing.T) {
+	m := New(
+		"deepseek-chat",
+		WithAPIKey("test-key"),
+		WithVariant(VariantDeepSeek),
+		WithEnableTokenTailoring(false),
+	)
+	require.False(t, m.optimizeForCache)
+	require.False(t, m.enableTokenTailoring)
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("hello"),
+		model.NewSystemMessage("system"),
+	}}
+	ctx, observer := imodelrequest.ObserveTokenTailoring(
+		context.Background(),
+		nil,
+	)
+
+	_, _, err := m.prepareChatRequest(ctx, req)
+	require.NoError(t, err)
+	require.Empty(t, observer.Snapshot())
+}
+
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
 func TestOptimizeMessagesForCache(t *testing.T) {
 	tests := []struct {

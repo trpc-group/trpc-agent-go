@@ -11,6 +11,8 @@
 package statecopy
 
 import (
+	"bytes"
+
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -20,7 +22,17 @@ func Message(message model.Message) model.Message {
 	cloned := message
 	cloned.ContentParts = cloneContentParts(message.ContentParts)
 	cloned.ToolCalls = cloneToolCalls(message.ToolCalls)
+	cloned.ProviderData = cloneProviderData(message.ProviderData)
 	return cloned
+}
+
+func cloneProviderData(data *model.ProviderData) *model.ProviderData {
+	if data == nil {
+		return nil
+	}
+	cloned := *data
+	cloned.Payload = bytes.Clone(data.Payload)
+	return &cloned
 }
 
 // Messages returns deep copies of messages and preserves a nil input.

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -2684,33 +2685,11 @@ func (f *Flow) callLLM(
 			finalizationMessage,
 		),
 	)
-	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
+	ctx, tailoringObserver := observeTokenTailoring(
 		ctx,
-		func(record imodelrequest.TokenTailoringRecord) {
-			summaryview.InvalidateBinding(invocation)
-			summaryfork.Invalidate(invocation)
-			if tokenTailoringCollapsedHistory(record) {
-				log.WarnfContext(
-					ctx,
-					"Model request token tailoring collapsed history: "+
-						"provider=%s, max_input_tokens=%d, messages=%d->%d",
-					record.Provider,
-					record.MaxInputTokens,
-					record.BeforeMessages,
-					record.AfterMessages,
-				)
-				return
-			}
-			log.DebugfContext(
-				ctx,
-				"Model request token tailoring applied: provider=%s, "+
-					"max_input_tokens=%d, messages=%d->%d",
-				record.Provider,
-				record.MaxInputTokens,
-				record.BeforeMessages,
-				record.AfterMessages,
-			)
-		},
+		invocation,
+		llmRequest,
+		finalizationMessage,
 	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
@@ -2743,10 +2722,109 @@ func (f *Flow) callLLM(
 	return ctx, seq, true, nil
 }
 
+func observeTokenTailoring(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	finalizationMessage *callLimitFinalizationMessage,
+) (context.Context, *imodelrequest.TokenTailoringObserver) {
+	var stateMu sync.Mutex
+	stateValid := true
+	return imodelrequest.ObserveTokenTailoring(
+		ctx,
+		func(change imodelrequest.TokenTailoringChange) {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+
+			record := change.Record
+			if stateValid &&
+				tokenTailoringPreservesHistory(change, llmRequest) &&
+				summaryview.RebaseAfterTransform(
+					invocation,
+					change.Before,
+					change.After,
+					nil,
+				) {
+				summaryfork.Attach(
+					invocation,
+					requestWithoutCallLimitFinalizationMessage(
+						llmRequest,
+						finalizationMessage,
+					),
+				)
+				log.DebugfContext(
+					ctx,
+					"Model request token tailoring preserved history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			// Request-derived summary state is monotonic for this model call.
+			// Once one transform cannot be proven and rebased, a later local
+			// transform must not revive only one of the derived snapshots.
+			stateValid = false
+			summaryview.InvalidateBinding(invocation)
+			summaryfork.Invalidate(invocation)
+			if tokenTailoringCollapsedHistory(record) {
+				log.WarnfContext(
+					ctx,
+					"Model request token tailoring collapsed history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			log.DebugfContext(
+				ctx,
+				"Model request token tailoring applied: provider=%s, "+
+					"max_input_tokens=%d, messages=%d->%d",
+				record.Provider,
+				record.MaxInputTokens,
+				record.BeforeMessages,
+				record.AfterMessages,
+			)
+		},
+	)
+}
+
 func tokenTailoringCollapsedHistory(
 	record imodelrequest.TokenTailoringRecord,
 ) bool {
 	return record.BeforeMessages > 2 && record.AfterMessages <= 2
+}
+
+func tokenTailoringPreservesHistory(
+	change imodelrequest.TokenTailoringChange,
+	request *model.Request,
+) bool {
+	record := change.Record
+	return request != nil &&
+		record.Provenance ==
+			imodelrequest.TokenTailoringProvenancePreserved &&
+		record.BeforeMessages == len(change.Before) &&
+		record.AfterMessages == len(change.After) &&
+		len(change.Before) == len(change.After) &&
+		messagesMatchRequest(change.After, request.Messages)
+}
+
+func messagesMatchRequest(
+	after []model.Message,
+	current []model.Message,
+) bool {
+	if len(after) != len(current) {
+		return false
+	}
+	if len(after) == 0 || &after[0] == &current[0] {
+		return true
+	}
+	return reflect.DeepEqual(after, current)
 }
 
 func withResponseSeqFinalizer(
