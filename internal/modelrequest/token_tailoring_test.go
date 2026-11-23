@@ -36,8 +36,10 @@ func TestTokenTailoringObserver(t *testing.T) {
 
 	change := TokenTailoringChange{
 		Record: record,
-		Before: []model.Message{model.NewUserMessage("before")},
-		After:  []model.Message{model.NewUserMessage("after")},
+		Preserved: &PreservedTransform{
+			Before: []model.Message{model.NewUserMessage("before")},
+			After:  []model.Message{model.NewUserMessage("after")},
+		},
 	}
 	RecordTokenTailoringChange(ctx, change)
 
@@ -60,6 +62,6 @@ func TestTokenTailoringObserverHandlesMissingObserver(t *testing.T) {
 func TestTokenTailoringProvenanceString(t *testing.T) {
 	require.Equal(t, "unknown", TokenTailoringProvenanceUnknown.String())
 	require.Equal(t, "preserved", TokenTailoringProvenancePreserved.String())
-	require.Equal(t, "dropped", TokenTailoringProvenanceDropped.String())
+	require.Equal(t, "reduced", TokenTailoringProvenanceReduced.String())
 	require.Equal(t, "unknown", TokenTailoringProvenance(255).String())
 }

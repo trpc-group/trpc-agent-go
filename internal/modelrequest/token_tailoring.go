@@ -35,11 +35,11 @@ const (
 	// source mapping and must be treated as unsafe for derived request state.
 	TokenTailoringProvenanceUnknown TokenTailoringProvenance = iota
 	// TokenTailoringProvenancePreserved means every output message is proven to
-	// correspond one-to-one with the input message at the same index.
+	// correspond to an input message without dropping or rewriting history.
 	TokenTailoringProvenancePreserved
-	// TokenTailoringProvenanceDropped means at least one input message was
-	// removed from the provider request.
-	TokenTailoringProvenanceDropped
+	// TokenTailoringProvenanceReduced means the output contains fewer messages
+	// than the input (len(after) < len(before)).
+	TokenTailoringProvenanceReduced
 )
 
 // String returns the stable diagnostic name for the provenance value.
@@ -47,20 +47,30 @@ func (p TokenTailoringProvenance) String() string {
 	switch p {
 	case TokenTailoringProvenancePreserved:
 		return "preserved"
-	case TokenTailoringProvenanceDropped:
-		return "dropped"
+	case TokenTailoringProvenanceReduced:
+		return "reduced"
 	default:
 		return "unknown"
 	}
 }
 
-// TokenTailoringChange contains the request snapshots needed to update
-// request-derived state after a proven-safe transformation. The snapshots are
-// delivered synchronously to the observer and are not retained in diagnostics.
-type TokenTailoringChange struct {
-	Record TokenTailoringRecord
+// PreservedTransform holds the synchronous request snapshots needed to rebase
+// request-derived summary state after a proven-safe transformation.
+type PreservedTransform struct {
 	Before []model.Message
 	After  []model.Message
+	// SourceIndexes maps each output message to its source index in Before.
+	// A nil slice represents the identity mapping (output i came from Before[i]).
+	SourceIndexes []int
+}
+
+// TokenTailoringChange contains the diagnostic record and, only when
+// Record.Provenance == TokenTailoringProvenancePreserved, the synchronous
+// transform snapshots needed to rebase summary state. Snapshots are not
+// retained in observer diagnostics after the callback returns.
+type TokenTailoringChange struct {
+	Record    TokenTailoringRecord
+	Preserved *PreservedTransform
 }
 
 // TokenTailoringObserver collects provider-side request transformations.

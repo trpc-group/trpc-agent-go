@@ -1,0 +1,368 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package runner_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+
+	openaisdk "github.com/openai/openai-go"
+	openaiopt "github.com/openai/openai-go/option"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+type recordingSummarySessionService struct {
+	session.Service
+	mu    sync.Mutex
+	calls []summaryEnqueueSnapshot
+}
+
+type summaryEnqueueSnapshot struct {
+	viewPresent bool
+	view        *summaryview.View
+	forkPresent bool
+	fork        *model.Request
+}
+
+func (s *recordingSummarySessionService) EnqueueSummaryJob(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	view, viewOK := summaryview.FromContext(ctx)
+	fork, forkOK := summary.CacheSafeForkRequestFromContext(ctx)
+	s.mu.Lock()
+	s.calls = append(s.calls, summaryEnqueueSnapshot{
+		viewPresent: viewOK,
+		view:        view,
+		forkPresent: forkOK,
+		fork:        fork,
+	})
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *recordingSummarySessionService) latest() summaryEnqueueSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[len(s.calls)-1]
+}
+
+func newOpenAIHTTPRecordingServer(
+	t *testing.T,
+) (*httptest.Server, func() []map[string]any) {
+	t.Helper()
+	var (
+		mu       sync.Mutex
+		messages []map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		var body struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		mu.Lock()
+		messages = body.Messages
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"resp-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(server.Close)
+	return server, func() []map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]map[string]any(nil), messages...)
+	}
+}
+
+func seedSessionMessages(
+	t *testing.T,
+	ctx context.Context,
+	svc session.Service,
+	key session.Key,
+	filterKey string,
+	agentName string,
+	msgs []model.Message,
+) {
+	t.Helper()
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	for i, msg := range msgs {
+		author := agentName
+		if msg.Role == model.RoleUser {
+			author = "user"
+		}
+		ev := event.NewResponseEvent(
+			fmt.Sprintf("seed-%d", i),
+			author,
+			&model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		)
+		ev.FilterKey = filterKey
+		require.NoError(t, svc.AppendEvent(ctx, sess, ev))
+	}
+}
+
+func runSingleTurn(
+	t *testing.T,
+	ctx context.Context,
+	r runner.Runner,
+	key session.Key,
+	prompt string,
+) {
+	t.Helper()
+	ch, err := r.Run(ctx, key.UserID, key.SessionID, model.NewUserMessage(prompt))
+	require.NoError(t, err)
+	for evt := range ch {
+		if evt != nil && evt.Error != nil {
+			t.Fatalf("unexpected event error: %s: %s", evt.Error.Type, evt.Error.Message)
+		}
+	}
+}
+
+func TestOpenAIHTTP_PlaceholderThenChatRequestCallbackRewriteInvalidatesSummarySnapshots(
+	t *testing.T,
+) {
+	history := []model.Message{
+		model.NewUserMessage("old question"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "tool output"),
+	}
+
+	t.Run("callback removing messages invalidates view and fork", func(t *testing.T) {
+		ctx := context.Background()
+		server, sentMessages := newOpenAIHTTPRecordingServer(t)
+		recSvc := &recordingSummarySessionService{
+			Service: inmemory.NewSessionService(),
+		}
+		key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+		seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+		m := openai.New(
+			"gpt-4o",
+			openai.WithBaseURL(server.URL),
+			openai.WithAPIKey("test-key"),
+			openai.WithEnableTokenTailoring(true),
+			openai.WithMaxInputTokens(10_000),
+			openai.WithChatRequestCallback(func(
+				_ context.Context,
+				req *openaisdk.ChatCompletionNewParams,
+			) {
+				req.Messages = req.Messages[len(req.Messages)-2:]
+			}),
+			openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+		)
+		ag := llmagent.New(
+			"qa",
+			llmagent.WithModel(m),
+			llmagent.WithInstruction("system prompt"),
+			llmagent.WithAddSessionSummary(true),
+		)
+		r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+		t.Cleanup(func() { _ = r.Close() })
+
+		runSingleTurn(t, ctx, r, key, "current question")
+
+		require.Len(t, sentMessages(), 2)
+		snap := recSvc.latest()
+		require.True(t, snap.viewPresent)
+		require.False(t, snap.view.Bound)
+		require.Equal(t, summaryview.BindingReasonInvalidated, snap.view.BindingReason)
+		require.False(t, snap.forkPresent)
+	})
+
+	t.Run("read-only callback preserves rebased view and fork", func(t *testing.T) {
+		ctx := context.Background()
+		server, sentMessages := newOpenAIHTTPRecordingServer(t)
+		recSvc := &recordingSummarySessionService{
+			Service: inmemory.NewSessionService(),
+		}
+		key := session.Key{AppName: "app", UserID: "u2", SessionID: "s2"}
+		seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+		m := openai.New(
+			"gpt-4o",
+			openai.WithBaseURL(server.URL),
+			openai.WithAPIKey("test-key"),
+			openai.WithEnableTokenTailoring(true),
+			openai.WithMaxInputTokens(10_000),
+			openai.WithChatRequestCallback(func(
+				_ context.Context,
+				req *openaisdk.ChatCompletionNewParams,
+			) {
+				_ = len(req.Messages)
+			}),
+			openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+		)
+		ag := llmagent.New(
+			"qa",
+			llmagent.WithModel(m),
+			llmagent.WithInstruction("system prompt"),
+			llmagent.WithAddSessionSummary(true),
+		)
+		r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+		t.Cleanup(func() { _ = r.Close() })
+
+		runSingleTurn(t, ctx, r, key, "current question")
+
+		require.Len(t, sentMessages(), 5)
+		snap := recSvc.latest()
+		require.True(t, snap.viewPresent)
+		require.True(t, snap.view.Bound)
+		require.True(t, snap.forkPresent)
+	})
+}
+
+func TestOpenAIHTTP_NumericToolCallExtraFieldsPreservesSummarySnapshots(t *testing.T) {
+	history := []model.Message{
+		model.NewUserMessage("old question"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+				ExtraFields: map[string]any{"score": float64(1)},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "tool output"),
+	}
+
+	for _, tailoringEnabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("tailoring=%v", tailoringEnabled), func(t *testing.T) {
+			ctx := context.Background()
+			server, sentMessages := newOpenAIHTTPRecordingServer(t)
+			recSvc := &recordingSummarySessionService{
+				Service: inmemory.NewSessionService(),
+			}
+			key := session.Key{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: fmt.Sprintf("s-%v", tailoringEnabled),
+			}
+			seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+			m := openai.New(
+				"gpt-4o",
+				openai.WithBaseURL(server.URL),
+				openai.WithAPIKey("test-key"),
+				openai.WithEnableTokenTailoring(tailoringEnabled),
+				openai.WithMaxInputTokens(10_000),
+				openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+			)
+			ag := llmagent.New(
+				"qa",
+				llmagent.WithModel(m),
+				llmagent.WithInstruction("system prompt"),
+				llmagent.WithAddSessionSummary(true),
+			)
+			r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+			t.Cleanup(func() { _ = r.Close() })
+
+			runSingleTurn(t, ctx, r, key, "current question")
+
+			require.Len(t, sentMessages(), 5)
+			snap := recSvc.latest()
+			require.True(t, snap.viewPresent)
+			require.True(t, snap.view.Bound)
+			require.True(t, snap.forkPresent)
+		})
+	}
+}
+
+func TestOpenAIHTTP_DefaultOpenAICacheReorderWithoutTailoringPreservesSummarySnapshots(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	server, sentMessages := newOpenAIHTTPRecordingServer(t)
+	recSvc := &recordingSummarySessionService{
+		Service: inmemory.NewSessionService(),
+	}
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s-reorder"}
+	seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", []model.Message{
+		model.NewUserMessage("u1"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "tool output"),
+		model.NewSystemMessage("mid-conversation system note"),
+	})
+
+	m := openai.New(
+		"gpt-4o",
+		openai.WithBaseURL(server.URL),
+		openai.WithAPIKey("test-key"),
+		openai.WithEnableTokenTailoring(false),
+		openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+	)
+	ag := llmagent.New(
+		"qa",
+		llmagent.WithModel(m),
+		llmagent.WithInstruction("leading system prompt"),
+		llmagent.WithAddSessionSummary(true),
+	)
+	r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+	t.Cleanup(func() { _ = r.Close() })
+
+	runSingleTurn(t, ctx, r, key, "u2")
+
+	sent := sentMessages()
+	roles := make([]string, len(sent))
+	for i, msg := range sent {
+		roles[i], _ = msg["role"].(string)
+	}
+	require.Equal(t, []string{"system", "system", "user", "assistant", "tool", "user"}, roles)
+
+	snap := recSvc.latest()
+	require.True(t, snap.viewPresent)
+	require.True(t, snap.view.Bound)
+	require.True(t, snap.forkPresent)
+}

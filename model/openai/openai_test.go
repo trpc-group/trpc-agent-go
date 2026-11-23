@@ -10262,36 +10262,30 @@ func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
 	)
 }
 
-func TestPrepareChatRequestObservesCacheReordering(t *testing.T) {
+func TestPrepareChatRequestDoesNotInvalidateOnCacheReorderingWithoutTailoring(t *testing.T) {
 	m := New(
 		"gpt-4o",
 		WithAPIKey("test-key"),
 		WithEnableTokenTailoring(false),
 	)
 	req := &model.Request{Messages: []model.Message{
-		model.NewUserMessage("hello"),
-		model.NewSystemMessage("system"),
+		model.NewSystemMessage("system-1"),
+		model.NewUserMessage("u1"),
+		model.NewAssistantMessage("a1"),
+		model.NewToolMessage("call_1", "search", "result"),
+		model.NewSystemMessage("system-2"),
+		model.NewUserMessage("u2"),
 	}}
-	var changes []imodelrequest.TokenTailoringChange
 	ctx, observer := imodelrequest.ObserveTokenTailoring(
 		context.Background(),
-		func(change imodelrequest.TokenTailoringChange) {
-			changes = append(changes, change)
-		},
+		nil,
 	)
 
 	_, _, err := m.prepareChatRequest(ctx, req)
 	require.NoError(t, err)
-	require.Len(t, observer.Snapshot(), 1)
-	require.Len(t, changes, 1)
-	require.Equal(
-		t,
-		imodelrequest.TokenTailoringProvenanceUnknown,
-		changes[0].Record.Provenance,
-	)
-	require.Zero(t, changes[0].Record.MaxInputTokens)
-	require.Nil(t, changes[0].Before)
-	require.Nil(t, changes[0].After)
+	require.Empty(t, observer.Snapshot())
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Equal(t, model.RoleSystem, req.Messages[1].Role)
 }
 
 type wrappedTailoringStrategy struct {
@@ -10343,6 +10337,7 @@ func TestPrepareChatRequestClassifiesNormalizationAsPreserved(t *testing.T) {
 							Name:      "search",
 							Arguments: []byte(`{"q":"x"}`),
 						},
+						ExtraFields: map[string]any{"score": float64(1)},
 					}},
 				},
 				model.NewToolMessage("call_1", "search", "result"),
@@ -10364,34 +10359,95 @@ func TestPrepareChatRequestClassifiesNormalizationAsPreserved(t *testing.T) {
 				imodelrequest.TokenTailoringProvenancePreserved,
 				changes[0].Record.Provenance,
 			)
-			require.Empty(t, changes[0].Before[2].Content)
-			require.Equal(t, " ", changes[0].After[2].Content)
+			require.NotNil(t, changes[0].Preserved)
+			require.Empty(t, changes[0].Preserved.Before[2].Content)
+			require.Equal(t, " ", changes[0].Preserved.After[2].Content)
 		})
 	}
 }
 
-func TestPrepareChatRequestSkipsObservationWhenDisabled(t *testing.T) {
-	m := New(
-		"deepseek-chat",
-		WithAPIKey("test-key"),
-		WithVariant(VariantDeepSeek),
-		WithEnableTokenTailoring(false),
-	)
-	require.False(t, m.optimizeForCache)
-	require.False(t, m.enableTokenTailoring)
+func TestRunChatRequestCallbackObservesMessageEdits(t *testing.T) {
+	t.Run("removing messages records reduced change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.Messages = req.Messages[len(req.Messages)-2:]
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage("sys"),
+				openai.UserMessage("u1"),
+				openai.AssistantMessage("a1"),
+				openai.UserMessage("u2"),
+				openai.UserMessage("u3"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, 5, records[0].BeforeMessages)
+		require.Equal(t, 2, records[0].AfterMessages)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceReduced, records[0].Provenance)
+	})
 
-	req := &model.Request{Messages: []model.Message{
-		model.NewUserMessage("hello"),
-		model.NewSystemMessage("system"),
-	}}
-	ctx, observer := imodelrequest.ObserveTokenTailoring(
-		context.Background(),
-		nil,
-	)
+	t.Run("same-size message rewrite records unknown change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.Messages[0] = openai.UserMessage("rewritten")
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceUnknown, records[0].Provenance)
+	})
 
-	_, _, err := m.prepareChatRequest(ctx, req)
-	require.NoError(t, err)
-	require.Empty(t, observer.Snapshot())
+	t.Run("read-only callback records no change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				_ = len(req.Messages)
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		require.Empty(t, observer.Snapshot())
+	})
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.

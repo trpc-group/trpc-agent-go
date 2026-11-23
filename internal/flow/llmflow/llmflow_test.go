@@ -1247,59 +1247,6 @@ func TestCallLLM_UnsafeTailoringCannotBeRevivedByPreservedChange(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestTokenTailoringPreservesHistoryRequiresCompleteSnapshots(t *testing.T) {
-	before := []model.Message{model.NewUserMessage("before")}
-	after := []model.Message{model.NewUserMessage("after")}
-	valid := imodelrequest.TokenTailoringChange{
-		Record: imodelrequest.TokenTailoringRecord{
-			BeforeMessages: 1,
-			AfterMessages:  1,
-			Provenance: imodelrequest.
-				TokenTailoringProvenancePreserved,
-		},
-		Before: before,
-		After:  after,
-	}
-	require.True(t, tokenTailoringPreservesHistory(
-		valid,
-		&model.Request{Messages: after},
-	))
-	// Separate slice copy with identical contents also passes.
-	require.True(t, tokenTailoringPreservesHistory(
-		valid,
-		&model.Request{Messages: []model.Message{model.NewUserMessage("after")}},
-	))
-
-	missingBefore := valid
-	missingBefore.Before = nil
-	require.False(t, tokenTailoringPreservesHistory(
-		missingBefore,
-		&model.Request{Messages: after},
-	))
-
-	staleAfter := valid
-	staleAfter.After = []model.Message{model.NewUserMessage("stale")}
-	require.False(t, tokenTailoringPreservesHistory(
-		staleAfter,
-		&model.Request{Messages: after},
-	))
-	require.False(t, tokenTailoringPreservesHistory(
-		valid,
-		&model.Request{Messages: []model.Message{
-			model.NewUserMessage("after"),
-			model.NewUserMessage("extra"),
-		}},
-	))
-
-	unknown := valid
-	unknown.Record.Provenance =
-		imodelrequest.TokenTailoringProvenanceUnknown
-	require.False(t, tokenTailoringPreservesHistory(
-		unknown,
-		&model.Request{Messages: after},
-	))
-}
-
 func TestTokenTailoringCollapsedHistory(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2809,8 +2756,10 @@ func (m *preservingTailoringModel) GenerateContent(
 				Provenance: imodelrequest.
 					TokenTailoringProvenancePreserved,
 			},
-			Before: before,
-			After:  req.Messages,
+			Preserved: &imodelrequest.PreservedTransform{
+				Before: before,
+				After:  req.Messages,
+			},
 		},
 	)
 	return completedModelResponse(), nil
@@ -2850,8 +2799,10 @@ func (m *unsafeThenPreservingTailoringModel) GenerateContent(
 				Provenance: imodelrequest.
 					TokenTailoringProvenancePreserved,
 			},
-			Before: before,
-			After:  req.Messages,
+			Preserved: &imodelrequest.PreservedTransform{
+				Before: before,
+				After:  req.Messages,
+			},
 		},
 	)
 	return completedModelResponse(), nil

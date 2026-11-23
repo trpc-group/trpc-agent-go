@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -42,6 +41,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summarystate"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytoken"
@@ -2728,30 +2728,21 @@ func observeTokenTailoring(
 	llmRequest *model.Request,
 	finalizationMessage *callLimitFinalizationMessage,
 ) (context.Context, *imodelrequest.TokenTailoringObserver) {
-	var stateMu sync.Mutex
-	stateValid := true
 	return imodelrequest.ObserveTokenTailoring(
 		ctx,
 		func(change imodelrequest.TokenTailoringChange) {
-			stateMu.Lock()
-			defer stateMu.Unlock()
-
 			record := change.Record
-			if stateValid &&
-				tokenTailoringPreservesHistory(change, llmRequest) &&
-				summaryview.RebaseAfterTransform(
-					invocation,
-					change.Before,
-					change.After,
-					nil,
-				) {
-				summaryfork.Attach(
-					invocation,
-					requestWithoutCallLimitFinalizationMessage(
+			if summarystate.ApplyRequestTransform(
+				invocation,
+				change,
+				llmRequest,
+				func() *model.Request {
+					return requestWithoutCallLimitFinalizationMessage(
 						llmRequest,
 						finalizationMessage,
-					),
-				)
+					)
+				},
+			) {
 				log.DebugfContext(
 					ctx,
 					"Model request token tailoring preserved history: "+
@@ -2763,12 +2754,6 @@ func observeTokenTailoring(
 				)
 				return
 			}
-			// Request-derived summary state is monotonic for this model call.
-			// Once one transform cannot be proven and rebased, a later local
-			// transform must not revive only one of the derived snapshots.
-			stateValid = false
-			summaryview.InvalidateBinding(invocation)
-			summaryfork.Invalidate(invocation)
 			if tokenTailoringCollapsedHistory(record) {
 				log.WarnfContext(
 					ctx,
@@ -2798,33 +2783,6 @@ func tokenTailoringCollapsedHistory(
 	record imodelrequest.TokenTailoringRecord,
 ) bool {
 	return record.BeforeMessages > 2 && record.AfterMessages <= 2
-}
-
-func tokenTailoringPreservesHistory(
-	change imodelrequest.TokenTailoringChange,
-	request *model.Request,
-) bool {
-	record := change.Record
-	return request != nil &&
-		record.Provenance ==
-			imodelrequest.TokenTailoringProvenancePreserved &&
-		record.BeforeMessages == len(change.Before) &&
-		record.AfterMessages == len(change.After) &&
-		len(change.Before) == len(change.After) &&
-		messagesMatchRequest(change.After, request.Messages)
-}
-
-func messagesMatchRequest(
-	after []model.Message,
-	current []model.Message,
-) bool {
-	if len(after) != len(current) {
-		return false
-	}
-	if len(after) == 0 || &after[0] == &current[0] {
-		return true
-	}
-	return reflect.DeepEqual(after, current)
 }
 
 func withResponseSeqFinalizer(

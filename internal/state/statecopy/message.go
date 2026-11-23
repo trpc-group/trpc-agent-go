@@ -66,22 +66,22 @@ func cloneContentPart(part model.ContentPart) model.ContentPart {
 	}
 	if part.Image != nil {
 		image := *part.Image
-		image.Data = append([]byte(nil), part.Image.Data...)
+		image.Data = bytes.Clone(part.Image.Data)
 		cloned.Image = &image
 	}
 	if part.Audio != nil {
 		audio := *part.Audio
-		audio.Data = append([]byte(nil), part.Audio.Data...)
+		audio.Data = bytes.Clone(part.Audio.Data)
 		cloned.Audio = &audio
 	}
 	if part.Video != nil {
 		video := *part.Video
-		video.Data = append([]byte(nil), part.Video.Data...)
+		video.Data = bytes.Clone(part.Video.Data)
 		cloned.Video = &video
 	}
 	if part.File != nil {
 		file := *part.File
-		file.Data = append([]byte(nil), part.File.Data...)
+		file.Data = bytes.Clone(part.File.Data)
 		cloned.File = &file
 	}
 	if part.ContentRef != nil {
@@ -98,9 +98,8 @@ func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
 	cloned := make([]model.ToolCall, len(toolCalls))
 	for i := range toolCalls {
 		cloned[i] = toolCalls[i]
-		cloned[i].Function.Arguments = append(
-			[]byte(nil),
-			toolCalls[i].Function.Arguments...,
+		cloned[i].Function.Arguments = bytes.Clone(
+			toolCalls[i].Function.Arguments,
 		)
 		if toolCalls[i].Index != nil {
 			index := *toolCalls[i].Index
