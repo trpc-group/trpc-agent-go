@@ -40,7 +40,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.41.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v1.10.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v1.12.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
 
