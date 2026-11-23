@@ -44,8 +44,13 @@ type clientWriteTextFileArgs struct {
 	Content string `json:"content"`
 }
 
+type clientWriteTextFileResult struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
 type clientWriteTextFileTool struct {
-	*function.FunctionTool[clientWriteTextFileArgs, string]
+	*function.FunctionTool[clientWriteTextFileArgs, clientWriteTextFileResult]
 	agent   *protocolAgent
 	session *sessionState
 }
@@ -147,7 +152,10 @@ func clientReadTextFileInputSchema(workspace string) *tool.Schema {
 func (a *protocolAgent) newClientWriteTextFileTool(session *sessionState) tool.Tool {
 	workspace := filepath.Clean(session.cwd)
 	base := function.NewFunctionTool(
-		func(ctx context.Context, args clientWriteTextFileArgs) (string, error) {
+		func(
+			ctx context.Context,
+			args clientWriteTextFileArgs,
+		) (clientWriteTextFileResult, error) {
 			return a.writeClientTextFile(ctx, session, args)
 		},
 		function.WithName(clientWriteTextFileToolName),
@@ -235,22 +243,25 @@ func (a *protocolAgent) writeClientTextFile(
 	ctx context.Context,
 	session *sessionState,
 	args clientWriteTextFileArgs,
-) (string, error) {
+) (clientWriteTextFileResult, error) {
 	path, err := resolveSessionPath(session.cwd, args.Path)
 	if err != nil {
-		return "", err
+		return clientWriteTextFileResult{}, err
 	}
 	if a.connection == nil {
-		return "", errors.New("acp client connection is not available")
+		return clientWriteTextFileResult{}, errors.New("acp client connection is not available")
 	}
 	if _, err := a.connection.WriteTextFile(ctx, acpsdk.WriteTextFileRequest{
 		Path:      path,
 		Content:   args.Content,
 		SessionId: acpsdk.SessionId(session.id),
 	}); err != nil {
-		return "", err
+		return clientWriteTextFileResult{}, err
 	}
-	return "file written successfully", nil
+	return clientWriteTextFileResult{
+		Path:    path,
+		Message: "file written successfully",
+	}, nil
 }
 
 func resolveSessionPath(cwd, path string) (string, error) {

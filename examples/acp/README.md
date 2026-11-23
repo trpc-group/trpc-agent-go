@@ -57,6 +57,7 @@ Client file reads default to `line=1` and `limit=2000`. Explicit values must be
 positive. `line` has no upper cap because it is a pagination cursor; `limit` is
 capped at 10,000. The file tool descriptions include the current session
 workspace so the model can construct paths without a separate `cwd` argument.
+Successful writes return only the resolved absolute `path` and a `message`.
 
 ACP supplies an absolute working directory for each session. Use
 `acp.WithRunOptionsFunc` when constructing the server to pass that directory to

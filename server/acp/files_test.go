@@ -11,6 +11,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -286,7 +287,16 @@ func TestClientWriteTextFileTool(t *testing.T) {
 		[]byte(`{"path":"docs/new.txt","content":"hello"}`),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "file written successfully", result)
+	assert.Equal(t, clientWriteTextFileResult{
+		Path:    filepath.Join("/workspace", "docs/new.txt"),
+		Message: "file written successfully",
+	}, result)
+	resultJSON, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"path": "/workspace/docs/new.txt",
+		"message": "file written successfully"
+	}`, string(resultJSON))
 	require.Len(t, connection.writeRequests(), 1)
 	request := connection.writeRequests()[0]
 	assert.Equal(t, filepath.Join("/workspace", "docs/new.txt"), request.Path)
