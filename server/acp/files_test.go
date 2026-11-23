@@ -338,7 +338,7 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 	assert.Equal(t, acpsdk.ToolCallId("call-1"), request.ToolCall.ToolCallId)
 	assert.Equal(t, acpsdk.ToolKindEdit, *request.ToolCall.Kind)
 	assert.Equal(t, filepath.Join("/workspace", "docs/new.txt"), request.ToolCall.Locations[0].Path)
-	assert.Len(t, request.Options, 4)
+	assert.Len(t, request.Options, 3)
 	var optionKinds []acpsdk.PermissionOptionKind
 	for _, option := range request.Options {
 		optionKinds = append(optionKinds, option.Kind)
@@ -347,7 +347,6 @@ func TestClientWriteTextFilePermission(t *testing.T) {
 		acpsdk.PermissionOptionKindAllowOnce,
 		acpsdk.PermissionOptionKindAllowAlways,
 		acpsdk.PermissionOptionKindRejectOnce,
-		acpsdk.PermissionOptionKindRejectAlways,
 	}, optionKinds)
 
 	connection.queuePermission(acpsdk.PermissionOptionKindRejectOnce)

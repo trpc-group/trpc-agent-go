@@ -345,11 +345,6 @@ func (t *clientWriteTextFileTool) CheckPermission(
 					Name:     "Reject once",
 					Kind:     acpsdk.PermissionOptionKindRejectOnce,
 				},
-				{
-					OptionId: acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindRejectAlways),
-					Name:     "Reject always",
-					Kind:     acpsdk.PermissionOptionKindRejectAlways,
-				},
 			},
 		},
 	)
@@ -376,8 +371,7 @@ func (t *clientWriteTextFileTool) CheckPermission(
 		t.session.writeAllowed = true
 		t.session.mu.Unlock()
 		return tool.AllowPermission(), nil
-	case acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindRejectOnce),
-		acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindRejectAlways):
+	case acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindRejectOnce):
 		return tool.DenyPermission("file write rejected by ACP client"), nil
 	default:
 		return tool.DenyPermission("unknown file write permission option"), nil
