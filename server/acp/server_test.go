@@ -482,6 +482,56 @@ func TestProtocolAgentNewerPromptReplacesActivePrompt(t *testing.T) {
 	assert.Equal(t, 2, runner.callCount())
 }
 
+func TestProtocolAgentCanceledPromptDoesNotReplaceActivePrompt(t *testing.T) {
+	runner := &testRunner{}
+	server, err := New(
+		runner,
+		withSessionIDGenerator(func() string { return "session-canceled-before-start" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	session, err := protocolAgent.NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.NoError(t, err)
+	sessionState := protocolAgent.sessions[string(session.SessionId)]
+
+	activeCtx, activeCancel := context.WithCancel(context.Background())
+	t.Cleanup(activeCancel)
+	activeToolCallIDs := newToolCallIDMapper(sessionState.allocateToolCallID)
+	require.NoError(t, protocolAgent.beginPrompt(
+		activeCtx,
+		sessionState,
+		"active-request",
+		activeCancel,
+		activeToolCallIDs,
+	))
+	sessionState.mu.Lock()
+	activePromptDone := sessionState.promptDone
+	sessionState.mu.Unlock()
+
+	canceledCtx, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+	response, err := protocolAgent.Prompt(
+		canceledCtx,
+		acpsdk.PromptRequest{
+			SessionId: session.SessionId,
+			Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("stale")},
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, acpsdk.StopReasonCancelled, response.StopReason)
+	assert.NoError(t, activeCtx.Err())
+	assert.Equal(t, 0, runner.callCount())
+
+	sessionState.mu.Lock()
+	assert.Equal(t, "active-request", sessionState.requestID)
+	assert.Equal(t, activePromptDone, sessionState.promptDone)
+	assert.Same(t, activeToolCallIDs, sessionState.toolCallIDs)
+	sessionState.mu.Unlock()
+}
+
 func TestHandlePromptTerminalErrorReturnsCancelledAfterPromptCancel(t *testing.T) {
 	server, err := New(&testRunner{})
 	require.NoError(t, err)

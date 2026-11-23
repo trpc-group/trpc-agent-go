@@ -37,6 +37,8 @@ const (
 	defaultShutdownTimeout       = 5 * time.Second
 )
 
+var errPromptCanceledBeforeStart = errors.New("prompt canceled before start")
+
 // Session describes an ACP session when run options are resolved.
 type Session struct {
 	ID  string
@@ -481,8 +483,19 @@ func (a *protocolAgent) Prompt(
 	requestID := uuid.NewString()
 	runCtx, cancel := context.WithCancel(ctx)
 	toolCallIDs := newToolCallIDMapper(session.allocateToolCallID)
-	if err := a.beginPrompt(session, requestID, cancel, toolCallIDs); err != nil {
+	if err := a.beginPrompt(runCtx, session, requestID, cancel, toolCallIDs); err != nil {
 		cancel()
+		if errors.Is(err, errPromptCanceledBeforeStart) {
+			log.DebugContext(
+				ctx,
+				"Skipped canceled ACP prompt",
+				"session_id",
+				session.id,
+				"request_id",
+				requestID,
+			)
+			return canceledPromptResponse(), nil
+		}
 		log.DebugContext(
 			ctx,
 			"Rejected ACP prompt",
@@ -685,6 +698,7 @@ func (a *protocolAgent) getSession(sessionID string) (*sessionState, error) {
 }
 
 func (a *protocolAgent) beginPrompt(
+	runCtx context.Context,
 	session *sessionState,
 	requestID string,
 	cancel context.CancelFunc,
@@ -696,6 +710,10 @@ func (a *protocolAgent) beginPrompt(
 		return acpsdk.NewInvalidParams(
 			map[string]any{"sessionId": "session is closed"},
 		)
+	}
+	if runCtx.Err() != nil {
+		session.mu.Unlock()
+		return errPromptCanceledBeforeStart
 	}
 	previousCancel := session.cancel
 	previousRequestID := session.requestID
