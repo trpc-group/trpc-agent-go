@@ -33,6 +33,7 @@ func initializeMCPServers(
 	ctx context.Context,
 	servers []acpsdk.McpServer,
 ) ([]tool.Tool, []tool.ToolSet, error) {
+	log.DebugContext(ctx, "Initializing ACP MCP servers", "server_count", len(servers))
 	configs := make([]mcpServerConfig, 0, len(servers))
 	usedNames := make(map[string]struct{}, len(servers))
 	for _, server := range servers {
@@ -49,6 +50,12 @@ func initializeMCPServers(
 	var tools []tool.Tool
 	var toolSets []tool.ToolSet
 	for _, config := range configs {
+		log.DebugContext(
+			ctx,
+			"Starting ACP stdio MCP server",
+			"mcp_server",
+			config.name,
+		)
 		toolSet := toolmcp.NewMCPToolSet(
 			toolmcp.ConnectionConfig{
 				Transport: "stdio",
@@ -61,14 +68,39 @@ func initializeMCPServers(
 		)
 		toolSets = append(toolSets, toolSet)
 		if err := toolSet.Init(ctx); err != nil {
+			log.WarnContext(
+				ctx,
+				"Failed to initialize ACP MCP server",
+				"mcp_server",
+				config.name,
+				"error",
+				err,
+			)
 			closeMCPServers(ctx, toolSets)
 			return nil, nil, acpsdk.NewInternalError(map[string]any{
 				"mcpServer": config.name,
 				"reason":    "failed to initialize stdio MCP server",
 			})
 		}
-		tools = append(tools, internaltool.NewNamedToolSet(toolSet).Tools(ctx)...)
+		serverTools := internaltool.NewNamedToolSet(toolSet).Tools(ctx)
+		tools = append(tools, serverTools...)
+		log.DebugContext(
+			ctx,
+			"ACP MCP server initialized",
+			"mcp_server",
+			config.name,
+			"tool_count",
+			len(serverTools),
+		)
 	}
+	log.DebugContext(
+		ctx,
+		"ACP MCP server initialization completed",
+		"server_count",
+		len(toolSets),
+		"tool_count",
+		len(tools),
+	)
 	return tools, toolSets, nil
 }
 
@@ -168,6 +200,13 @@ func closeMCPServers(ctx context.Context, toolSets []tool.ToolSet) {
 				"error",
 				err,
 			)
+			continue
 		}
+		log.DebugContext(
+			ctx,
+			"Closed ACP MCP server",
+			"mcp_server",
+			toolSets[index].Name(),
+		)
 	}
 }

@@ -227,6 +227,18 @@ func (a *protocolAgent) readClientTextFile(
 	if a.connection == nil {
 		return "", errors.New("acp client connection is not available")
 	}
+	log.DebugContext(
+		ctx,
+		"Reading text file through ACP client",
+		"session_id",
+		session.id,
+		"path",
+		path,
+		"line",
+		line,
+		"limit",
+		limit,
+	)
 	response, err := a.connection.ReadTextFile(ctx, acpsdk.ReadTextFileRequest{
 		Path:      path,
 		Line:      &line,
@@ -234,8 +246,28 @@ func (a *protocolAgent) readClientTextFile(
 		SessionId: acpsdk.SessionId(session.id),
 	})
 	if err != nil {
+		log.WarnContext(
+			ctx,
+			"Failed to read text file through ACP client",
+			"session_id",
+			session.id,
+			"path",
+			path,
+			"error",
+			err,
+		)
 		return "", err
 	}
+	log.DebugContext(
+		ctx,
+		"Read text file through ACP client",
+		"session_id",
+		session.id,
+		"path",
+		path,
+		"content_bytes",
+		len(response.Content),
+	)
 	return response.Content, nil
 }
 
@@ -251,13 +283,41 @@ func (a *protocolAgent) writeClientTextFile(
 	if a.connection == nil {
 		return clientWriteTextFileResult{}, errors.New("acp client connection is not available")
 	}
+	log.DebugContext(
+		ctx,
+		"Writing text file through ACP client",
+		"session_id",
+		session.id,
+		"path",
+		path,
+		"content_bytes",
+		len(args.Content),
+	)
 	if _, err := a.connection.WriteTextFile(ctx, acpsdk.WriteTextFileRequest{
 		Path:      path,
 		Content:   args.Content,
 		SessionId: acpsdk.SessionId(session.id),
 	}); err != nil {
+		log.WarnContext(
+			ctx,
+			"Failed to write text file through ACP client",
+			"session_id",
+			session.id,
+			"path",
+			path,
+			"error",
+			err,
+		)
 		return clientWriteTextFileResult{}, err
 	}
+	log.DebugContext(
+		ctx,
+		"Wrote text file through ACP client",
+		"session_id",
+		session.id,
+		"path",
+		path,
+	)
 	return clientWriteTextFileResult{
 		Path:    path,
 		Message: "file written successfully",
@@ -303,19 +363,51 @@ func (t *clientWriteTextFileTool) CheckPermission(
 	allowed := t.session.writeAllowed
 	t.session.mu.Unlock()
 	if allowed {
+		log.DebugContext(
+			ctx,
+			"Allowed ACP file write from session permission cache",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		return tool.AllowPermission(), nil
 	}
 
 	var args clientWriteTextFileArgs
 	if err := json.Unmarshal(request.Arguments, &args); err != nil {
+		log.DebugContext(
+			ctx,
+			"Denied ACP file write with invalid arguments",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		return tool.DenyPermission("invalid file write arguments"), nil
 	}
 	path, err := resolveSessionPath(t.session.cwd, args.Path)
 	if err != nil {
+		log.DebugContext(
+			ctx,
+			"Denied ACP file write outside the session workspace",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+			"error",
+			err,
+		)
 		return tool.DenyPermission(err.Error()), nil
 	}
 	mapper := t.session.currentToolCallIDMapper()
 	if mapper == nil {
+		log.ErrorContext(
+			ctx,
+			"ACP tool call ID mapper is unavailable for file write permission",
+			"session_id",
+			t.session.id,
+		)
 		return tool.PermissionDecision{}, errors.New(
 			"acp tool call ID mapper is not available",
 		)
@@ -335,6 +427,18 @@ func (t *clientWriteTextFileTool) CheckPermission(
 	title := "Write file"
 	kind := acpsdk.ToolKindEdit
 	status := acpsdk.ToolCallStatusInProgress
+	log.DebugContext(
+		ctx,
+		"Requesting ACP file write permission",
+		"session_id",
+		t.session.id,
+		"provider_tool_call_id",
+		request.ToolCallID,
+		"acp_tool_call_id",
+		acpToolCallID,
+		"path",
+		path,
+	)
 	response, err := t.agent.connection.RequestPermission(
 		ctx,
 		acpsdk.RequestPermissionRequest{
@@ -367,9 +471,27 @@ func (t *clientWriteTextFileTool) CheckPermission(
 		},
 	)
 	if err != nil {
+		log.WarnContext(
+			ctx,
+			"Failed to request ACP file write permission",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+			"error",
+			err,
+		)
 		return tool.PermissionDecision{}, err
 	}
 	if response.Outcome.Cancelled != nil {
+		log.DebugContext(
+			ctx,
+			"ACP file write permission request was canceled",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		t.session.mu.Lock()
 		cancel := t.session.cancel
 		t.session.mu.Unlock()
@@ -379,19 +501,61 @@ func (t *clientWriteTextFileTool) CheckPermission(
 		return tool.PermissionDecision{}, context.Canceled
 	}
 	if response.Outcome.Selected == nil {
+		log.DebugContext(
+			ctx,
+			"ACP file write permission was not granted",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		return tool.DenyPermission("file write permission was not granted"), nil
 	}
 	switch response.Outcome.Selected.OptionId {
 	case acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindAllowOnce):
+		log.DebugContext(
+			ctx,
+			"ACP file write permission allowed once",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		return tool.AllowPermission(), nil
 	case acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindAllowAlways):
 		t.session.mu.Lock()
 		t.session.writeAllowed = true
 		t.session.mu.Unlock()
+		log.DebugContext(
+			ctx,
+			"ACP file write permission allowed for session",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		return tool.AllowPermission(), nil
 	case acpsdk.PermissionOptionId(acpsdk.PermissionOptionKindRejectOnce):
+		log.DebugContext(
+			ctx,
+			"ACP file write permission rejected",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+		)
 		return tool.DenyPermission("file write rejected by ACP client"), nil
 	default:
+		log.WarnContext(
+			ctx,
+			"ACP file write permission returned an unknown option",
+			"session_id",
+			t.session.id,
+			"provider_tool_call_id",
+			request.ToolCallID,
+			"option_id",
+			response.Outcome.Selected.OptionId,
+		)
 		return tool.DenyPermission("unknown file write permission option"), nil
 	}
 }

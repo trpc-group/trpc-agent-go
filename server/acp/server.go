@@ -209,13 +209,17 @@ func (s *Server) connect(input io.Reader, output io.Writer) (*connection, error)
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
 	connection, err := s.connect(input, output)
 	if err != nil {
+		log.ErrorContext(ctx, "Failed to create ACP connection", "error", err)
 		return err
 	}
+	log.DebugContext(ctx, "ACP connection established")
+	defer log.DebugContext(ctx, "ACP connection closed")
 	defer connection.agent.shutdown()
 	select {
 	case <-connection.done():
 		return nil
 	case <-ctx.Done():
+		log.DebugContext(ctx, "ACP connection canceled", "error", ctx.Err())
 		return ctx.Err()
 	}
 }
@@ -264,6 +268,16 @@ func (a *protocolAgent) Initialize(
 	ctx context.Context,
 	request acpsdk.InitializeRequest,
 ) (acpsdk.InitializeResponse, error) {
+	log.DebugContext(
+		ctx,
+		"Received ACP initialize request",
+		"protocol_version",
+		request.ProtocolVersion,
+		"client_file_read",
+		request.ClientCapabilities.Fs.ReadTextFile,
+		"client_file_write",
+		request.ClientCapabilities.Fs.WriteTextFile,
+	)
 	a.setClientFileCapabilities(request.ClientCapabilities.Fs)
 	a.warnUnsupportedClientFileCapabilities(ctx, request.ClientCapabilities.Fs)
 	protocolVersion := request.ProtocolVersion
@@ -271,6 +285,16 @@ func (a *protocolAgent) Initialize(
 		protocolVersion = acpsdk.ProtocolVersionNumber
 	}
 	implementation := a.server.implementation
+	log.DebugContext(
+		ctx,
+		"ACP initialize completed",
+		"protocol_version",
+		protocolVersion,
+		"implementation",
+		implementation.Name,
+		"implementation_version",
+		implementation.Version,
+	)
 	return acpsdk.InitializeResponse{
 		ProtocolVersion: protocolVersion,
 		AgentCapabilities: acpsdk.AgentCapabilities{
@@ -287,22 +311,50 @@ func (a *protocolAgent) NewSession(
 	ctx context.Context,
 	request acpsdk.NewSessionRequest,
 ) (acpsdk.NewSessionResponse, error) {
+	log.DebugContext(
+		ctx,
+		"Creating ACP session",
+		"cwd",
+		request.Cwd,
+		"mcp_server_count",
+		len(request.McpServers),
+		"additional_directory_count",
+		len(request.AdditionalDirectories),
+	)
 	if !filepath.IsAbs(request.Cwd) {
+		log.DebugContext(ctx, "Rejected ACP session with relative cwd", "cwd", request.Cwd)
 		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(
 			map[string]any{"cwd": "must be an absolute path"},
 		)
 	}
 	if len(request.AdditionalDirectories) != 0 {
+		log.DebugContext(
+			ctx,
+			"Rejected ACP session with additional directories",
+			"additional_directory_count",
+			len(request.AdditionalDirectories),
+		)
 		return acpsdk.NewSessionResponse{}, acpsdk.NewInvalidParams(
 			map[string]any{"additionalDirectories": "additional directories are not supported"},
 		)
 	}
 	tools, toolSets, err := initializeMCPServers(ctx, request.McpServers)
 	if err != nil {
+		log.DebugContext(
+			ctx,
+			"Failed to initialize ACP session tools",
+			"cwd",
+			request.Cwd,
+			"mcp_server_count",
+			len(request.McpServers),
+			"error",
+			err,
+		)
 		return acpsdk.NewSessionResponse{}, err
 	}
 	sessionID, err := a.server.newSessionID()
 	if err != nil {
+		log.ErrorContext(ctx, "Failed to allocate ACP session ID", "error", err)
 		closeMCPServers(ctx, toolSets)
 		return acpsdk.NewSessionResponse{}, err
 	}
@@ -317,6 +369,18 @@ func (a *protocolAgent) NewSession(
 	a.mu.Lock()
 	a.sessions[sessionID] = session
 	a.mu.Unlock()
+	log.DebugContext(
+		ctx,
+		"ACP session created",
+		"session_id",
+		sessionID,
+		"cwd",
+		session.cwd,
+		"tool_count",
+		len(session.tools),
+		"mcp_server_count",
+		len(session.toolSets),
+	)
 	return acpsdk.NewSessionResponse{SessionId: acpsdk.SessionId(sessionID)}, nil
 }
 
@@ -337,13 +401,29 @@ func (s *Server) newSessionID() (string, error) {
 func (a *protocolAgent) Prompt(
 	ctx context.Context,
 	request acpsdk.PromptRequest,
-) (acpsdk.PromptResponse, error) {
+) (response acpsdk.PromptResponse, err error) {
 	session, err := a.getSession(string(request.SessionId))
 	if err != nil {
+		log.DebugContext(
+			ctx,
+			"Rejected ACP prompt for unknown session",
+			"session_id",
+			request.SessionId,
+		)
 		return acpsdk.PromptResponse{}, err
 	}
 	message, err := promptToMessage(request.Prompt)
 	if err != nil {
+		log.DebugContext(
+			ctx,
+			"Rejected ACP prompt with invalid content",
+			"session_id",
+			session.id,
+			"content_block_count",
+			len(request.Prompt),
+			"error",
+			err,
+		)
 		return acpsdk.PromptResponse{}, acpsdk.NewInvalidParams(
 			map[string]any{"prompt": err.Error()},
 		)
@@ -353,10 +433,57 @@ func (a *protocolAgent) Prompt(
 	toolCallIDs := newToolCallIDMapper(session.allocateToolCallID)
 	if err := a.beginPrompt(session, requestID, cancel, toolCallIDs); err != nil {
 		cancel()
+		log.DebugContext(
+			ctx,
+			"Rejected ACP prompt",
+			"session_id",
+			session.id,
+			"request_id",
+			requestID,
+			"error",
+			err,
+		)
 		return acpsdk.PromptResponse{}, err
 	}
+	log.DebugContext(
+		ctx,
+		"ACP prompt started",
+		"session_id",
+		session.id,
+		"request_id",
+		requestID,
+		"cwd",
+		session.cwd,
+		"content_block_count",
+		len(request.Prompt),
+	)
 	defer cancel()
-	defer a.finishPrompt(session, requestID)
+	defer func() {
+		if err != nil {
+			log.ErrorContext(
+				ctx,
+				"ACP prompt failed",
+				"session_id",
+				session.id,
+				"request_id",
+				requestID,
+				"error",
+				err,
+			)
+		} else {
+			log.DebugContext(
+				ctx,
+				"ACP prompt completed",
+				"session_id",
+				session.id,
+				"request_id",
+				requestID,
+				"stop_reason",
+				response.StopReason,
+			)
+		}
+		a.finishPrompt(ctx, session, requestID)
+	}()
 
 	runOptions := append([]agent.RunOption(nil), a.server.runOptions...)
 	if a.server.runOptionsFunc != nil {
@@ -437,22 +564,29 @@ func canceledPromptResponse(messageID *string) acpsdk.PromptResponse {
 }
 
 func (a *protocolAgent) Cancel(
-	_ context.Context,
+	ctx context.Context,
 	request acpsdk.CancelNotification,
 ) error {
 	session, err := a.getSession(string(request.SessionId))
 	if err != nil {
+		log.DebugContext(
+			ctx,
+			"Ignored ACP cancel for unknown session",
+			"session_id",
+			request.SessionId,
+		)
 		return nil
 	}
-	a.cancelPrompt(session)
+	a.cancelPrompt(ctx, session)
 	return nil
 }
 
 func (a *protocolAgent) CloseSession(
-	_ context.Context,
+	ctx context.Context,
 	request acpsdk.CloseSessionRequest,
 ) (acpsdk.CloseSessionResponse, error) {
 	sessionID := string(request.SessionId)
+	log.DebugContext(ctx, "Received ACP session close request", "session_id", sessionID)
 	a.mu.Lock()
 	session, ok := a.sessions[sessionID]
 	if ok {
@@ -460,9 +594,11 @@ func (a *protocolAgent) CloseSession(
 	}
 	a.mu.Unlock()
 	if !ok {
+		log.DebugContext(ctx, "ACP session already closed", "session_id", sessionID)
 		return acpsdk.CloseSessionResponse{}, nil
 	}
 	a.closeSession(session)
+	log.DebugContext(ctx, "ACP session closed", "session_id", sessionID)
 	return acpsdk.CloseSessionResponse{}, nil
 }
 
@@ -505,7 +641,11 @@ func (a *protocolAgent) beginPrompt(
 	return nil
 }
 
-func (a *protocolAgent) finishPrompt(session *sessionState, requestID string) {
+func (a *protocolAgent) finishPrompt(
+	ctx context.Context,
+	session *sessionState,
+	requestID string,
+) {
 	session.mu.Lock()
 	if session.requestID == requestID {
 		session.cancel = nil
@@ -517,6 +657,14 @@ func (a *protocolAgent) finishPrompt(session *sessionState, requestID string) {
 		}
 	}
 	session.mu.Unlock()
+	log.DebugContext(
+		ctx,
+		"ACP prompt lifecycle finished",
+		"session_id",
+		session.id,
+		"request_id",
+		requestID,
+	)
 }
 
 func (s *sessionState) allocateToolCallID() acpsdk.ToolCallId {
@@ -532,11 +680,22 @@ func (s *sessionState) currentToolCallIDMapper() *toolCallIDMapper {
 	return s.toolCallIDs
 }
 
-func (a *protocolAgent) cancelPrompt(session *sessionState) {
+func (a *protocolAgent) cancelPrompt(
+	ctx context.Context,
+	session *sessionState,
+) {
 	session.mu.Lock()
 	cancel := session.cancel
 	requestID := session.requestID
 	session.mu.Unlock()
+	log.DebugContext(
+		ctx,
+		"Canceling ACP prompt",
+		"session_id",
+		session.id,
+		"request_id",
+		requestID,
+	)
 	if cancel != nil {
 		cancel()
 	}
@@ -605,6 +764,14 @@ func waitForPromptAndCloseResources(
 		}
 	}
 	closeMCPServers(context.Background(), session.toolSets)
+	log.DebugContext(
+		context.Background(),
+		"ACP session resources closed",
+		"session_id",
+		session.id,
+		"mcp_server_count",
+		len(session.toolSets),
+	)
 }
 
 func (a *protocolAgent) shutdown() {
@@ -619,6 +786,14 @@ func (a *protocolAgent) shutdownWithTimeout(timeout time.Duration) {
 	}
 	a.sessions = make(map[string]*sessionState)
 	a.mu.Unlock()
+	log.DebugContext(
+		context.Background(),
+		"Shutting down ACP connection",
+		"session_count",
+		len(sessions),
+		"timeout",
+		timeout,
+	)
 	promptDone := make([]<-chan struct{}, len(sessions))
 	for index, session := range sessions {
 		promptDone[index] = a.stopSession(session)
@@ -636,6 +811,7 @@ func (a *protocolAgent) shutdownWithTimeout(timeout time.Duration) {
 		}(session, promptDone[index])
 	}
 	waitGroup.Wait()
+	log.DebugContext(context.Background(), "ACP connection shutdown completed")
 }
 
 func (*protocolAgent) Authenticate(
