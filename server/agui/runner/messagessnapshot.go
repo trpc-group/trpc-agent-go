@@ -54,6 +54,9 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 	if r.tracker == nil {
 		return nil, errors.New("tracker is nil")
 	}
+	if r.messagesSnapshotMaxTrackEvents < 0 {
+		return nil, errors.New("messages snapshot max track events must be non-negative")
+	}
 	runAgentInput, err = r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("run input hook: %w", err)
@@ -137,7 +140,11 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 // In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	sessionKey session.Key) (*aguievents.MessagesSnapshotEvent, *session.TrackEvents, error) {
-	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey)
+	var opts []session.Option
+	if r.messagesSnapshotMaxTrackEvents > 0 {
+		opts = append(opts, session.WithEventNum(r.messagesSnapshotMaxTrackEvents))
+	}
+	trackEvents, err := r.tracker.GetEvents(ctx, sessionKey, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
