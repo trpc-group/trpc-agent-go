@@ -30,10 +30,12 @@ import (
 // When no observer is attached to ctx, ObserveChanges returns a no-op without
 // cloning request messages. Otherwise it classifies changes fail-closed:
 //   - Reduced: len(after) < len(before).
-//   - Preserved: len(after) == len(before) and every message at index i is
+//   - Preserved: len(after) == len(before), every message at index i is
 //     unchanged or equals the shared wirenorm empty-content placeholder
-//     normalization of before[i].
-//   - Unknown: any other modification.
+//     normalization of before[i], and the provider guards post-tailoring
+//     request callbacks against outbound message mutations.
+//   - Unknown: any other modification, or any provider whose post-tailoring
+//     callbacks are not guarded yet.
 func ObserveChanges(
 	ctx context.Context,
 	provider string,
@@ -49,6 +51,10 @@ func ObserveChanges(
 		changed, provenance := classifyMessageChange(before, after)
 		if !changed {
 			return
+		}
+		if provenance == modelrequest.TokenTailoringProvenancePreserved &&
+			!providerHasGuardedCallbacks(provider) {
+			provenance = modelrequest.TokenTailoringProvenanceUnknown
 		}
 		change := modelrequest.TokenTailoringChange{
 			Record: modelrequest.TokenTailoringRecord{
@@ -70,6 +76,101 @@ func ObserveChanges(
 		}
 		modelrequest.RecordTokenTailoringChange(ctx, change)
 	}
+}
+
+// providerHasGuardedCallbacks reports whether provider ships an outbound
+// message-change guard around its post-tailoring request callbacks in the root
+// module. Separately versioned provider modules remain conservatively
+// fail-closed until they guard their own callbacks.
+func providerHasGuardedCallbacks(provider string) bool {
+	switch provider {
+	case "openai.Model", "hunyuan.Model", "huggingface.Model":
+		return true
+	default:
+		return false
+	}
+}
+
+// ObserveSerializedMessages snapshots the effective serialized messages field
+// from a complete provider request payload and returns a function that records
+// a reduced or unknown change when a callback modifies outbound messages
+// (including top-level ExtraFields/SetExtraFields overrides).
+//
+// When no observer is attached to ctx, ObserveSerializedMessages returns a
+// no-op without serializing the request.
+func ObserveSerializedMessages(
+	ctx context.Context,
+	provider string,
+	messagesField string,
+	serialize func() ([]byte, error),
+) func() {
+	if serialize == nil || !modelrequest.HasTokenTailoringObserver(ctx) {
+		return func() {}
+	}
+	beforeMsgs, beforeCount, beforeErr := extractCanonicalMessagesField(
+		serialize,
+		messagesField,
+	)
+	return func() {
+		afterMsgs, afterCount, afterErr := extractCanonicalMessagesField(
+			serialize,
+			messagesField,
+		)
+		if beforeErr == nil && afterErr == nil &&
+			bytes.Equal(beforeMsgs, afterMsgs) {
+			return
+		}
+		provenance := modelrequest.TokenTailoringProvenanceUnknown
+		if beforeErr == nil && afterErr == nil &&
+			beforeCount >= 0 && afterCount >= 0 &&
+			afterCount < beforeCount {
+			provenance = modelrequest.TokenTailoringProvenanceReduced
+		}
+		record := modelrequest.TokenTailoringRecord{
+			Provider:   provider,
+			Provenance: provenance,
+		}
+		if beforeCount >= 0 {
+			record.BeforeMessages = beforeCount
+		}
+		if afterCount >= 0 {
+			record.AfterMessages = afterCount
+		}
+		modelrequest.RecordTokenTailoring(ctx, record)
+	}
+}
+
+func extractCanonicalMessagesField(
+	serialize func() ([]byte, error),
+	messagesField string,
+) ([]byte, int, error) {
+	raw, err := serialize()
+	if err != nil {
+		return nil, -1, err
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, -1, err
+	}
+	msgRaw, exists := envelope[messagesField]
+	if !exists {
+		return nil, 0, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(msgRaw))
+	decoder.UseNumber()
+	var val any
+	if err := decoder.Decode(&val); err != nil {
+		return nil, -1, err
+	}
+	canonical, err := json.Marshal(val)
+	if err != nil {
+		return nil, -1, err
+	}
+	count := -1
+	if arr, ok := val.([]any); ok {
+		count = len(arr)
+	}
+	return canonical, count, nil
 }
 
 func classifyMessageChange(

@@ -4200,3 +4200,186 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 		})
 	}
 }
+
+func TestRunChatRequestCallbackObservesMessageEdits(t *testing.T) {
+	t.Run("removing messages records reduced change", func(t *testing.T) {
+		m, err := New(
+			"test-model",
+			WithAPIKey(ApiKey),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *ChatCompletionRequest,
+			) {
+				req.Messages = []ChatMessage{
+					req.Messages[0],
+					req.Messages[len(req.Messages)-1],
+				}
+			}),
+		)
+		require.NoError(t, err)
+		hfReq := &ChatCompletionRequest{
+			Model: "test-model",
+			Messages: []ChatMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "u1"},
+				{Role: "assistant", Content: "a1"},
+				{Role: "user", Content: "u2"},
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, hfReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, 4, records[0].BeforeMessages)
+		require.Equal(t, 2, records[0].AfterMessages)
+		require.Equal(
+			t,
+			imodelrequest.TokenTailoringProvenanceReduced,
+			records[0].Provenance,
+		)
+	})
+
+	t.Run("ExtraFields overriding messages records reduced change", func(t *testing.T) {
+		m, err := New(
+			"test-model",
+			WithAPIKey(ApiKey),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *ChatCompletionRequest,
+			) {
+				req.ExtraFields = map[string]any{
+					"messages": []ChatMessage{
+						req.Messages[0],
+						req.Messages[len(req.Messages)-1],
+					},
+				}
+			}),
+		)
+		require.NoError(t, err)
+		hfReq := &ChatCompletionRequest{
+			Model: "test-model",
+			Messages: []ChatMessage{
+				{Role: "system", Content: "sys"},
+				{Role: "user", Content: "u1"},
+				{Role: "assistant", Content: "a1"},
+				{Role: "user", Content: "u2"},
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, hfReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, 4, records[0].BeforeMessages)
+		require.Equal(t, 2, records[0].AfterMessages)
+		require.Equal(
+			t,
+			imodelrequest.TokenTailoringProvenanceReduced,
+			records[0].Provenance,
+		)
+	})
+
+	t.Run("non-message ExtraFields edit records no change", func(t *testing.T) {
+		m, err := New(
+			"test-model",
+			WithAPIKey(ApiKey),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *ChatCompletionRequest,
+			) {
+				req.ExtraFields = map[string]any{"trace_id": "t1"}
+			}),
+		)
+		require.NoError(t, err)
+		hfReq := &ChatCompletionRequest{
+			Model: "test-model",
+			Messages: []ChatMessage{
+				{Role: "user", Content: "u1"},
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, hfReq)
+		require.Empty(t, observer.Snapshot())
+	})
+}
+
+func TestGenerateContent_HTTPPlaceholderThenCallbackOverrideRecordsReduction(t *testing.T) {
+	var sentMessages []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		var body struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		sentMessages = body.Messages
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"hf-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	m, err := New(
+		"test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey(ApiKey),
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(10_000),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			req *ChatCompletionRequest,
+		) {
+			req.ExtraFields = map[string]any{
+				"messages": []ChatMessage{
+					req.Messages[0],
+					req.Messages[len(req.Messages)-1],
+				},
+			}
+		}),
+	)
+	require.NoError(t, err)
+
+	ctx, observer := imodelrequest.ObserveTokenTailoring(
+		context.Background(),
+		nil,
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("old question"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "search",
+						Arguments: []byte(`{"q":"x"}`),
+					},
+				}},
+			},
+			model.NewToolMessage("call_1", "search", "tool output"),
+			model.NewUserMessage("current question"),
+		},
+	}
+	ch, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Len(t, sentMessages, 2)
+	records := observer.Snapshot()
+	require.Len(t, records, 2)
+	require.Equal(t, imodelrequest.TokenTailoringProvenancePreserved, records[0].Provenance)
+	require.Equal(t, imodelrequest.TokenTailoringProvenanceReduced, records[1].Provenance)
+	require.Equal(t, 5, records[1].BeforeMessages)
+	require.Equal(t, 2, records[1].AfterMessages)
+}

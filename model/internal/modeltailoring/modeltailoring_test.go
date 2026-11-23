@@ -11,6 +11,7 @@ package modeltailoring
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -140,58 +141,118 @@ func TestObserveChangesSkipsSnapshotWithoutObserver(t *testing.T) {
 }
 
 func TestObserveChangesClassifiesBuiltInStrategyNormalizationAsPreserved(t *testing.T) {
-	var changes []modelrequest.TokenTailoringChange
-	ctx, observer := modelrequest.ObserveTokenTailoring(
-		context.Background(),
-		func(change modelrequest.TokenTailoringChange) {
-			changes = append(changes, change)
-		},
-	)
-	textPart := "part"
-	req := &model.Request{Messages: []model.Message{
-		model.NewSystemMessage("system"),
-		{
-			Role: model.RoleUser,
-			ContentParts: []model.ContentPart{{
-				Type: model.ContentTypeText,
-				Text: &textPart,
-			}},
-		},
-		{
-			Role:             model.RoleAssistant,
-			ReasoningContent: "thinking",
-			ToolCalls: []model.ToolCall{{
-				Type: "function",
-				ID:   "call_1",
-				Function: model.FunctionDefinitionParam{
-					Name:      "search",
-					Arguments: []byte(`{"q":"x"}`),
+	for _, provider := range []string{
+		"openai.Model",
+		"hunyuan.Model",
+		"huggingface.Model",
+	} {
+		t.Run(provider, func(t *testing.T) {
+			var changes []modelrequest.TokenTailoringChange
+			ctx, observer := modelrequest.ObserveTokenTailoring(
+				context.Background(),
+				func(change modelrequest.TokenTailoringChange) {
+					changes = append(changes, change)
 				},
-			}},
-		},
-		model.NewToolMessage("call_1", "search", "result"),
-		model.NewUserMessage("follow up"),
-	}}
-	strategy := model.NewMiddleOutStrategy(model.NewSimpleTokenCounter())
-	finishObservation := ObserveChanges(ctx, "test.Model", req, 10_000)
-	tailored, err := strategy.TailorMessages(ctx, req.Messages, 10_000)
-	require.NoError(t, err)
-	require.True(t, ApplyResult(ctx, "test.Model", req, tailored))
-	finishObservation()
+			)
+			textPart := "part"
+			req := &model.Request{Messages: []model.Message{
+				model.NewSystemMessage("system"),
+				{
+					Role: model.RoleUser,
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeText,
+						Text: &textPart,
+					}},
+				},
+				{
+					Role:             model.RoleAssistant,
+					ReasoningContent: "thinking",
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call_1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "search",
+							Arguments: []byte(`{"q":"x"}`),
+						},
+					}},
+				},
+				model.NewToolMessage("call_1", "search", "result"),
+				model.NewUserMessage("follow up"),
+			}}
+			strategy := model.NewMiddleOutStrategy(model.NewSimpleTokenCounter())
+			finishObservation := ObserveChanges(ctx, provider, req, 10_000)
+			tailored, err := strategy.TailorMessages(ctx, req.Messages, 10_000)
+			require.NoError(t, err)
+			require.True(t, ApplyResult(ctx, provider, req, tailored))
+			finishObservation()
 
-	require.Equal(t, []modelrequest.TokenTailoringRecord{{
-		Provider:       "test.Model",
-		MaxInputTokens: 10_000,
-		BeforeMessages: 5,
-		AfterMessages:  5,
-		Provenance:     modelrequest.TokenTailoringProvenancePreserved,
-	}}, observer.Snapshot())
-	require.Len(t, changes, 1)
-	require.NotNil(t, changes[0].Preserved)
-	require.Empty(t, changes[0].Preserved.Before[1].Content)
-	require.Equal(t, " ", changes[0].Preserved.After[1].Content)
-	require.Empty(t, changes[0].Preserved.Before[2].Content)
-	require.Equal(t, " ", changes[0].Preserved.After[2].Content)
+			require.Equal(t, []modelrequest.TokenTailoringRecord{{
+				Provider:       provider,
+				MaxInputTokens: 10_000,
+				BeforeMessages: 5,
+				AfterMessages:  5,
+				Provenance:     modelrequest.TokenTailoringProvenancePreserved,
+			}}, observer.Snapshot())
+			require.Len(t, changes, 1)
+			require.NotNil(t, changes[0].Preserved)
+			require.Empty(t, changes[0].Preserved.Before[1].Content)
+			require.Equal(t, " ", changes[0].Preserved.After[1].Content)
+			require.Empty(t, changes[0].Preserved.Before[2].Content)
+			require.Equal(t, " ", changes[0].Preserved.After[2].Content)
+		})
+	}
+}
+
+func TestObserveChangesFailsClosedForUnguardedProviders(t *testing.T) {
+	for _, provider := range []string{
+		"anthropic.Model",
+		"gemini.Model",
+		"ollama.Model",
+		"test.Model",
+	} {
+		t.Run(provider, func(t *testing.T) {
+			var changes []modelrequest.TokenTailoringChange
+			ctx, observer := modelrequest.ObserveTokenTailoring(
+				context.Background(),
+				func(change modelrequest.TokenTailoringChange) {
+					changes = append(changes, change)
+				},
+			)
+			req := &model.Request{Messages: []model.Message{
+				model.NewSystemMessage("system"),
+				model.NewUserMessage("question"),
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call_1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "search",
+							Arguments: []byte(`{"q":"x"}`),
+						},
+					}},
+				},
+				model.NewToolMessage("call_1", "search", "result"),
+				model.NewUserMessage("follow up"),
+			}}
+			strategy := model.NewMiddleOutStrategy(model.NewSimpleTokenCounter())
+			finishObservation := ObserveChanges(ctx, provider, req, 10_000)
+			tailored, err := strategy.TailorMessages(ctx, req.Messages, 10_000)
+			require.NoError(t, err)
+			require.True(t, ApplyResult(ctx, provider, req, tailored))
+			finishObservation()
+
+			require.Equal(t, []modelrequest.TokenTailoringRecord{{
+				Provider:       provider,
+				MaxInputTokens: 10_000,
+				BeforeMessages: 5,
+				AfterMessages:  5,
+				Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+			}}, observer.Snapshot())
+			require.Len(t, changes, 1)
+			require.Nil(t, changes[0].Preserved)
+		})
+	}
 }
 
 func TestObserveChangesNumericExtraFields(t *testing.T) {
@@ -242,7 +303,7 @@ func TestObserveChangesNumericExtraFields(t *testing.T) {
 			}),
 		}}
 
-		finishObservation := ObserveChanges(ctx, "test.Model", req, 100)
+		finishObservation := ObserveChanges(ctx, "openai.Model", req, 100)
 		req.Messages[0].Content = " "
 		finishObservation()
 
@@ -483,5 +544,227 @@ func TestObserveChangesClassifiesReducedAndExpandedHistory(t *testing.T) {
 			modelrequest.TokenTailoringProvenanceUnknown,
 			observer.Snapshot()[0].Provenance,
 		)
+	})
+}
+
+func TestObserveSerializedMessages(t *testing.T) {
+	t.Run("skips serialization without observer or serializer", func(t *testing.T) {
+		called := false
+		serialize := func() ([]byte, error) {
+			called = true
+			return []byte(`{"messages":[]}`), nil
+		}
+		allocs := testing.AllocsPerRun(100, func() {
+			finish := ObserveSerializedMessages(
+				context.Background(),
+				"openai.Model",
+				"messages",
+				serialize,
+			)
+			finish()
+		})
+		require.False(t, called)
+		require.Zero(t, allocs)
+
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		finish := ObserveSerializedMessages(ctx, "openai.Model", "messages", nil)
+		finish()
+		require.Empty(t, observer.Snapshot())
+	})
+
+	t.Run("ignores non-message edits and key reordering", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		payload := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+		finish := ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) { return []byte(payload), nil },
+		)
+		payload = `{"model":"gpt-4o","temperature":0.2,"messages":[{"content":"hi","role":"user"}]}`
+		finish()
+		require.Empty(t, observer.Snapshot())
+	})
+
+	t.Run("both missing messages field records nothing", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		payload := `{"model":"gpt-4o"}`
+		finish := ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) { return []byte(payload), nil },
+		)
+		finish()
+		require.Empty(t, observer.Snapshot())
+	})
+
+	t.Run("reduced message array records reduced", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		payload := `{"Messages":[{"Role":"system","Content":"s"},{"Role":"user","Content":"u1"},{"Role":"user","Content":"u2"}]}`
+		finish := ObserveSerializedMessages(
+			ctx,
+			"hunyuan.Model",
+			"Messages",
+			func() ([]byte, error) { return []byte(payload), nil },
+		)
+		payload = `{"Messages":[{"Role":"system","Content":"s"}]}`
+		finish()
+
+		require.Equal(t, []modelrequest.TokenTailoringRecord{{
+			Provider:       "hunyuan.Model",
+			BeforeMessages: 3,
+			AfterMessages:  1,
+			Provenance:     modelrequest.TokenTailoringProvenanceReduced,
+		}}, observer.Snapshot())
+	})
+
+	t.Run("removing messages field records reduced to zero", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		payload := `{"messages":[{"role":"user","content":"u1"},{"role":"user","content":"u2"}]}`
+		finish := ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) { return []byte(payload), nil },
+		)
+		payload = `{"model":"gpt-4o"}`
+		finish()
+
+		require.Equal(t, []modelrequest.TokenTailoringRecord{{
+			Provider:       "openai.Model",
+			BeforeMessages: 2,
+			AfterMessages:  0,
+			Provenance:     modelrequest.TokenTailoringProvenanceReduced,
+		}}, observer.Snapshot())
+	})
+
+	t.Run("same-size rewrite records unknown", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		payload := `{"messages":[{"role":"user","content":"u1"}]}`
+		finish := ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) { return []byte(payload), nil },
+		)
+		payload = `{"messages":[{"role":"user","content":"rewritten"}]}`
+		finish()
+
+		require.Equal(t, []modelrequest.TokenTailoringRecord{{
+			Provider:       "openai.Model",
+			BeforeMessages: 1,
+			AfterMessages:  1,
+			Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+		}}, observer.Snapshot())
+	})
+
+	t.Run("non-array override records unknown", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		payload := `{"messages":[{"role":"user","content":"u1"}]}`
+		finish := ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) { return []byte(payload), nil },
+		)
+		payload = `{"messages":null}`
+		finish()
+
+		require.Equal(t, []modelrequest.TokenTailoringRecord{{
+			Provider:       "openai.Model",
+			BeforeMessages: 1,
+			AfterMessages:  0,
+			Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+		}}, observer.Snapshot())
+	})
+
+	t.Run("serialization or decode errors fail closed as unknown", func(t *testing.T) {
+		cases := []struct {
+			name      string
+			beforeRaw []byte
+			beforeErr error
+			afterRaw  []byte
+			afterErr  error
+			wantRec   modelrequest.TokenTailoringRecord
+		}{
+			{
+				name:      "after serialize error",
+				beforeRaw: []byte(`{"messages":[{"role":"user","content":"u1"}]}`),
+				afterErr:  errors.New("marshal boom"),
+				wantRec: modelrequest.TokenTailoringRecord{
+					Provider:       "openai.Model",
+					BeforeMessages: 1,
+					AfterMessages:  0,
+					Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+				},
+			},
+			{
+				name:      "before invalid json",
+				beforeRaw: []byte(`{invalid`),
+				afterRaw:  []byte(`{"messages":[{"role":"user","content":"u1"}]}`),
+				wantRec: modelrequest.TokenTailoringRecord{
+					Provider:       "openai.Model",
+					BeforeMessages: 0,
+					AfterMessages:  1,
+					Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+				},
+			},
+			{
+				name:      "invalid messages raw json",
+				beforeRaw: []byte(`{"messages":[{"role":"user","content":"u1"}]}`),
+				afterRaw:  []byte(`{"messages":[}`),
+				wantRec: modelrequest.TokenTailoringRecord{
+					Provider:       "openai.Model",
+					BeforeMessages: 1,
+					AfterMessages:  0,
+					Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+				},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, observer := modelrequest.ObserveTokenTailoring(
+					context.Background(),
+					nil,
+				)
+				calls := 0
+				finish := ObserveSerializedMessages(
+					ctx,
+					"openai.Model",
+					"messages",
+					func() ([]byte, error) {
+						calls++
+						if calls == 1 {
+							return tc.beforeRaw, tc.beforeErr
+						}
+						return tc.afterRaw, tc.afterErr
+					},
+				)
+				finish()
+				require.Equal(t, []modelrequest.TokenTailoringRecord{tc.wantRec}, observer.Snapshot())
+			})
+		}
 	})
 }

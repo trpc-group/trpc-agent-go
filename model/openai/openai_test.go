@@ -10448,6 +10448,96 @@ func TestRunChatRequestCallbackObservesMessageEdits(t *testing.T) {
 		m.runChatRequestCallback(ctx, chatReq)
 		require.Empty(t, observer.Snapshot())
 	})
+
+	t.Run("SetExtraFields overriding messages records reduced change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				keep := []openai.ChatCompletionMessageParamUnion{
+					req.Messages[0],
+					req.Messages[len(req.Messages)-1],
+				}
+				req.SetExtraFields(map[string]any{"messages": keep})
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage("sys"),
+				openai.UserMessage("u1"),
+				openai.AssistantMessage("a1"),
+				openai.UserMessage("u2"),
+				openai.UserMessage("u3"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, 5, records[0].BeforeMessages)
+		require.Equal(t, 2, records[0].AfterMessages)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceReduced, records[0].Provenance)
+	})
+
+	t.Run("SetExtraFields overriding non-message fields records no change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.SetExtraFields(map[string]any{
+					"metadata": map[string]any{"trace_id": "abc"},
+				})
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		require.Empty(t, observer.Snapshot())
+	})
+
+	t.Run("SetExtraFields with unmarshalable override fails closed", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.SetExtraFields(map[string]any{
+					"messages": func() {},
+				})
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceUnknown, records[0].Provenance)
+	})
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.

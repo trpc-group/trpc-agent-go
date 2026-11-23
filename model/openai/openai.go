@@ -595,30 +595,16 @@ func (m *Model) runChatRequestCallback(
 	if m.chatRequestCallback == nil {
 		return
 	}
-	if chatRequest != nil && imodelrequest.HasTokenTailoringObserver(ctx) {
-		beforeCount := len(chatRequest.Messages)
-		beforeJSON, beforeErr := json.Marshal(chatRequest.Messages)
-		defer func() {
-			afterCount := len(chatRequest.Messages)
-			afterJSON, afterErr := json.Marshal(chatRequest.Messages)
-			if beforeErr == nil && afterErr == nil &&
-				bytes.Equal(beforeJSON, afterJSON) {
-				return
-			}
-			provenance := imodelrequest.TokenTailoringProvenanceUnknown
-			if afterCount < beforeCount {
-				provenance = imodelrequest.TokenTailoringProvenanceReduced
-			}
-			imodelrequest.RecordTokenTailoring(
-				ctx,
-				imodelrequest.TokenTailoringRecord{
-					Provider:       "openai.Model",
-					BeforeMessages: beforeCount,
-					AfterMessages:  afterCount,
-					Provenance:     provenance,
-				},
-			)
-		}()
+	if chatRequest != nil {
+		finishObservation := modeltailoring.ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) {
+				return chatRequest.MarshalJSON()
+			},
+		)
+		defer finishObservation()
 	}
 	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
 	m.chatRequestCallback(ctx, chatRequest)

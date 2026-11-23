@@ -208,6 +208,95 @@ func TestOpenAIHTTP_PlaceholderThenChatRequestCallbackRewriteInvalidatesSummaryS
 		require.False(t, snap.forkPresent)
 	})
 
+	t.Run("callback overriding messages via SetExtraFields invalidates view and fork", func(t *testing.T) {
+		ctx := context.Background()
+		server, sentMessages := newOpenAIHTTPRecordingServer(t)
+		recSvc := &recordingSummarySessionService{
+			Service: inmemory.NewSessionService(),
+		}
+		key := session.Key{AppName: "app", UserID: "u1b", SessionID: "s1b"}
+		seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+		m := openai.New(
+			"gpt-4o",
+			openai.WithBaseURL(server.URL),
+			openai.WithAPIKey("test-key"),
+			openai.WithEnableTokenTailoring(true),
+			openai.WithMaxInputTokens(10_000),
+			openai.WithChatRequestCallback(func(
+				_ context.Context,
+				req *openaisdk.ChatCompletionNewParams,
+			) {
+				keep := []openaisdk.ChatCompletionMessageParamUnion{
+					req.Messages[0],
+					req.Messages[len(req.Messages)-1],
+				}
+				req.SetExtraFields(map[string]any{"messages": keep})
+			}),
+			openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+		)
+		ag := llmagent.New(
+			"qa",
+			llmagent.WithModel(m),
+			llmagent.WithInstruction("system prompt"),
+			llmagent.WithAddSessionSummary(true),
+		)
+		r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+		t.Cleanup(func() { _ = r.Close() })
+
+		runSingleTurn(t, ctx, r, key, "current question")
+
+		require.Len(t, sentMessages(), 2)
+		snap := recSvc.latest()
+		require.True(t, snap.viewPresent)
+		require.False(t, snap.view.Bound)
+		require.Equal(t, summaryview.BindingReasonInvalidated, snap.view.BindingReason)
+		require.False(t, snap.forkPresent)
+	})
+
+	t.Run("callback setting non-message SetExtraFields preserves rebased view and fork", func(t *testing.T) {
+		ctx := context.Background()
+		server, sentMessages := newOpenAIHTTPRecordingServer(t)
+		recSvc := &recordingSummarySessionService{
+			Service: inmemory.NewSessionService(),
+		}
+		key := session.Key{AppName: "app", UserID: "u1c", SessionID: "s1c"}
+		seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+		m := openai.New(
+			"gpt-4o",
+			openai.WithBaseURL(server.URL),
+			openai.WithAPIKey("test-key"),
+			openai.WithEnableTokenTailoring(true),
+			openai.WithMaxInputTokens(10_000),
+			openai.WithChatRequestCallback(func(
+				_ context.Context,
+				req *openaisdk.ChatCompletionNewParams,
+			) {
+				req.SetExtraFields(map[string]any{
+					"metadata": map[string]any{"trace_id": "t1"},
+				})
+			}),
+			openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+		)
+		ag := llmagent.New(
+			"qa",
+			llmagent.WithModel(m),
+			llmagent.WithInstruction("system prompt"),
+			llmagent.WithAddSessionSummary(true),
+		)
+		r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+		t.Cleanup(func() { _ = r.Close() })
+
+		runSingleTurn(t, ctx, r, key, "current question")
+
+		require.Len(t, sentMessages(), 5)
+		snap := recSvc.latest()
+		require.True(t, snap.viewPresent)
+		require.True(t, snap.view.Bound)
+		require.True(t, snap.forkPresent)
+	})
+
 	t.Run("read-only callback preserves rebased view and fork", func(t *testing.T) {
 		ctx := context.Background()
 		server, sentMessages := newOpenAIHTTPRecordingServer(t)

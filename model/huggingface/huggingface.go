@@ -154,6 +154,17 @@ func (m *Model) runChatRequestCallback(
 	if m.chatRequestCallback == nil {
 		return
 	}
+	if hfRequest != nil {
+		finishObservation := modeltailoring.ObserveSerializedMessages(
+			ctx,
+			"huggingface.Model",
+			"messages",
+			func() ([]byte, error) {
+				return m.marshalRequestForContext(ctx, hfRequest)
+			},
+		)
+		defer finishObservation()
+	}
 	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
 	m.chatRequestCallback(ctx, hfRequest)
 }

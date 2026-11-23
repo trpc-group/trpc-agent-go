@@ -45,6 +45,9 @@ func TestApplyRequestTransform_PreservedRebasesViewAndFork(t *testing.T) {
 	summaryfork.Attach(inv, req)
 
 	req.Messages[1].Content = " "
+	customFork := &model.Request{
+		Messages: append(append([]model.Message(nil), req.Messages...), model.NewAssistantMessage("reply")),
+	}
 	ok := ApplyRequestTransform(
 		inv,
 		modelrequest.TokenTailoringChange{
@@ -59,7 +62,7 @@ func TestApplyRequestTransform_PreservedRebasesViewAndFork(t *testing.T) {
 			},
 		},
 		req,
-		nil,
+		func() *model.Request { return customFork },
 	)
 
 	require.True(t, ok)
@@ -69,7 +72,7 @@ func TestApplyRequestTransform_PreservedRebasesViewAndFork(t *testing.T) {
 	require.Equal(t, " ", view.Items[0].Message.Content)
 	fork, found := summaryfork.Request(inv)
 	require.True(t, found)
-	require.Equal(t, req.Messages, fork.Messages)
+	require.Equal(t, customFork.Messages, fork.Messages)
 }
 
 func TestApplyRequestTransform_InvalidatesBothOnUnsafeAndStaysMonotonic(t *testing.T) {
