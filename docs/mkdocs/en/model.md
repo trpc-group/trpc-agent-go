@@ -2436,9 +2436,16 @@ agent := llmagent.New(
 )
 ```
 
-For client-executed search, configure a handler that returns
-`[]responses.ToolSearchEntry`. The following handler loads billing candidates
-for invoice queries:
+In client mode, the built-in keyword handler searches the current request's
+deferred tools by model-facing name, namespace, and tool description. By
+default it returns up to five matching entries.
+
+```go
+llm := responses.New("gpt-5.4", responses.WithClientToolSearch(responses.NewKeywordToolSearch()))
+```
+
+For custom retrieval, pass a handler that returns `[]responses.ToolSearchEntry`.
+The following handler selects billing candidates for invoice queries.
 
 ```go
 import (

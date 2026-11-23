@@ -23,6 +23,7 @@ import (
 )
 
 func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
+	search := responses.NewKeywordToolSearch()
 	candidates := []responses.ToolSearchEntry{
 		{Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
 			Name: "lookup_invoice", Tool: searchTool("billing_lookup_invoice", "Look up an invoice and its payment status.")},
@@ -52,7 +53,7 @@ func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
 		{"unrelated word and filler", "the voice tools", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := keywordSearch(context.Background(), &responses.ToolSearchRequest{Query: tc.query, Candidates: candidates})
+			got, err := search(context.Background(), &responses.ToolSearchRequest{Query: tc.query, Candidates: candidates})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +66,7 @@ func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
 				}
 			}
 			if !reflect.DeepEqual(got, want) {
-				t.Errorf("keywordSearch(%q) = %v, want %v", tc.query, got, want)
+				t.Errorf("search(%q) = %v, want %v", tc.query, got, want)
 			}
 		})
 	}
