@@ -85,6 +85,12 @@ func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
 	}}
 }
 
+// WorkspacePerInvocation reports whether agent tools acquire a fresh workspace
+// for each invocation.
+func (r *workspaceRuntime) WorkspacePerInvocation() bool {
+	return r != nil && r.cfg.workspacePersistence == WorkspacePersistencePerTurn
+}
+
 // CreateWorkspace creates a per-execution directory inside the sandbox.
 func (r *workspaceRuntime) CreateWorkspace(
 	ctx context.Context,

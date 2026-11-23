@@ -139,6 +139,8 @@ type options struct {
 
 	// textOnlyMessageContent overrides the variant default when set.
 	textOnlyMessageContent *bool
+
+	preserveToolsWhenDisabled bool
 }
 
 var (
@@ -160,6 +162,24 @@ var (
 
 // Option is a function that configures an OpenAI model.
 type Option func(*options)
+
+// WithPreserveToolsWhenDisabled keeps tool definitions in requests where the
+// framework disables tool calls, such as during call-limit finalization.
+// The default is false, which omits the definitions in those requests.
+//
+// When enabled, tools follow the usual request processing. The adapter sets
+// tool_choice to "none" after callbacks, extra fields, and SDK JSON options,
+// even if the tool list is empty. The legacy functions and function_call
+// fields are omitted during finalization.
+//
+// Enable this only for endpoints verified to honor "none". Preserving tool
+// definitions can help reuse the prompt cache. API errors and unexpected tool
+// calls follow the existing finalization error path.
+func WithPreserveToolsWhenDisabled(enabled bool) Option {
+	return func(opts *options) {
+		opts.preserveToolsWhenDisabled = enabled
+	}
+}
 
 // WithAPIKey sets the API key for the OpenAI client.
 func WithAPIKey(key string) Option {

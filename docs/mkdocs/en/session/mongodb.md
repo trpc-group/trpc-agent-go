@@ -223,11 +223,14 @@ the number of events loaded by a context-window read.
 ## Context-window read costs
 
 For a single session with a positive event limit, MongoDB reads newest events
-first in small cursor batches and closes the cursor once the window and its
-required user message are available. The returned order and filtering remain
-the same. If the window has no user message, the reader searches older history
-for the nearest user message; a history without any user message still requires
-a full scan. Empty payloads do not consume an event slot.
+first. The initial cursor batch contains at most the smaller of the event limit
+and 128 documents. Subsequent batches contain up to 128 documents, including
+when skipping empty payloads or searching older history for a user message.
+The reader closes the cursor once the window and its required user message are
+available. The returned order and filtering remain the same. If the window has
+no user message, the reader searches older history for the nearest user message;
+a history without any user message still requires a full scan. Empty payloads
+do not consume an event slot.
 
 Time filtering uses the event payload timestamp, which can differ from the
 document's `created_at`. If the oldest event in the candidate window satisfies
@@ -237,6 +240,13 @@ behavior even when timestamps are out of order. Unlimited and multi-session
 reads retain the existing full-history path. Pagination is unchanged. The
 ordered lookup index avoids a blocking sort; the optimization does not force
 an index hint, so externally managed indexes remain supported.
+
+Bounded reads validate only payloads actually traversed, including older events
+searched for a user message. Unlike the previous full-history context reads,
+they can succeed despite invalid JSON in unvisited historical payloads. Invalid
+JSON encountered during traversal still returns an error; full-history
+fallbacks still decode the complete history. A bounded read does not validate
+the integrity of the entire session history.
 
 An optional live-model smoke test verifies a three-turn conversation, event
 window truncation and history reloading after recreating the service. It sends

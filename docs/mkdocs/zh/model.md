@@ -12,6 +12,41 @@ Model 模块具有以下核心特性：
 - **完整错误处理**：提供双层错误处理机制，区分系统错误和 API 错误
 - **可扩展配置**：支持丰富的自定义配置项，满足不同场景需求
 
+<a id="preserving-tools-during-call-limit-finalization"></a>
+
+### 在调用上限收尾时保留工具定义
+
+下面的 Agent 最多执行 5 轮工具调用。达到上限进入收尾时，Agent 会再请模型基于已有结果回答。如果模型仍提出工具调用，框架会拒绝执行。
+
+- 默认情况下，收尾请求不发送工具定义（`tools`）。
+- 开启此选项后，收尾请求按平时的规则生成 `tools`，并发送 `tool_choice: "none"`。保留工具定义有机会复用前面请求的提示词缓存。
+
+请先验证模型和网关支持 `tool_choice: "none"`，再启用这个选项。
+
+```go
+m := openai.New(modelName,
+    openai.WithBaseURL(baseURL),
+    openai.WithAPIKey(apiKey),
+    openai.WithPreserveToolsWhenDisabled(true),
+)
+a := llmagent.New("assistant",
+    llmagent.WithModel(m),
+    llmagent.WithTools(tools),
+    llmagent.WithMaxToolIterations(5),
+    llmagent.WithToolIterationLimitFinalization("请基于已有结果回答。"),
+)
+```
+
+这个选项也适用于 LLM 调用次数上限触发的收尾。收尾请求计入 `MaxLLMCalls`。如果端点报错，框架会直接返回错误。
+
+<details>
+<summary>使用模型包装器时</summary>
+<p>外层需要转发 <code>PreservesToolsWhenDisabled() bool</code>，框架才会保留传给模型的工具定义。
+未转发时，框架会移除请求中的工具定义和工具控制字段。
+内层 OpenAI 模型如果开启了此选项，仍会发送 <code>tool_choice: "none"</code>，也可以发送由内层配置或回调提供的工具定义。</p>
+</details>
+
+
 ## 快速开始
 
 ### 在 Agent 中使用 Model
