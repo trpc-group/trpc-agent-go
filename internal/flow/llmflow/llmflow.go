@@ -724,6 +724,14 @@ func (f *Flow) runOneStepWithResume(
 	eventChan chan<- *event.Event,
 	pendingResume *model.Response,
 ) (lastEvent *event.Event, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.runModelStep(ctx, invocation, eventChan, pendingResume)
+}
+
+func (f *Flow) runModelStep(ctx context.Context, invocation *agent.Invocation, eventChan chan<- *event.Event, pendingResume *model.Response) (lastEvent *event.Event, err error) {
+
 	ctx, stepSpan, stepStarted := startLatencySpan(
 		ctx,
 		invocation,
@@ -2582,6 +2590,9 @@ func (f *Flow) callLLM(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (context.Context, model.Seq[*model.Response], bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, nil, false, err
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -3163,6 +3174,9 @@ func (f *Flow) generateContentSeq(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
@@ -3186,6 +3200,9 @@ func (f *Flow) generateContentSeq(
 		}
 		finishLatencySpan(span, started, err)
 	}()
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 	if iterModel, ok := callModel.(model.IterModel); ok {
 		seq, genErr := iterModel.GenerateContentIter(ctx, llmRequest)
 		err = genErr

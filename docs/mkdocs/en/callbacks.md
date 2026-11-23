@@ -4,6 +4,9 @@ This page describes the callback system used across the project to intercept,
 observe, and customize model inference, tool invocation, agent execution,
 and AG-UI event translation.
 
+For context replacement, cancellation propagation, and the AfterTool lifecycle,
+see [Cancellation and context propagation](cancellation.md).
+
 The callback system comes in four categories:
 
 - ModelCallbacks
