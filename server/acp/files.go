@@ -40,8 +40,8 @@ type clientReadTextFileArgs struct {
 }
 
 type clientWriteTextFileArgs struct {
-	Path    string `json:"path" jsonschema:"description=File path relative to the session workspace or an absolute path inside it"`
-	Content string `json:"content" jsonschema:"description=Text content to write to the file"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 type clientWriteTextFileTool struct {
@@ -99,25 +99,28 @@ func (a *protocolAgent) newClientFileTools(session *sessionState) []tool.Tool {
 }
 
 func (a *protocolAgent) newClientReadTextFileTool(session *sessionState) tool.Tool {
+	workspace := filepath.Clean(session.cwd)
 	return function.NewFunctionTool(
 		func(ctx context.Context, args clientReadTextFileArgs) (string, error) {
 			return a.readClientTextFile(ctx, session, args)
 		},
 		function.WithName(clientReadTextFileToolName),
-		function.WithDescription("Read a text file through the ACP client."),
-		function.WithInputSchema(clientReadTextFileInputSchema()),
+		function.WithDescription(fmt.Sprintf(
+			"Read a text file through the ACP client. Session workspace: %s.",
+			workspace,
+		)),
+		function.WithInputSchema(clientReadTextFileInputSchema(workspace)),
 	)
 }
 
-func clientReadTextFileInputSchema() *tool.Schema {
+func clientReadTextFileInputSchema(workspace string) *tool.Schema {
 	return &tool.Schema{
 		Type:     "object",
 		Required: []string{"path"},
 		Properties: map[string]*tool.Schema{
 			"path": {
-				Type: "string",
-				Description: "File path relative to the session workspace or an " +
-					"absolute path inside it.",
+				Type:        "string",
+				Description: clientFilePathDescription(workspace),
 			},
 			"line": {
 				Type: "integer",
@@ -142,12 +145,17 @@ func clientReadTextFileInputSchema() *tool.Schema {
 }
 
 func (a *protocolAgent) newClientWriteTextFileTool(session *sessionState) tool.Tool {
+	workspace := filepath.Clean(session.cwd)
 	base := function.NewFunctionTool(
 		func(ctx context.Context, args clientWriteTextFileArgs) (string, error) {
 			return a.writeClientTextFile(ctx, session, args)
 		},
 		function.WithName(clientWriteTextFileToolName),
-		function.WithDescription("Write a text file through the ACP client."),
+		function.WithDescription(fmt.Sprintf(
+			"Write a text file through the ACP client. Session workspace: %s.",
+			workspace,
+		)),
+		function.WithInputSchema(clientWriteTextFileInputSchema(workspace)),
 		function.WithConcurrencySafe(false),
 	)
 	return &clientWriteTextFileTool{
@@ -155,6 +163,31 @@ func (a *protocolAgent) newClientWriteTextFileTool(session *sessionState) tool.T
 		agent:        a,
 		session:      session,
 	}
+}
+
+func clientWriteTextFileInputSchema(workspace string) *tool.Schema {
+	return &tool.Schema{
+		Type:     "object",
+		Required: []string{"path", "content"},
+		Properties: map[string]*tool.Schema{
+			"path": {
+				Type:        "string",
+				Description: clientFilePathDescription(workspace),
+			},
+			"content": {
+				Type:        "string",
+				Description: "Text content to write to the file.",
+			},
+		},
+	}
+}
+
+func clientFilePathDescription(workspace string) string {
+	return fmt.Sprintf(
+		"File path relative to the session workspace or an absolute path "+
+			"inside it. Session workspace: %s.",
+		workspace,
+	)
 }
 
 func (a *protocolAgent) readClientTextFile(

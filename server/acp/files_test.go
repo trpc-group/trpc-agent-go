@@ -242,6 +242,9 @@ func TestClientReadTextFileInputSchema(t *testing.T) {
 	require.NotNil(t, readTool)
 	schema := readTool.Declaration().InputSchema
 	require.NotNil(t, schema)
+	assert.Contains(t, readTool.Declaration().Description, "Session workspace: /workspace")
+	assert.Contains(t, schema.Properties["path"].Description, "Session workspace: /workspace")
+	assert.NotContains(t, schema.Properties, "cwd")
 	require.Contains(t, schema.Properties, "line")
 	require.Contains(t, schema.Properties, "limit")
 	assert.Equal(t, defaultClientFileReadLine, schema.Properties["line"].Default)
@@ -272,6 +275,11 @@ func TestClientWriteTextFileTool(t *testing.T) {
 	)
 	writeTool := findTool(session.tools, clientWriteTextFileToolName)
 	require.NotNil(t, writeTool)
+	writeSchema := writeTool.Declaration().InputSchema
+	require.NotNil(t, writeSchema)
+	assert.Contains(t, writeTool.Declaration().Description, "Session workspace: /workspace")
+	assert.Contains(t, writeSchema.Properties["path"].Description, "Session workspace: /workspace")
+	assert.NotContains(t, writeSchema.Properties, "cwd")
 
 	result, err := writeTool.(tool.CallableTool).Call(
 		context.Background(),
