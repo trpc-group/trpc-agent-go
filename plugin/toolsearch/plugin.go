@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	searchrank "trpc.group/trpc-go/trpc-agent-go/internal/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -138,7 +139,7 @@ func New(presetTools []tool.Tool, opts ...Option) *Plugin {
 		if t == nil || t.Declaration() == nil {
 			continue
 		}
-		p.indexTool(t)
+		p.indexTool(t, "", "")
 	}
 	// WithDeferredTools bypasses the empty-name guard below: the internal
 	// default namespace deliberately uses "" as its sentinel, but user-supplied
@@ -184,17 +185,13 @@ func (p *Plugin) Register(r *plugin.Registry) {
 // metaByName, nameByLower) and pre-computes its search metadata. It does not
 // touch deferredNames or namespaceByTool, so preset tools indexed through
 // this method alone stay out of the query and embedding candidate sets.
-func (p *Plugin) indexTool(t tool.Tool) {
+func (p *Plugin) indexTool(t tool.Tool, namespace, namespaceDescription string) {
 	decl := t.Declaration()
 	name := decl.Name
-	parsed := parseToolName(name)
 	p.toolsByName[name] = t
 	p.metaByName[name] = &toolMetadata{
-		Parts:       parsed.Parts,
-		Full:        parsed.Full,
 		Description: decl.Description,
-		descLower:   strings.ToLower(decl.Description),
-		nameLower:   strings.ToLower(name),
+		document:    searchrank.NewDocument(name, decl.Description, namespace, namespaceDescription),
 	}
 	p.nameByLower[strings.ToLower(name)] = name
 }
@@ -229,6 +226,12 @@ func (p *Plugin) registerToolbox(name, description string, tools []tool.Tool) {
 	} else if description != "" && box.description == "" {
 		// Re-registering into the same namespace: enrich an empty description.
 		box.description = description
+		// Existing documents must observe the newly enriched namespace bias.
+		for toolName := range box.toolNames {
+			if meta := p.metaByName[toolName]; meta != nil {
+				meta.document = searchrank.NewDocument(toolName, meta.Description, name, description)
+			}
+		}
 	}
 
 	for _, t := range tools {
@@ -252,7 +255,7 @@ func (p *Plugin) registerToolbox(name, description string, tools []tool.Tool) {
 				p.name, toolName, name)
 			continue
 		}
-		p.indexTool(t)
+		p.indexTool(t, box.name, box.description)
 		p.deferredNames[toolName] = struct{}{}
 		p.namespaceByTool[toolName] = name
 		box.toolNames[toolName] = struct{}{}
