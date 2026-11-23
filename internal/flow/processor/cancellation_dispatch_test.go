@@ -243,17 +243,21 @@ func (t *cancellationStreamTool) StreamInner() bool {
 }
 
 func TestCancellationDispatch_CancelDuringToolSelection(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	after := 0
-	callbacks := tool.NewCallbacks().RegisterAfterTool(func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-		after++
-		return nil, nil
-	})
-	tl := &cancellationStreamTool{selectStream: func() bool { cancel(); return true }}
-	_, _, _, _, _, err := NewFunctionCallResponseProcessor(false, callbacks).executeToolWithCallbacks(
-		ctx, agent.NewInvocation(), model.ToolCall{Function: model.FunctionDefinitionParam{Name: "stream"}}, tl, nil)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Zero(t, tl.calls)
-	require.Zero(t, after)
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unsupported", true: "stream"}[stream], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			after := 0
+			callbacks := tool.NewCallbacks().RegisterAfterTool(func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+				after++
+				return nil, nil
+			})
+			tl := &cancellationStreamTool{selectStream: func() bool { cancel(); return stream }}
+			_, _, _, _, _, err := NewFunctionCallResponseProcessor(false, callbacks).executeToolWithCallbacks(
+				ctx, agent.NewInvocation(), model.ToolCall{Function: model.FunctionDefinitionParam{Name: "stream"}}, tl, nil)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Zero(t, tl.calls)
+			require.Zero(t, after)
+		})
+	}
 }

@@ -229,11 +229,22 @@ alone proves all the later events. The observation, persistence, and safe Resume
 features discussed in #2757 are separate draft changes, not implied guarantees
 of context cancellation.
 
-In a sequential tool batch, rejecting a later call after cancellation does not
-discard results already produced by earlier tools. If the batch deadline has
-expired, those results use the existing bounded persistence fallback, and the
-caller still receives `context.DeadlineExceeded`. Persistence can still fail;
-explicit cancellation does not enable this deadline-only fallback.
+For LLMFlow sequential tool batches in the default merged-result mode (parallel
+execution and per-call result events disabled), a deadline that rejects a later
+call allows already-completed results to use the existing bounded persistence
+fallback. This is a storage attempt, not successful delivery to the public event
+stream, and the caller still receives `context.DeadlineExceeded`. Retained
+messages pass through `AfterToolMessages` before persistence. For this deadline
+finalization, the hook receives a context that preserves values and has a fresh
+one-second timeout; the append has its own bounded timeout. If message rewriting
+fails, the raw messages are not persisted. Persistence can also fail.
+
+Explicit cancellation does not enable that fallback: when a later call is
+rejected, the accumulated merged result is neither published nor persisted by
+this path, and the caller receives `context.Canceled`. Per-call result mode
+publishes results individually as they complete and has separate round handling.
+These LLMFlow persistence rules do not establish Graph checkpoint or Resume
+guarantees.
 
 Tools should check the effective context before side effects, pass it to HTTP,
 database, and other I/O APIs, and observe Done in long waits. Already-running
