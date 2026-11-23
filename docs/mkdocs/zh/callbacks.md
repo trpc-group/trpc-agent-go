@@ -371,6 +371,11 @@ type ToolResultMessagesFunc = func(
 - 如果回调返回非空消息，它们将替换默认工具消息。
 - 当使用带有内置 OpenAI/Anthropic 适配器的 llmagent 时，推荐的返回类型是 `[]model.Message`。
 
+使用 Chat Completions 时，先返回匹配的 `RoleTool` 回执，再返回携带图片的
+`RoleUser` 消息，参考[图片工具示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/imagetool)。
+如果在用户消息中设置 `ToolID`，使用 `in.ToolCallID`。框架会将用户消息放在
+当轮所有工具回执之后，无需再配置 `BeforeModel` 回调。
+
 **使用示例：**
 
 ```go
