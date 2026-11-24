@@ -532,7 +532,7 @@ func main() {
 			Profiles: map[string]runtimeprofile.Profile{
 				"tenant_alpha": {
 					AppName:   "tenant-alpha",
-					ModelName: "gpt-5",
+					ModelName: "gpt-5.6-sol",
 					Prompt: runtimeprofile.Prompt{
 						Instruction: "You are the tenant Alpha assistant.",
 					},

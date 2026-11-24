@@ -260,7 +260,7 @@ agent:
 
 model:
   mode: "openai"
-  name: "gpt-5"
+  name: "gpt-5.6-sol"
   openai_variant: "auto"
 
 # Optional: knowledge backends used by knowledge search tools.
@@ -832,7 +832,20 @@ go run ./cmd/openclaw \
 ```
 
 By default, `-model` uses `$OPENAI_MODEL` if set, otherwise it falls
-back to `gpt-5.6-sol`.
+back to `gpt-5.6-sol`. This replaces `gpt-5`, which OpenAI retires on
+December 11, 2026.
+
+For `gpt-5.6-sol` with the OpenAI variant, OpenClaw sends
+`reasoning_effort: none` when a request does not set a reasoning effort.
+This applies to every request, including requests without tools. OpenAI's
+Chat Completions API does not support tool calling with another reasoning
+effort on GPT-5.4 and later, and `gpt-5.6-sol` defaults to `medium` when
+the field is omitted. Reasoning is therefore off by default, which differs
+from `gpt-5`.
+
+To change it, set `model.generation_config.reasoning_effort`. An explicit
+value is sent unchanged, so use a value other than `none` only for runs
+that do not call tools. Other model names do not get this default.
 
 ### Request-scoped model selection
 
@@ -854,7 +867,7 @@ model:
       base_url: "${DEEPSEEK_BASE_URL}"
     strong:
       mode: openai
-      name: gpt-5
+      name: gpt-5.6-sol
       openai_variant: openai
       base_url: "${OPENAI_BASE_URL}"
 ```
@@ -1564,7 +1577,7 @@ If you already have an OpenClaw skills directory, you can reuse it:
 cd openclaw
 go run ./cmd/openclaw \
   -mode openai \
-  -model gpt-5 \
+  -model gpt-5.6-sol \
   -skills-extra-dirs "/path/to/openclaw/skills"
 ```
 
@@ -1802,7 +1815,7 @@ To disable these tools explicitly:
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -model gpt-5 \
+  -model gpt-5.6-sol \
   -config ./openclaw.yaml \
   -enable-openclaw-tools=false
 ```

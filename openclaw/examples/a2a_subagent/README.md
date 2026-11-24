@@ -31,7 +31,7 @@ If you want to override the default environment-based model settings:
 ```bash
 cd openclaw
 go run ./examples/a2a_subagent \
-  -model gpt-5 \
+  -model gpt-5.6-sol \
   -openai-base-url https://api.openai.com/v1
 ```
 
