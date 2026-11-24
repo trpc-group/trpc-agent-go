@@ -131,17 +131,19 @@ jobs:
           set -euo pipefail
           cd test
           go mod tidy -diff
-          go test -coverpkg=trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses -coverprofile=coverage.out ./...
+          module=trpc.group/trpc-go/trpc-agent-go
+          coverpkg="$module/model/openai/sdkv3/responses,$module/internal/flow/llmflow,$module/internal/flow/processor,$module/internal/providerdata"
+          go test -coverpkg="$coverpkg" -coverprofile=coverage.out ./...
       - name: Prepare Responses integration coverage
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          module = "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/"
+          module = "trpc.group/trpc-go/trpc-agent-go/"
           profile = Path("test/coverage.out").read_text()
           Path("coverage-responses-e2e.out").write_text(
-              profile.replace(module, "./model/openai/sdkv3/")
+              profile.replace(module, "./")
           )
           PY
       - name: Upload Responses integration coverage

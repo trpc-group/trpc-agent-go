@@ -37,14 +37,23 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 		return messages, false, nil
 	}
 	projected := make([]model.Message, 0, len(messages))
+	searches := chatSearchHistory{client: make(map[string]string)}
 	for i, message := range messages {
-		converted, include, err := projectChatHistoryMessage(message)
+		if message.Role != model.RoleTool {
+			if err := searches.finish(); err != nil {
+				return nil, false, fmt.Errorf("chat history message %d: %w", i, err)
+			}
+		}
+		converted, include, err := projectChatHistoryMessage(message, &searches)
 		if err != nil {
 			return nil, false, fmt.Errorf("chat history message %d: %w", i, err)
 		}
 		if include {
 			projected = append(projected, converted)
 		}
+	}
+	if err := searches.finish(); err != nil {
+		return nil, false, err
 	}
 	if len(projected) == 0 {
 		return nil, false, fmt.Errorf("chat history has no transferable messages")
@@ -58,7 +67,7 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 	return projected, true, nil
 }
 
-func projectChatHistoryMessage(message model.Message) (model.Message, bool, error) {
+func projectChatHistoryMessage(message model.Message, searches *chatSearchHistory) (model.Message, bool, error) {
 	data := message.ProviderData
 	if slices.ContainsFunc(message.ContentParts, isEmptyChatContentPart) {
 		message.ContentParts = slices.DeleteFunc(slices.Clone(message.ContentParts), isEmptyChatContentPart)
@@ -74,7 +83,7 @@ func projectChatHistoryMessage(message model.Message) (model.Message, bool, erro
 		if err := providerdata.ValidateMessage(message, model.Info{Name: data.Model, ProviderDataProtocol: data.Protocol}); err != nil {
 			return model.Message{}, false, err
 		}
-		return projectResponsesHistory(message)
+		return projectResponsesHistory(message, searches)
 	}
 	if message.Role == model.RoleTool && len(message.ContentParts) > 0 {
 		var content strings.Builder
@@ -167,10 +176,13 @@ func (m *Model) supportsUserHistoryPart(part model.ContentPart) bool {
 
 // projectResponsesHistory validates the native record while preserving the
 // caller-visible projection, which callbacks may have edited for this request.
-func projectResponsesHistory(message model.Message) (model.Message, bool, error) {
-	callIDs, nativeText, sources, err := responsesHistoryForChat(message.ProviderData.Payload)
+func projectResponsesHistory(message model.Message, searches *chatSearchHistory) (model.Message, bool, error) {
+	callIDs, nativeText, sources, err := responsesHistoryForChat(message, searches)
 	if err != nil {
 		return model.Message{}, false, err
+	}
+	if message.Role == model.RoleTool {
+		return model.Message{}, false, nil
 	}
 	if len(callIDs) != len(message.ToolCalls) {
 		return model.Message{}, false, fmt.Errorf("responses function calls do not match the message projection")
@@ -186,7 +198,7 @@ func projectResponsesHistory(message model.Message) (model.Message, bool, error)
 	converted.ReasoningSignature = ""
 	// A callback can redact or otherwise replace the visible projection without
 	// editing ProviderData. Never restore source URLs from that stale record.
-	if visible, ok := chatVisibleText(converted); ok && visible == nativeText && len(sources) > 0 {
+	if visible, ok := chatVisibleText(converted); ok && visible != "" && visible == nativeText && len(sources) > 0 {
 		sources = slices.DeleteFunc(sources, func(source string) bool { return chatTextContainsURL(visible, source) })
 		if len(sources) > 0 {
 			links := "\n\nSources:\n" + strings.Join(sources, "\n")
@@ -209,16 +221,30 @@ func projectResponsesHistory(message model.Message) (model.Message, bool, error)
 
 // responsesHistoryForChat validates the native items and collects their text
 // and supported citations without changing the persisted record.
-func responsesHistoryForChat(payload json.RawMessage) ([]string, string, []string, error) {
-	items, err := responseshistory.ReadCompleted(payload)
+func responsesHistoryForChat(message model.Message, searches *chatSearchHistory) ([]string, string, []string, error) {
+	payload := message.ProviderData.Payload
+	items, err := responseshistory.ReadCompletedWithToolSearch(payload)
 	if err != nil {
 		return nil, "", nil, err
+	}
+	if message.Role == model.RoleTool && (len(items) != 1 || len(message.ToolCalls) != 0) {
+		return nil, "", nil, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
 	}
 	var callIDs []string
 	var text strings.Builder
 	var sources []string
 	seen := make(map[string]struct{})
+	var hosted int
 	for i, item := range items {
+		if item.Type == responseshistory.ToolSearchCall || item.Type == responseshistory.ToolSearchOutput {
+			if err := searches.track(item, message, &hosted); err != nil {
+				return nil, "", nil, fmt.Errorf("item %d: %w", i, err)
+			}
+			continue
+		}
+		if message.Role == model.RoleTool {
+			return nil, "", nil, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
+		}
 		switch item.Type {
 		case responseshistory.FunctionCall:
 			callIDs = append(callIDs, item.CallID)
@@ -246,7 +272,58 @@ func responsesHistoryForChat(payload json.RawMessage) ([]string, string, []strin
 			}
 		}
 	}
+	if hosted != 0 {
+		return nil, "", nil, fmt.Errorf("hosted tool_search_call has no tool_search_output")
+	}
 	return callIDs, text.String(), sources, nil
+}
+
+// chatSearchHistory tracks unanswered client searches across messages. Hosted
+// searches are paired by order within one output and may omit call_id.
+type chatSearchHistory struct {
+	client map[string]string
+}
+
+func (h *chatSearchHistory) track(item responseshistory.Item, message model.Message, hosted *int) error {
+	if message.Role == model.RoleTool {
+		if item.Type != responseshistory.ToolSearchOutput || item.Execution != "client" || item.CallID != message.ToolID {
+			return fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
+		}
+		name, ok := h.client[item.CallID]
+		if !ok {
+			return fmt.Errorf("tool_search_output %q has no preceding tool_search_call", item.CallID)
+		}
+		if name != message.ProviderData.Model {
+			return fmt.Errorf("tool_search_output %q belongs to a different model", item.CallID)
+		}
+		delete(h.client, item.CallID)
+		return nil
+	}
+	if item.Execution == "server" {
+		if item.Type == responseshistory.ToolSearchCall {
+			*hosted++
+		} else if *hosted == 0 {
+			return fmt.Errorf("hosted tool_search_output has no preceding tool_search_call")
+		} else {
+			*hosted--
+		}
+		return nil
+	}
+	if item.Type != responseshistory.ToolSearchCall {
+		return fmt.Errorf("client tool_search_output %q must be recorded on a tool message", item.CallID)
+	}
+	if _, exists := h.client[item.CallID]; exists {
+		return fmt.Errorf("duplicate tool_search_call call_id %q", item.CallID)
+	}
+	h.client[item.CallID] = message.ProviderData.Model
+	return nil
+}
+
+func (h *chatSearchHistory) finish() error {
+	for callID := range h.client {
+		return fmt.Errorf("client tool_search_call %q has no tool_search_output", callID)
+	}
+	return nil
 }
 
 func chatVisibleText(message model.Message) (string, bool) {

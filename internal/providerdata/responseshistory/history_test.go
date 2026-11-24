@@ -61,3 +61,17 @@ func TestReadCompletedRejectsInvalidHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestReadToolSearchRequiresConsumerSupport(t *testing.T) {
+	const call = `{"type":"tool_search_call","execution":"client","call_id":"s","arguments":{"query":"invoice"}}`
+	const result = `{"type":"tool_search_output","execution":"client","call_id":"s","tools":[],"future":9007199254740993}`
+	raw := json.RawMessage("[" + call + "," + result + "]")
+	_, err := ReadCompleted(raw)
+	require.ErrorContains(t, err, "unsupported native item type")
+	items, err := ReadCompletedWithToolSearch(raw)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Equal(t, call, string(items[0].Raw))
+	require.JSONEq(t, `{"query":"invoice"}`, string(items[0].SearchArguments()))
+	require.Equal(t, result, string(items[1].Raw))
+}

@@ -328,7 +328,7 @@ func TestApplyDeclarations_DoesNotUnwrapNamedLikeToolSemantics(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestApplyDeclarations_DoesNotExposeOptionalRuntimeInterfaces(t *testing.T) {
+func TestApplyDeclarations_PreservesLoadingWithoutExposingExecutionInterfaces(t *testing.T) {
 	base := &semanticSurfaceTool{
 		stubCallableSurfaceTool: stubCallableSurfaceTool{
 			stubSurfaceTool: stubSurfaceTool{
@@ -360,7 +360,8 @@ func TestApplyDeclarations_DoesNotExposeOptionalRuntimeInterfaces(t *testing.T) 
 	require.False(t, ok)
 	require.Equal(t, base, itool.ResolveDeclaration(patched[0]))
 	require.Equal(t, tool.ToolMetadata{}, tool.MetadataOf(patched[0]))
-	require.False(t, tool.ShouldDefer(context.Background(), patched[0]))
+	require.True(t, tool.ShouldDefer(context.Background(), patched[0]),
+		"overriding a declaration preserves the model loading decision")
 	_, ok = patched[0].(tool.PermissionChecker)
 	require.False(t, ok)
 	_, ok = patched[0].(stateDeltaForInvocation)

@@ -42,6 +42,7 @@ type options struct {
 	httpClientOptions         []model.HTTPClientOption
 	openaiOptions             []option.RequestOption
 	extraFields               map[string]any
+	toolSearch                toolSearchConfig
 }
 
 func defaultOptions() options {
@@ -111,6 +112,42 @@ func WithHTTPClientOptions(httpOpts ...model.HTTPClientOption) Option {
 func WithOpenAIOptions(opts ...option.RequestOption) Option {
 	return func(o *options) {
 		o.openaiOptions = append(o.openaiOptions, opts...)
+	}
+}
+
+// WithHostedToolSearch enables hosted tool search. Request tools that report
+// tool.ShouldDefer, for example through deferred.Tool or deferred.ToolSet
+// in the tool/deferred package, are declared with defer_loading, and the
+// tool_search tool is added. Members of a ToolSet that has deferred members
+// are grouped in one namespace named after the ToolSet, described by
+// tool.ToolSetDescriber when the ToolSet implements it. The API searches and
+// loads deferred tools within the same response, and function calls to
+// loaded tools are mapped back to the registered tools and run as ordinary
+// tool calls.
+//
+// Requests without deferred tools or tool search history are unchanged. Tool
+// search requires a model that supports it. WithHostedToolSearch and
+// WithClientToolSearch are mutually exclusive; the later option wins.
+func WithHostedToolSearch() Option {
+	return func(o *options) {
+		o.toolSearch = toolSearchConfig{mode: toolSearchHosted}
+	}
+}
+
+// WithClientToolSearch enables client-executed tool search even when the
+// agent has no deferred tools. The handler can select deferred
+// tools, replace their implementations, or discover tools in its own catalog.
+// LLMAgent records the returned tools' declarations in tool_search_output
+// before the next model step and borrows their execution bindings for this
+// run. After a restart, an expired binding can be searched for again.
+//
+// Client tool search requires a flow that completes provider actions, such as
+// LLMAgent; Graph LLM nodes report an error for a search call. GenerateContent
+// returns an error when handler is nil. WithHostedToolSearch and
+// WithClientToolSearch are mutually exclusive; the later option wins.
+func WithClientToolSearch(handler ToolSearchHandler) Option {
+	return func(o *options) {
+		o.toolSearch = toolSearchConfig{mode: toolSearchClient, handler: handler}
 	}
 }
 

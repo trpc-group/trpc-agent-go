@@ -95,6 +95,12 @@ func TestValidateMessages(t *testing.T) {
 	require.NoError(t, ValidateMessages(native, nativeInfo))
 	native[2].Role = model.RoleUser
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "assistant message")
+	native[2].Role = model.RoleTool
+	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "requires a tool id",
+		"a native tool record must name the action it answers")
+	native[2].ToolID = "call-1"
+	require.NoError(t, ValidateMessages(native, nativeInfo))
+	native[2].ToolID = ""
 	native[2].Role = model.RoleAssistant
 	native[2].ProviderData.Payload = json.RawMessage(`{`)
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "valid JSON object or array")
@@ -117,6 +123,19 @@ func TestHistoryCompatibilityIsIndependentOfProducerValidation(t *testing.T) {
 
 	message.ProviderData.Payload = json.RawMessage("null")
 	require.ErrorContains(t, ValidateHistory([]model.Message{message}, target), "valid JSON object or array")
+}
+
+func TestValidateHistoryAcceptsCompletedToolActionFromAnotherProducer(t *testing.T) {
+	target := historyConsumer{infoModel{info: model.Info{Name: "model-b", ProviderDataProtocol: nativeInfo.ProviderDataProtocol}}}
+	result := model.NewToolMessage("search-1", "", "")
+	result.ProviderData = &model.ProviderData{Protocol: nativeInfo.ProviderDataProtocol, Model: nativeInfo.Name,
+		Payload: json.RawMessage(`[{"type":"tool_search_output","call_id":"search-1","tools":[]}]`)}
+	require.NoError(t, ValidateHistory([]model.Message{result}, target))
+	require.ErrorContains(t, ValidateMessage(result, target.Info()), "belongs to protocol")
+	result.ToolID = ""
+	require.ErrorContains(t, ValidateHistory([]model.Message{result}, target), "requires a tool id")
+	result.Role = model.RoleUser
+	require.ErrorContains(t, ValidateHistory([]model.Message{result}, target), "only valid on assistant")
 }
 
 func TestValidateHistoryRequiresProducerForUndeclaredProtocols(t *testing.T) {

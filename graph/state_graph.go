@@ -613,10 +613,11 @@ func executeNodeWithWorkflowTrace(
 	}
 	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
 	workflow := &itelemetry.Workflow{
-		Name:    fmt.Sprintf("execute_function_node %s", id),
-		ID:      id,
-		Type:    workflowTypeFromNodeType(nodeType),
-		Request: state.safeClone(),
+		Name:           fmt.Sprintf("execute_function_node %s", id),
+		ID:             id,
+		Type:           workflowTypeFromNodeType(nodeType),
+		Request:        state.safeClone(),
+		FilterResponse: filterNodeResponse,
 	}
 	defer func() {
 		itelemetry.TraceWorkflow(span, workflow)
@@ -714,10 +715,11 @@ func (sg *StateGraph) AddLLMNode(
 		var workflow *itelemetry.Workflow
 		if recordWorkflow {
 			workflow = &itelemetry.Workflow{
-				Name:    workflowName,
-				ID:      id,
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           workflowName,
+				ID:             id,
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 		}
 		defer func() {
@@ -2179,7 +2181,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	}
 	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
 	if hasAfterCallbacks {
-		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel); err != nil {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel, config.Request); err != nil {
 			return ctx, nil, err
 		}
 	}
@@ -2474,10 +2476,11 @@ func newToolsNodeRuntime(
 		var workflow *itelemetry.Workflow
 		if startedSpan {
 			workflow = &itelemetry.Workflow{
-				Name:    "execute_tools_node",
-				ID:      "execute_tools_node",
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           "execute_tools_node",
+				ID:             "execute_tools_node",
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 			defer func() {
 				itelemetry.TraceWorkflow(span, workflow)
@@ -4592,7 +4595,7 @@ func callToolWithRetry(
 	state State,
 	toolCallIndex int,
 ) (any, error) {
-	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
+	runtimeTool, ok := itool.ResolveSemantic(callableTool).(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {
 		var err error
@@ -4897,6 +4900,10 @@ type modelExecutionConfig struct {
 const (
 	errMsgNoModelResponse = "no response received from model"
 	errMsgNoModelChoices  = "model returned no choices"
+	// errMsgProviderActions reports a response that delegates provider-native
+	// actions, such as a client-executed tool search, which LLM nodes do not
+	// complete. Treating it as the node result would lose the pending action.
+	errMsgProviderActions = "model response requests provider actions, which graph LLM nodes do not complete"
 )
 
 type modelDeltaStreamTap struct {
@@ -4968,6 +4975,13 @@ func validateFinalModelResponse(
 			errMsgNoModelChoices,
 		))
 		return nil, errors.New(errMsgNoModelChoices)
+	}
+	if providerdata.ResponseRequestsActions(resp) {
+		span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgProviderActions,
+		))
+		return nil, errors.New(errMsgProviderActions)
 	}
 	return resp, nil
 }

@@ -10,11 +10,13 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func responsesHistory(payload string) model.Message {
@@ -303,6 +305,139 @@ func TestPrepareChatMessagesUserMedia(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, string(wire), "describe")
 			require.Contains(t, string(wire), tt.wantWire)
+		})
+	}
+}
+
+func TestChatRequestProjectsPairedSearchWithoutLosingOrdinaryCalls(t *testing.T) {
+	const native = `[
+		{"type":"message","id":"msg","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Visible answer","annotations":[{"type":"url_citation","url":"https://example.com/source"}]}]},
+		{"type":"tool_search_call","id":"hosted","execution":"server","call_id":null,"status":"completed","arguments":{"query":"hosted"}},
+		{"type":"tool_search_output","id":"hosted_output","execution":"server","call_id":null,"status":"completed","tools":[{"type":"function","name":"old_loaded_tool"}]},
+		{"type":"tool_search_call","id":"client","execution":"client","call_id":"search","status":"completed","arguments":"{\"query\":\"client\"}"},
+		{"type":"function_call","call_id":"call","name":"history_lookup","arguments":"{}"}
+	]`
+	assistant := responsesHistory(native)
+	assistant.Content = "Visible answer"
+	assistant.ToolCalls = []model.ToolCall{{Type: "function", ID: "call", Function: model.FunctionDefinitionParam{Name: "history_lookup", Arguments: []byte(`{}`)}}}
+	searchResult := model.Message{Role: model.RoleTool, ToolID: "search", ToolName: "tool_search", Content: "private search summary", ProviderData: &model.ProviderData{
+		Protocol: "openai.responses", Model: "first", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"search","status":"completed","tools":[{"type":"function","name":"another_old_tool"}]}]`),
+	}}
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question"), assistant, searchResult, model.NewToolMessage("call", "history_lookup", "actual tool result"), model.NewUserMessage("next")},
+		Tools:    map[string]tool.Tool{"current_tool": stubTool{decl: &tool.Declaration{Name: "current_tool", InputSchema: &tool.Schema{Type: "object"}}}},
+	}
+	before, err := json.Marshal(request)
+	require.NoError(t, err)
+	params, _, err := New("chat").prepareChatRequest(context.Background(), request)
+	require.NoError(t, err)
+	wire, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.Contains(t, string(wire), "Visible answer")
+	require.Contains(t, string(wire), "https://example.com/source")
+	require.Contains(t, string(wire), "history_lookup")
+	require.Contains(t, string(wire), "actual tool result")
+	require.Contains(t, string(wire), "current_tool")
+	for _, absent := range []string{"tool_search_call", "tool_search_output", "old_loaded_tool", "another_old_tool", "private search summary"} {
+		require.NotContains(t, string(wire), absent)
+	}
+	after, err := json.Marshal(request)
+	require.NoError(t, err)
+	require.JSONEq(t, string(before), string(after))
+}
+
+func TestChatSearchProjectionRejectsInvalidOrUnpairedHistory(t *testing.T) {
+	search := func(payload string) model.Message {
+		message := responsesHistory(payload)
+		message.Content = ""
+		return message
+	}
+	result := func(callID string) model.Message {
+		return model.Message{Role: model.RoleTool, ToolID: callID, ProviderData: &model.ProviderData{
+			Protocol: "openai.responses", Model: "first", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"` + callID + `","status":"completed","tools":[]}]`),
+		}}
+	}
+	call := search(`[{"type":"tool_search_call","execution":"client","call_id":"s","status":"completed","arguments":{"query":"x"}}]`)
+	ordinary := search(`[{"type":"function_call","call_id":"c","name":"lookup","arguments":"{}"},{"type":"tool_search_call","execution":"client","call_id":"s","arguments":{"query":"x"}}]`)
+	ordinary.ToolCalls = []model.ToolCall{{ID: "c", Type: "function", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte(`{}`)}}}
+	mismatched := result("s")
+	mismatched.ToolID = "other"
+	otherModel := result("s")
+	otherModel.ProviderData.Model = "different"
+	tests := []struct {
+		name     string
+		messages []model.Message
+		want     string
+	}{
+		{"client orphan", []model.Message{result("s")}, "no preceding tool_search_call"},
+		{"client incomplete", []model.Message{call}, "has no tool_search_output"},
+		{"client intervening user", []model.Message{call, model.NewUserMessage("next"), result("s")}, "has no tool_search_output"},
+		{"client duplicate output", []model.Message{call, result("s"), result("s")}, "no preceding tool_search_call"},
+		{"client duplicate call", []model.Message{search(`[{"type":"tool_search_call","execution":"client","call_id":"s","arguments":{}},{"type":"tool_search_call","execution":"client","call_id":"s","arguments":{}}]`)}, "duplicate tool_search_call"},
+		{"mismatched tool id", []model.Message{call, mismatched}, "may only record"},
+		{"different producer", []model.Message{call, otherModel}, "different model"},
+		{"client output on assistant", []model.Message{search(`[{"type":"tool_search_output","execution":"client","call_id":"s","tools":[]}]`)}, "must be recorded on a tool message"},
+		{"client search without id", []model.Message{search(`[{"type":"tool_search_call","execution":"client","arguments":{}}]`)}, "empty call_id"},
+		{"client invalid arguments", []model.Message{search(`[{"type":"tool_search_call","execution":"client","call_id":"s","arguments":"[]"}]`)}, "invalid JSON arguments"},
+		{"client null arguments", []model.Message{search(`[{"type":"tool_search_call","execution":"client","call_id":"s","arguments":null}]`)}, "invalid JSON arguments"},
+		{"unknown execution", []model.Message{search(`[{"type":"tool_search_call","execution":"future","arguments":{}}]`)}, "unsupported execution"},
+		{"unfinished search", []model.Message{search(`[{"type":"tool_search_call","execution":"server","status":"in_progress"}]`)}, "want completed"},
+		{"hosted orphan", []model.Message{search(`[{"type":"tool_search_output","execution":"server","tools":[]}]`)}, "no preceding tool_search_call"},
+		{"hosted incomplete", []model.Message{search(`[{"type":"tool_search_call","execution":"server","arguments":{}}]`)}, "has no tool_search_output"},
+		{"malformed tools", []model.Message{call, {Role: model.RoleTool, ToolID: "s", ProviderData: &model.ProviderData{Protocol: "openai.responses", Model: "first", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"s","tools":{}}]`)}}}, "decode"},
+		{"unknown native item", []model.Message{search(`[{"type":"other"}]`)}, "unsupported native item type"},
+		{"ordinary missing result", []model.Message{ordinary, result("s")}, "missing tool results"},
+		{"ordinary orphan result", []model.Message{call, result("s"), model.NewToolMessage("other", "lookup", "x")}, "no pending function call"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := New("chat").prepareProviderHistory(tt.messages)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestChatSearchProjectionAcceptsParallelCallsAndHostedIDs(t *testing.T) {
+	assistant := responsesHistory(`[
+		{"type":"tool_search_call","execution":"server","call_id":"hosted","arguments":{}},
+		{"type":"tool_search_output","execution":"server","call_id":"hosted","tools":[]},
+		{"type":"tool_search_call","execution":"client","call_id":"one","arguments":{"query":"one"}},
+		{"type":"tool_search_call","execution":"client","call_id":"two","arguments":"{\"query\":\"two\"}"}
+	]`)
+	assistant.Content = ""
+	output := func(id string) model.Message {
+		return model.Message{Role: model.RoleTool, ToolID: id, ProviderData: &model.ProviderData{
+			Protocol: "openai.responses", Model: "first", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"` + id + `","tools":[]}]`),
+		}}
+	}
+	messages := []model.Message{model.NewUserMessage("question"), assistant, output("two"), output("one"), model.NewUserMessage("next")}
+	projected, changed, err := New("chat").prepareProviderHistory(messages)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []model.Message{model.NewUserMessage("question"), model.NewUserMessage("next")}, projected)
+}
+
+func TestChatSearchProjectionDoesNotRestoreClearedCitation(t *testing.T) {
+	for _, nativeText := range []string{"sensitive original", ""} {
+		t.Run(nativeText, func(t *testing.T) {
+			payload, err := json.Marshal([]any{
+				map[string]any{"type": "message", "id": "m", "status": "completed", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": nativeText, "annotations": []any{map[string]any{"type": "url_citation", "url": "https://example.com/private"}}}}},
+				map[string]any{"type": "tool_search_call", "execution": "server", "arguments": map[string]any{}},
+				map[string]any{"type": "tool_search_output", "execution": "server", "tools": []any{}},
+			})
+			require.NoError(t, err)
+			message := responsesHistory(string(payload))
+			message.Content = ""
+			messages := []model.Message{model.NewUserMessage("question"), message}
+			before, err := json.Marshal(messages)
+			require.NoError(t, err)
+			projected, changed, err := New("chat").prepareProviderHistory(messages)
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.Equal(t, []model.Message{model.NewUserMessage("question")}, projected)
+			after, err := json.Marshal(messages)
+			require.NoError(t, err)
+			require.JSONEq(t, string(before), string(after))
 		})
 	}
 }

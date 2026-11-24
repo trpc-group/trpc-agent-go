@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -348,4 +349,34 @@ func TestPostToolRequestProcessor_HelperEdgeCases(t *testing.T) {
 
 	invocation.SetState(contentHasCompactedToolResultsStateKey, true)
 	require.True(t, hasCompactedToolResultMessages(invocation))
+}
+
+func TestModelProvidedToolPromptRespectsOptions(t *testing.T) {
+	type builtinModel struct {
+		model.Model
+		modelrequest.BuiltinTools
+	}
+	for _, tc := range []struct {
+		name       string
+		options    []PostToolOption
+		system     bool
+		wantPrompt bool
+	}{
+		{name: "default", wantPrompt: true},
+		{name: "wait for first result", system: true, options: []PostToolOption{WithPostToolPromptBeforeResult(false)}},
+		{name: "do not create system message", options: []PostToolOption{WithPostToolPromptCreateSystemMessage(false)}},
+		{name: "append to existing system message", system: true, options: []PostToolOption{WithPostToolPromptCreateSystemMessage(false)}, wantPrompt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := append([]PostToolOption{WithPostToolPromptForModelTools()}, tc.options...)
+			req := &model.Request{}
+			if tc.system {
+				req.Messages = append(req.Messages, model.NewSystemMessage(testSystemContent))
+			}
+			req.Messages = append(req.Messages, model.NewUserMessage("Hello"))
+			inv := &agent.Invocation{Model: builtinModel{BuiltinTools: true}}
+			NewPostToolRequestProcessor(opts...).ProcessRequest(context.Background(), inv, req, nil)
+			require.Equal(t, tc.wantPrompt, hasPostToolPrompt(req.Messages, DefaultPostToolPrompt))
+		})
+	}
 }

@@ -150,3 +150,112 @@ by the `integration` build tag and `MONGODB_INTEGRATION_URI`:
 MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
+
+## Expiration cleanup query costs
+
+Cleanup identifies expired session groups in one aggregation per collection.
+It matches non-deleted rows and the full string range of `app_name`, allowing
+MongoDB to use the existing partial `cleanup` index on
+`(app_name, user_id, session_id, updated_at)`. Application names stored by this
+backend are strings. The aggregation still selects groups whose maximum
+`updated_at` is at or before the TTL cutoff. A group with a newer row retains
+all of its history, and track groups still span every track in the session.
+
+This change needs no new index or data migration and does not force an index
+hint. Existing indexes and externally managed databases remain usable; missing
+indexes affect performance, not cleanup results. An indexed plan avoids
+scanning soft-deleted history. MongoDB 7.0 can cover this query from the index;
+MongoDB 6.0 may still fetch active documents to check `deleted_at: null`.
+When active histories dominate, index traversal plus document fetches can be
+slower than the original collection scan, particularly on MongoDB 6.0. Verify the execution
+plan, document/key scans and latency on the deployed database version.
+
+Expired groups are deleted in batches of at most 500, with the remaining
+partial batch committed at the end. Completed batches survive a later failure.
+Event and track cleanup run sequentially with separate 30-second budgets (up
+to 60 seconds combined); parent cancellation or service shutdown stops both.
+Soft/hard deletion modes and TTL values are unchanged. Cleanup still repeats
+full grouping on each instance and retains the existing non-atomic
+check-then-delete window with concurrent appends; it introduces no watermark,
+lease or cascade from session-state TTL expiration.
+
+To compare identification costs on different history distributions, run the
+opt-in benchmark from `session/mongodb` against a local test replica set:
+
+```bash
+MONGODB_INTEGRATION_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -tags=integration -run '^$' \
+  -bench '^BenchmarkIntegrationCleanupIdentification$' -benchtime=3x -count=3
+```
+
+The fixtures include 1 KiB payloads, deleted-heavy/recent-heavy histories,
+short active sessions, expired sessions and long-lived sessions. Both original
+and indexed aggregations consume and validate the complete result set. Setup,
+deletes and result validation are excluded from timing. The 10 ms delay applies
+once before the Aggregate call, not to getMore. These local measurements do
+not predict production latency.
+
+## Event ordering index upgrades
+
+New services create `idx_session_events_ordered_lookup`, a non-unique partial
+index on `(app_name, user_id, session_id, created_at, _id)` for documents matching
+`{deleted_at: null}`. Collection prefixes also apply to the index name. It
+supports chronological event reads and reverse pagination without an additional
+sort. The original lookup index is retained for rolling upgrades and rollback;
+existing documents and older writers need no conversion.
+
+Index creation during initialization can add startup time and database load.
+For large collections, build the index before deploying the new service. If
+using `WithSkipDBInit(true)`, manage the index explicitly (adjust names for your
+collection prefix):
+
+```javascript
+db.session_events.createIndex(
+  {app_name: 1, user_id: 1, session_id: 1, created_at: 1, _id: 1},
+  {name: "idx_session_events_ordered_lookup",
+   partialFilterExpression: {deleted_at: null}}
+)
+```
+
+Reads remain correct without this index, but may need a blocking sort. Keeping
+both indexes adds storage and write overhead. This index alone does not limit
+the number of events loaded by a context-window read.
+
+## Context-window read costs
+
+For a single session with a positive event limit, MongoDB reads newest events
+first. The initial cursor batch contains at most the smaller of the event limit
+and 128 documents. Subsequent batches contain up to 128 documents, including
+when skipping empty payloads or searching older history for a user message.
+The reader closes the cursor once the window and its required user message are
+available. The returned order and filtering remain the same. If the window has
+no user message, the reader searches older history for the nearest user message;
+a history without any user message still requires a full scan. Empty payloads
+do not consume an event slot.
+
+Time filtering uses the event payload timestamp, which can differ from the
+document's `created_at`. If the oldest event in the candidate window satisfies
+the time cutoff, the window is safe to use. Otherwise, the reader falls back to
+the original full-history filtering to preserve the first-matching-timestamp
+behavior even when timestamps are out of order. Unlimited and multi-session
+reads retain the existing full-history path. Pagination is unchanged. The
+ordered lookup index avoids a blocking sort; the optimization does not force
+an index hint, so externally managed indexes remain supported.
+
+Bounded reads validate only payloads actually traversed, including older events
+searched for a user message. Unlike the previous full-history context reads,
+they can succeed despite invalid JSON in unvisited historical payloads. Invalid
+JSON encountered during traversal still returns an error; full-history
+fallbacks still decode the complete history. A bounded read does not validate
+the integrity of the entire session history.
+
+An optional live-model smoke test verifies a three-turn conversation, event
+window truncation and history reloading after recreating the service. It sends
+synthetic prompts to the configured endpoint and is skipped by default:
+
+```bash
+# Configure OPENAI_API_KEY, OPENAI_BASE_URL and MODEL_NAME in your environment.
+cd test
+MONGODB_LIVE_MODEL_TEST=1 MONGO_TEST_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -run '^TestMongoDBHistoryLiveModel$' -count=1 -v .
+```

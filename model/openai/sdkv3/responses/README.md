@@ -68,11 +68,302 @@ recovery contract.
   Malformed streams and EOF without a terminal response are errors. Cancelling
   the request context closes the stream without committing partial calls.
 
-Only `message`, `reasoning`, and `function_call` output item types are supported.
-Unknown output types fail explicitly, including hosted-tool calls. Audio/video
-input, hosted tools, tool search, background execution, approval interactions,
-`conversation`, `previous_response_id`, and provider compaction are outside this
-initial contract. Unsupported Chat-specific parameters fail validation.
+Only `message`, `reasoning`, `function_call`, `tool_search_call`, and
+`tool_search_output` output item types are supported; the tool search items
+are described in [Tool search](#tool-search). Unknown output types fail
+explicitly, including hosted-tool calls. Audio/video input, other hosted tools,
+background execution, approval interactions, `conversation`,
+`previous_response_id`, and provider compaction are outside this initial
+contract. Unsupported Chat-specific parameters fail validation.
+
+## Tool search
+
+[Tool search](https://developers.openai.com/api/docs/guides/tools-tool-search)
+lets the model load tool definitions when it needs them instead of receiving
+every definition up front. It is opt-in and requires a model that supports
+`tool_search`; the OpenAI guide lists `gpt-5.4` and later.
+
+- `WithHostedToolSearch()` declares deferred tools with `defer_loading: true`
+  and adds `{"type":"tool_search"}`. The API searches and loads tools inside
+  the same response, which stays `Done`.
+- `WithClientToolSearch(handler)` leaves deferred tools out of the request and
+  adds a client `tool_search` tool whose arguments have a `query` string. When
+  the model searches, `handler` returns tool entries to load and execute. It
+  can select deferred candidates, replace their tool objects, or return tools
+  from an external catalog. The adapter records a `tool_search_output` with
+  their definitions. Search is available even when no deferred tools are
+  registered. A nil handler makes `GenerateContent` fail.
+
+The two options are mutually exclusive; the later one wins. Wrap a tool or
+ToolSet with `tool/deferred` to select what is deferred, then register it with
+the agent as usual. Other tools keep their own `tool.DeferredTool` preference.
+Deferred tools stay registered, filtered, and executed by the agent; only the
+request changes. In hosted mode, requests without deferred tools and without
+tool search history are unchanged. Adapters without tool search, such as Chat
+Completions, ignore deferral.
+
+Tools registered and allowed for the request remain executable even before a
+search loads their definitions. Use the existing tool filters and permission
+callbacks to enforce access restrictions; deferral controls schema exposure.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        // Defer one CRM member; the others stay visible up front.
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        // Defer the whole billing ToolSet.
+        deferred.ToolSet(billing),
+    }),
+)
+```
+
+With no options, every wrapped tool is deferred. `deferred.WithFilter` selects
+which tools to defer. The filter receives the original tool at request time;
+for ToolSets, that is the original member before the framework adds a name
+prefix. It returns true to
+defer the tool and false to keep it eager, overriding the wrapped tool's own
+`tool.DeferredTool` preference in either case. `deferred.WithFilter(nil)` restores
+the default of deferring every wrapped tool. If set more than once, the last
+filter wins. The same ToolSet wrapper can be registered with
+`WithActivatableToolSets`, and it applies the filter to members refreshed from
+the original ToolSet, including MCP members. Wrapping does not open a new
+connection; closing the wrapped ToolSet closes the original. A nil original
+returns nil.
+
+Agent and run tool filters receive the registered wrapper. `Declaration()`
+and `tool.MetadataOf` remain available; a filter that needs the original
+concrete type can follow the existing `Original() tool.Tool` convention,
+unwrapping more than once if needed.
+
+### Namespaces
+
+A ToolSet with at least one deferred member is sent as a `namespace` named
+after the ToolSet. Members keep their original names inside it, and eager
+members are sent without `defer_loading`. The namespace description comes from
+`tool.ToolSetDescriber`; an MCP ToolSet returns `ConnectionConfig.Description`.
+Without one, the description is `Tools from the <name> tool set.` ToolSets
+without deferred members, and standalone tools, keep their ordinary top-level
+function names.
+
+For a custom ToolSet, keep the description in the instance and implement the
+optional `Description()` method. The following application-defined type can
+be used for the `billing` value registered above; `lookupInvoice` and
+`listInvoices` are existing `tool.Tool` values:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// In the agent setup, before registering the ToolSet:
+billing := staticToolSet{
+    name:        "billing",
+    description: "Look up invoices, payments, and refunds.",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+The deferred wrapper forwards `Description()`, and the adapter uses its value
+as `namespace.description` and `ToolSearchEntry.NamespaceDescription`.
+
+A function call returned with a namespace is mapped back to the tool that the
+agent registered for that member, for example `crm_lookup` for `lookup` in
+`crm`. The mapping uses the stored namespace and member name, without parsing
+the registered name. Registered names must remain unique across ToolSets and
+standalone tools; namespace grouping does not resolve collisions in the
+agent's name-keyed tool registry. The native item keeps its namespace for the
+next request. An unknown namespaced call becomes a not-found tool call named
+`<namespace>.<name>` and
+never falls back to a tool with the bare name. A namespace name that equals a
+top-level function name fails the request. After an `AfterModel` payload edit,
+the flow uses `ProjectProviderDataWithRequest` to resolve namespaced calls
+against the request's tool bindings, including original-name ToolSets. An edit
+to function arguments preserves the executor selected for that call ID,
+namespace, and function name. If a callback introduces a call such as
+`weather.weather` that could select two executors, reprojection reports
+ambiguity before execution. To explicitly select a top-level function, use
+its name with an empty namespace. Direct
+`ProjectProviderData` calls have no request, so they reject namespaced calls.
+
+### Client-executed search
+
+The handler returns entries containing both the model-facing identity and the
+tool object to execute:
+
+```go
+type ToolSearchHandler func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error)
+
+type ToolSearchEntry struct {
+    Namespace            string
+    NamespaceDescription string
+    Name                 string
+    Tool                 tool.Tool
+}
+```
+
+The handler receives a `ToolSearchRequest`:
+
+- `CallID` is the `tool_search_call` it answers.
+- `Arguments` holds the raw arguments, and `Query` holds their `query` string.
+- `Candidates` lists deferred tools available to load. A registered candidate
+  becomes available again when its replacement binding expires.
+
+Candidates come from the request tools, so agent and run tool filters apply
+before they reach the handler. Read a candidate's declaration through
+`entry.Tool.Declaration()`. The model calls the function by its `Namespace`
+and `Name`. For a ToolSet member such as `billing.lookup_invoice`, `Name`
+is `lookup_invoice` even if the registered tool is named `billing_lookup_invoice`.
+A new entry can omit `Name` to use the tool's declaration name. An empty
+`Namespace` declares a top-level function.
+
+This handler returns matching invoice candidates or loads an external tool
+when the local catalog has no match.
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+func invoiceSearch(catalogTool tool.Tool) responses.ToolSearchHandler {
+    return func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        if !strings.Contains(strings.ToLower(req.Query), "invoice") {
+            return nil, nil
+        }
+        var entries []responses.ToolSearchEntry
+        for _, entry := range req.Candidates {
+            if strings.Contains(strings.ToLower(entry.Tool.Declaration().Description), "invoice") {
+                entries = append(entries, entry)
+            }
+        }
+        if len(entries) == 0 {
+            entries = append(entries, responses.ToolSearchEntry{
+                Namespace:            "external_billing",
+                NamespaceDescription: "Invoice lookup tools.",
+                Tool:                 catalogTool,
+            })
+        }
+        return entries, nil
+    }
+}
+
+// catalogTool is an application-owned tool.Tool with an invoice declaration.
+llm := responses.New("gpt-5.4", responses.WithClientToolSearch(invoiceSearch(catalogTool)))
+```
+
+To substitute a sandbox implementation, copy a candidate and set
+`entry.Tool = sandboxTool` before returning it. The model calls the same
+namespace and function name with the sandbox tool's schema. The sandbox tool
+receives those arguments through the usual permissions and tool callbacks.
+`Run.ToolFilter` also applies to replacements and external tools. Each returned
+entry needs a tool with a declaration and a distinct model-facing identity.
+If two entries in one result map to the same execution key, the search
+fails before either entry can be used. A nil or empty slice reports a search
+with no matches.
+
+The agent borrows returned objects for this Run. The application owns their
+resources. Session history keeps the schema seen by the model. In a later Run,
+an original candidate can execute through the agent's registered tool when
+its namespace and function name still match, even if the ToolSet's naming
+mode has changed. A call to a replacement or external tool from an earlier Run returns a tool error
+asking the model to search again. If that tool is now registered as deferred
+under the same namespace and name, the handler can select it from
+`Candidates`. Later searches use this latest selection.
+
+The candidate list stays local. With its default prompt and a fixed tool
+configuration, LLMAgent includes its tool guidance from the first request,
+even with an entirely external catalog. Search results append tool definitions
+to the input history.
+
+When using `GenerateContent` directly, check `IsFinalResponse()` for completion.
+A pending client search has `Done == false`. Its choice has a nil `FinishReason`
+unless it also contains ordinary function calls, which use `"tool_calls"`.
+LLMAgent completes the search through `model.ProviderActionCompleter` before
+running those functions. `CompleteProviderActions` runs the handler and returns
+one tool message per search:
+
+- `ToolID` is the call ID and `ToolName` is `ToolSearchToolName`.
+- `Content` is a display summary such as `{"loaded_tools":["billing_lookup"]}`.
+- `ProviderData` holds the complete `tool_search_output`, including the
+  loaded definitions.
+
+The flow publishes and persists that message, and model callbacks see the
+search response, before the next model step. Tool callbacks do not run for a
+search because it is not a tool call.
+
+Loaded definitions stay in history, and the top-level tools of later requests
+remain the eager tools plus `tool_search`. A loaded tool stays loaded while
+its `tool_search_output` remains in the request history. A history limit or
+summary that drops the output unloads the tool, and it becomes a candidate
+again.
+
+If the handler fails, LLMAgent emits an error and ends the run. Both the
+unanswered search and any ordinary function calls in that response stay
+pending. Before sending another user message, resume the same session with
+`model.Message{}` and `agent.WithResume(true)`. Once the search succeeds,
+LLMAgent executes the pending functions and sends their results and the
+search output in the next model request.
+
+If some search results were persisted before an interruption, resume reuses
+their loaded definitions and retries only the unanswered searches.
+
+To let the model continue without the tools, return an empty result instead
+of an error. Canceling the run context stops the search without an output or a
+search error. The handler may be called concurrently for different requests.
+
+### Tool search boundaries
+
+- Client search needs a flow that completes provider actions. LLMAgent and
+  Runner do. Graph LLM nodes report `model response requests provider
+  actions, which graph LLM nodes do not complete`. Hosted search there applies
+  to tools implementing `tool.DeferredTool`, including wrapped tools.
+- Model wrappers that do not forward `model.ProviderActionCompleter`, including
+  the current failover and hedge wrappers, cannot complete client searches.
+  LLMAgent then stops with `model "..." does not complete provider actions`.
+- Resume is not exactly-once. A crash after the handler returns and before its
+  output is stored runs the handler again. Resume applies the session history
+  policy to events preceding the pending response, then reuses results already
+  saved for that response. Resume candidates exclude loaded tools with usable
+  bindings. A deferred registration can be selected again
+  when its previous binding expired.
+- A response can contain both a client search and function calls. If only
+  some ordinary function results were stored, resume does not run the
+  remaining function calls, as described under
+  [Tool recovery boundaries](#tool-recovery-boundaries).
+- An `AfterModel` callback must keep `Done` false on a client search response.
+  Marking it `Done` skips the search, and the next request fails because the
+  call has no output.
+- Partial ToolSet deferral in client mode sends the eager members in a
+  top-level namespace and later loads deferred members into a namespace with
+  the same name. Top-level tool definitions stay unchanged across the search
+  and execution requests.
+- A run-scoped profile that overrides tool declarations, as in prompt
+  iteration, changes the model-facing declaration but preserves the tool's
+  deferral decision.
+- Do not combine native tool search with `plugin/toolsearch`. The plugin has
+  its own deferred-tool registration and does not use `tool.DeferredTool`.
 
 ## Images returned by local tools
 
@@ -248,9 +539,11 @@ responses retain their existing callback behavior.
 The framework stores the record under `provider_data` with `provider`, `model`,
 and `payload` keys. The configured model identifies the producer. Models implement the optional
 `model.ProviderDataProjector` capability to project edited native records;
-wrappers must forward it to support such edits. Built-in failover and hedge
-wrappers do so. `BeforeModel` edits affect only the current request's detached
-history, while `BeforeTool` edits affect only the current tool execution.
+`model.ProviderDataRequestProjector` also receives the request to resolve
+namespaced tool identities. Wrappers must forward these capabilities to support
+such edits. Built-in failover and hedge wrappers do so. `BeforeModel` edits
+affect only the current request's detached history, while `BeforeTool` edits
+affect only the current tool execution.
 
 Redis retains its existing skip-on-decode-error history policy, including
 events with invalid ProviderData. Each history read logs at most one warning
@@ -323,13 +616,23 @@ Edits to visible text or tool arguments apply to that projection. Responses
 reasoning, signatures and item IDs stay in the session. The adapter appends
 missing HTTP(S) URL citations as plain links when the visible text still matches
 the native text. Duplicate citations are emitted once. If a callback edits
-the visible text, its edits take precedence over the stored citations.
+the visible text, its edits take precedence over the stored citations. Clearing
+the last visible content of a text-only reply omits that reply from Chat.
 The adapter returns an error before HTTP for images in tool results, unsupported annotations and
 messages that follow a function call in the same output. Those cases need
 content, metadata or ordering that this conversion cannot preserve.
 Switching back replays the original Responses items and converts the
 intervening Chat messages and tool rounds without Chat-specific reasoning.
-Completed tools are replayed as history. If a Chat tool call has empty or
+Completed tools are replayed as history. Chat omits paired native tool search
+calls and outputs, including client results stored on tool messages. Ordinary
+function calls and their results remain in the conversation. The Chat tool
+list comes from the current request after filtering, including deferred
+registrations. A temporary tool returned only by an earlier search stays out
+of that list. Switching back to Responses replays the saved search items.
+If a new call requires a handler-selected executor from a previous run, it
+must be searched again before execution.
+
+If a Chat tool call has empty or
 whitespace-only arguments, the Responses request sends `{}` for that call
 and preserves its recorded result and call ID.
 
@@ -371,8 +674,9 @@ saved ProviderData payload. A different protocol or configured model name fails
 before tool execution. Legacy Chat recovery keeps its existing execution
 order.
 
-LLMAgent resumes only a final persisted assistant event
-containing tool calls. It does not scan earlier events for missing results.
+For ordinary function calls, the existing resume mechanism only handles a
+final persisted assistant event containing tool calls. It does not scan
+earlier events for missing function results.
 For example, if a response calls A and B and only A's result was persisted as
 a separate event before a crash, resume does not run B. The incomplete native
 round fails history validation; this adapter does not provide recovery for
@@ -422,10 +726,14 @@ access the same sessions to versions that understand `provider_data`. An older
 binary may strip ProviderData, so resuming that history through the old binary
 cannot be promised.
 
-This adapter requires a root module version containing `Message.ProviderData`,
-`Info.ProviderDataProtocol`, and the shared Responses history reader.
-Repository-relative `replace` directives support local
-development only; downstream consumers must resolve a compatible root version
+This adapter requires a root module version containing `Message.ProviderData` and
+`Info.ProviderDataProtocol`. Tool search additionally requires a root version
+containing `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`,
+and `tool.ToolSetDescriber`; the examples above also use `tool/deferred`. The
+adapter uses root internal packages, so its required root version must be the
+matching release rather than any later root version. Repository-relative
+`replace` directives support local development only; downstream consumers
+must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited. Publish
 the compatible root module first, update this module's required root version,
 and verify an external consumer without a root-module `replace` before

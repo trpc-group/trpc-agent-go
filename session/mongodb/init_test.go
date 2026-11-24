@@ -104,7 +104,7 @@ func TestEnsureIndexes_UniqueOnlyOnPrimaryKeys(t *testing.T) {
 func TestEnsureIndexes_SessionEventsIsLookupOnCreatedAt(t *testing.T) {
 	_, models := captureIndexes(t)
 	ms := models["session_events"]
-	require.Len(t, ms, 3)
+	require.Len(t, ms, 4)
 	keys := ms[0].Keys.(bson.D)
 	require.Len(t, keys, 4)
 	assert.Equal(t, "app_name", keys[0].Key)
@@ -116,7 +116,7 @@ func TestEnsureIndexes_SessionEventsIsLookupOnCreatedAt(t *testing.T) {
 func TestEnsureIndexes_SessionEventsHasEventIDLookup(t *testing.T) {
 	_, models := captureIndexes(t)
 	ms := models["session_events"]
-	require.Len(t, ms, 3)
+	require.Len(t, ms, 4)
 	keys := ms[1].Keys.(bson.D)
 	require.Len(t, keys, 4)
 	assert.Equal(t, "app_name", keys[0].Key)
@@ -132,7 +132,7 @@ func TestEnsureIndexes_SessionEventsHasEventIDLookup(t *testing.T) {
 func TestEnsureIndexes_SessionEventsHasCleanupIndex(t *testing.T) {
 	_, models := captureIndexes(t)
 	ms := models["session_events"]
-	require.Len(t, ms, 3)
+	require.Len(t, ms, 4)
 	assertCleanupIndex(t, ms[2])
 }
 

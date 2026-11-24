@@ -139,7 +139,7 @@ func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.
 		`{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]},`+
 		`{"type":"function_call_output","call_id":"call_1","output":"ok"}]`, string(encoded))
 
-	unsupported := decodeResponse(t, `{"id":"r","status":"completed","output":[{"type":"tool_search_call","id":"ts_1","status":"completed"}]}`)
+	unsupported := decodeResponse(t, `{"id":"r","status":"completed","output":[{"type":"web_search_call","id":"ws_1","status":"completed"}]}`)
 	_, err = projectResponse(unsupported, "gpt-5")
 	require.ErrorContains(t, err, "unsupported native item type")
 }
@@ -157,7 +157,7 @@ func TestConvertMessagesValidatesProviderData(t *testing.T) {
 	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "belongs to protocol")
 	msg.ProviderData.Protocol = responseProvider
-	msg.ProviderData.Payload = json.RawMessage(`[{"type":"tool_search_call"}]`)
+	msg.ProviderData.Payload = json.RawMessage(`[{"type":"web_search_call"}]`)
 	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "unsupported native item type")
 	msg.ProviderData.Payload = json.RawMessage(`[{`)

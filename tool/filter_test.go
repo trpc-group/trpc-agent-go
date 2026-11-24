@@ -153,3 +153,24 @@ func (m *mockToolSet) Close() error {
 func (m *mockToolSet) Name() string {
 	return m.name
 }
+
+type describedMockToolSet struct {
+	mockToolSet
+	description string
+}
+
+func (m *describedMockToolSet) Description() string {
+	return m.description
+}
+
+func TestFilterToolSet_ForwardsDescription(t *testing.T) {
+	described := &describedMockToolSet{mockToolSet: mockToolSet{name: "crm"}, description: "CRM tools."}
+	filtered, ok := FilterToolSet(described, NewExcludeToolNamesFilter("x")).(ToolSetDescriber)
+	if !ok || filtered.Description() != "CRM tools." {
+		t.Fatalf("filtered ToolSet must forward the description, got %v", filtered)
+	}
+	plain, ok := FilterToolSet(&mockToolSet{name: "plain"}, nil).(ToolSetDescriber)
+	if !ok || plain.Description() != "" {
+		t.Fatalf("a ToolSet without a description must report none")
+	}
+}
