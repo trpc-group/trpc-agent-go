@@ -40,19 +40,22 @@ const (
 )
 
 type processConnection struct {
-	generation uint64
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	connection *acpsdk.ClientSideConnection
-	cancel     context.CancelFunc
-	done       chan struct{}
-	waitErr    error
+	generation      uint64
+	cmd             *exec.Cmd
+	stdin           io.WriteCloser
+	connection      *acpsdk.ClientSideConnection
+	cancel          context.CancelFunc
+	done            chan struct{}
+	waitErr         error
+	agentDescriptor acpAgentDescriptor
 }
 
 type connectionManager struct {
 	config       ACPConfig
 	stderr       io.Writer
 	closeTimeout time.Duration
+	activeTurns  *activeTurnRegistry
+	terminalAuth bool
 
 	mu         sync.Mutex
 	startMu    sync.Mutex
@@ -64,15 +67,22 @@ type connectionManager struct {
 	closeErr   error
 }
 
-func newConnectionManager(config ACPConfig, stderr io.Writer) *connectionManager {
+func newConnectionManager(
+	config ACPConfig,
+	stderr io.Writer,
+	activeTurns *activeTurnRegistry,
+	terminalAuth bool,
+) *connectionManager {
 	return &connectionManager{
 		config:       config,
 		stderr:       stderr,
 		closeTimeout: defaultCloseTimeout,
+		activeTurns:  activeTurns,
+		terminalAuth: terminalAuth,
 	}
 }
 
-func (m *connectionManager) connect() (*processConnection, error) {
+func (m *connectionManager) connect(ctx context.Context) (*processConnection, error) {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
 
@@ -91,6 +101,13 @@ func (m *connectionManager) connect() (*processConnection, error) {
 
 	process, err := m.startProcess()
 	if err != nil {
+		m.mu.Lock()
+		m.state = lifecycleStopped
+		m.mu.Unlock()
+		return nil, err
+	}
+	if err := m.initialize(ctx, process); err != nil {
+		m.stopStartedProcess(process)
 		m.mu.Lock()
 		m.state = lifecycleStopped
 		m.mu.Unlock()
@@ -139,11 +156,15 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 		return nil, fmt.Errorf("acpagent: start agent process: %w", err)
 	}
 	return &processConnection{
-		cmd:        cmd,
-		stdin:      stdin,
-		connection: acpsdk.NewClientSideConnection(protocolClient{}, stdin, stdout),
-		cancel:     cancel,
-		done:       make(chan struct{}),
+		cmd:   cmd,
+		stdin: stdin,
+		connection: acpsdk.NewClientSideConnection(
+			&protocolClient{activeTurns: m.activeTurns},
+			stdin,
+			stdout,
+		),
+		cancel: cancel,
+		done:   make(chan struct{}),
 	}, nil
 }
 

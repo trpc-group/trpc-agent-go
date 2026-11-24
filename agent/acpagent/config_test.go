@@ -126,14 +126,18 @@ func TestNewValidatesACPConfig(t *testing.T) {
 	}
 }
 
-func TestNewRequiresTerminalAuthHandler(t *testing.T) {
+func TestNewAllowsMissingTerminalAuthHandler(t *testing.T) {
 	t.Parallel()
 
-	_, err := New(validACPConfig(t))
-	require.EqualError(t, err, "acpagent: terminal auth handler is required")
+	acpAgent, err := New(validACPConfig(t))
+	require.NoError(t, err)
+	require.Nil(t, acpAgent.terminalAuthHandler)
+	require.NoError(t, acpAgent.Close())
 
-	_, err = New(validACPConfig(t), WithTerminalAuthHandler(nil))
-	require.EqualError(t, err, "acpagent: terminal auth handler is required")
+	acpAgent, err = New(validACPConfig(t), WithTerminalAuthHandler(nil))
+	require.NoError(t, err)
+	require.Nil(t, acpAgent.terminalAuthHandler)
+	require.NoError(t, acpAgent.Close())
 }
 
 func TestNewDoesNotStartProcessAndCopiesSlices(t *testing.T) {

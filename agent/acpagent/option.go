@@ -19,9 +19,10 @@ type options struct {
 	stderr              io.Writer
 }
 
-// WithTerminalAuthHandler sets the required handler for terminal authentication.
+// WithTerminalAuthHandler sets the handler for terminal authentication.
 //
 // The handler owns the interactive terminal or application UI used for login.
+// A nil handler disables terminal authentication capability advertisement.
 func WithTerminalAuthHandler(handler TerminalAuthHandler) Option {
 	return func(options *options) {
 		options.terminalAuthHandler = handler

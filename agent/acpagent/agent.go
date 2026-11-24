@@ -25,6 +25,7 @@ var errRunNotImplemented = errors.New("acpagent: run is not implemented")
 type ACPAgent struct {
 	config              ACPConfig
 	terminalAuthHandler TerminalAuthHandler
+	activeTurns         *activeTurnRegistry
 	connections         *connectionManager
 	closeOnce           sync.Once
 	closeErr            error
@@ -43,17 +44,21 @@ func New(config ACPConfig, opts ...Option) (*ACPAgent, error) {
 			opt(&options)
 		}
 	}
-	if options.terminalAuthHandler == nil {
-		return nil, errors.New("acpagent: terminal auth handler is required")
-	}
 	if options.stderr == nil {
 		options.stderr = discardWriter{}
 	}
 	config = config.clone()
+	activeTurns := newActiveTurnRegistry()
 	return &ACPAgent{
 		config:              config,
 		terminalAuthHandler: options.terminalAuthHandler,
-		connections:         newConnectionManager(config, options.stderr),
+		activeTurns:         activeTurns,
+		connections: newConnectionManager(
+			config,
+			options.stderr,
+			activeTurns,
+			options.terminalAuthHandler != nil,
+		),
 	}, nil
 }
 

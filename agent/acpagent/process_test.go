@@ -12,7 +12,6 @@ package acpagent
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -23,38 +22,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestACPHelperProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_ACP_HELPER") != "1" {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "acp helper stderr")
-	switch os.Getenv("ACP_HELPER_MODE") {
-	case "exit":
-		os.Exit(7)
-	case "hang":
-		time.Sleep(time.Hour)
-		os.Exit(0)
-	default:
-		_, _ = io.Copy(io.Discard, os.Stdin)
-		os.Exit(0)
-	}
-}
-
 func TestAgentProcessLifecycle(t *testing.T) {
 	var stderr bytes.Buffer
 	acpAgent := newHelperAgent(t, "wait", &stderr)
 
-	process, err := acpAgent.connections.connect()
+	process, err := acpAgent.connections.connect(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, process)
 	require.NotNil(t, process.connection)
+	require.True(t, process.agentDescriptor.agentCapabilities.LoadSession)
+	require.Len(t, process.agentDescriptor.authMethods, 2)
+	require.Equal(t, "agent-login", process.agentDescriptor.authMethods[0].Agent.Id)
+	require.Equal(t, "terminal-login", process.agentDescriptor.authMethods[1].Terminal.Id)
+	require.Equal(t, "helper-agent", process.agentDescriptor.agentInfo.Name)
+	require.Equal(t, "1.2.3", process.agentDescriptor.agentInfo.Version)
 	require.Equal(t, testConnectionSnapshot{
 		state:      lifecycleRunning,
 		generation: 1,
 		pid:        process.cmd.Process.Pid,
 	}, snapshotConnectionManager(acpAgent.connections))
 
-	again, err := acpAgent.connections.connect()
+	again, err := acpAgent.connections.connect(context.Background())
 	require.NoError(t, err)
 	require.Same(t, process, again)
 
@@ -82,7 +70,7 @@ func TestAgentCloseIsIdempotent(t *testing.T) {
 	require.NoError(t, acpAgent.Close())
 	require.NoError(t, acpAgent.Close())
 
-	_, err = acpAgent.connections.connect()
+	_, err = acpAgent.connections.connect(context.Background())
 	require.ErrorIs(t, err, errAgentClosed)
 }
 
@@ -91,7 +79,7 @@ func TestAgentCloseReturnsStableError(t *testing.T) {
 
 	acpAgent := newHelperAgent(t, "hang", io.Discard)
 	acpAgent.connections.closeTimeout = 100 * time.Millisecond
-	_, err := acpAgent.connections.connect()
+	_, err := acpAgent.connections.connect(context.Background())
 	require.NoError(t, err)
 
 	first := acpAgent.Close()
@@ -103,8 +91,8 @@ func TestAgentCloseReturnsStableError(t *testing.T) {
 func TestAgentProcessAbnormalExit(t *testing.T) {
 	t.Parallel()
 
-	acpAgent := newHelperAgent(t, "exit", io.Discard)
-	process, err := acpAgent.connections.connect()
+	acpAgent := newHelperAgent(t, "exit_after_init", io.Discard)
+	process, err := acpAgent.connections.connect(context.Background())
 	require.NoError(t, err)
 	<-process.done
 
@@ -128,7 +116,7 @@ func TestAgentProcessStartFailureKeepsManagerStopped(t *testing.T) {
 	acpAgent, err := New(config, WithTerminalAuthHandler(noopTerminalAuth))
 	require.NoError(t, err)
 
-	process, err := acpAgent.connections.connect()
+	process, err := acpAgent.connections.connect(context.Background())
 	require.Nil(t, process)
 	require.ErrorContains(t, err, "start agent process")
 	require.Equal(t, testConnectionSnapshot{
@@ -140,12 +128,12 @@ func TestAgentProcessStartFailureKeepsManagerStopped(t *testing.T) {
 func TestAgentProcessRestartIncrementsGeneration(t *testing.T) {
 	t.Parallel()
 
-	acpAgent := newHelperAgent(t, "exit", io.Discard)
-	first, err := acpAgent.connections.connect()
+	acpAgent := newHelperAgent(t, "exit_after_init", io.Discard)
+	first, err := acpAgent.connections.connect(context.Background())
 	require.NoError(t, err)
 	<-first.done
 
-	second, err := acpAgent.connections.connect()
+	second, err := acpAgent.connections.connect(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), second.generation)
 	require.Equal(t, uint64(2), snapshotConnectionManager(acpAgent.connections).generation)
@@ -165,7 +153,7 @@ func TestAgentConcurrentConnectSharesProcess(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			processes[index], errs[index] = acpAgent.connections.connect()
+			processes[index], errs[index] = acpAgent.connections.connect(context.Background())
 		}(i)
 	}
 	wg.Wait()
@@ -188,7 +176,7 @@ func TestAgentConcurrentConnectAndClose(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		_, _ = acpAgent.connections.connect()
+		_, _ = acpAgent.connections.connect(context.Background())
 	}()
 	go func() {
 		defer wg.Done()
@@ -231,8 +219,22 @@ func snapshotConnectionManager(manager *connectionManager) testConnectionSnapsho
 
 func newHelperAgent(t *testing.T, mode string, stderr io.Writer) *ACPAgent {
 	t.Helper()
+	return newHelperAgentForTerminalAuth(t, mode, stderr, true)
+}
+
+func newHelperAgentForTerminalAuth(
+	t *testing.T,
+	mode string,
+	stderr io.Writer,
+	terminalAuth bool,
+) *ACPAgent {
+	t.Helper()
 	executable, err := os.Executable()
 	require.NoError(t, err)
+	terminalAuthValue := "0"
+	if terminalAuth {
+		terminalAuthValue = "1"
+	}
 	config := ACPConfig{
 		Name:    "acp-helper",
 		Command: executable,
@@ -240,14 +242,15 @@ func newHelperAgent(t *testing.T, mode string, stderr io.Writer) *ACPAgent {
 		Env: []string{
 			"GO_WANT_ACP_HELPER=1",
 			"ACP_HELPER_MODE=" + mode,
+			"ACP_HELPER_EXPECT_TERMINAL_AUTH=" + terminalAuthValue,
 		},
 		WorkDir: t.TempDir(),
 	}
-	acpAgent, err := New(
-		config,
-		WithTerminalAuthHandler(noopTerminalAuth),
-		WithStderrWriter(stderr),
-	)
+	options := []Option{WithStderrWriter(stderr)}
+	if terminalAuth {
+		options = append(options, WithTerminalAuthHandler(noopTerminalAuth))
+	}
+	acpAgent, err := New(config, options...)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = acpAgent.Close()
