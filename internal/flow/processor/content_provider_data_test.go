@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -609,6 +610,57 @@ func TestInterruptedToolOutputsFollowProjectedNativePayload(t *testing.T) {
 	require.Equal(t, "edited", got.messages[1].ToolID)
 	require.Contains(t, got.messages[1].Content, "unknown")
 	require.Equal(t, next, got.messages[2])
+}
+
+func TestInterruptedNativeWindowUsesProjectedCalls(t *testing.T) {
+	call := interruptedTestCall(t, "original")
+	result := model.NewToolMessage("original", "lookup", "result")
+	next := model.NewUserMessage("follow up")
+	events := timedTestEvents(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		toolTranscriptTestEvent("r1", "i1", call, ""),
+		toolTranscriptTestEvent("r1", "i1", result, model.ObjectTypeToolResponse),
+	)
+	before := persistTestEvents(t, events)
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	edited := interruptedTestCall(t, "edited")
+	processor := NewContentRequestProcessor(
+		WithMaxHistoryRuns(2),
+		WithEventMessageProjector(func(_ *agent.Invocation, _ event.Event, msg model.Message) model.Message {
+			if msg.ProviderData != nil {
+				msg.ProviderData = edited.ProviderData
+			}
+			if msg.Role == model.RoleTool {
+				msg.ToolID = "edited"
+			}
+			return msg
+		}),
+	)
+
+	got := processor.getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Equal(t, []model.Message{next}, got.messages,
+		"trimming a projected call must also trim its projected result")
+	require.Equal(t, before, inv.Session.Events, "projection must not change the session")
+}
+
+func TestInterruptedNativeUnalignedHistory(t *testing.T) {
+	original := interruptedTestCall(t, "original")
+	edited := interruptedTestCall(t, "edited")
+	rounds := interruptedToolRounds{"event": {
+		source: original.ProviderData,
+		native: original.ToolCalls,
+	}}
+	item := summaryview.Item{EffectiveEvent: event.Event{ID: "event"}, Message: edited}
+	messages := []model.Message{
+		original,
+		model.NewToolMessage("edited", "lookup", "result"),
+		model.NewUserMessage("follow up"),
+	}
+	for _, items := range [][]summaryview.Item{{item}, {item, item, item, item}} {
+		history := projectedHistory{messages: messages, items: items}
+		require.Equal(t, 1, rounds.windowStart(history, 2, &interruptedRoundModel{}))
+		require.Equal(t, history, history.withInterruptedToolResults(rounds, &interruptedRoundModel{}))
+	}
 }
 
 func TestInterruptedNativeOutputPairingUsesIDs(t *testing.T) {

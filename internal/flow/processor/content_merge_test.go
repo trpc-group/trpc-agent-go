@@ -146,7 +146,7 @@ func Test_rearrangeLatestFuncResp_MergesBetweenCallAndLatest(t *testing.T) {
 	}
 
 	events := []event.Event{toolCall, unrelated1, respA, unrelated2, respB}
-	out := p.rearrangeLatestFuncResp(events)
+	out := p.rearrangeLatestFuncResp(events, nil)
 
 	// Expect: [toolCall, merged(tool results for a,b)], unrelated events removed in between for latest rearrangement
 	assert.Len(t, out, 2)
@@ -176,7 +176,7 @@ func Test_rearrangeLatestFuncResp_NoMatchingCall_ReturnsOriginal(t *testing.T) {
 			},
 		},
 	}
-	out := p.rearrangeLatestFuncResp([]event.Event{plain, respX})
+	out := p.rearrangeLatestFuncResp([]event.Event{plain, respX}, nil)
 	assert.Equal(t, 2, len(out))
 	assert.Equal(t, "msg", out[0].Choices[0].Message.Content)
 	assert.Equal(t, "x", out[1].GetToolResultIDs()[0])
@@ -197,7 +197,7 @@ func Test_rearrangeLatestFuncResp_LatestNotToolResult_ReturnsOriginal(t *testing
 			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "m2"}}},
 		},
 	}
-	out := p.rearrangeLatestFuncResp([]event.Event{plain1, plain2})
+	out := p.rearrangeLatestFuncResp([]event.Event{plain1, plain2}, nil)
 	assert.Equal(t, 2, len(out))
 	assert.Equal(t, "m1", out[0].Choices[0].Message.Content)
 	assert.Equal(t, "m2", out[1].Choices[0].Message.Content)

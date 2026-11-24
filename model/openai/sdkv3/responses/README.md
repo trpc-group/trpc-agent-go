@@ -326,10 +326,11 @@ saved ProviderData payload. A different protocol or configured model name fails
 before tool execution. Legacy Chat recovery keeps its existing execution
 order.
 
-The existing resume mechanism only handles a final persisted assistant event
+**Known limitation of explicit resume.** Runner only handles a final persisted assistant event
 containing tool calls. It does not scan earlier events for missing results.
 For example, if a response calls A and B and only A's result was persisted as
-a separate event before a crash, resume does not run B.
+a separate event before a crash, explicit resume reports B's missing result
+before sending a Responses request.
 
 A new user message on the same session lets Runner and LLMAgent continue after
 an interruption. The outgoing request keeps A's result and adds a

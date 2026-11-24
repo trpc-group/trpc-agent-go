@@ -107,17 +107,44 @@ func (rounds interruptedToolRounds) restoreDisplayCalls(events []event.Event) {
 
 // A window cutting through an old tool round must drop results whose native
 // call was dropped, even if its display IDs were rewritten.
-func (rounds interruptedToolRounds) windowStart(history projectedHistory, limit int) int {
+func (rounds interruptedToolRounds) windowStart(
+	history projectedHistory, limit int, projector model.ProviderDataProjector,
+) int {
 	messages := history.messages
-	if len(rounds) > 0 && len(messages) > limit && messages[len(messages)-limit].Role == model.RoleTool {
+	if limit <= 0 {
+		return 0
+	}
+	if len(rounds) > 0 && len(history.items) == len(messages) &&
+		len(messages) > limit && messages[len(messages)-limit].Role == model.RoleTool {
 		messages = append([]model.Message(nil), messages...)
-		for i, item := range history.items {
-			if round, ok := rounds[item.EffectiveEvent.ID]; ok && item.Message.ProviderData != nil {
-				messages[i].ToolCalls = round.native
+		// Only the prefix being dropped is used by maxHistoryRunsStartIndex.
+		for i := 0; i < len(messages)-limit; i++ {
+			if calls, ok := rounds.effectiveCalls(history.items[i], projector); ok {
+				messages[i].ToolCalls = calls
 			}
 		}
 	}
 	return maxHistoryRunsStartIndex(messages, limit)
+}
+
+// effectiveCalls resolves the calls in the actual projected payload. The
+// display calls may differ after an event projector edits the native record.
+func (rounds interruptedToolRounds) effectiveCalls(
+	item summaryview.Item, projector model.ProviderDataProjector,
+) ([]model.ToolCall, bool) {
+	round, ok := rounds[item.EffectiveEvent.ID]
+	data := item.Message.ProviderData
+	if !ok || data == nil || data.Protocol != "openai.responses" {
+		return nil, false
+	}
+	if data == round.source || (data.Model == round.source.Model && bytes.Equal(data.Payload, round.source.Payload)) {
+		return round.native, true
+	}
+	if projector == nil {
+		return nil, false
+	}
+	projected, err := projector.ProjectProviderData(data)
+	return projected.ToolCalls, err == nil
 }
 
 func isUserTurnEvent(evt *event.Event) bool {
@@ -130,29 +157,19 @@ func isUserTurnEvent(evt *event.Event) bool {
 func (history projectedHistory) withInterruptedToolResults(
 	rounds interruptedToolRounds, projector model.ProviderDataProjector,
 ) projectedHistory {
-	if len(rounds) == 0 {
+	if len(rounds) == 0 || len(history.items) != len(history.messages) {
 		return history
 	}
 	var out projectedHistory
 	start := 0
 	for i, item := range history.items {
-		data := item.Message.ProviderData
-		round, ok := rounds[item.EffectiveEvent.ID]
-		if !ok || data == nil || data.Protocol != "openai.responses" {
+		calls, ok := rounds.effectiveCalls(item, projector)
+		if !ok {
 			continue
 		}
 		next := i + 1
 		for next < len(history.items) && history.items[next].Message.Role == model.RoleTool {
 			next++
-		}
-		calls := round.native
-		if data != round.source && !bytes.Equal(data.Payload, round.source.Payload) {
-			// The application's event projector may replace the native payload.
-			projected, err := projector.ProjectProviderData(data)
-			if err != nil {
-				continue
-			}
-			calls = projected.ToolCalls
 		}
 		missing := missingResponsesToolResults(calls, history.messages[i+1:next])
 		if len(missing) == 0 {

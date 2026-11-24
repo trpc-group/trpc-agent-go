@@ -1572,7 +1572,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.applyToolTranscriptMode(events, inv)
-	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
+	resultEvents = p.rearrangeLatestFuncResp(resultEvents, inv)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	// Apply compaction to the already timeline-filtered projection. Tool-result
 	// policy (force-clean/keep) and historical passes must run for scoped modes
@@ -1609,7 +1609,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
-		startIdx := rounds.windowStart(history, p.MaxHistoryRuns)
+		startIdx := rounds.windowStart(history, p.MaxHistoryRuns, projector)
 		startIdx = pendingNativeToolRoundStart(history.messages, startIdx)
 		if len(history.items) == len(history.messages) {
 			history.items = history.items[startIdx:]
@@ -2800,7 +2800,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 	}
 
 	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
-	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents := p.rearrangeLatestFuncResp(events, inv)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	currentRequestID := inv.RunOptions.RequestID
 	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
@@ -3892,81 +3892,129 @@ func hasNonToolPayload(msg model.Message) bool {
 	return msg.Content != "" || len(msg.ContentParts) > 0
 }
 
-// rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
+// rearrangeLatestFuncResp removes intermediate events from the latest tool
+// round while preserving input and events belonging to a later run.
 func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	events []event.Event,
+	inv *agent.Invocation,
 ) []event.Event {
-	if len(events) == 0 {
+	if len(events) == 0 || !events[len(events)-1].IsToolResultResponse() {
 		return events
 	}
 
-	// Check if latest event is a function response.
-	lastEvent := events[len(events)-1]
-	if !lastEvent.IsToolResultResponse() {
-		return events
-	}
-
-	functionResponseIDs := lastEvent.GetToolResultIDs()
-	if len(functionResponseIDs) == 0 {
-		return events
-	}
-
-	// Look for corresponding function call event.
-	functionCallEventIdx := -1
-	var functionCallIDs []string
-	for i := len(events) - 2; i >= 0; i-- {
-		evt := &events[i]
-		if evt.IsToolCallResponse() {
-			callIDs := evt.GetToolCallIDs()
-			functionCallIDSet := toMap(callIDs)
-			for _, responseID := range functionResponseIDs {
-				if functionCallIDSet[responseID] {
-					functionCallEventIdx = i
-					functionCallIDs = callIDs
-					break
-				}
-			}
-			if functionCallEventIdx != -1 {
-				break
+	matches := toolResponseMatchesByCallEvent(events)
+	last := len(events) - 1
+	callIndex := -1
+	for index, responses := range matches {
+		for _, response := range responses {
+			if response.eventIndex == last && (callIndex < 0 || index < callIndex) {
+				callIndex = index
 			}
 		}
 	}
-
-	if functionCallEventIdx == -1 {
+	if callIndex < 0 {
 		return events
 	}
 
-	// Collect function response events between call and latest response.
-	var functionResponseEvents []event.Event
-	for i := functionCallEventIdx + 1; i < len(events); i++ {
-		evt := &events[i]
-		if isUserTurnEvent(evt) && evt.InvocationID != events[functionCallEventIdx].InvocationID &&
-			eventHasProviderData(events[functionCallEventIdx]) {
-			// A late result belongs to the older call. Let the subsequent
-			// history pass pair it without discarding the newer user turn.
-			return events
+	// The next run may start with a rewritten system or assistant message.
+	// A nested invocation is not a new turn in the parent transcript.
+	boundary := len(events)
+	for i := callIndex + 1; i < len(events); i++ {
+		if startsLaterToolTurn(events[callIndex], events[i], inv) {
+			boundary = i
+			break
 		}
-		if evt.IsToolResultResponse() {
-			responseIDs := toMap(evt.GetToolResultIDs())
-			for _, callID := range functionCallIDs {
-				if responseIDs[callID] {
-					functionResponseEvents = append(functionResponseEvents, *evt)
-					break
-				}
+	}
+
+	// Match individual choices: a single result event may answer calls in
+	// different rounds. Move only the older round's choices before the next
+	// turn and leave the remaining choices in their original position.
+	byEvent := make(map[int]map[int]int)
+	for owner, responses := range matches {
+		for _, response := range responses {
+			if byEvent[response.eventIndex] == nil {
+				byEvent[response.eventIndex] = make(map[int]int)
+			}
+			for _, choice := range response.choiceIndices {
+				byEvent[response.eventIndex][choice] = owner
 			}
 		}
 	}
-
-	// Build result with rearranged events.
-	resultEvents := make([]event.Event, functionCallEventIdx+1)
-	copy(resultEvents, events[:functionCallEventIdx+1])
-
-	if len(functionResponseEvents) > 0 {
-		mergedEvent := p.mergeFunctionResponseEvents(functionResponseEvents)
-		resultEvents = append(resultEvents, mergedEvent)
+	var moved []event.Event
+	for i := callIndex + 1; i < len(events); i++ {
+		var choices []int
+		for choice, owner := range byEvent[i] {
+			if owner == callIndex || (i < boundary && owner < callIndex) {
+				choices = append(choices, choice)
+			}
+		}
+		if len(choices) != 0 {
+			sort.Ints(choices)
+			moved = append(moved, filterToolResponseEvent(events, matchedToolResponseEvent{
+				eventIndex: i, choiceIndices: choices,
+			}))
+		}
 	}
+	result := append([]event.Event(nil), events[:callIndex+1]...)
+	if len(moved) > 0 {
+		result = append(result, p.mergeFunctionResponseEvents(moved))
+	}
+	for i := boundary; i < len(events); i++ {
+		if !events[i].IsToolResultResponse() {
+			result = append(result, events[i])
+			continue
+		}
+		removed := make(map[int]struct{})
+		for choice, owner := range byEvent[i] {
+			if owner == callIndex {
+				removed[choice] = struct{}{}
+			}
+		}
+		if len(removed) == 0 {
+			result = append(result, events[i])
+		} else if remaining, ok := omitToolResultChoices(events[i], removed); ok {
+			result = append(result, remaining)
+		}
+	}
+	return result
+}
 
-	return resultEvents
+func startsLaterToolTurn(call, candidate event.Event, inv *agent.Invocation) bool {
+	if inv != nil && messageorigin.IsCurrentTurn(inv, candidate.ID) &&
+		(candidate.InvocationID == "" || candidate.InvocationID == inv.InvocationID) {
+		return true
+	}
+	if candidate.IsToolResultResponse() {
+		return false
+	}
+	// Parent and trigger metadata identify AgentTool/Team messages as part of
+	// the in-flight call, even when their message role is user.
+	if candidate.ParentInvocationID != "" && candidate.ParentInvocationID != call.ParentInvocationID {
+		return false
+	}
+	if candidate.ParentMetadata != nil {
+		for _, id := range call.GetToolCallIDs() {
+			if id != "" && candidate.ParentMetadata.TriggerID == id {
+				return false
+			}
+		}
+	}
+	if call.RequestID != "" && candidate.RequestID != "" && call.RequestID != candidate.RequestID {
+		return true
+	}
+	if candidate.Author != "user" || !candidate.IsUserMessage() {
+		return false
+	}
+	if inv != nil && candidate.InvocationID != "" && candidate.InvocationID == inv.InvocationID {
+		return true
+	}
+	// Same-request child invocations in older transcripts may lack parent
+	// metadata. Keep the established nested-event suppression for them.
+	if call.RequestID != "" && call.RequestID == candidate.RequestID &&
+		call.InvocationID != "" && candidate.InvocationID != "" && call.InvocationID != candidate.InvocationID {
+		return false
+	}
+	return true
 }
 
 // rearrangeEventsForAsyncFunctionResponsesInHistory rearranges the async function_response events in the history.
@@ -4169,17 +4217,29 @@ func toolResponseMatchesByCallEventFiltered(
 			if responseID == "" {
 				continue
 			}
+			best, bestScore := -1, -1
 			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
 				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
 					continue
 				}
-				delete(pendingCallRounds[j].pendingIDs, responseID)
-				responseMatchesByCallEvent[pendingCallRounds[j].eventIndex] = appendToolResponseChoice(
-					responseMatchesByCallEvent[pendingCallRounds[j].eventIndex],
-					i,
-					choiceIndex,
+				call := events[pendingCallRounds[j].eventIndex]
+				score := 0
+				if evt.RequestID != "" && evt.RequestID == call.RequestID {
+					score++
+				}
+				if evt.InvocationID != "" && evt.InvocationID == call.InvocationID {
+					score += 2
+				}
+				if score > bestScore {
+					best, bestScore = j, score
+				}
+			}
+			if best >= 0 {
+				delete(pendingCallRounds[best].pendingIDs, responseID)
+				owner := pendingCallRounds[best].eventIndex
+				responseMatchesByCallEvent[owner] = appendToolResponseChoice(
+					responseMatchesByCallEvent[owner], i, choiceIndex,
 				)
-				break
 			}
 		}
 	}

@@ -704,9 +704,9 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResum
 保存结果后再请求模型。对于 Responses，Runner 会在执行工具前检查所选模型是否与已保存的调用匹配。
 如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。
 
-如果末尾是其他事件，Runner 会跳过工具恢复步骤。例如，末尾是 A 的工具结果，而 B
-缺少结果，显式恢复当前会在发送 Responses 请求前报告结果缺失。此时仍可在同一个
-Session 发新消息继续聊。
+**显式恢复的已知限制。** 并行调用 A 和 B 时，如果最后一条事件是 A 的结果，B 的结果尚未保存，
+Runner 会跳过工具恢复，并在发送 Responses 请求前报告缺少 B 的结果。此时可以在同一 Session
+发新消息继续聊。模型会收到 A 的真实结果和 B 的状态未知提示，Runner 不会重新执行这两个工具。
 [Responses 工具恢复说明](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call 参数自动修复

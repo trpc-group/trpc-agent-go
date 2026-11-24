@@ -743,10 +743,11 @@ the saved call against the selected model before executing any tools. A retry
 can repeat an external action if the tool performed it before its result was
 saved.
 
-Other final events skip the tool recovery step. In particular, if the last
-event is A's result and B's result is missing, explicit resume currently
-reports the missing result before sending a Responses request. You can still
-send a new user message on the same session. [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
+**Known limitation of explicit resume.** If parallel calls A and B were issued
+and the last event is A's result, Runner skips tool recovery and reports B's
+missing result before sending a Responses request. Send a new user message in
+the same session to continue with A's recorded result and B's outcome marked
+unknown, without rerunning either tool. [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call Arguments Auto Repair
 
