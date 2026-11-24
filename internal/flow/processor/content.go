@@ -1517,6 +1517,8 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	var events []event.Event
 	sessionEvents := sessionEventsSnapshot(inv.Session)
+	projector := responsesHistoryProjector(inv.Model, req)
+	rounds := p.bindNativeToolRounds(inv, filter, sessionEvents, projector)
 	eventCutoff := newEventHistoryCutoff(sessionEvents, cutoff)
 	toolCallIDsToRestoreByEvent := p.toolCallIDsToRestoreByEvent(
 		sessionEvents,
@@ -1610,6 +1612,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			inv.AgentName,
 		)
 	}
+	rounds.restoreDisplayCalls(resultEvents)
 	history := p.projectHistoryAcrossSummaryCutoff(
 		resultEvents,
 		sessionEvents,
@@ -1620,6 +1623,8 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 	)
 
 	history = p.mergeProjectedUserMessages(history)
+	rounds.useNativeCalls(history, projector)
+	history = history.withLateToolResults(rounds)
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
@@ -1633,8 +1638,12 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		}
 		history.messages = history.messages[startIdx:]
 	}
+	history = history.withInterruptedToolResults(rounds)
 	history.messages = annotateUserMessagesWithAttachedFiles(history.messages)
 	for i := range history.items {
+		if _, ok := rounds[history.items[i].EffectiveEvent.ID]; ok {
+			history.messages[i].ToolCalls = history.items[i].Message.ToolCalls
+		}
 		history.items[i].Message = annotateUserMessageWithAttachedFiles(
 			history.items[i].Message,
 		)

@@ -565,9 +565,12 @@ summary cutoffs, and `MaxHistoryRuns` behave as they do for legacy history.
 - When a summary cutoff runs through a native tool round, the original record
   and every result that answers its calls are restored together. Legacy
   history keeps restoring only the calls whose results follow the cutoff.
-- `MaxHistoryRuns` still counts messages. Only a pending native round, a
-  native call record followed solely by its tool results, may extend the
-  limit, and only by that round. Completed native rounds are removed whole.
+- `MaxHistoryRuns` still counts messages. A pending native call followed solely
+  by its tool results can extend the window to retain that round. When a new
+  user turn follows an interrupted call that remains in the window, each missing
+  result adds one request-only output after trimming. The outgoing history
+  can therefore exceed the message limit. Completed native rounds are
+  removed whole.
 - `ToolTranscriptModeOmitPreviousCompleted` rebases completed tool rounds of
   earlier requests: their calls and results are removed, visible text remains
   as ordinary assistant history, and the native record and its reasoning are
@@ -575,8 +578,8 @@ summary cutoffs, and `MaxHistoryRuns` behave as they do for legacy history.
 - Native call arguments in a resumed tool round are not compacted; their tool
   results are.
 - An incomplete per-call result round is kept intact for a native record
-  instead of being stripped, so the adapter rejects the missing result
-  explicitly rather than replaying a record without some of its calls.
+  with its existing results. See [Tool recovery boundaries](#tool-recovery-boundaries)
+  for how a later user turn handles missing results.
 
 Foreign-agent events converted into user context are newly authored user
 messages without ProviderData. A legacy or differently configured downstream
@@ -619,13 +622,30 @@ saved ProviderData payload. A different protocol or configured model name fails
 before tool execution. Legacy Chat recovery keeps its existing execution
 order.
 
-For ordinary function calls, the existing resume mechanism only handles a
+**Known limitation of explicit resume.** For ordinary function calls, Runner only handles a
 final persisted assistant event containing tool calls. It does not scan
 earlier events for missing function results.
 For example, if a response calls A and B and only A's result was persisted as
-a separate event before a crash, resume does not run B. The incomplete native
-round fails history validation; this adapter does not provide recovery for
-partially completed multi-tool rounds.
+a separate event before a crash, explicit resume reports B's missing result
+before sending a Responses request.
+
+A new top-level user message in the same session lets Runner and LLMAgent continue after
+an interruption. For ordinary native function calls, the outgoing request keeps
+real results, including empty results and late results that can be attributed
+to a call unambiguously. It adds a `function_call_output` for each missing
+result stating that its execution status is unknown. The framework neither
+reruns those calls nor writes the placeholders to the session. This also
+works for existing sessions with a retained tool call and no recorded result.
+Wrappers must forward `model.ProviderDataProjector` so the framework can pair
+results with the IDs in the native record. For tool namespaces, wrappers must
+also forward `model.ProviderDataRequestProjector` to resolve registered names.
+
+An empty explicit resume continues to handle the current pending round as
+described above. If an older incomplete round has already been superseded by a
+later user message, its missing results are repaired in the outgoing request
+without rerunning its calls. Chat, `tool_search`, and other provider actions
+retain their existing behavior. Direct adapter calls and Graph LLM nodes
+continue to validate the history supplied to them.
 
 Session persistence and business side effects are separate operations. A
 successful tool side effect followed by a crash before its result is stored
