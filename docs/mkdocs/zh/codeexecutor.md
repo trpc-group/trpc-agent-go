@@ -214,6 +214,15 @@ Basic 认证，例如在 HTTPS 上使用 `Authorization: Basic dXNlcjo=` 表示 
 账号。kernel 进程内临时修改的环境不会被原生进程继承；自定义模板迁移时仍需
 核对 HOME/PATH。
 
+### E2B 工作区持久化
+
+`WithWorkspacePersistence` 默认为 `WorkspacePersistencePerTurn`。Agent 工具在
+一次调用内共享工作区，下一次调用获取新目录，复用同一个 `LLMAgent` 时也是如此。
+通过 `Invocation.View()` 并行执行的工具调用共享原调用的目录。
+通过 `Invocation.Clone()` 创建的子调用使用独立目录，即使它们属于同一轮用户请求。
+设置 `WorkspacePersistencePerSession` 后，同一会话在沙箱存活期间跨轮次复用目录。
+两种模式都在执行器的沙箱内分配目录，并共用该沙箱的 Code Interpreter kernel。
+
 ### E2B 沙箱自动重建
 
 `WithAutoRecreate` 默认关闭。可为执行器自行创建的沙箱开启自动重建。

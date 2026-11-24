@@ -23,8 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
@@ -346,19 +348,38 @@ func TestCreateWorkspace_PerSessionPersistence(t *testing.T) {
 	assert.NotEqual(t, wsA.Path, wsB.Path)
 }
 
-func TestCreateWorkspace_DefaultIsPerTurn(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string { return "" })
-	defer srv.close()
-	c := newMockedExecutor(t, srv) // default: WorkspacePersistencePerTurn
-	ctx := context.Background()
+func TestCreateWorkspace_ConcurrentPerTurnPaths(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	t.Cleanup(srv.close)
+	c := newMockedExecutor(t, srv)
 
-	ws1, err := c.CreateWorkspace(ctx, "same-id", codeexecutor.WorkspacePolicy{})
-	require.NoError(t, err)
-	ws2, err := c.CreateWorkspace(ctx, "same-id", codeexecutor.WorkspacePolicy{})
-	require.NoError(t, err)
+	const callers = 32
+	paths := make([]string, callers)
+	start := make(chan struct{})
+	var group errgroup.Group
+	for i := range paths {
+		i := i
+		group.Go(func() error {
+			<-start
+			ws, err := c.CreateWorkspace(context.Background(), "same-id", codeexecutor.WorkspacePolicy{})
+			paths[i] = ws.Path
+			return err
+		})
+	}
+	close(start)
+	require.NoError(t, group.Wait())
 
-	// Default behavior: each call creates a unique path (timestamp suffix).
-	assert.NotEqual(t, ws1.Path, ws2.Path)
+	seen := make(map[string]bool, callers)
+	for _, path := range paths {
+		require.False(t, seen[path], "concurrent calls reused %q", path)
+		seen[path] = true
+	}
+	for _, path := range paths {
+		suffix, ok := strings.CutPrefix(path, defaultSandboxRunBase+"/ws_same-id_")
+		require.True(t, ok, "unexpected workspace path %q", path)
+		_, err := uuid.Parse(suffix)
+		require.NoError(t, err)
+	}
 }
 
 func TestCreateWorkspace_PerSessionRejectsEmptyID(t *testing.T) {

@@ -326,6 +326,43 @@ func TestTraceWorkflow_DropRequest(t *testing.T) {
 	}
 }
 
+func TestTraceWorkflow_RecordsFilteredResponse(t *testing.T) {
+	t.Cleanup(InstallSpanAttributePolicy(SpanAttributePolicy{}))
+	span := newRecordingSpan()
+	TraceWorkflow(span, &Workflow{
+		Response: "original",
+		FilterResponse: func(response any) any {
+			if response != "original" {
+				t.Fatalf("unexpected filter input %v", response)
+			}
+			return "filtered"
+		},
+	})
+	if got, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIWorkflowResponse); !ok || got != `"filtered"` {
+		t.Fatalf("expected filtered workflow response, got %q (present %t)", got, ok)
+	}
+}
+
+func TestTraceWorkflow_DropResponseSkipsMarshal(t *testing.T) {
+	t.Cleanup(InstallSpanAttributePolicy(AppendAttributeRule(SpanAttributePolicy{}, AttributeRule{
+		Operation: OperationWorkflow,
+		Key:       semconvtrace.KeyGenAIWorkflowResponse,
+		Action:    AttributeDrop,
+	})))
+
+	span := newRecordingSpan()
+	TraceWorkflow(span, &Workflow{
+		Response: "result",
+		FilterResponse: func(any) any {
+			t.Fatal("dropped workflow response was inspected")
+			return nil
+		},
+	})
+	if _, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIWorkflowResponse); ok {
+		t.Fatal("dropped workflow response was recorded")
+	}
+}
+
 func TestTraceToolCall_DropArguments(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 

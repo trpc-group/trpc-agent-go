@@ -15,7 +15,7 @@ try:
     import requests
 except ImportError as e:
     print(f"Error: Required package not installed: {e}", file=sys.stderr)
-    print("Run: pip install pytesseract Pillow requests", file=sys.stderr)
+    print("Run: pip install \"pytesseract==0.3.13\" \"Pillow==13.0.0\" \"requests==2.34.2\"", file=sys.stderr)
     sys.exit(1)
 
 

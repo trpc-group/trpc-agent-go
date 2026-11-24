@@ -12,6 +12,7 @@ package e2b
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
@@ -665,14 +667,20 @@ func (r *workspaceRuntime) allocateWorkspacePath(
 	execID string,
 	generation uint64,
 ) (string, error) {
-	if r.cfg.workspacePersistence == WorkspacePersistencePerSession && execID == "" {
-		return "", errors.New(
-			"e2b: execID must not be empty when using WorkspacePersistencePerSession",
-		)
-	}
-	leaf := perTurnWorkspaceLeaf(execID)
+	var leaf string
 	if r.cfg.workspacePersistence == WorkspacePersistencePerSession {
+		if execID == "" {
+			return "", errors.New(
+				"e2b: execID must not be empty when using WorkspacePersistencePerSession",
+			)
+		}
 		leaf = "ws_" + stableWorkspaceHash(execID)
+	} else {
+		id, err := uuid.NewRandom()
+		if err != nil {
+			return "", fmt.Errorf("e2b: generate workspace UUID: %w", err)
+		}
+		leaf = "ws_" + sanitize(execID) + "_" + id.String()
 	}
 	if r.ce != nil && r.ce.autoRecreate && generation != 0 {
 		return path.Join(
@@ -683,8 +691,4 @@ func (r *workspaceRuntime) allocateWorkspacePath(
 		), nil
 	}
 	return path.Join(r.cfg.runBase, leaf), nil
-}
-
-func perTurnWorkspaceLeaf(execID string) string {
-	return "ws_" + sanitize(execID) + "_" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }

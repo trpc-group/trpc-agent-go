@@ -44,7 +44,7 @@ func (s *integrationSummarizer) SetPrompt(_ string)       {}
 func (s *integrationSummarizer) SetModel(_ model.Model)   {}
 func (s *integrationSummarizer) Metadata() map[string]any { return nil }
 
-func newIntegrationService(t *testing.T, opts ...ServiceOpt) (context.Context, *Service, *mongo.Database) {
+func newIntegrationService(t testing.TB, opts ...ServiceOpt) (context.Context, *Service, *mongo.Database) {
 	t.Helper()
 	uri := os.Getenv(mongodbIntegrationURIEnv)
 	if uri == "" {

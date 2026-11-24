@@ -626,3 +626,41 @@ func Test_rearrangeAsyncFuncRespHist_FiltersMixedResponseEventAcrossRounds(t *te
 	assert.Len(t, out[3].Response.Choices, 1)
 	assert.Equal(t, "second result", out[3].Response.Choices[0].Message.Content)
 }
+
+func TestLatestToolResultKeepsNestedWorkInsideParentRound(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, resultRun := range []string{"call-run", "resume-run"} {
+			call := toolTranscriptTestEvent("call-run", "parent", testCallMessage(t, native, "", "member"), "")
+			task := toolTranscriptTestEvent(resultRun, "child", model.NewUserMessage("private member task"), "")
+			task.Author = "user"
+			task.ParentInvocationID = "parent"
+			reply := toolTranscriptTestEvent(resultRun, "child", model.NewAssistantMessage("private intermediate reply"), "")
+			reply.ParentInvocationID = "parent"
+			result := toolTranscriptTestEvent(resultRun, "parent", model.NewToolMessage("member", "lookup", "final member result"), model.ObjectTypeToolResponse)
+			if resultRun == "resume-run" {
+				task.ParentInvocationID, reply.ParentInvocationID, result.InvocationID = "resume-parent", "resume-parent", "resume-parent"
+			}
+			events := []event.Event{call, task, reply, result}
+			p := NewContentRequestProcessor()
+			got := p.rearrangeAsyncFuncRespHist(p.rearrangeLatestFuncResp(events, nil))
+			require.Len(t, got, 2, "native=%t resultRun=%s", native, resultRun)
+			require.Equal(t, call, got[0])
+			require.Equal(t, result.Choices, got[1].Choices)
+		}
+	}
+}
+
+func TestLatestToolResultPreservesCurrentInputWithAmbiguousRequestID(t *testing.T) {
+	for _, requestID := range []string{"", "reused"} {
+		call := toolTranscriptTestEvent(requestID, "old", testCallMessage(t, false, "", "a"), "")
+		next := toolTranscriptTestEvent(requestID, "current", model.NewUserMessage("new question"), "")
+		next.Author = "user"
+		result := toolTranscriptTestEvent(requestID, "old", model.NewToolMessage("a", "lookup", "late"), model.ObjectTypeToolResponse)
+		events := []event.Event{call, next, result}
+		inv := testInvocation(events, "current", requestID, next.Choices[0].Message)
+		got := NewContentRequestProcessor().rearrangeLatestFuncResp(events, inv)
+		require.Len(t, got, 3)
+		require.Equal(t, result.Choices, got[1].Choices)
+		require.Equal(t, next, got[2])
+	}
+}

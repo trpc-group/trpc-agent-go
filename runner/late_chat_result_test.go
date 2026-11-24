@@ -74,7 +74,7 @@ func TestRunnerChatLateToolResultPreservesNewerTurn(t *testing.T) {
 	}{
 		{"old-run", "user", model.NewUserMessage("old question"), model.ObjectTypeChatCompletion},
 		{"old-run", "assistant", call, model.ObjectTypeChatCompletion},
-		{"new-run", "user", model.NewSystemMessage("new system instruction"), model.ObjectTypeChatCompletion},
+		{"new-run", "assistant", model.NewSystemMessage("new system instruction"), model.ObjectTypeChatCompletion},
 		{"new-run", "user", model.NewUserMessage("new question"), model.ObjectTypeChatCompletion},
 		{"old-run", "assistant", model.NewToolMessage("call-old", "lookup", "old result"), model.ObjectTypeToolResponse},
 	}
@@ -82,14 +82,15 @@ func TestRunnerChatLateToolResultPreservesNewerTurn(t *testing.T) {
 		evt := event.NewResponseEvent(item.invocation, item.author, &model.Response{
 			Object: item.object, Done: true, Choices: []model.Choice{{Message: item.message}},
 		})
-		evt.FilterKey = "assistant"
+		evt.RequestID = item.invocation
+		evt.FilterKey = key.AppName
 		evt.Timestamp = time.Now().Add(time.Duration(i-len(fixture)) * time.Second)
 		require.NoError(t, svc.AppendEvent(ctx, sess, evt))
 	}
 
 	m := openai.New("test", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
 		openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
-	a := llmagent.New("assistant", llmagent.WithModel(m))
+	a := llmagent.New("assistant", llmagent.WithModel(m), llmagent.WithMessageTimelineFilterMode("all"))
 	r := runner.NewRunner("late-chat", a, runner.WithSessionService(svc))
 	defer r.Close()
 	stream, err := r.Run(ctx, "user", "session", model.Message{})
@@ -104,16 +105,16 @@ func TestRunnerChatLateToolResultPreservesNewerTurn(t *testing.T) {
 	case req := <-requests:
 		require.Equal(t, "/chat/completions", req.Path)
 		require.Len(t, req.Messages, 5)
-		require.Equal(t, "user", req.Messages[0].Role)
-		require.Equal(t, "old question", req.Messages[0].Content)
-		require.Equal(t, "assistant", req.Messages[1].Role)
-		require.Len(t, req.Messages[1].ToolCalls, 1)
-		require.Equal(t, "call-old", req.Messages[1].ToolCalls[0].ID)
-		require.Equal(t, "tool", req.Messages[2].Role)
-		require.Equal(t, "call-old", req.Messages[2].ToolCallID)
-		require.Equal(t, "old result", req.Messages[2].Content)
-		require.Equal(t, "system", req.Messages[3].Role)
-		require.Equal(t, "new system instruction", req.Messages[3].Content)
+		require.Equal(t, "system", req.Messages[0].Role)
+		require.Equal(t, "new system instruction", req.Messages[0].Content)
+		require.Equal(t, "user", req.Messages[1].Role)
+		require.Equal(t, "old question", req.Messages[1].Content)
+		require.Equal(t, "assistant", req.Messages[2].Role)
+		require.Len(t, req.Messages[2].ToolCalls, 1)
+		require.Equal(t, "call-old", req.Messages[2].ToolCalls[0].ID)
+		require.Equal(t, "tool", req.Messages[3].Role)
+		require.Equal(t, "call-old", req.Messages[3].ToolCallID)
+		require.Equal(t, "old result", req.Messages[3].Content)
 		require.Equal(t, "user", req.Messages[4].Role)
 		require.Equal(t, "new question", req.Messages[4].Content)
 	case <-ctx.Done():

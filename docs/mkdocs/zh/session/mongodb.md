@@ -139,6 +139,39 @@ MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
 
+## 过期清理查询开销
+
+每个集合通过一次聚合识别过期会话组。查询匹配未删除记录，并增加覆盖
+`app_name` 全部字符串取值的条件，使 MongoDB 可以使用已有的 partial
+`cleanup` 索引 `(app_name, user_id, session_id, updated_at)`。
+本后端写入的应用名均为字符串。聚合仍按会话求最大的 `updated_at`，仅清理
+不晚于 TTL 截止时间的组；存在更新记录时保留全部历史，Track 仍覆盖会话内所有 track。
+
+此优化不新增索引、不迁移数据，也不强制 hint。已有索引和外部管理的数据库
+可以继续使用，缺少索引只影响性能，不影响清理结果。索引计划可以跳过软删除
+历史；MongoDB 7.0 可以使用覆盖查询，6.0 仍可能读取活跃文档来判断
+`deleted_at: null`。活跃历史占多数时，索引遍历加回表可能比原来的全表扫描更慢，尤其是在 6.0 上。
+应在实际数据库版本上核对执行计划、文档和索引扫描数以及耗时。
+
+每批最多删除 500 个过期组，遍历结束后提交剩余不足一批的组；后续失败不影响
+已经完成的批次。事件与 Track 依次清理，各自拥有 30 秒预算（合计最多 60 秒），
+父 context 取消或服务关闭会停止清理。软/硬删除模式和 TTL 值保持不变。
+每个实例仍每轮执行全量分组；检查与删除也没有和并发追加构成原子操作。
+本优化不引入水位、租约或基于会话状态 TTL 的级联删除。
+
+在 `session/mongodb` 目录下，对本地测试副本集运行可选基准：
+
+```bash
+MONGODB_INTEGRATION_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -tags=integration -run '^$' \
+  -bench '^BenchmarkIntegrationCleanupIdentification$' -benchtime=3x -count=3
+```
+
+数据包含 1 KiB 负载，覆盖软删除历史多、近期历史多、短活跃会话、全部过期及
+长会话场景。原聚合和索引聚合都会完整消费并校验结果。计时不含数据准备、
+删除和结果校验；10ms 延迟仅注入在 Aggregate 调用前，不含 getMore。
+本地基准不代表线上延迟。
+
 ## 事件排序索引升级
 
 新服务初始化时新增 `idx_session_events_ordered_lookup` 非唯一 partial 索引，
