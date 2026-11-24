@@ -683,9 +683,13 @@ eventChan, err := r.Run(
 eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发生了什么？"))
 ```
 
-如果 LLMAgent 续聊时沿用发起工具调用时配置的 Responses 模型，新请求会按调用 ID
-保留已保存的工具结果，不会重跑中断的调用。缺少结果的调用只在发给模型的请求中标为“执行状态未知”。
-如果使用自定义模型包装器，请将 `model.ProviderDataProjector` 转发给底层 Responses 模型，以便 Runner 按原始工具调用 ID 匹配结果。
+在新的顶层用户轮次中，若沿用发起普通函数调用的 Responses 模型，LLMAgent 会按调用 ID 匹配
+已保存的结果，不会重跑这些调用。真实结果会保留，包括空结果，以及能够明确归属到调用的
+迟到结果。每个缺失结果仅在发给模型的请求中标记为“上次运行可能在结果记录前被打断，
+执行状态未知”。Session 保留原始事件。如果使用自定义模型包装器，请将 `model.ProviderDataProjector`
+转发给底层 Responses 模型，以便 Runner 匹配原生调用 ID。使用工具命名空间时，还需要转发
+`model.ProviderDataRequestProjector` 以解析注册的工具名。Chat、`tool_search` 和其他
+provider action 保持原有行为。
 
 Runner 默认合并保存并行工具的结果。如果 A 已返回、B 仍在运行，停止时整批结果还没写入
 Session，模型会看到 A 和 B 都是未知。开启 `agent.WithToolResultEventPerCallEnabled(true)`
@@ -702,7 +706,9 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResum
 使用 LLMAgent 时，Runner 检查 Session 中最后一条已保存的事件。如果它是带
 `tool_calls` 的 assistant 回复，Runner 会使用当前 Agent 的工具和回调执行这些调用，
 保存结果后再请求模型。对于 Responses，Runner 会在执行工具前检查所选模型是否与已保存的调用匹配。
-如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。
+如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。当前挂起轮次
+仍按原有方式恢复；已被后续用户消息取代的旧函数调用轮次，则按上文所述仅修复发出的请求，
+不会重新执行其中的工具。
 
 **显式恢复的已知限制。** 并行调用 A 和 B 时，如果最后一条事件是 A 的结果，B 的结果尚未保存，
 Runner 会跳过工具恢复，并在发送 Responses 请求前报告缺少 B 的结果。此时可以在同一 Session

@@ -31,6 +31,32 @@ import (
 )
 
 const cancelFollowUp = "continue with a new request"
+const missingInterruptedToolResult = "No result is available for this tool call. " +
+	"The previous run may have been interrupted before the result was recorded. " +
+	"The tool may already have run, and its outcome is unknown."
+
+func appendNativeSessionEvents(t *testing.T, ctx context.Context, svc session.Service, sess *session.Session, events ...*event.Event) {
+	t.Helper()
+	for _, evt := range events {
+		evt.FilterKey = "native"
+		require.NoError(t, svc.AppendEvent(ctx, sess, evt))
+	}
+}
+
+func inputToolOutputs(t *testing.T, items []inputItem) map[string]string {
+	t.Helper()
+	outputs := make(map[string]string)
+	for _, item := range items {
+		if item.Type != "function_call_output" {
+			continue
+		}
+		require.NotContains(t, outputs, item.CallID, "tool outputs must not be duplicated")
+		var value string
+		require.NoError(t, json.Unmarshal(item.Output, &value))
+		outputs[item.CallID] = value
+	}
+	return outputs
+}
 
 func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 	for _, tc := range []struct {
@@ -214,7 +240,7 @@ func TestRunnerCancelThenContinueNativeToolHistory(t *testing.T) {
 }
 
 // Wait for persistence of the tool call, or the first result in a per-call round.
-func waitCancelBoundary(t *testing.T, ctx context.Context, stream <-chan *event.Event, resultID string) {
+func waitCancelBoundary(t *testing.T, ctx context.Context, stream <-chan *event.Event, resultID string) *event.Event {
 	t.Helper()
 	for {
 		select {
@@ -224,14 +250,15 @@ func waitCancelBoundary(t *testing.T, ctx context.Context, stream <-chan *event.
 				continue
 			}
 			if resultID == "" && evt.IsToolCallResponse() {
-				return
+				return evt
 			}
 			if resultID != "" && evt.IsToolResultResponse() {
 				require.Equal(t, []string{resultID}, evt.GetToolResultIDs())
-				return
+				return evt
 			}
 		case <-ctx.Done():
 			t.Fatal("timed out waiting for the tool boundary")
+			return nil
 		}
 	}
 }
@@ -312,9 +339,6 @@ func assertCancelRequestHistory(
 	t *testing.T, input json.RawMessage, nativeOutput, knownID, userText string,
 ) []json.RawMessage {
 	t.Helper()
-	const wantMissingResult = "No result is available for this tool call. " +
-		"The previous run may have been interrupted before the result was recorded. " +
-		"The tool may already have run, and its outcome is unknown."
 	var items []json.RawMessage
 	require.NoError(t, json.Unmarshal(input, &items))
 	var native []json.RawMessage
@@ -368,7 +392,7 @@ func assertCancelRequestHistory(
 		outputIndex, ok := outputIndexes[id]
 		require.True(t, ok, "missing output for %s", id)
 		if id != knownID {
-			require.Equal(t, wantMissingResult, outputs[id], "unrecorded result for %s", id)
+			require.Equal(t, missingInterruptedToolResult, outputs[id], "unrecorded result for %s", id)
 		}
 		require.Less(t, callIndex, outputIndex, "call must precede its result")
 		require.Less(t, outputIndex, firstUserIndex, "all prior results must precede the first new user turn")

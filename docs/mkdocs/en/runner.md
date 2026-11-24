@@ -717,11 +717,18 @@ Send a new user message with the same `userID` and `sessionID`.
 eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("What happened?"))
 ```
 
-When LLMAgent continues with the same configured Responses model that issued
-the tool calls, it replays saved results by call ID without re-executing those
-calls. Each missing result gets an unknown execution status in the model
-request only.
-If you use a custom model wrapper, forward `model.ProviderDataProjector` to the underlying Responses model so Runner can match results by their original tool call IDs.
+When a new top-level user turn continues with the same Responses model that
+issued the ordinary function calls, LLMAgent matches saved results by call ID without
+re-executing those calls. It preserves real results, including empty results
+and late results that can be attributed to a call unambiguously. For each
+missing result, the outgoing request gets a placeholder explaining that the
+previous run may have stopped before the outcome was recorded. The Session
+retains the original events.
+If you use a custom model wrapper, forward `model.ProviderDataProjector` to
+the underlying Responses model so Runner can match the native call IDs. For
+tool namespaces, also forward `model.ProviderDataRequestProjector` to resolve
+registered tool names. Chat, `tool_search`, and other provider actions retain
+their existing behavior.
 
 By default, Runner saves parallel tool results together. If A returns while B
 is running and the run stops before the combined result is saved, both appear
@@ -741,7 +748,9 @@ reply with `tool_calls`, Runner executes those calls using the agent's tools and
 callbacks, saves the results, then calls the model. For Responses, it validates
 the saved call against the selected model before executing any tools. A retry
 can repeat an external action if the tool performed it before its result was
-saved.
+saved. If a later user message already superseded an older function call,
+its missing result gets the same request-only placeholder described above.
+Only the current pending round is eligible for execution during resume.
 
 **Known limitation of explicit resume.** If parallel calls A and B were issued
 and the last event is A's result, Runner skips tool recovery and reports B's

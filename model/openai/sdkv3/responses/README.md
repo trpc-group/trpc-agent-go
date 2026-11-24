@@ -626,14 +626,23 @@ For example, if a response calls A and B and only A's result was persisted as
 a separate event before a crash, explicit resume reports B's missing result
 before sending a Responses request.
 
-A new user message on the same session lets Runner and LLMAgent continue after
-an interruption. The outgoing request keeps A's result and adds a
-`function_call_output` for B stating that its execution status is unknown.
-The framework neither runs B again nor writes that placeholder to the session.
-This also works for existing sessions with a retained tool call and no recorded
-result. Wrappers must forward `model.ProviderDataProjector` so the framework
-can pair results with the IDs in the native record. Direct adapter calls and
-Graph LLM nodes continue to validate the history supplied to them.
+A new top-level user message in the same session lets Runner and LLMAgent continue after
+an interruption. For ordinary native function calls, the outgoing request keeps
+real results, including empty results and late results that can be attributed
+to a call unambiguously. It adds a `function_call_output` for each missing
+result stating that its execution status is unknown. The framework neither
+reruns those calls nor writes the placeholders to the session. This also
+works for existing sessions with a retained tool call and no recorded result.
+Wrappers must forward `model.ProviderDataProjector` so the framework can pair
+results with the IDs in the native record. For tool namespaces, wrappers must
+also forward `model.ProviderDataRequestProjector` to resolve registered names.
+
+An empty explicit resume continues to handle the current pending round as
+described above. If an older incomplete round has already been superseded by a
+later user message, its missing results are repaired in the outgoing request
+without rerunning its calls. Chat, `tool_search`, and other provider actions
+retain their existing behavior. Direct adapter calls and Graph LLM nodes
+continue to validate the history supplied to them.
 
 Session persistence and business side effects are separate operations. A
 successful tool side effect followed by a crash before its result is stored

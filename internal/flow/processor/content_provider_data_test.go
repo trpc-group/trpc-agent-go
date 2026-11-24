@@ -21,7 +21,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -492,6 +491,10 @@ type interruptedRoundModel struct {
 	mockModel
 }
 
+func (*interruptedRoundModel) Info() model.Info {
+	return model.Info{Name: testProviderDataModel, ProviderDataProtocol: testProviderDataProvider}
+}
+
 func (*interruptedRoundModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
 	msg := model.NewAssistantMessage("")
 	err := json.Unmarshal(data.Payload, &msg.ToolCalls)
@@ -512,7 +515,8 @@ func TestNativeLateToolResultKeepsNewUserTurn(t *testing.T) {
 	events := timedTestEvents(time.Now(),
 		toolTranscriptTestEvent("r1", "i1", interruptedTestCall(t, "a", "b"), ""),
 		toolTranscriptTestEvent("r2", "i2", next, ""),
-		toolTranscriptTestEvent("r1", "i1", model.NewToolMessage("b", "lookup", "late result"), model.ObjectTypeToolResponse),
+		// A recovery worker may save the original call ID under a new invocation.
+		toolTranscriptTestEvent("worker", "late-writer", model.NewToolMessage("b", "lookup", "late result"), model.ObjectTypeToolResponse),
 	)
 	events[0].Choices[0].Message.ToolCalls = nil // Wire IDs remain in the native record.
 	events[1].Author = "user"
@@ -523,6 +527,8 @@ func TestNativeLateToolResultKeepsNewUserTurn(t *testing.T) {
 	require.Len(t, history.messages, 4)
 	require.Equal(t, events[0].Choices[0].Message, history.messages[0])
 	require.Equal(t, events[2].Choices[0].Message, history.messages[1])
+	require.Equal(t, events[2].ID, history.items[1].EffectiveEvent.ID)
+	require.True(t, history.items[1].Boundary.IsZero(), "moving a real result must not summarize the intervening user input")
 	require.Equal(t, "a", history.messages[2].ToolID)
 	require.Contains(t, history.messages[2].Content, "unknown")
 	require.True(t, history.items[2].Boundary.IsZero(), "a placeholder cannot advance the stored summary cutoff")
@@ -531,6 +537,44 @@ func TestNativeLateToolResultKeepsNewUserTurn(t *testing.T) {
 	processor = NewContentRequestProcessor(WithMaxHistoryRuns(2))
 	trimmed := processor.getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
 	require.Equal(t, []model.Message{next}, trimmed.messages, "a truncated call must take its real result with it")
+}
+
+func TestLateResultsFromTwoSupersededRounds(t *testing.T) {
+	callA, callB := interruptedTestCall(t, "a"), interruptedTestCall(t, "b")
+	resultA, resultB := model.NewToolMessage("a", "lookup", "one"), model.NewToolMessage("b", "lookup", "two")
+	userB, userC := model.NewUserMessage("second question"), model.NewUserMessage("third question")
+	events := timedTestEvents(time.Now(),
+		toolTranscriptTestEvent("r1", "i1", callA, ""),
+		toolTranscriptTestEvent("r2", "i2", userB, ""),
+		toolTranscriptTestEvent("r2", "i2", callB, ""),
+		toolTranscriptTestEvent("r1", "i1", resultA, model.ObjectTypeToolResponse),
+		toolTranscriptTestEvent("r3", "i3", userC, ""),
+		toolTranscriptTestEvent("r2", "i2", resultB, model.ObjectTypeToolResponse),
+	)
+	events[1].Author, events[4].Author = "user", "user"
+	inv := testInvocation(events, "i3", "r3", userC)
+	inv.Model = &interruptedRoundModel{}
+	got := NewContentRequestProcessor().getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Equal(t, []model.Message{callA, resultA, userB, callB, resultB, userC}, got)
+}
+
+func TestCompleteResponsesRoundPreservesBothResultEvents(t *testing.T) {
+	results := []model.Message{model.NewToolMessage("b", "lookup", ""), model.NewToolMessage("a", "lookup", "value")}
+	next := model.NewUserMessage("continue")
+	events := timedTestEvents(time.Now(),
+		toolTranscriptTestEvent("r1", "i1", interruptedTestCall(t, "a", "b"), ""),
+		toolTranscriptTestEvent("r1", "i1", results[0], model.ObjectTypeToolResponse),
+		toolTranscriptTestEvent("r1", "i1", results[1], model.ObjectTypeToolResponse),
+	)
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	history := NewContentRequestProcessor().getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, history.messages, 4)
+	require.Equal(t, results, history.messages[1:3])
+	for i := 1; i <= 2; i++ {
+		require.Equal(t, events[i].ID, history.items[i].EffectiveEvent.ID)
+		require.Equal(t, events[i].ID, history.items[i].Boundary.EventID)
+	}
 }
 
 func TestInterruptedNativeReplyWithoutDisplayToolCalls(t *testing.T) {
@@ -592,6 +636,35 @@ func TestEmptyResumeInputKeepsNativeTailPending(t *testing.T) {
 	}
 }
 
+func TestNestedInputKeepsParentCallPending(t *testing.T) {
+	user := toolTranscriptTestEvent("shared", "parent", model.NewUserMessage("start"), "")
+	user.Author = "user"
+	call := interruptedTestCall(t, "delegate")
+	parentCall := toolTranscriptTestEvent("shared", "parent", call, "")
+	childInput := toolTranscriptTestEvent("shared", "child", model.NewUserMessage("delegated task"), "")
+	childInput.Author, childInput.ParentInvocationID = "user", "parent"
+	events := timedTestEvents(time.Now(), user, parentCall, childInput)
+	p := NewContentRequestProcessor()
+	parent := testInvocation(events, "parent", "shared", user.Choices[0].Message)
+	child := parent.Clone(agent.WithInvocationID("child"), agent.WithInvocationMessage(childInput.Choices[0].Message))
+	resume := testInvocation(events, "resume", "new-request", model.Message{})
+	resume.RunOptions.Resume = true
+	for _, inv := range []*agent.Invocation{child, resume} {
+		inv.Model = &interruptedRoundModel{}
+		got := p.getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+		require.Contains(t, got, call)
+		for _, msg := range got {
+			require.NotEqual(t, model.RoleTool, msg.Role, "a delegated input cannot supersede the parent call")
+		}
+	}
+
+	next := testInvocation(events, "new-user-turn", "shared", model.NewUserMessage("continue"))
+	next.Model = &interruptedRoundModel{}
+	got := p.getIncrementMessagesAfterCutoff(next, nil, summaryHistoryCutoff{})
+	require.Equal(t, "delegate", got[2].ToolID, "a new user turn can reuse an application-supplied request ID")
+	require.Contains(t, got[2].Content, "unknown")
+}
+
 func TestInterruptedToolOutputsFollowProjectedNativePayload(t *testing.T) {
 	next := model.NewUserMessage("follow up")
 	call := interruptedTestCall(t, "original")
@@ -643,33 +716,10 @@ func TestInterruptedNativeWindowUsesProjectedCalls(t *testing.T) {
 	require.Equal(t, before, inv.Session.Events, "projection must not change the session")
 }
 
-func TestInterruptedNativeUnalignedHistory(t *testing.T) {
-	original := interruptedTestCall(t, "original")
-	edited := interruptedTestCall(t, "edited")
-	rounds := interruptedToolRounds{"event": {
-		source: original.ProviderData,
-		native: original.ToolCalls,
-	}}
-	item := summaryview.Item{EffectiveEvent: event.Event{ID: "event"}, Message: edited}
-	messages := []model.Message{
-		original,
-		model.NewToolMessage("edited", "lookup", "result"),
-		model.NewUserMessage("follow up"),
-	}
-	for _, items := range [][]summaryview.Item{{item}, {item, item, item, item}} {
-		history := projectedHistory{messages: messages, items: items}
-		require.Equal(t, 1, rounds.windowStart(history, 2, &interruptedRoundModel{}))
-		require.Equal(t, history, history.withInterruptedToolResults(rounds, &interruptedRoundModel{}))
-	}
-}
-
 func TestInterruptedNativeOutputPairingUsesIDs(t *testing.T) {
 	calls := testToolCalls("kept", "pending")
-	results := []model.Message{
-		model.NewToolMessage("kept", "lookup", "7"),
-		model.NewToolMessage("different", "lookup", "9"),
-	}
-	missing := missingResponsesToolResults(calls, results)
+	results := map[string]int{"kept": 1, "different": 2}
+	missing := missingResponsesToolResults(calls, 0, results)
 	require.Len(t, missing, 1)
 	require.Equal(t, "pending", missing[0].ToolID)
 	require.Contains(t, missing[0].Content, "unknown")

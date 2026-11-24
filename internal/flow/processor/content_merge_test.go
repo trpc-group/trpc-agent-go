@@ -146,7 +146,7 @@ func Test_rearrangeLatestFuncResp_MergesBetweenCallAndLatest(t *testing.T) {
 	}
 
 	events := []event.Event{toolCall, unrelated1, respA, unrelated2, respB}
-	out := p.rearrangeLatestFuncResp(events, nil)
+	out := p.rearrangeLatestFuncResp(events)
 
 	// Expect: [toolCall, merged(tool results for a,b)], unrelated events removed in between for latest rearrangement
 	assert.Len(t, out, 2)
@@ -176,7 +176,7 @@ func Test_rearrangeLatestFuncResp_NoMatchingCall_ReturnsOriginal(t *testing.T) {
 			},
 		},
 	}
-	out := p.rearrangeLatestFuncResp([]event.Event{plain, respX}, nil)
+	out := p.rearrangeLatestFuncResp([]event.Event{plain, respX})
 	assert.Equal(t, 2, len(out))
 	assert.Equal(t, "msg", out[0].Choices[0].Message.Content)
 	assert.Equal(t, "x", out[1].GetToolResultIDs()[0])
@@ -197,7 +197,7 @@ func Test_rearrangeLatestFuncResp_LatestNotToolResult_ReturnsOriginal(t *testing
 			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "m2"}}},
 		},
 	}
-	out := p.rearrangeLatestFuncResp([]event.Event{plain1, plain2}, nil)
+	out := p.rearrangeLatestFuncResp([]event.Event{plain1, plain2})
 	assert.Equal(t, 2, len(out))
 	assert.Equal(t, "m1", out[0].Choices[0].Message.Content)
 	assert.Equal(t, "m2", out[1].Choices[0].Message.Content)
@@ -627,7 +627,7 @@ func Test_rearrangeAsyncFuncRespHist_FiltersMixedResponseEventAcrossRounds(t *te
 	assert.Equal(t, "second result", out[3].Response.Choices[0].Message.Content)
 }
 
-func TestLatestToolResultKeepsNestedWorkInsideParentRound(t *testing.T) {
+func TestLatestToolResultWithNestedWork(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for _, resultRun := range []string{"call-run", "resume-run"} {
 			call := toolTranscriptTestEvent("call-run", "parent", testCallMessage(t, native, "", "member"), "")
@@ -642,25 +642,14 @@ func TestLatestToolResultKeepsNestedWorkInsideParentRound(t *testing.T) {
 			}
 			events := []event.Event{call, task, reply, result}
 			p := NewContentRequestProcessor()
-			got := p.rearrangeAsyncFuncRespHist(p.rearrangeLatestFuncResp(events, nil))
+			got := p.rearrangeAsyncFuncRespHist(p.rearrangeLatestFuncResp(events))
+			if native {
+				require.Equal(t, events, got, "native=%t resultRun=%s", native, resultRun)
+				continue
+			}
 			require.Len(t, got, 2, "native=%t resultRun=%s", native, resultRun)
 			require.Equal(t, call, got[0])
 			require.Equal(t, result.Choices, got[1].Choices)
 		}
-	}
-}
-
-func TestLatestToolResultPreservesCurrentInputWithAmbiguousRequestID(t *testing.T) {
-	for _, requestID := range []string{"", "reused"} {
-		call := toolTranscriptTestEvent(requestID, "old", testCallMessage(t, false, "", "a"), "")
-		next := toolTranscriptTestEvent(requestID, "current", model.NewUserMessage("new question"), "")
-		next.Author = "user"
-		result := toolTranscriptTestEvent(requestID, "old", model.NewToolMessage("a", "lookup", "late"), model.ObjectTypeToolResponse)
-		events := []event.Event{call, next, result}
-		inv := testInvocation(events, "current", requestID, next.Choices[0].Message)
-		got := NewContentRequestProcessor().rearrangeLatestFuncResp(events, inv)
-		require.Len(t, got, 3)
-		require.Equal(t, result.Choices, got[1].Choices)
-		require.Equal(t, next, got[2])
 	}
 }

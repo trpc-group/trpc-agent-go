@@ -139,7 +139,7 @@ func TestRearrangeMixedNativeActionResults(t *testing.T) {
 			}, results...)
 			for _, history := range [][]event.Event{events, persistTestEvents(t, events)} {
 				p := NewContentRequestProcessor()
-				got := p.rearrangeLatestFuncResp(history, nil)
+				got := p.rearrangeLatestFuncResp(history)
 				require.Equal(t, history, got, "latest-result handling must retain the complete native round")
 				got = p.rearrangeAsyncFuncRespHist(got)
 				require.Equal(t, history, got, "history preparation must preserve result order")

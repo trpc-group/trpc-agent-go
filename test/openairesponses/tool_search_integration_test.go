@@ -258,10 +258,13 @@ func toolSummary(t *testing.T, raw json.RawMessage) []string {
 type inputItem struct {
 	Type      string          `json:"type"`
 	Role      string          `json:"role"`
+	ID        string          `json:"id"`
 	CallID    string          `json:"call_id"`
 	Namespace string          `json:"namespace"`
 	Name      string          `json:"name"`
 	Execution string          `json:"execution"`
+	Content   json.RawMessage `json:"content"`
+	Output    json.RawMessage `json:"output"`
 	Tools     json.RawMessage `json:"tools"`
 }
 
