@@ -36,6 +36,7 @@ func TestACPHelperProcess(t *testing.T) {
 	authenticated := false
 	authCalls := 0
 	sessionCount := 0
+	sessions := make(map[acpsdk.SessionId]struct{})
 	for {
 		var request helperRequest
 		if err := decoder.Decode(&request); err != nil {
@@ -89,9 +90,9 @@ func TestACPHelperProcess(t *testing.T) {
 				continue
 			}
 			sessionCount++
-			writeHelperResult(request.ID, acpsdk.NewSessionResponse{
-				SessionId: acpsdk.SessionId(fmt.Sprintf("helper-session-%d", sessionCount)),
-			})
+			sessionID := acpsdk.SessionId(fmt.Sprintf("helper-session-%d", sessionCount))
+			sessions[sessionID] = struct{}{}
+			writeHelperResult(request.ID, acpsdk.NewSessionResponse{SessionId: sessionID})
 		case acpsdk.AgentMethodSessionClose:
 			if !initialized {
 				writeHelperError(request.ID, acpsdk.NewInvalidRequest("not initialized"))
@@ -101,7 +102,35 @@ func TestACPHelperProcess(t *testing.T) {
 				writeHelperError(request.ID, acpsdk.NewInternalError("session close called"))
 				continue
 			}
+			var params acpsdk.CloseSessionRequest
+			_ = json.Unmarshal(request.Params, &params)
+			delete(sessions, params.SessionId)
 			writeHelperResult(request.ID, acpsdk.CloseSessionResponse{})
+		case acpsdk.AgentMethodSessionPrompt:
+			var params acpsdk.PromptRequest
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				writeHelperError(request.ID, acpsdk.NewInvalidParams(err.Error()))
+				continue
+			}
+			if _, ok := sessions[params.SessionId]; !ok {
+				writeHelperError(request.ID, &acpsdk.RequestError{
+					Code:    -32002,
+					Message: "Resource not found",
+					Data:    map[string]any{"sessionId": params.SessionId},
+				})
+				continue
+			}
+			helperWritePromptUpdates(params.SessionId, mode)
+			writeHelperResult(request.ID, acpsdk.PromptResponse{
+				StopReason: acpsdk.StopReasonEndTurn,
+				Usage: &acpsdk.Usage{
+					InputTokens:  3,
+					OutputTokens: 5,
+					TotalTokens:  8,
+				},
+			})
+		case acpsdk.AgentMethodSessionCancel:
+			continue
 		case acpsdk.AgentMethodAuthenticate:
 			authCalls++
 			if authCalls > 1 {
@@ -210,4 +239,44 @@ func helperAuthData() map[string]any {
 	return map[string]any{
 		"loginUrl": "https://example.test/login",
 	}
+}
+
+func helperWritePromptUpdates(sessionID acpsdk.SessionId, mode string) {
+	if mode == "prompt_overflow" {
+		for i := 0; i < defaultSessionUpdateQueueSize*2; i++ {
+			writeHelperNotification(sessionID, acpsdk.UpdateAgentMessageText("x"))
+		}
+		return
+	}
+	if mode != "prompt_stream" {
+		return
+	}
+	writeHelperNotification(sessionID, acpsdk.UpdateAgentThoughtText("thinking"))
+	writeHelperNotification(sessionID, acpsdk.UpdateAgentMessageText("hello"))
+	writeHelperNotification(
+		sessionID,
+		acpsdk.StartToolCall(
+			"tool-1",
+			"Read file",
+			acpsdk.WithStartKind(acpsdk.ToolKindRead),
+			acpsdk.WithStartRawInput(map[string]any{"path": "file.txt"}),
+		),
+	)
+	writeHelperNotification(sessionID, acpsdk.UpdatePlan(acpsdk.PlanEntry{
+		Content:  "Inspect file",
+		Priority: acpsdk.PlanEntryPriorityHigh,
+		Status:   acpsdk.PlanEntryStatusInProgress,
+	}))
+	writeHelperNotification(sessionID, acpsdk.UpdateAgentMessageText(" world"))
+}
+
+func writeHelperNotification(sessionID acpsdk.SessionId, update acpsdk.SessionUpdate) {
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  acpsdk.ClientMethodSessionUpdate,
+		"params": acpsdk.SessionNotification{
+			SessionId: sessionID,
+			Update:    update,
+		},
+	})
 }

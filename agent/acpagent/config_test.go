@@ -186,7 +186,7 @@ func TestRunValidatesInvocation(t *testing.T) {
 
 	events, err = acpAgent.Run(context.Background(), &agent.Invocation{})
 	require.Nil(t, events)
-	require.ErrorIs(t, err, errRunNotImplemented)
+	require.ErrorContains(t, err, "prompt is empty")
 }
 
 func TestMergeEnvironment(t *testing.T) {

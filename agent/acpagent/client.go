@@ -43,8 +43,15 @@ func (c *protocolClient) RequestPermission(
 	return c.checkPermission(ctx, request), nil
 }
 
-func (*protocolClient) SessionUpdate(context.Context, acpsdk.SessionNotification) error {
-	return nil
+func (c *protocolClient) SessionUpdate(
+	_ context.Context,
+	notification acpsdk.SessionNotification,
+) error {
+	turn, ok := c.activeTurns.get(notification.SessionId)
+	if !ok {
+		return nil
+	}
+	return turn.enqueue(notification)
 }
 
 func (*protocolClient) CreateTerminal(

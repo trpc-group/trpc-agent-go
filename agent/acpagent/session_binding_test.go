@@ -15,6 +15,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/require"
@@ -183,6 +184,32 @@ func TestComputeLaunchFingerprintExcludesEnvValues(t *testing.T) {
 	require.NotEqual(t, first, fourth)
 }
 
+func TestACPSessionPromptGateSerializesOnlyMatchingSession(t *testing.T) {
+	t.Parallel()
+
+	first := newGatedACPSession()
+	second := newGatedACPSession()
+	require.NoError(t, first.acquirePrompt(context.Background()))
+
+	blockedCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, first.acquirePrompt(blockedCtx), context.DeadlineExceeded)
+
+	otherCtx, otherCancel := context.WithTimeout(context.Background(), time.Second)
+	defer otherCancel()
+	require.NoError(t, second.acquirePrompt(otherCtx))
+	second.releasePrompt()
+
+	first.releasePrompt()
+	reacquiredCtx, reacquiredCancel := context.WithTimeout(
+		context.Background(),
+		time.Second,
+	)
+	defer reacquiredCancel()
+	require.NoError(t, first.acquirePrompt(reacquiredCtx))
+	first.releasePrompt()
+}
+
 func newSessionInvocation(
 	t *testing.T,
 	service session.Service,
@@ -195,6 +222,14 @@ func newSessionInvocation(
 		Session:        sess,
 		SessionService: service,
 	}
+}
+
+func newGatedACPSession() *acpSession {
+	session := &acpSession{
+		promptGate: make(chan struct{}, 1),
+	}
+	session.promptGate <- struct{}{}
+	return session
 }
 
 func loadSessionState(

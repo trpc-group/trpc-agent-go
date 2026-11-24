@@ -40,7 +40,10 @@ type acpSession struct {
 	key        session.Key
 	id         acpsdk.SessionId
 	generation uint64
+	process    *processConnection
+	promptGate chan struct{}
 	stateDelta session.StateMap
+	stateOnce  sync.Once
 }
 
 type acpSessionStore struct {
@@ -159,8 +162,11 @@ func (a *ACPAgent) acquireSessionOnce(
 		key:        key,
 		id:         response.SessionId,
 		generation: process.generation,
+		process:    process,
+		promptGate: make(chan struct{}, 1),
 		stateDelta: cloneSessionState(state),
 	}
+	binding.promptGate <- struct{}{}
 	a.sessions.put(binding)
 	return binding, nil
 }
@@ -216,12 +222,36 @@ func (s *acpSession) applyStateDelta(target *event.Event) {
 	if s == nil || target == nil {
 		return
 	}
-	if target.StateDelta == nil {
-		target.StateDelta = make(session.StateMap, len(s.stateDelta))
+	s.stateOnce.Do(func() {
+		if target.StateDelta == nil {
+			target.StateDelta = make(session.StateMap, len(s.stateDelta))
+		}
+		for key, value := range s.stateDelta {
+			target.StateDelta[key] = append([]byte(nil), value...)
+		}
+	})
+}
+
+func (s *acpSession) acquirePrompt(ctx context.Context) error {
+	if s == nil || s.promptGate == nil {
+		return errors.New("acpagent: ACP session prompt gate is unavailable")
 	}
-	for key, value := range s.stateDelta {
-		target.StateDelta[key] = append([]byte(nil), value...)
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.promptGate:
+		return nil
+	}
+}
+
+func (s *acpSession) releasePrompt() {
+	if s == nil || s.promptGate == nil {
+		return
+	}
+	s.promptGate <- struct{}{}
 }
 
 func closeRejectedACPSession(

@@ -13,6 +13,7 @@ import (
 	"context"
 	"testing"
 
+	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,4 +38,25 @@ func TestActiveTurnRegistryClearsOnlyMatchingTurn(t *testing.T) {
 	registry.clear("session-1", second)
 	_, ok = registry.get("session-1")
 	require.False(t, ok)
+}
+
+func TestActiveTurnQueueOverflowCancelsTurn(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	turn := newActiveTurn(ctx, nil, cancel)
+	for i := 0; i < defaultSessionUpdateQueueSize; i++ {
+		require.NoError(t, turn.enqueue(acpsdk.SessionNotification{}))
+	}
+	require.ErrorIs(
+		t,
+		turn.enqueue(acpsdk.SessionNotification{}),
+		errSessionUpdateOverflow,
+	)
+	require.True(t, turn.hasOverflowed())
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("overflow did not cancel the turn context")
+	}
 }

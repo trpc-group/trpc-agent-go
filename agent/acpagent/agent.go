@@ -20,8 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-var errRunNotImplemented = errors.New("acpagent: run is not implemented")
-
 // ACPAgent adapts an external ACP agent process to agent.Agent.
 type ACPAgent struct {
 	config              ACPConfig
@@ -75,11 +73,28 @@ func New(config ACPConfig, opts ...Option) (*ACPAgent, error) {
 }
 
 // Run implements agent.Agent.
-func (a *ACPAgent) Run(_ context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+func (a *ACPAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
 	if invocation == nil {
 		return nil, errors.New("acpagent: invocation is nil")
 	}
-	return nil, errRunNotImplemented
+	content, err := promptContentFromMessage(invocation.Message)
+	if err != nil {
+		return nil, err
+	}
+	session, err := a.acquireSession(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx := agent.CloneContext(ctx)
+	out := make(chan *event.Event)
+	go a.runPrompt(runCtx, invocation, session, content, out)
+	return out, nil
 }
 
 // Tools implements agent.Agent.
