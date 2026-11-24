@@ -1518,7 +1518,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 	var events []event.Event
 	sessionEvents := sessionEventsSnapshot(inv.Session)
 	projector := responsesHistoryProjector(inv.Model, req)
-	rounds := p.bindInterruptedToolRounds(inv, filter, sessionEvents, projector)
+	rounds := p.bindNativeToolRounds(inv, filter, sessionEvents, projector)
 	eventCutoff := newEventHistoryCutoff(sessionEvents, cutoff)
 	toolCallIDsToRestoreByEvent := p.toolCallIDsToRestoreByEvent(
 		sessionEvents,

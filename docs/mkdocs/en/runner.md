@@ -723,10 +723,14 @@ re-executing those calls. It preserves real results, including empty results
 and late results that can be attributed to a call unambiguously. For each
 missing result, the outgoing request gets a placeholder explaining that the
 previous run may have stopped before the outcome was recorded. The Session
-retains the original events.
-If you use a custom model wrapper, forward `model.ProviderDataProjector` to
-the underlying Responses model so Runner can match the native call IDs. For
-tool namespaces, also forward `model.ProviderDataRequestProjector` to resolve
+retains the original events. If a real result is saved later, the next request
+uses it in place of the placeholder. An earlier answer can still say the
+outcome was unknown, and prompt-cache reuse can stop at the changed output.
+
+If a new user message still fails with `function call "..." has no tool result`
+when using a custom model wrapper, check that the wrapper forwards
+`model.ProviderDataProjector` to the underlying Responses model so Runner can
+match the native call IDs. For tool namespaces, also forward `model.ProviderDataRequestProjector` to resolve
 registered tool names. Chat, `tool_search`, and other provider actions retain
 their existing behavior.
 
@@ -756,7 +760,7 @@ Only the current pending round is eligible for execution during resume.
 and the last event is A's result, Runner skips tool recovery and reports B's
 missing result before sending a Responses request. Send a new user message in
 the same session to continue with A's recorded result and B's outcome marked
-unknown, without rerunning either tool. [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
+unknown, without rerunning either tool. [Recovery tracking issue](https://github.com/trpc-group/trpc-agent-go/issues/2757) · [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call Arguments Auto Repair
 

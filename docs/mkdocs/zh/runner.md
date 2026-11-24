@@ -686,8 +686,12 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发�
 在新的顶层用户轮次中，若沿用发起普通函数调用的 Responses 模型，LLMAgent 会按调用 ID 匹配
 已保存的结果，不会重跑这些调用。真实结果会保留，包括空结果，以及能够明确归属到调用的
 迟到结果。每个缺失结果仅在发给模型的请求中标记为“上次运行可能在结果记录前被打断，
-执行状态未知”。Session 保留原始事件。如果使用自定义模型包装器，请将 `model.ProviderDataProjector`
-转发给底层 Responses 模型，以便 Runner 匹配原生调用 ID。使用工具命名空间时，还需要转发
+执行状态未知”。Session 保留原始事件。如果之后保存了真实结果，下次请求会用它替换占位。
+模型先前的回答可能仍说结果未知，提示词缓存也可能只能复用到这处变更之前。
+
+使用自定义模型包装器时，如果发新消息仍报 `function call "..." has no tool result`，
+请检查包装器是否将 `model.ProviderDataProjector` 转发给底层 Responses 模型，以便 Runner 匹配原生调用 ID。
+使用工具命名空间时，还需要转发
 `model.ProviderDataRequestProjector` 以解析注册的工具名。Chat、`tool_search` 和其他
 provider action 保持原有行为。
 
@@ -713,7 +717,7 @@ eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResum
 **显式恢复的已知限制。** 并行调用 A 和 B 时，如果最后一条事件是 A 的结果，B 的结果尚未保存，
 Runner 会跳过工具恢复，并在发送 Responses 请求前报告缺少 B 的结果。此时可以在同一 Session
 发新消息继续聊。模型会收到 A 的真实结果和 B 的状态未知提示，Runner 不会重新执行这两个工具。
-[Responses 工具恢复说明](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
+[恢复问题跟踪](https://github.com/trpc-group/trpc-agent-go/issues/2757) · [Responses 工具恢复说明](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call 参数自动修复
 

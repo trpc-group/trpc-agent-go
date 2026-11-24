@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// Request-only unknown outputs currently apply to Responses function calls.
+// A matching protocol and model name alone do not define how another adapter
+// represents a missing result.
 const responsesHistoryProtocol = "openai.responses"
 
 type projectNativeCalls func(*model.ProviderData) (model.Message, error)
@@ -35,19 +38,20 @@ func responsesHistoryProjector(m model.Model, req *model.Request) projectNativeC
 	return projector.ProjectProviderData
 }
 
-type interruptedToolRound struct {
+type nativeToolRoundBinding struct {
 	source  *model.ProviderData
 	display []model.ToolCall
 	native  []model.ToolCall
 }
 
-type interruptedToolRounds map[string]interruptedToolRound
+type nativeToolRoundBindings map[string]nativeToolRoundBinding
 
-// Bind native call IDs on the detached session snapshot before matching results
-// or selecting summary boundaries. Preserve the stored display for projection.
-func (p *ContentRequestProcessor) bindInterruptedToolRounds(
+// Bind the last native assistant reply of each superseded invocation if it
+// contains function calls. The detached snapshot uses wire IDs for result
+// matching and summary boundaries. Keep the stored display for projection.
+func (p *ContentRequestProcessor) bindNativeToolRounds(
 	inv *agent.Invocation, filter string, events []event.Event, project projectNativeCalls,
-) interruptedToolRounds {
+) nativeToolRoundBindings {
 	if project == nil {
 		return nil
 	}
@@ -61,7 +65,7 @@ func (p *ContentRequestProcessor) bindInterruptedToolRounds(
 	if latestUserInvocation == "" {
 		return nil
 	}
-	rounds := make(interruptedToolRounds)
+	rounds := make(nativeToolRoundBindings)
 	seenNativeReply := make(map[string]bool)
 	for i := len(events) - 1; i >= 0; i-- {
 		evt := &events[i]
@@ -86,7 +90,7 @@ func (p *ContentRequestProcessor) bindInterruptedToolRounds(
 		if err != nil || len(native.ToolCalls) == 0 {
 			continue
 		}
-		rounds[evt.ID] = interruptedToolRound{source: msg.ProviderData, display: msg.ToolCalls, native: native.ToolCalls}
+		rounds[evt.ID] = nativeToolRoundBinding{source: msg.ProviderData, display: msg.ToolCalls, native: native.ToolCalls}
 		msg.ToolCalls = native.ToolCalls
 	}
 	return rounds
@@ -127,7 +131,7 @@ func (p *ContentRequestProcessor) visibleUserTurns(
 	return -1, "", seen
 }
 
-func (rounds interruptedToolRounds) restoreDisplayCalls(events []event.Event) {
+func (rounds nativeToolRoundBindings) restoreDisplayCalls(events []event.Event) {
 	if len(rounds) == 0 {
 		return
 	}
@@ -141,7 +145,7 @@ func (rounds interruptedToolRounds) restoreDisplayCalls(events []event.Event) {
 
 // The window and result matcher use the wire IDs. The items retain the
 // projected display, which is restored before returning the request.
-func (rounds interruptedToolRounds) useNativeCalls(history projectedHistory, project projectNativeCalls) {
+func (rounds nativeToolRoundBindings) useNativeCalls(history projectedHistory, project projectNativeCalls) {
 	if len(rounds) == 0 || len(history.messages) != len(history.items) {
 		return
 	}
@@ -176,7 +180,7 @@ func isUserTurnEvent(evt *event.Event) bool {
 // A result persisted after the next user turn would otherwise be downgraded
 // to an orphan by the tool-history sanitizer. Move just that result in the
 // request. Normal native rounds retain their original event order.
-func (history projectedHistory) withLateToolResults(rounds interruptedToolRounds) projectedHistory {
+func (history projectedHistory) withLateToolResults(rounds nativeToolRoundBindings) projectedHistory {
 	if len(rounds) == 0 || len(history.items) != len(history.messages) {
 		return history
 	}
@@ -249,7 +253,7 @@ func uniqueToolCallPositions(messages []model.Message) map[string]int {
 // compaction. They must neither evict a real message nor be reported as
 // compacted successful results.
 func (history projectedHistory) withInterruptedToolResults(
-	rounds interruptedToolRounds,
+	rounds nativeToolRoundBindings,
 ) projectedHistory {
 	if len(rounds) == 0 || len(history.items) != len(history.messages) {
 		return history
