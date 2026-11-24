@@ -12,6 +12,7 @@ package openairesponses_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -22,7 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -400,80 +400,110 @@ func assertCancelRequestHistory(
 	return items
 }
 
-// A native record can retain calls after its editable display projection changes.
+// Persist an edited display through the public session hook while the tools
+// execute with the original IDs. Only A finishes before cancellation.
 func TestStoppedNativePartialResultWithEditedStoredDisplay(t *testing.T) {
-	for _, edit := range []string{"clear", "change IDs"} {
-		t.Run(edit, func(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		displayIDs []string
+	}{
+		{name: "clear"},
+		{name: "change IDs", displayIDs: []string{"display-a", "display-b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			svc := recoveryOpenSession(t, t.TempDir(), func(c *session.AppendEventContext, next func() error) error {
+				if c.Event.Response == nil || len(c.Event.Choices) != 1 || len(c.Event.Choices[0].Message.ToolCalls) != 2 {
+					return next()
+				}
+				// Give the session its own display without mutating the execution event.
+				stored := *c.Event
+				stored.Response = c.Event.Response.Clone()
+				msg := &stored.Choices[0].Message
+				calls := msg.ToolCalls
+				msg.ToolCalls = nil
+				for i, id := range tc.displayIDs {
+					call := calls[i]
+					call.ID = id
+					msg.ToolCalls = append(msg.ToolCalls, call)
+				}
+				c.Event = &stored
+				return next()
+			})
+			t.Cleanup(func() { _ = svc.Close() })
+
+			var callsA, callsB atomic.Int32
+			startedB := make(chan struct{})
+			calculator := function.NewFunctionTool(func(ctx context.Context, _ struct {
+				A int `json:"a"`
+			}) (int, error) {
+				id, _ := tool.ToolCallIDFromContext(ctx)
+				switch id {
+				case "call_a":
+					callsA.Add(1)
+					select {
+					case <-startedB:
+						return 7, nil
+					case <-ctx.Done():
+						return 0, ctx.Err()
+					}
+				case "call_b":
+					if callsB.Add(1) == 1 {
+						close(startedB)
+					}
+					<-ctx.Done()
+					return 0, ctx.Err()
+				default:
+					return 0, fmt.Errorf("unexpected execution ID %q", id)
+				}
+			}, function.WithName("calculator"))
 			rt := newToolResultNativeTransport(toolResultNativeMultiOutput)
-			m := toolResultNativeModel(rt)
-			responses, err := m.GenerateContent(ctx, &model.Request{Messages: []model.Message{model.NewUserMessage("calculate")}})
-			require.NoError(t, err)
-			original := collect(t, responses)
-			require.Len(t, original, 1)
-			pending := original[0]
-			require.Len(t, pending.Choices[0].Message.ToolCalls, 2)
-			if edit == "clear" {
-				pending.Choices[0].Message.ToolCalls = nil
-			} else {
-				pending.Choices[0].Message.ToolCalls[0].ID = "display-a"
-				pending.Choices[0].Message.ToolCalls[1].ID = "display-b"
-			}
-			svc := openToolResultNativeSQLite(t, filepath.Join(t.TempDir(), "edited-display.db"))
-			key := session.Key{AppName: "native", UserID: "user", SessionID: "session"}
-			sess, err := svc.CreateSession(ctx, key, nil)
-			require.NoError(t, err)
-			user := event.NewResponseEvent("old-run", "user", &model.Response{Done: true, Choices: []model.Choice{{Message: model.NewUserMessage("calculate")}}})
-			call := event.NewResponseEvent("old-run", "native", pending)
-			result := event.NewResponseEvent("old-run", "native", &model.Response{Done: true, Choices: []model.Choice{{Message: model.NewToolMessage("call_a", "calculator", "7")}}})
-			toolresultround.Mark(result, true)
-			require.True(t, result.IsToolResultResponse())
-			for _, evt := range []*event.Event{user, call, result} {
-				evt.FilterKey = "native"
-				require.NoError(t, svc.AppendEvent(ctx, sess, evt))
-			}
-			loaded, err := svc.GetSession(ctx, key)
-			require.NoError(t, err)
-			require.Len(t, loaded.Events, 3)
-			storedCall := loaded.Events[1].Choices[0].Message
-			require.NotNil(t, storedCall.ProviderData)
-			require.JSONEq(t, toolResultNativeMultiOutput, string(storedCall.ProviderData.Payload))
-			if edit == "clear" {
-				require.Empty(t, storedCall.ToolCalls)
-			} else {
-				require.Equal(t, "display-a", storedCall.ToolCalls[0].ID)
-				require.Equal(t, "display-b", storedCall.ToolCalls[1].ID)
-			}
-			storedResult := loaded.Events[2].Choices[0].Message
-			require.Equal(t, model.RoleTool, storedResult.Role)
-			require.Equal(t, "call_a", storedResult.ToolID)
-			require.Equal(t, "7", storedResult.Content)
-			<-rt.requests
-			a := llmagent.New("native", llmagent.WithModel(m))
+			a := llmagent.New("native", llmagent.WithModel(toolResultNativeModel(rt)),
+				llmagent.WithTools([]tool.Tool{calculator}), llmagent.WithEnableParallelTools(true))
 			r := runner.NewRunner("native", a, runner.WithSessionService(svc))
 			t.Cleanup(func() { _ = r.Close() })
+			stream, err := r.Run(ctx, "user", "session", model.NewUserMessage("calculate"),
+				agent.WithRequestID("edit-display"), agent.WithToolResultEventPerCallEnabled(true))
+			require.NoError(t, err)
+			callEvent := waitCancelBoundary(t, ctx, stream, "")
+			result := waitCancelBoundary(t, ctx, stream, "call_a")
+			require.Equal(t, "7", result.Choices[0].Message.Content)
+			require.True(t, r.(runner.ManagedRunner).Cancel("edit-display"))
+			drainCancelStream(t, ctx, stream)
+			require.EqualValues(t, 1, rt.calls.Load())
+			<-rt.requests
+
 			events := runToolResultNative(t, r, cancelFollowUp)
 			require.Empty(t, toolResultNativeErrors(events))
 			require.True(t, cancelHasAnswer(events))
+			require.EqualValues(t, 1, callsA.Load())
+			require.EqualValues(t, 1, callsB.Load())
 			require.EqualValues(t, 2, rt.calls.Load())
-			assertCancelRequestHistory(t, <-rt.requests, toolResultNativeMultiOutput, "call_a", cancelFollowUp)
-			stored, err := svc.GetSession(ctx, key)
+			stored, err := svc.GetSession(ctx, session.Key{AppName: "native", UserID: "user", SessionID: "session"})
 			require.NoError(t, err)
-			var results []model.Message
+			var records int
+			outputs := map[string][]string{}
 			for _, evt := range stored.Events {
 				if evt.Response == nil {
 					continue
 				}
-				for _, choice := range evt.Response.Choices {
-					if choice.Message.Role == model.RoleTool {
-						results = append(results, choice.Message)
+				for _, choice := range evt.Choices {
+					msg := choice.Message
+					if msg.Role == model.RoleTool {
+						outputs[msg.ToolID] = append(outputs[msg.ToolID], msg.Content)
+					}
+					if evt.ID == callEvent.ID {
+						records++
+						require.NotNil(t, msg.ProviderData)
+						require.JSONEq(t, toolResultNativeMultiOutput, string(msg.ProviderData.Payload))
+						require.ElementsMatch(t, tc.displayIDs, evt.GetToolCallIDs())
 					}
 				}
 			}
-			require.Len(t, results, 1, "the missing output must not be stored")
-			require.Equal(t, "call_a", results[0].ToolID)
-			require.Equal(t, "7", results[0].Content)
+			require.Equal(t, 1, records)
+			require.Equal(t, map[string][]string{"call_a": {"7"}}, outputs)
+			assertCancelRequestHistory(t, <-rt.requests, toolResultNativeMultiOutput, "call_a", cancelFollowUp)
 		})
 	}
 }
