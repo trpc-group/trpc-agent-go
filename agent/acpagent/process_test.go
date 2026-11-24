@@ -1,0 +1,256 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package acpagent
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestACPHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_ACP_HELPER") != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "acp helper stderr")
+	switch os.Getenv("ACP_HELPER_MODE") {
+	case "exit":
+		os.Exit(7)
+	case "hang":
+		time.Sleep(time.Hour)
+		os.Exit(0)
+	default:
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
+}
+
+func TestAgentProcessLifecycle(t *testing.T) {
+	var stderr bytes.Buffer
+	acpAgent := newHelperAgent(t, "wait", &stderr)
+
+	process, err := acpAgent.connections.connect()
+	require.NoError(t, err)
+	require.NotNil(t, process)
+	require.NotNil(t, process.connection)
+	require.Equal(t, testConnectionSnapshot{
+		state:      lifecycleRunning,
+		generation: 1,
+		pid:        process.cmd.Process.Pid,
+	}, snapshotConnectionManager(acpAgent.connections))
+
+	again, err := acpAgent.connections.connect()
+	require.NoError(t, err)
+	require.Same(t, process, again)
+
+	require.NoError(t, acpAgent.Close())
+	require.Eventually(t, func() bool {
+		select {
+		case <-process.done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, testConnectionSnapshot{
+		state:      lifecycleStopped,
+		generation: 1,
+	}, snapshotConnectionManager(acpAgent.connections))
+	require.Contains(t, stderr.String(), "acp helper stderr")
+}
+
+func TestAgentCloseIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	acpAgent, err := New(validACPConfig(t), WithTerminalAuthHandler(noopTerminalAuth))
+	require.NoError(t, err)
+	require.NoError(t, acpAgent.Close())
+	require.NoError(t, acpAgent.Close())
+
+	_, err = acpAgent.connections.connect()
+	require.ErrorIs(t, err, errAgentClosed)
+}
+
+func TestAgentCloseReturnsStableError(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgent(t, "hang", io.Discard)
+	acpAgent.connections.closeTimeout = 100 * time.Millisecond
+	_, err := acpAgent.connections.connect()
+	require.NoError(t, err)
+
+	first := acpAgent.Close()
+	require.ErrorIs(t, first, context.DeadlineExceeded)
+	second := acpAgent.Close()
+	require.EqualError(t, second, first.Error())
+}
+
+func TestAgentProcessAbnormalExit(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgent(t, "exit", io.Discard)
+	process, err := acpAgent.connections.connect()
+	require.NoError(t, err)
+	<-process.done
+
+	require.Equal(t, testConnectionSnapshot{
+		state:      lifecycleStopped,
+		generation: 1,
+	}, snapshotConnectionManager(acpAgent.connections))
+	runErr := acpAgent.connections.processError(process)
+	require.Error(t, runErr)
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, runErr, &exitErr)
+	require.Equal(t, 7, exitErr.ExitCode())
+	require.NoError(t, acpAgent.Close())
+}
+
+func TestAgentProcessStartFailureKeepsManagerStopped(t *testing.T) {
+	t.Parallel()
+
+	config := validACPConfig(t)
+	config.Command = t.TempDir() + "/missing-agent"
+	acpAgent, err := New(config, WithTerminalAuthHandler(noopTerminalAuth))
+	require.NoError(t, err)
+
+	process, err := acpAgent.connections.connect()
+	require.Nil(t, process)
+	require.ErrorContains(t, err, "start agent process")
+	require.Equal(t, testConnectionSnapshot{
+		state: lifecycleStopped,
+	}, snapshotConnectionManager(acpAgent.connections))
+	require.NoError(t, acpAgent.Close())
+}
+
+func TestAgentProcessRestartIncrementsGeneration(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgent(t, "exit", io.Discard)
+	first, err := acpAgent.connections.connect()
+	require.NoError(t, err)
+	<-first.done
+
+	second, err := acpAgent.connections.connect()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), second.generation)
+	require.Equal(t, uint64(2), snapshotConnectionManager(acpAgent.connections).generation)
+	<-second.done
+	require.NoError(t, acpAgent.Close())
+}
+
+func TestAgentConcurrentConnectSharesProcess(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgent(t, "wait", io.Discard)
+	const callers = 8
+	processes := make([]*processConnection, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			processes[index], errs[index] = acpAgent.connections.connect()
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+	for i := 1; i < callers; i++ {
+		require.Same(t, processes[0], processes[i])
+	}
+	require.NoError(t, acpAgent.Close())
+}
+
+func TestAgentConcurrentConnectAndClose(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgent(t, "wait", io.Discard)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, _ = acpAgent.connections.connect()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = acpAgent.Close()
+	}()
+	close(start)
+
+	waited := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent connect and close did not finish")
+	}
+	require.Equal(t, lifecycleStopped, snapshotConnectionManager(acpAgent.connections).state)
+}
+
+type testConnectionSnapshot struct {
+	state      lifecycleState
+	generation uint64
+	pid        int
+}
+
+func snapshotConnectionManager(manager *connectionManager) testConnectionSnapshot {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	snapshot := testConnectionSnapshot{
+		state:      manager.state,
+		generation: manager.generation,
+	}
+	if manager.current != nil && manager.current.cmd.Process != nil {
+		snapshot.pid = manager.current.cmd.Process.Pid
+	}
+	return snapshot
+}
+
+func newHelperAgent(t *testing.T, mode string, stderr io.Writer) *ACPAgent {
+	t.Helper()
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	config := ACPConfig{
+		Name:    "acp-helper",
+		Command: executable,
+		Args:    []string{"-test.run=^TestACPHelperProcess$"},
+		Env: []string{
+			"GO_WANT_ACP_HELPER=1",
+			"ACP_HELPER_MODE=" + mode,
+		},
+		WorkDir: t.TempDir(),
+	}
+	acpAgent, err := New(
+		config,
+		WithTerminalAuthHandler(noopTerminalAuth),
+		WithStderrWriter(stderr),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = acpAgent.Close()
+	})
+	return acpAgent
+}

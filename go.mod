@@ -43,6 +43,8 @@ require (
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
+require github.com/coder/acp-go-sdk v0.15.0
+
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
