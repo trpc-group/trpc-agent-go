@@ -116,3 +116,21 @@ func TestToolSearchHistoryPreservesLiteralAfterToolSetRemoval(t *testing.T) {
 		require.ErrorContains(t, err, "ambiguous")
 	}
 }
+
+func TestHostedSearchSupersedesOnlyEarlierBindingsForReportedIdentities(t *testing.T) {
+	const flat = `{"type":"function","name":"lookup"}`
+	const member = `{"type":"namespace","name":"billing","tools":[{"type":"function","name":"lookup"}]}`
+	const hosted = `{"type":"tool_search_output","execution":"server","tools":[` + flat + `]}`
+	const before = `{"type":"function_call","call_id":"before","name":"lookup","arguments":"{}"}`
+	const after = `{"type":"function_call","call_id":"after","name":"lookup","arguments":"{}"}`
+	const other = `{"type":"function_call","call_id":"other","namespace":"billing","name":"lookup","arguments":"{}"}`
+	req := &model.Request{Messages: []model.Message{bindingSearchResult("old", "["+flat+","+member+"]")}, Tools: agentTools(t, nil, billingToolSet())}
+	msg := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{Protocol: responseProvider, Model: "target",
+		Payload: json.RawMessage("[" + before + "," + hosted + "," + after + "," + other + "]")}}
+	bindings, err := providerdata.ResolveActionBindings(req, msg)
+	require.NoError(t, err)
+	require.Len(t, bindings, 2)
+	require.Equal(t, "before", bindings[0].CallID)
+	require.Equal(t, "other", bindings[1].CallID)
+	require.Equal(t, "old", bindings[1].ActionID)
+}

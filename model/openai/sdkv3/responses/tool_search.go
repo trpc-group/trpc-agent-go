@@ -528,13 +528,16 @@ func namespaceFunctionParam(name string, decl *tool.Declaration, deferred bool) 
 type toolSearchHistory struct {
 	seen bool
 	// loaded holds functions loaded by earlier tool_search_output items.
-	loaded  map[wireFunction]bool
-	origins map[wireFunction]string
+	loaded         map[wireFunction]bool
+	origins        map[wireFunction]string
+	clientProducer map[string]string // client search call ID to producing model
 }
 
 func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 	history := toolSearchHistory{
-		loaded: make(map[wireFunction]bool), origins: make(map[wireFunction]string),
+		loaded:         make(map[wireFunction]bool),
+		origins:        make(map[wireFunction]string),
+		clientProducer: make(map[string]string),
 	}
 	for _, msg := range messages {
 		if msg.ProviderData == nil || msg.ProviderData.Protocol != responseProvider {
@@ -553,50 +556,47 @@ func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 				origin := ""
 				if msg.Role == model.RoleTool && item.Execution == executionClient && item.CallID == msg.ToolID {
 					origin = item.CallID
+					history.clientProducer[origin] = msg.ProviderData.Model
 				}
-				// Reserve top-level identities first, regardless of result order.
-				// A namespace member cannot own the same qualified execution key.
-				for _, raw := range item.Tools {
-					var definition struct{ Type, Name string }
-					if json.Unmarshal(raw, &definition) == nil && definition.Type == functionToolType {
-						history.loaded[wireFunction{name: definition.Name}] = true
+				forEachSearchFunction(item.Tools, func(fn wireFunction) {
+					history.loaded[fn] = true
+					if origin != "" {
+						history.origins[fn] = origin
+					} else if item.Execution == executionServer {
+						history.supersedeForeignBinding(fn, msg.ProviderData.Model)
 					}
-				}
-				for _, loaded := range item.Tools {
-					markLoadedTools(history, origin, loaded)
-				}
+				})
 			}
 		}
 	}
 	return history
 }
 
-func markLoadedTools(history toolSearchHistory, origin string, raw json.RawMessage) {
-	var definition struct {
-		Type  string `json:"type"`
-		Name  string `json:"name"`
-		Tools []struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
-		} `json:"tools"`
+// A hosted lookup from the same model keeps its existing client binding.
+func (h toolSearchHistory) supersedeForeignBinding(fn wireFunction, producer string) {
+	if original := h.clientProducer[h.origins[fn]]; original != "" && original != producer {
+		delete(h.origins, fn)
 	}
-	if err := json.Unmarshal(raw, &definition); err != nil {
-		return
-	}
-	switch definition.Type {
-	case functionToolType:
-		fn := wireFunction{name: definition.Name}
-		history.loaded[fn] = true
-		if origin != "" {
-			history.origins[fn] = origin
+}
+
+// forEachSearchFunction visits exact wire identities explicitly loaded by a search.
+func forEachSearchFunction(tools []json.RawMessage, visit func(wireFunction)) {
+	for _, raw := range tools {
+		var definition struct {
+			Type  string
+			Name  string
+			Tools []struct{ Type, Name string }
 		}
-	case "namespace":
-		for _, member := range definition.Tools {
-			if member.Type == functionToolType {
-				fn := wireFunction{namespace: definition.Name, name: member.Name}
-				history.loaded[fn] = true
-				if origin != "" {
-					history.origins[fn] = origin
+		if json.Unmarshal(raw, &definition) != nil {
+			continue
+		}
+		switch definition.Type {
+		case functionToolType:
+			visit(wireFunction{name: definition.Name})
+		case "namespace":
+			for _, member := range definition.Tools {
+				if member.Type == functionToolType {
+					visit(wireFunction{namespace: definition.Name, name: member.Name})
 				}
 			}
 		}
@@ -615,9 +615,18 @@ func resolveActionBindings(request *model.Request, message model.Message) ([]pro
 	if err != nil {
 		return nil, err
 	}
-	plan := projectionToolPlan(request)
+	history := scanToolSearchHistory(request.Messages)
+	plan := projectionToolPlanWithHistory(request, history)
 	var bindings []providerdata.ActionBinding
 	for _, item := range items {
+		if item.Type == outputTypeToolSearchOutput && item.Execution == executionServer {
+			// A hosted result supersedes the client selection for later calls
+			// in this response, just as it does in persisted history.
+			forEachSearchFunction(item.Tools, func(fn wireFunction) {
+				history.supersedeForeignBinding(fn, message.ProviderData.Model)
+			})
+			continue
+		}
 		if item.Type != outputTypeFunctionCall {
 			continue
 		}

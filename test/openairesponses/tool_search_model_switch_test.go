@@ -57,7 +57,7 @@ type searchSwitchFixture struct {
 	runner   runner.Runner
 }
 
-func newSearchSwitchFixture(t *testing.T, handler responses.ToolSearchHandler, tools []tool.Tool, sets []tool.ToolSet, replies ...switchReply) *searchSwitchFixture {
+func newSearchSwitchFixture(t *testing.T, handler responses.ToolSearchHandler, targetSearch responses.Option, tools []tool.Tool, sets []tool.ToolSet, replies ...switchReply) *searchSwitchFixture {
 	t.Helper()
 	f := &searchSwitchFixture{replies: replies, sessions: inmemory.NewSessionService()}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +81,7 @@ func newSearchSwitchFixture(t *testing.T, handler responses.ToolSearchHandler, t
 	t.Cleanup(server.Close)
 	models := map[string]model.Model{
 		switchSource: responses.New(switchSource, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), responses.WithClientToolSearch(handler), responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
-		switchTarget: responses.New(switchTarget, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), responses.WithClientToolSearch(handler), responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
+		switchTarget: responses.New(switchTarget, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), targetSearch, responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
 		switchChat: chat.New(switchChat, chat.WithBaseURL(server.URL), chat.WithAPIKey("test"),
 			chat.WithOpenAIOptions(openaiopt.WithMaxRetries(0))),
 	}
@@ -248,7 +248,7 @@ func TestRunnerClientToolSearchResponsesChatResponses(t *testing.T) {
 		searches.Add(1)
 		return append(selectSearchCandidates(req, "billing_lookup"), responses.ToolSearchEntry{Tool: external}), nil
 	}
-	f := newSearchSwitchFixture(t, handler, []tool.Tool{deferred.Tool(eta), deferred.Tool(hidden)},
+	f := newSearchSwitchFixture(t, handler, responses.WithClientToolSearch(handler), []tool.Tool{deferred.Tool(eta), deferred.Tool(hidden)},
 		[]tool.ToolSet{deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{invoice}})},
 		switchResponsesReply(switchSearchReasoning+","+switchSearchCall), switchResponsesReply(switchInvoiceCall),
 		switchResponsesReply(switchInvoiceAnswer), switchChatReply(`{"role":"assistant","content":"240"}`, "stop"),
@@ -314,7 +314,7 @@ func TestRunnerClientToolSearchReplacementAcrossModelSwitch(t *testing.T) {
 		}, function.WithName("sandbox_lookup"), function.WithDescription("Sandbox invoice."))
 		return selected, nil
 	}
-	f := newSearchSwitchFixture(t, handler, nil, []tool.ToolSet{deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{production}})},
+	f := newSearchSwitchFixture(t, handler, responses.WithClientToolSearch(handler), nil, []tool.ToolSet{deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{production}})},
 		switchResponsesReply(switchSearchReasoning+","+switchSearchCall), switchResponsesReply(switchInvoiceCall),
 		switchResponsesReply(switchInvoiceAnswer), switchChatReply(`{"role":"assistant","content":"240"}`, "stop"),
 		switchTextReply("msg_read", "240"), switchResponsesReply(staleCall), switchResponsesReply(searchAgain),
@@ -350,4 +350,62 @@ func TestRunnerClientToolSearchReplacementAcrossModelSwitch(t *testing.T) {
 	require.Contains(t, string(reqs[8].body["input"]), "fresh sandbox 120")
 	require.Zero(t, productionRuns.Load(), "same-name production must never replace the handler's selected sandbox")
 	requireSearchEventsUnchanged(t, f, old, count)
+}
+
+func TestRunnerHostedSearchAfterClientReplacement(t *testing.T) {
+	const call = `{"type":"function_call","call_id":"target-call","namespace":"billing","name":"lookup","arguments":"{}"}`
+	const search = `{"type":"tool_search_call","execution":"server","status":"completed","arguments":{}},`
+	const matched = `[{"type":"namespace","name":"billing","tools":[{"type":"function","name":"lookup"}]}]`
+	for _, tc := range []struct {
+		name, definitions string
+		nextTurn          bool
+		wantRegistered    int32
+	}{
+		{"same response", matched, false, 1},
+		{"next turn", matched, true, 1},
+		{"search miss", "[]", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var searches, sandbox, registered atomic.Int32
+			makeLookup := func(counter *atomic.Int32, value string) tool.Tool {
+				return function.NewFunctionTool(func(context.Context, struct{}) (string, error) {
+					counter.Add(1)
+					return value, nil
+				}, function.WithName("lookup"), function.WithDescription("Look up an invoice."))
+			}
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+				searches.Add(1)
+				selected := selectSearchCandidates(req, "billing_lookup")
+				if len(selected) != 1 {
+					return nil, fmt.Errorf("missing billing lookup")
+				}
+				selected[0].Tool = makeLookup(&sandbox, "sandbox")
+				return selected, nil
+			}
+			hosted := search + `{"type":"tool_search_output","execution":"server","status":"completed","tools":` + tc.definitions + `}`
+			replies := []switchReply{switchResponsesReply(switchSearchCall), switchResponsesReply(switchInvoiceCall), switchTextReply("msg_a", "done")}
+			if tc.nextTurn {
+				replies = append(replies, switchResponsesReply(hosted+","+switchInvoiceAnswer), switchResponsesReply(call))
+			} else {
+				replies = append(replies, switchResponsesReply(hosted+","+call))
+			}
+			replies = append(replies, switchTextReply("msg_b", "done"))
+			f := newSearchSwitchFixture(t, handler, responses.WithHostedToolSearch(), nil, []tool.ToolSet{deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{makeLookup(&registered, "registered")}})}, replies...)
+			f.run(t, switchSource, "Look up the sandbox invoice.")
+			f.run(t, switchTarget, "Search the hosted catalog.")
+			if tc.nextTurn {
+				f.run(t, switchTarget, "Call the tool you found.")
+			}
+			require.EqualValues(t, 1, searches.Load())
+			require.EqualValues(t, 1, sandbox.Load())
+			require.Equal(t, tc.wantRegistered, registered.Load())
+			requests := f.snapshot()
+			last := string(requests[len(requests)-1].body["input"])
+			if tc.wantRegistered == 0 {
+				require.Contains(t, last, "search for it again")
+			} else {
+				require.Contains(t, last, "registered")
+			}
+		})
+	}
 }

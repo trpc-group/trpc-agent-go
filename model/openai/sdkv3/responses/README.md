@@ -333,6 +333,12 @@ To let the model continue without the tools, return an empty result instead
 of an error. Canceling the run context stops the search without an output or a
 search error. The handler may be called concurrently for different requests.
 
+When switching from client search to hosted search on a different configured model, a hosted result that explicitly
+lists the same function (namespace and name) supersedes its earlier client
+selection. Later calls in that response and subsequent turns use the current
+registered tool. An empty result or a result for another function preserves
+the previous binding.
+
 ### Tool search boundaries
 
 - Client search needs a flow that completes provider actions. LLMAgent and
