@@ -4388,6 +4388,60 @@ func TestModel_HandleNonStreamingRequest_ContextCancelDoesNotBlock(t *testing.T)
 	})
 }
 
+func collectResponsesWithTimeout(
+	t *testing.T,
+	ch <-chan *model.Response,
+	timeout time.Duration,
+) []*model.Response {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var responses []*model.Response
+	for {
+		select {
+		case resp, ok := <-ch:
+			if !ok {
+				return responses
+			}
+			responses = append(responses, resp)
+		case <-timer.C:
+			t.Fatal("timed out waiting for response channel to close")
+		}
+	}
+}
+
+func TestModel_GenerateContent_NonStreamingCanceledInResponseCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"n","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithChatResponseCallback(func(_ context.Context, _ *ChatCompletionRequest, _ *ChatCompletionResponse) {
+			cancel()
+		}),
+	)
+	require.NoError(t, err)
+
+	// Uses the default buffered responseChan (size 256); cancellation before
+	// send must still suppress the normal success response.
+	ch, err := m.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	responses := collectResponsesWithTimeout(t, ch, 2*time.Second)
+	assert.Empty(t, responses)
+}
+
 func TestModel_GenerateContent_StreamingCanceledInChunkCallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -4431,10 +4485,7 @@ func TestModel_GenerateContent_StreamingCanceledInChunkCallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var responses []*model.Response
-	for resp := range ch {
-		responses = append(responses, resp)
-	}
+	responses := collectResponsesWithTimeout(t, ch, 2*time.Second)
 	assert.Empty(t, responses)
 
 	select {
@@ -4459,7 +4510,11 @@ func TestSendResponse_BlockingSendSucceeds(t *testing.T) {
 	}()
 
 	<-started
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case ok := <-sent:
+		t.Fatalf("sendResponse returned early (%v) while channel was full", ok)
+	case <-time.After(20 * time.Millisecond):
+	}
 
 	require.Same(t, prefill, <-ch)
 

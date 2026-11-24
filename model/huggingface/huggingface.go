@@ -224,6 +224,9 @@ func (m *Model) handleNonStreamingRequest(
 
 	// Call response callback if provided.
 	m.runChatResponseCallback(ctx, hfRequest, hfResponse)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// Convert HuggingFace response to model.Response.
 	response := m.convertResponse(hfResponse)
