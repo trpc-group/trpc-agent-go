@@ -10,12 +10,15 @@
 package processor
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -625,4 +628,53 @@ func Test_rearrangeAsyncFuncRespHist_FiltersMixedResponseEventAcrossRounds(t *te
 	assert.Equal(t, []string{"call_second"}, out[3].GetToolResultIDs())
 	assert.Len(t, out[3].Response.Choices, 1)
 	assert.Equal(t, "second result", out[3].Response.Choices[0].Message.Content)
+}
+
+func TestChatLateToolResultPreservesNewerTurn(t *testing.T) {
+	question := model.NewUserMessage("new question")
+	user := toolTranscriptTestEvent("new", "new", question, "")
+	user.Author = "user"
+	system := model.NewSystemMessage("new instruction")
+	assistant := model.NewAssistantMessage("new answer")
+	a := model.NewToolMessage("a", "lookup", "result A")
+	b := model.NewToolMessage("b", "lookup", "result B")
+	calls := testCallMessage(t, false, "", "a", "b")
+	for _, tc := range []struct {
+		name          string
+		aAlreadySaved bool
+	}{
+		{"partial results", false},
+		{"both results", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events := []event.Event{toolTranscriptTestEvent("old", "old", calls, "")}
+			if tc.aAlreadySaved {
+				events = append(events, toolTranscriptTestEvent("old", "old", a, model.ObjectTypeToolResponse))
+			}
+			events = append(events, user,
+				toolTranscriptTestEvent("new", "new", system, ""),
+				toolTranscriptTestEvent("new", "new", assistant, ""),
+				toolTranscriptTestEvent("old", "old", b, model.ObjectTypeToolResponse),
+			)
+			inv := testInvocation(timedTestEvents(time.Now(), events...), "new", "new", question)
+			req := &model.Request{}
+			ctx := context.Background()
+			NewContentRequestProcessor().ProcessRequest(ctx, inv, req, nil)
+			messages := toolcall.SanitizeMessagesWithTools(ctx, req.Messages, nil)
+			for _, msg := range []model.Message{question, system, assistant} {
+				assert.Contains(t, messages, msg, "the newer turn must survive a late tool result")
+			}
+			var results []model.Message
+			for _, msg := range messages {
+				if msg.Role == model.RoleTool {
+					results = append(results, msg)
+				}
+			}
+			if tc.aAlreadySaved {
+				require.ElementsMatch(t, []model.Message{a, b}, results)
+			} else {
+				require.Equal(t, []model.Message{b}, results)
+			}
+		})
+	}
 }
