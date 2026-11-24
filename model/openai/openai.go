@@ -725,6 +725,9 @@ func (m *Model) appendOutboundMessagesObserver(
 		) (*http.Response, error) {
 			raw, err := readAndRestoreRequestBody(req)
 			checkOutbound(raw, err)
+			if err != nil {
+				return nil, err
+			}
 			return next(req)
 		},
 	))
@@ -737,8 +740,11 @@ func readAndRestoreRequestBody(req *http.Request) ([]byte, error) {
 	body := req.Body
 	raw, err := io.ReadAll(body)
 	_ = body.Close()
+	if err != nil {
+		return nil, err
+	}
 	req.Body = io.NopCloser(bytes.NewReader(raw))
-	return raw, err
+	return raw, nil
 }
 
 func validateLogprobsConfig(request *model.Request) error {

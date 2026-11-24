@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10563,6 +10564,98 @@ func TestReadAndRestoreRequestBody(t *testing.T) {
 	restored, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 	require.Equal(t, `{"messages":[]}`, string(restored))
+
+	readErr := errors.New("source body read failed")
+	req, err = http.NewRequest(
+		http.MethodPost,
+		"http://example.com",
+		&failingPayloadReader{
+			payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
+			err:     readErr,
+		},
+	)
+	require.NoError(t, err)
+	raw, err = readAndRestoreRequestBody(req)
+	require.ErrorIs(t, err, readErr)
+	require.Nil(t, raw)
+}
+
+type failingPayloadReader struct {
+	payload []byte
+	sent    bool
+	err     error
+}
+
+func (r *failingPayloadReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		n := copy(p, r.payload)
+		return n, nil
+	}
+	return 0, r.err
+}
+
+func TestGenerateContent_WithRequestBodyReadErrorPropagates(t *testing.T) {
+	for _, withObserver := range []bool{false, true} {
+		t.Run(fmt.Sprintf("observer=%v", withObserver), func(t *testing.T) {
+			var serverHits atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				if _, err := io.ReadAll(r.Body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				serverHits.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"resp-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+			}))
+			defer server.Close()
+
+			sourceErr := errors.New("source body read failed")
+			reader := &failingPayloadReader{
+				payload: []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`),
+				err:     sourceErr,
+			}
+			m := New(
+				"gpt-4o",
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+				WithOpenAIOptions(
+					openaiopt.WithMaxRetries(0),
+					openaiopt.WithRequestBody("application/json", reader),
+				),
+			)
+			ctx := context.Background()
+			var observer *imodelrequest.TokenTailoringObserver
+			if withObserver {
+				ctx, observer = imodelrequest.ObserveTokenTailoring(ctx, nil)
+			}
+			ch, err := m.GenerateContent(ctx, &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+			})
+			require.NoError(t, err)
+			var gotErr *model.ResponseError
+			for resp := range ch {
+				if resp != nil && resp.Error != nil {
+					gotErr = resp.Error
+				}
+			}
+			require.NotNil(t, gotErr)
+			require.Contains(t, gotErr.Message, sourceErr.Error())
+			require.Zero(t, serverHits.Load())
+			if withObserver {
+				records := observer.Snapshot()
+				require.Len(t, records, 1)
+				require.Equal(
+					t,
+					imodelrequest.TokenTailoringProvenanceUnknown,
+					records[0].Provenance,
+				)
+			}
+		})
+	}
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.

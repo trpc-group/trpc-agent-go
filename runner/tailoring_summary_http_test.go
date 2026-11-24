@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -809,4 +810,107 @@ func TestOpenAIHTTP_WithOpenAIOptionsMessageOverrideInvalidatesSummarySnapshots(
 			require.Equal(t, tt.wantFork, snap.forkPresent)
 		})
 	}
+}
+
+type failingJSONBodyReader struct {
+	payload []byte
+	sent    bool
+	err     error
+}
+
+func (r *failingJSONBodyReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		n := copy(p, r.payload)
+		return n, nil
+	}
+	return 0, r.err
+}
+
+func TestOpenAIHTTP_WithRequestBodyReadErrorPropagatesThroughRunner(t *testing.T) {
+	ctx := context.Background()
+	var (
+		mu         sync.Mutex
+		serverHits int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		mu.Lock()
+		serverHits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"resp-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(server.Close)
+
+	recSvc := &recordingSummarySessionService{
+		Service: inmemory.NewSessionService(),
+	}
+	key := session.Key{AppName: "app", UserID: "err-u", SessionID: "err-s"}
+	seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", []model.Message{
+		model.NewUserMessage("old question"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "tool output"),
+	})
+
+	sourceErr := errors.New("request body source failed")
+	reader := &failingJSONBodyReader{
+		payload: []byte(`{"model":"gpt-4o","messages":[{"role":"system","content":"system prompt"},{"role":"user","content":"current question"}]}`),
+		err:     sourceErr,
+	}
+	m := openai.New(
+		"gpt-4o",
+		openai.WithBaseURL(server.URL),
+		openai.WithAPIKey("test-key"),
+		openai.WithEnableTokenTailoring(true),
+		openai.WithMaxInputTokens(10_000),
+		openai.WithOpenAIOptions(
+			openaiopt.WithMaxRetries(0),
+			openaiopt.WithRequestBody("application/json", reader),
+		),
+	)
+	ag := llmagent.New(
+		"qa",
+		llmagent.WithModel(m),
+		llmagent.WithInstruction("system prompt"),
+		llmagent.WithAddSessionSummary(true),
+	)
+	r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+	t.Cleanup(func() { _ = r.Close() })
+
+	ch, err := r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("current question"),
+	)
+	require.NoError(t, err)
+	var errMsg string
+	for evt := range ch {
+		if evt != nil && evt.Error != nil {
+			errMsg = evt.Error.Message
+		}
+	}
+	require.Contains(t, errMsg, sourceErr.Error())
+	mu.Lock()
+	hits := serverHits
+	mu.Unlock()
+	require.Zero(t, hits)
+
+	recSvc.mu.Lock()
+	enqueueCalls := len(recSvc.calls)
+	recSvc.mu.Unlock()
+	require.Zero(t, enqueueCalls)
 }
