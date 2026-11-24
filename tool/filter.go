@@ -66,6 +66,14 @@ func (f *filteredToolSet) Name() string {
 	return f.original.Name()
 }
 
+// Description implements ToolSetDescriber for the original ToolSet.
+func (f *filteredToolSet) Description() string {
+	if describer, ok := f.original.(ToolSetDescriber); ok {
+		return describer.Description()
+	}
+	return ""
+}
+
 // NewIncludeToolNamesFilter creates a FilterFunc that includes only the specified tool names.
 func NewIncludeToolNamesFilter(names ...string) FilterFunc {
 	allowedNames := make(map[string]struct{}, len(names))

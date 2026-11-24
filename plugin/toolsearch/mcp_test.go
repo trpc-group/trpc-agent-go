@@ -18,8 +18,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/deferred"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
@@ -519,11 +521,34 @@ func (f *fakeStreamableTool) StreamInner() bool { return true }
 func TestNewRenamedTool_StreamInnerFalse(t *testing.T) {
 	// A tool that implements StreamableTool but StreamInner returns false.
 	noStream := &fakeNoStreamTool{name: "nostream", desc: "no stream inner"}
-	renamed := newRenamedTool(noStream, "server")
-	_, isStreamable := renamed.(tool.StreamableTool)
-	assert.False(t, isStreamable, "when StreamInner returns false, should not be streamableRenamedTool")
-	_, isCallable := renamed.(tool.CallableTool)
-	assert.True(t, isCallable)
+	for name, original := range map[string]tool.Tool{
+		"plain": noStream, "deferred": deferred.Tool(noStream),
+	} {
+		t.Run(name, func(t *testing.T) {
+			renamed := newRenamedTool(original, "server")
+			_, isStreamable := renamed.(tool.StreamableTool)
+			assert.False(t, isStreamable, "StreamInner=false keeps the callable execution path")
+			callable, ok := renamed.(tool.CallableTool)
+			require.True(t, ok)
+			result, err := callable.Call(context.Background(), nil)
+			require.NoError(t, err)
+			assert.Equal(t, "ok", result)
+		})
+	}
+}
+
+func TestNewRenamedTool_DeferredNamedCallable(t *testing.T) {
+	original := function.NewFunctionTool(
+		func(context.Context, struct{}) (string, error) { return "ok", nil },
+		function.WithName("lookup"),
+	)
+	named := itool.NewUnprefixedNamedTool(original)
+	renamed := newRenamedTool(deferred.Tool(named), "server")
+	_, streams := renamed.(tool.StreamableTool)
+	require.False(t, streams, "a NamedTool method must not make a callable-only tool stream")
+	result, err := renamed.(tool.CallableTool).Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+	require.Equal(t, "ok", result)
 }
 
 type fakeNoStreamTool struct {

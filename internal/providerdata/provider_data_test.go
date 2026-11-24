@@ -95,6 +95,12 @@ func TestValidateMessages(t *testing.T) {
 	require.NoError(t, ValidateMessages(native, nativeInfo))
 	native[2].Role = model.RoleUser
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "assistant message")
+	native[2].Role = model.RoleTool
+	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "requires a tool id",
+		"a native tool record must name the action it answers")
+	native[2].ToolID = "call-1"
+	require.NoError(t, ValidateMessages(native, nativeInfo))
+	native[2].ToolID = ""
 	native[2].Role = model.RoleAssistant
 	native[2].ProviderData.Payload = json.RawMessage(`{`)
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "valid JSON object or array")

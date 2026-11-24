@@ -13,7 +13,25 @@ package modelrequest
 import (
 	"context"
 	"encoding/json"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+// BuiltinTools marks an adapter that offers tools even when Request.Tools is empty.
+type BuiltinTools bool
+
+func (b BuiltinTools) hasBuiltinTools() bool { return bool(b) }
+
+// HasBuiltinTools reports whether the selected model supplies its own tool surface.
+func HasBuiltinTools(m model.Model) bool {
+	if surface, ok := m.(interface{ hasBuiltinTools() bool }); ok {
+		return surface.hasBuiltinTools()
+	}
+	// A forwarding wrapper may expose only the public model capabilities.
+	// Treat native action support as a potential tool surface in that case.
+	_, ok := m.(model.ProviderActionCompleter)
+	return ok && m.Info().ProviderDataProtocol != ""
+}
 
 type toolsDisabledKey struct{}
 

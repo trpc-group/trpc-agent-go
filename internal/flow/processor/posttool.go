@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -59,7 +60,8 @@ type PostToolRequestProcessor struct {
 	promptBeforeToolResult bool
 	// createSystemMessage controls whether the processor may prepend a new
 	// system message before the first tool result when none exists yet.
-	createSystemMessage bool
+	createSystemMessage           bool
+	requireModelToolsBeforeResult bool
 }
 
 // PostToolOption is a functional option for PostToolRequestProcessor.
@@ -87,6 +89,12 @@ func WithPostToolPromptCreateSystemMessage(enable bool) PostToolOption {
 	return func(p *PostToolRequestProcessor) {
 		p.createSystemMessage = enable
 	}
+}
+
+// WithPostToolPromptForModelTools delays guidance for an agent with no
+// registered tools until its selected model offers tools or a result arrives.
+func WithPostToolPromptForModelTools() PostToolOption {
+	return func(p *PostToolRequestProcessor) { p.requireModelToolsBeforeResult = true }
 }
 
 // NewPostToolRequestProcessor creates a new PostToolRequestProcessor.
@@ -123,6 +131,10 @@ func (p *PostToolRequestProcessor) ProcessRequest(
 
 	hasToolResult := hasPendingToolResultMessages(req.Messages) ||
 		hasCompactedToolResultMessages(invocation)
+	// A model may offer a search tool before the agent has any registered tools.
+	if !hasToolResult && p.requireModelToolsBeforeResult && (invocation == nil || !modelrequest.HasBuiltinTools(invocation.Model)) {
+		return
+	}
 	if !hasToolResult && !p.promptBeforeToolResult {
 		return
 	}

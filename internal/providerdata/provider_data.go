@@ -66,15 +66,31 @@ func ResponseHasData(response *model.Response) bool {
 	return false
 }
 
+// ResponseRequestsActions reports whether response is a completed native
+// response that asks the caller to complete provider actions before the next
+// model step, as described by model.ProviderActionCompleter.
+func ResponseRequestsActions(response *model.Response) bool {
+	return response != nil && !response.IsPartial && !response.Done &&
+		response.Error == nil && ResponseHasData(response)
+}
+
 // ValidateMessage checks a native record before the selected model consumes it.
-// Ordinary messages carry no record and pass through unchanged.
+// Ordinary messages carry no record and pass through unchanged. A record is
+// valid on an assistant message or on a tool message that names the native
+// action it answers.
 func ValidateMessage(message model.Message, info model.Info) error {
 	data := message.ProviderData
 	if data == nil {
 		return nil
 	}
-	if message.Role != model.RoleAssistant {
-		return fmt.Errorf("provider data is only valid on assistant messages")
+	switch message.Role {
+	case model.RoleAssistant:
+	case model.RoleTool:
+		if strings.TrimSpace(message.ToolID) == "" {
+			return fmt.Errorf("provider data on a tool message requires a tool id")
+		}
+	default:
+		return fmt.Errorf("provider data is only valid on assistant messages and tool messages")
 	}
 	if strings.TrimSpace(data.Protocol) == "" || strings.TrimSpace(data.Model) == "" {
 		return fmt.Errorf("provider data requires a protocol and model identity")

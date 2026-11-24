@@ -2411,12 +2411,154 @@ alone leaves the original text in ProviderData. Keep the record when resuming an
 unfinished tool round. See the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)
 for a complete SDK-based callback and model wrapper requirements.
 
+### Tool search
+
+Tool search lets the model load tool definitions when it needs them. It is
+opt-in on the Responses model and requires a model that supports
+`tool_search`; the OpenAI guide lists `gpt-5.4` and later. The agent decides
+which tools are deferred. Deferred tools stay registered, filtered, and
+executed by the agent; only what the model sees up front changes.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
+// Hosted search: the API searches the deferred definitions in the request.
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billing),
+    }),
+)
+```
+
+For client-executed search, configure a handler that returns
+`[]responses.ToolSearchEntry`. The following handler loads billing candidates
+for invoice queries:
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+)
+
+search := responses.WithClientToolSearch(
+    func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        var entries []responses.ToolSearchEntry
+        if strings.Contains(strings.ToLower(req.Query), "invoice") {
+            for _, entry := range req.Candidates {
+                if entry.Namespace == "billing" {
+                    entries = append(entries, entry)
+                }
+            }
+        }
+        return entries, nil
+    },
+)
+llm := responses.New("gpt-5.4", search)
+// Register llm with llmagent.WithModel as above.
+```
+
+- `deferred.Tool` and `deferred.ToolSet` wrap tools for registration with
+  `WithTools`, `WithToolSets`, or `WithActivatableToolSets`. Without options,
+  every wrapped tool is deferred. Use `deferred.WithFilter` to select members:
+  the filter receives the original tool at request time, returning true to
+  defer it and false to keep it eager. It can select members by their original
+  names and applies to refreshed members, including MCP tools. `WithFilter(nil)`
+  restores the default of deferring all tools; the last filter option wins.
+- The wrapper overrides the wrapped tool's own `tool.DeferredTool` preference;
+  unwrapped tools keep theirs. Agent and run tool filters still apply. Closing
+  a wrapped ToolSet closes the original; wrapping opens no new connection.
+- Agent and run filters see the registered wrapper. `Declaration()` and
+  `tool.MetadataOf` work as usual; filters that need a concrete type can follow
+  `Original() tool.Tool` to unwrap the original, more than once if needed.
+- A ToolSet with deferred members is sent as a namespace named after the
+  ToolSet. Its description comes from `tool.ToolSetDescriber`; MCP ToolSets
+  use `ConnectionConfig.Description`. Calls are mapped back using the stored
+  namespace and member name, without parsing registered names. Registered
+  names must remain unique in the request; namespaces do not resolve naming
+  collisions in the tool registry.
+- Direct `GenerateContent` callers can check `IsFinalResponse()` for completion.
+  A pending client search has `Done == false`. Its choice has a nil `FinishReason`
+  unless it also contains ordinary function calls. `LLMAgent` runs the handler
+  and stores the `tool_search_output` as a tool message before the next model
+  step. `req.Candidates` is also `[]responses.ToolSearchEntry`. Each entry has
+  `Namespace`, `NamespaceDescription`, `Name`, and `Tool`. Read the declaration
+  through `entry.Tool.Declaration()`. A candidate's `Name` is already the wire
+  name, which can differ from the tool's declaration name.
+- Return a candidate unchanged to select it, copy it and set
+  `entry.Tool = sandboxTool` to substitute an implementation, or return a new
+  entry containing an external `tool.Tool`. A new entry may omit `Name` to use
+  the tool's declaration name. Client search remains available without any
+  registered deferred tools. `Run.ToolFilter` also checks returned replacement
+  and external objects. Execution uses the usual tool permissions and callbacks.
+- Returned objects are borrowed for the current Run, and the application
+  owns their cleanup. Session history retains the loaded definitions. Later
+  Runs can execute original candidates through the registered tools. A call
+  to an expired replacement or external tool returns a tool error asking the
+  model to search again. The handler can then return a fresh object.
+- A handler error ends the run before ordinary functions in the same response
+  execute. Before sending another user message, resume the same session with
+  `model.Message{}` and `agent.WithResume(true)` to retry the search and run
+  the pending functions. An empty search result lets the model continue.
+- Graph LLM nodes and the current failover and hedge wrappers report an error
+  for a pending client search. Hosted requests without
+  deferred tools or tool search history are unchanged, and Chat Completions
+  ignores deferral.
+- `plugin/toolsearch` has its own deferred-tool registration and does not use
+  `tool.DeferredTool`; do not combine it with native tool search.
+
+For a custom non-MCP ToolSet, store the description in the instance and
+implement the optional `Description()` method. The following type belongs to
+the application. `lookupInvoice` and `listInvoices` are existing `tool.Tool`
+values, and `billing` can be used in the registration above:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// In the agent setup, before registering the ToolSet:
+billing := staticToolSet{
+    name:        "billing",
+    description: "Look up invoices, payments, and refunds.",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+`deferred.ToolSet` forwards this description to the adapter, which uses it as
+`namespace.description` and the client search candidate's `NamespaceDescription`.
+
+`go run ./toolsearch -mode server` and `go run ./toolsearch -mode client` in
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
+demonstrate both modes. The full contract and its unverified boundaries are in
+the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#tool-search).
+
 ### Notes
 
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
-- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
+- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`; tool search also needs `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`, and `tool.ToolSetDescriber`, and the examples use `tool/deferred`. Publish the required root release before the adapter release. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
 - Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
-- Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
+- Server-managed continuation through `previous_response_id` or `conversation`, hosted tools other than tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).
 

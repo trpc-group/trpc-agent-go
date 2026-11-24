@@ -64,6 +64,11 @@ func (m *failoverModel) ProjectProviderData(data *model.ProviderData) (model.Mes
 	return providerdata.ProjectFromCandidates(m.candidates, data)
 }
 
+// ProjectProviderDataWithRequest forwards native projection with request tools.
+func (m *failoverModel) ProjectProviderDataWithRequest(request *model.Request, data *model.ProviderData) (model.Message, error) {
+	return providerdata.ProjectFromCandidatesWithRequest(m.candidates, request, data)
+}
+
 // InputTokenBudget returns the smallest advertised candidate budget so a
 // request remains eligible for every failover target.
 func (m *failoverModel) InputTokenBudget(
