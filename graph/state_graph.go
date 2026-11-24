@@ -2511,7 +2511,7 @@ func newToolsNodeRuntime(
 		}
 
 		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
-		resultContents := make([][]byte, len(toolCalls))
+		resultContents := make([]toolResultOutput, len(toolCalls))
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:          toolCalls,
@@ -2540,8 +2540,8 @@ func newToolsNodeRuntime(
 		if len(newMessages) > 0 {
 			lastIndex := len(newMessages) - 1
 			lastResponse := newMessages[lastIndex].Content
-			if lastIndex < len(resultContents) && resultContents[lastIndex] != nil {
-				lastResponse = string(resultContents[lastIndex])
+			if content := toolResultContentAt(resultContents, lastIndex).structuredJSON(); content != nil {
+				lastResponse = string(content)
 			}
 			upd[StateKeyLastToolResponse] = lastResponse
 		}
@@ -2555,7 +2555,7 @@ func newToolsNodeRuntime(
 
 			responses := make([]toolNodeResponse, 0, len(newMessages))
 			for i, msg := range newMessages {
-				output := toolResultContentAt(resultContents, i)
+				output := toolResultContentAt(resultContents, i).raw
 				if output == nil {
 					output = toolNodeResponseOutput(msg)
 				}
@@ -5661,8 +5661,8 @@ type toolCallsConfig struct {
 	// SkipArgumentRepair is true when these calls came from a ProviderData
 	// message whose editable arguments must not be rewritten automatically.
 	SkipArgumentRepair bool
-	// resultContents records raw marker result JSON by call index for node outputs.
-	resultContents [][]byte
+	// resultContents records serialized tool results by call index for node outputs.
+	resultContents []toolResultOutput
 }
 
 type parallelToolCallCancelCause struct {
@@ -5698,7 +5698,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedKey := completedToolMessageKey(i, toolCall)
 			if msg, ok := completedMessages[completedKey]; ok {
 				newMessages = append(newMessages, msg)
-				setToolResultContent(config.resultContents, i, completedResultContents[completedKey])
+				setToolResultContent(config.resultContents, i, toolResultOutput{
+					raw: completedResultContents[completedKey], structured: true,
+				})
 				continue
 			}
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
@@ -5731,7 +5733,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			}
 			newMessages = append(newMessages, toolMessage)
 			completedThisRun[completedKey] = toolMessage
-			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, i)
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, i).structuredJSON()
 		}
 		clearCompletedToolMessages(config.State, config.NodeID)
 		return newMessages, nil
@@ -5759,7 +5761,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		completedKey := completedToolMessageKey(i, tc)
 		if msg, ok := completedMessages[completedKey]; ok {
 			out[i] = msg
-			setToolResultContent(config.resultContents, i, completedResultContents[completedKey])
+			setToolResultContent(config.resultContents, i, toolResultOutput{
+				raw: completedResultContents[completedKey], structured: true,
+			})
 			continue
 		}
 		pendingCalls = append(pendingCalls, pendingCall{idx: i, tc: tc})
@@ -5824,7 +5828,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			out[r.idx] = r.msg
 			completedKey := completedToolMessageKey(r.idx, config.ToolCalls[r.idx])
 			completedThisRun[completedKey] = r.msg
-			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, r.idx)
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, r.idx).structuredJSON()
 		}
 	}
 	traceRecorder.flush(ctx)
@@ -6056,7 +6060,7 @@ type singleToolCallConfig struct {
 	RetryPolicy        *tool.RetryPolicy
 	Concurrency        *toolcall.Limiter
 	TraceRecorder      *graphToolTraceRecorder
-	resultContents     [][]byte
+	resultContents     []toolResultOutput
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -6281,8 +6285,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		content,
 		nil,
 	)
+	setToolResultContent(config.resultContents, config.ToolCallIndex, toolResultOutput{
+		raw: content, structured: resultMessage != nil,
+	})
 	if resultMessage != nil {
-		setToolResultContent(config.resultContents, config.ToolCallIndex, content)
 		return *resultMessage, nil
 	}
 	return model.NewToolMessage(id, name, string(content)), nil
@@ -6305,17 +6311,30 @@ func successfulToolResultMessage(result any, callErr error, call model.ToolCall)
 	return resultMessage
 }
 
-func setToolResultContent(contents [][]byte, index int, content []byte) {
-	if index >= 0 && index < len(contents) && len(content) > 0 {
+type toolResultOutput struct {
+	raw        json.RawMessage
+	structured bool
+}
+
+func (output toolResultOutput) structuredJSON() json.RawMessage {
+	// Ordinary results already carry their original JSON in Message.Content.
+	if output.structured {
+		return output.raw
+	}
+	return nil
+}
+
+func setToolResultContent(contents []toolResultOutput, index int, content toolResultOutput) {
+	if index >= 0 && index < len(contents) && len(content.raw) > 0 {
 		contents[index] = content
 	}
 }
 
-func toolResultContentAt(contents [][]byte, index int) json.RawMessage {
+func toolResultContentAt(contents []toolResultOutput, index int) toolResultOutput {
 	if index < 0 || index >= len(contents) {
-		return nil
+		return toolResultOutput{}
 	}
-	return json.RawMessage(contents[index])
+	return contents[index]
 }
 
 func toolNodeResponseOutput(message model.Message) json.RawMessage {
