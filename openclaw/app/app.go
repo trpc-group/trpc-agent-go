@@ -4037,7 +4037,11 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		opts = append(opts, openai.WithChatRequestCallback(func(
 			_ context.Context, req *openaisdk.ChatCompletionNewParams,
 		) {
-			// GPT-5.6 Chat Completions tools require no reasoning.
+			// The Chat Completions API does not support tool calling
+			// with a reasoning effort other than "none" on GPT-5.4
+			// and later, while gpt-5.6-sol defaults to "medium".
+			// Disable reasoning unless the caller chose an effort. See
+			// https://developers.openai.com/api/docs/guides/migrate-to-responses.
 			if req.ReasoningEffort == "" {
 				req.ReasoningEffort = "none"
 			}
