@@ -437,6 +437,7 @@ type Model struct {
 	optimizeForCache          bool // Optimize message structure for prompt caching
 	omitFileContentParts      bool
 	preserveToolsWhenDisabled bool
+	hasOpenAIOptions          bool
 }
 
 // New creates a new OpenAI-like model.
@@ -525,6 +526,7 @@ func New(name string, opts ...Option) *Model {
 		optimizeForCache:           o.OptimizeForCache,
 		omitFileContentParts:       o.OmitFileContentParts,
 		preserveToolsWhenDisabled:  o.preserveToolsWhenDisabled,
+		hasOpenAIOptions:           len(o.OpenAIOptions) > 0,
 	}
 }
 
@@ -690,6 +692,55 @@ func (m *Model) prepareChatRequest(
 	return chatRequest, opts, nil
 }
 
+// appendOutboundMessagesObserver attaches an innermost SDK middleware when
+// client-level OpenAIOptions are configured and a token-tailoring observer is
+// attached, so outbound message mutations applied by SDK options (such as
+// WithJSONSet, WithJSONDel, WithRequestBody, or custom middlewares) are
+// observed against the final HTTP request body before transmission.
+func (m *Model) appendOutboundMessagesObserver(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	opts []openaiopt.RequestOption,
+) []openaiopt.RequestOption {
+	if !m.hasOpenAIOptions ||
+		chatRequest == nil ||
+		!imodelrequest.HasTokenTailoringObserver(ctx) {
+		return opts
+	}
+	checkOutbound := modeltailoring.ObserveOutboundSerializedMessages(
+		ctx,
+		"openai.Model",
+		"messages",
+		func() ([]byte, error) {
+			return chatRequest.MarshalJSON()
+		},
+	)
+	if checkOutbound == nil {
+		return opts
+	}
+	return append(opts, openaiopt.WithMiddleware(
+		func(
+			req *http.Request,
+			next openaiopt.MiddlewareNext,
+		) (*http.Response, error) {
+			raw, err := readAndRestoreRequestBody(req)
+			checkOutbound(raw, err)
+			return next(req)
+		},
+	))
+}
+
+func readAndRestoreRequestBody(req *http.Request) ([]byte, error) {
+	if req == nil || req.Body == nil {
+		return nil, nil
+	}
+	body := req.Body
+	raw, err := io.ReadAll(body)
+	_ = body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	return raw, err
+}
+
 func validateLogprobsConfig(request *model.Request) error {
 	if request.TopLogprobs == nil {
 		return nil
@@ -718,6 +769,7 @@ func (m *Model) GenerateContent(
 		opts = m.enforceDisabledTools(chatRequest, opts)
 	}
 	m.runChatRequestJSONCallback(ctx, chatRequest)
+	opts = m.appendOutboundMessagesObserver(ctx, chatRequest, opts)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
@@ -758,6 +810,7 @@ func (m *Model) GenerateContentIter(
 			callOpts = m.enforceDisabledTools(chatRequest, opts)
 		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
+		callOpts = m.appendOutboundMessagesObserver(ctx, chatRequest, callOpts)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false

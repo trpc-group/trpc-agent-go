@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/statecopy"
@@ -116,28 +117,89 @@ func ObserveSerializedMessages(
 			serialize,
 			messagesField,
 		)
-		if beforeErr == nil && afterErr == nil &&
-			bytes.Equal(beforeMsgs, afterMsgs) {
+		recordCanonicalMessagesDiff(
+			ctx,
+			provider,
+			beforeMsgs, beforeCount, beforeErr,
+			afterMsgs, afterCount, afterErr,
+		)
+	}
+}
+
+// ObserveOutboundSerializedMessages snapshots the baseline canonical messages
+// field from serialize and returns a checker for the final outbound request
+// payload (for example, after SDK request options and middlewares have run).
+// The returned checker records at most one reduced or unknown change when the
+// final payload differs from the baseline or cannot be decoded.
+//
+// When no observer is attached to ctx, ObserveOutboundSerializedMessages
+// returns nil without serializing the request.
+func ObserveOutboundSerializedMessages(
+	ctx context.Context,
+	provider string,
+	messagesField string,
+	serialize func() ([]byte, error),
+) func(outbound []byte, outboundErr error) {
+	if serialize == nil || !modelrequest.HasTokenTailoringObserver(ctx) {
+		return nil
+	}
+	beforeMsgs, beforeCount, beforeErr := extractCanonicalMessagesField(
+		serialize,
+		messagesField,
+	)
+	var recorded atomic.Bool
+	return func(outbound []byte, outboundErr error) {
+		if recorded.Load() {
 			return
 		}
-		provenance := modelrequest.TokenTailoringProvenanceUnknown
-		if beforeErr == nil && afterErr == nil &&
-			beforeCount >= 0 && afterCount >= 0 &&
-			afterCount < beforeCount {
-			provenance = modelrequest.TokenTailoringProvenanceReduced
+		afterMsgs, afterCount, afterErr := extractCanonicalMessagesBytes(
+			outbound,
+			outboundErr,
+			messagesField,
+		)
+		if recordCanonicalMessagesDiff(
+			ctx,
+			provider,
+			beforeMsgs, beforeCount, beforeErr,
+			afterMsgs, afterCount, afterErr,
+		) {
+			recorded.Store(true)
 		}
-		record := modelrequest.TokenTailoringRecord{
-			Provider:   provider,
-			Provenance: provenance,
-		}
-		if beforeCount >= 0 {
-			record.BeforeMessages = beforeCount
-		}
-		if afterCount >= 0 {
-			record.AfterMessages = afterCount
-		}
-		modelrequest.RecordTokenTailoring(ctx, record)
 	}
+}
+
+func recordCanonicalMessagesDiff(
+	ctx context.Context,
+	provider string,
+	beforeMsgs []byte,
+	beforeCount int,
+	beforeErr error,
+	afterMsgs []byte,
+	afterCount int,
+	afterErr error,
+) bool {
+	if beforeErr == nil && afterErr == nil &&
+		bytes.Equal(beforeMsgs, afterMsgs) {
+		return false
+	}
+	provenance := modelrequest.TokenTailoringProvenanceUnknown
+	if beforeErr == nil && afterErr == nil &&
+		beforeCount >= 0 && afterCount >= 0 &&
+		afterCount < beforeCount {
+		provenance = modelrequest.TokenTailoringProvenanceReduced
+	}
+	record := modelrequest.TokenTailoringRecord{
+		Provider:   provider,
+		Provenance: provenance,
+	}
+	if beforeCount >= 0 {
+		record.BeforeMessages = beforeCount
+	}
+	if afterCount >= 0 {
+		record.AfterMessages = afterCount
+	}
+	modelrequest.RecordTokenTailoring(ctx, record)
+	return true
 }
 
 func extractCanonicalMessagesField(
@@ -145,8 +207,16 @@ func extractCanonicalMessagesField(
 	messagesField string,
 ) ([]byte, int, error) {
 	raw, err := serialize()
-	if err != nil {
-		return nil, -1, err
+	return extractCanonicalMessagesBytes(raw, err, messagesField)
+}
+
+func extractCanonicalMessagesBytes(
+	raw []byte,
+	rawErr error,
+	messagesField string,
+) ([]byte, int, error) {
+	if rawErr != nil {
+		return nil, -1, rawErr
 	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &envelope); err != nil {

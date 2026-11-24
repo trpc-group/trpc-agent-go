@@ -10540,6 +10540,31 @@ func TestRunChatRequestCallbackObservesMessageEdits(t *testing.T) {
 	})
 }
 
+func TestReadAndRestoreRequestBody(t *testing.T) {
+	raw, err := readAndRestoreRequestBody(nil)
+	require.NoError(t, err)
+	require.Nil(t, raw)
+
+	req, err := http.NewRequest(http.MethodPost, "http://example.com", nil)
+	require.NoError(t, err)
+	raw, err = readAndRestoreRequestBody(req)
+	require.NoError(t, err)
+	require.Nil(t, raw)
+
+	req, err = http.NewRequest(
+		http.MethodPost,
+		"http://example.com",
+		strings.NewReader(`{"messages":[]}`),
+	)
+	require.NoError(t, err)
+	raw, err = readAndRestoreRequestBody(req)
+	require.NoError(t, err)
+	require.Equal(t, `{"messages":[]}`, string(raw))
+	restored, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, `{"messages":[]}`, string(restored))
+}
+
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
 func TestOptimizeMessagesForCache(t *testing.T) {
 	tests := []struct {

@@ -909,3 +909,95 @@ func TestObserveExtraFieldMessageOverrides(t *testing.T) {
 		}
 	})
 }
+
+func TestObserveOutboundSerializedMessages(t *testing.T) {
+	t.Run("returns nil without observer or serializer", func(t *testing.T) {
+		called := false
+		serialize := func() ([]byte, error) {
+			called = true
+			return []byte(`{"messages":[]}`), nil
+		}
+		allocs := testing.AllocsPerRun(100, func() {
+			check := ObserveOutboundSerializedMessages(
+				context.Background(),
+				"openai.Model",
+				"messages",
+				serialize,
+			)
+			if check != nil {
+				t.Fatal("expected nil checker without observer")
+			}
+		})
+		require.False(t, called)
+		require.Zero(t, allocs)
+
+		ctx, _ := modelrequest.ObserveTokenTailoring(context.Background(), nil)
+		require.Nil(t, ObserveOutboundSerializedMessages(ctx, "openai.Model", "messages", nil))
+	})
+
+	t.Run("ignores unchanged messages and records diff once across retries", func(t *testing.T) {
+		ctx, observer := modelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		check := ObserveOutboundSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) {
+				return []byte(`{"model":"gpt-4o","messages":[{"role":"system","content":"s"},{"role":"user","content":"u1"},{"role":"user","content":"u2"}]}`), nil
+			},
+		)
+		require.NotNil(t, check)
+
+		// Unchanged messages with extra top-level fields and reordered keys.
+		check([]byte(`{"model":"gpt-4o","stream":true,"messages":[{"content":"s","role":"system"},{"content":"u1","role":"user"},{"content":"u2","role":"user"}]}`), nil)
+		require.Empty(t, observer.Snapshot())
+
+		// Outbound override reducing messages is recorded once even if retried.
+		reduced := []byte(`{"model":"gpt-4o","messages":[{"role":"system","content":"s"}]}`)
+		check(reduced, nil)
+		check(reduced, nil)
+
+		require.Equal(t, []modelrequest.TokenTailoringRecord{{
+			Provider:       "openai.Model",
+			BeforeMessages: 3,
+			AfterMessages:  1,
+			Provenance:     modelrequest.TokenTailoringProvenanceReduced,
+		}}, observer.Snapshot())
+	})
+
+	t.Run("fails closed on outbound read error or invalid body", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			body []byte
+			err  error
+		}{
+			{name: "read error", err: errors.New("read failed")},
+			{name: "empty body", body: nil},
+			{name: "invalid json", body: []byte(`not-json`)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, observer := modelrequest.ObserveTokenTailoring(
+					context.Background(),
+					nil,
+				)
+				check := ObserveOutboundSerializedMessages(
+					ctx,
+					"openai.Model",
+					"messages",
+					func() ([]byte, error) {
+						return []byte(`{"messages":[{"role":"user","content":"u1"}]}`), nil
+					},
+				)
+				check(tc.body, tc.err)
+				require.Equal(t, []modelrequest.TokenTailoringRecord{{
+					Provider:       "openai.Model",
+					BeforeMessages: 1,
+					AfterMessages:  0,
+					Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+				}}, observer.Snapshot())
+			})
+		}
+	})
+}

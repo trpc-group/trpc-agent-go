@@ -10,9 +10,11 @@
 package runner_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -83,12 +85,18 @@ func newOpenAIHTTPRecordingServer(
 		r *http.Request,
 	) {
 		var body struct {
+			Stream   bool             `json:"stream"`
 			Messages []map[string]any `json:"messages"`
 		}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		mu.Lock()
 		messages = body.Messages
 		mu.Unlock()
+		if body.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"id\":\"resp-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"id":"resp-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
 	}))
@@ -591,6 +599,193 @@ func TestOpenAIHTTP_ExtraFieldsMessageOverrideInvalidatesSummarySnapshots(
 				)
 			}
 			ag := llmagent.New("qa", agentOpts...)
+			r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+			t.Cleanup(func() { _ = r.Close() })
+
+			runSingleTurn(t, ctx, r, key, "current question")
+
+			sent := sentMessages()
+			require.Len(t, sent, tt.wantSentLen)
+			if tt.wantFirstContent != "" {
+				require.Equal(t, tt.wantFirstContent, sent[0]["content"])
+			}
+			snap := recSvc.latest()
+			require.True(t, snap.viewPresent)
+			require.Equal(t, tt.wantBound, snap.view.Bound)
+			if !tt.wantBound {
+				require.Equal(
+					t,
+					summaryview.BindingReasonInvalidated,
+					snap.view.BindingReason,
+				)
+			}
+			require.Equal(t, tt.wantFork, snap.forkPresent)
+		})
+	}
+}
+
+func TestOpenAIHTTP_WithOpenAIOptionsMessageOverrideInvalidatesSummarySnapshots(
+	t *testing.T,
+) {
+	history := []model.Message{
+		model.NewUserMessage("old question"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "tool output"),
+	}
+	twoMessages := []map[string]any{
+		{"role": "system", "content": "system prompt"},
+		{"role": "user", "content": "current question"},
+	}
+
+	rewriteBodyMiddleware := func(
+		req *http.Request,
+		next openaiopt.MiddlewareNext,
+	) (*http.Response, error) {
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		_ = req.Body.Close()
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		payload["messages"] = twoMessages
+		updated, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(updated))
+		req.ContentLength = int64(len(updated))
+		return next(req)
+	}
+
+	tests := []struct {
+		name             string
+		stream           bool
+		openAIOpts       []openaiopt.RequestOption
+		wantSentLen      int
+		wantFirstContent string
+		wantBound        bool
+		wantFork         bool
+	}{
+		{
+			name: "WithJSONSet replacing messages invalidates view and fork",
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithJSONSet("messages", twoMessages),
+			},
+			wantSentLen: 2,
+			wantBound:   false,
+			wantFork:    false,
+		},
+		{
+			name: "WithJSONSet subpath mutating messages.0.content invalidates view and fork",
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithJSONSet("messages.0.content", "rewritten system"),
+			},
+			wantSentLen:      5,
+			wantFirstContent: "rewritten system",
+			wantBound:        false,
+			wantFork:         false,
+		},
+		{
+			name: "WithJSONDel removing messages invalidates view and fork",
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithJSONDel("messages"),
+			},
+			wantSentLen: 0,
+			wantBound:   false,
+			wantFork:    false,
+		},
+		{
+			name: "WithMiddleware replacing request body messages invalidates view and fork",
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithMiddleware(rewriteBodyMiddleware),
+			},
+			wantSentLen: 2,
+			wantBound:   false,
+			wantFork:    false,
+		},
+		{
+			name:   "streaming WithJSONSet replacing messages invalidates view and fork",
+			stream: true,
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithJSONSet("messages", twoMessages),
+			},
+			wantSentLen: 2,
+			wantBound:   false,
+			wantFork:    false,
+		},
+		{
+			name: "non-message WithOpenAIOptions preserve rebased view and fork",
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithHeader("X-Trace-Id", "t1"),
+				openaiopt.WithJSONSet("metadata", map[string]any{"k": "v"}),
+			},
+			wantSentLen: 5,
+			wantBound:   true,
+			wantFork:    true,
+		},
+		{
+			name:   "streaming non-message WithOpenAIOptions preserve rebased view and fork",
+			stream: true,
+			openAIOpts: []openaiopt.RequestOption{
+				openaiopt.WithMaxRetries(0),
+				openaiopt.WithJSONSet("metadata", map[string]any{"k": "v"}),
+			},
+			wantSentLen: 5,
+			wantBound:   true,
+			wantFork:    true,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			server, sentMessages := newOpenAIHTTPRecordingServer(t)
+			recSvc := &recordingSummarySessionService{
+				Service: inmemory.NewSessionService(),
+			}
+			key := session.Key{
+				AppName:   "app",
+				UserID:    fmt.Sprintf("oai-opt-u-%d", i),
+				SessionID: fmt.Sprintf("oai-opt-s-%d", i),
+			}
+			seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+			m := openai.New(
+				"gpt-4o",
+				openai.WithBaseURL(server.URL),
+				openai.WithAPIKey("test-key"),
+				openai.WithEnableTokenTailoring(true),
+				openai.WithMaxInputTokens(10_000),
+				openai.WithOpenAIOptions(tt.openAIOpts...),
+			)
+			ag := llmagent.New(
+				"qa",
+				llmagent.WithModel(m),
+				llmagent.WithInstruction("system prompt"),
+				llmagent.WithAddSessionSummary(true),
+				llmagent.WithGenerationConfig(model.GenerationConfig{
+					Stream: tt.stream,
+				}),
+			)
 			r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
 			t.Cleanup(func() { _ = r.Close() })
 
