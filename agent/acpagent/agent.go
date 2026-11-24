@@ -24,6 +24,7 @@ var errRunNotImplemented = errors.New("acpagent: run is not implemented")
 // ACPAgent adapts an external ACP agent process to agent.Agent.
 type ACPAgent struct {
 	config              ACPConfig
+	authMethodSelector  AuthMethodSelector
 	terminalAuthHandler TerminalAuthHandler
 	activeTurns         *activeTurnRegistry
 	connections         *connectionManager
@@ -51,12 +52,14 @@ func New(config ACPConfig, opts ...Option) (*ACPAgent, error) {
 	activeTurns := newActiveTurnRegistry()
 	return &ACPAgent{
 		config:              config,
+		authMethodSelector:  options.authMethodSelector,
 		terminalAuthHandler: options.terminalAuthHandler,
 		activeTurns:         activeTurns,
 		connections: newConnectionManager(
 			config,
 			options.stderr,
 			activeTurns,
+			options.authMethodSelector,
 			options.terminalAuthHandler != nil,
 		),
 	}, nil

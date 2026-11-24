@@ -9,7 +9,11 @@
 
 package acpagent
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // AuthMethodType identifies how an ACP authentication method is executed.
 type AuthMethodType string
@@ -31,6 +35,76 @@ type AuthMethod struct {
 	Description string
 	// Type identifies how the method is executed.
 	Type AuthMethodType
+}
+
+// AuthChallenge describes an authentication selection required by an ACP operation.
+type AuthChallenge struct {
+	// Operation is the ACP operation that requires authentication.
+	Operation string
+	// Methods contains the authentication methods advertised by the agent.
+	Methods []AuthMethod
+}
+
+// AuthSelection identifies the authentication method selected by an application.
+type AuthSelection struct {
+	// MethodID is the advertised authentication method identifier.
+	MethodID string
+	// Meta contains method-specific opaque parameters for authenticate.
+	Meta map[string]any
+}
+
+// AuthMethodSelector selects an advertised authentication method for an ACP operation.
+type AuthMethodSelector interface {
+	// SelectAuthMethod selects one method from the challenge.
+	SelectAuthMethod(ctx context.Context, challenge AuthChallenge) (AuthSelection, error)
+}
+
+// AuthMethodSelectorFunc adapts a function into an AuthMethodSelector.
+type AuthMethodSelectorFunc func(
+	ctx context.Context,
+	challenge AuthChallenge,
+) (AuthSelection, error)
+
+// SelectAuthMethod implements AuthMethodSelector.
+func (f AuthMethodSelectorFunc) SelectAuthMethod(
+	ctx context.Context,
+	challenge AuthChallenge,
+) (AuthSelection, error) {
+	if f == nil {
+		return AuthSelection{}, errors.New("acpagent: auth method selector is nil")
+	}
+	return f(ctx, challenge)
+}
+
+// AuthRequiredError indicates that an ACP operation requires authentication.
+type AuthRequiredError struct {
+	// Operation is the ACP operation that returned auth_required.
+	Operation string
+	// Methods contains the authentication methods advertised by the agent.
+	Methods []AuthMethod
+	// Data preserves the structured JSON-RPC error data.
+	Data any
+	// Err preserves the underlying ACP request error.
+	Err error
+}
+
+// Error implements error.
+func (e *AuthRequiredError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Operation == "" {
+		return "acpagent: authentication required"
+	}
+	return fmt.Sprintf("acpagent: authentication required for %s", e.Operation)
+}
+
+// Unwrap returns the underlying ACP request error.
+func (e *AuthRequiredError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // TerminalAuthRequest describes one terminal authentication invocation.

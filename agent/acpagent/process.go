@@ -21,6 +21,7 @@ import (
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+	"golang.org/x/sync/singleflight"
 )
 
 const defaultCloseTimeout = 5 * time.Second
@@ -48,6 +49,7 @@ type processConnection struct {
 	done            chan struct{}
 	waitErr         error
 	agentDescriptor acpAgentDescriptor
+	authGroup       singleflight.Group
 }
 
 type connectionManager struct {
@@ -55,6 +57,7 @@ type connectionManager struct {
 	stderr       io.Writer
 	closeTimeout time.Duration
 	activeTurns  *activeTurnRegistry
+	authSelector AuthMethodSelector
 	terminalAuth bool
 
 	mu         sync.Mutex
@@ -71,6 +74,7 @@ func newConnectionManager(
 	config ACPConfig,
 	stderr io.Writer,
 	activeTurns *activeTurnRegistry,
+	authSelector AuthMethodSelector,
 	terminalAuth bool,
 ) *connectionManager {
 	return &connectionManager{
@@ -78,6 +82,7 @@ func newConnectionManager(
 		stderr:       stderr,
 		closeTimeout: defaultCloseTimeout,
 		activeTurns:  activeTurns,
+		authSelector: authSelector,
 		terminalAuth: terminalAuth,
 	}
 }

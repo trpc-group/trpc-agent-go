@@ -15,8 +15,30 @@ import "io"
 type Option func(*options)
 
 type options struct {
+	authMethodSelector  AuthMethodSelector
 	terminalAuthHandler TerminalAuthHandler
 	stderr              io.Writer
+}
+
+// WithAuthMethodSelector sets the selector used to choose authentication methods.
+//
+// A nil selector leaves auth_required errors available to the caller as
+// AuthRequiredError without attempting authentication.
+func WithAuthMethodSelector(selector AuthMethodSelector) Option {
+	return func(options *options) {
+		options.authMethodSelector = selector
+	}
+}
+
+// WithAuthMethodSelectorFunc adapts fn into an authentication method selector.
+func WithAuthMethodSelectorFunc(selector AuthMethodSelectorFunc) Option {
+	return func(options *options) {
+		if selector == nil {
+			options.authMethodSelector = nil
+			return
+		}
+		options.authMethodSelector = selector
+	}
 }
 
 // WithTerminalAuthHandler sets the handler for terminal authentication.

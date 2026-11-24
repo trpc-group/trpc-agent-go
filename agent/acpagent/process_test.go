@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,8 +33,8 @@ func TestAgentProcessLifecycle(t *testing.T) {
 	require.NotNil(t, process.connection)
 	require.True(t, process.agentDescriptor.agentCapabilities.LoadSession)
 	require.Len(t, process.agentDescriptor.authMethods, 2)
-	require.Equal(t, "agent-login", process.agentDescriptor.authMethods[0].Agent.Id)
-	require.Equal(t, "terminal-login", process.agentDescriptor.authMethods[1].Terminal.Id)
+	require.Equal(t, acpsdk.AuthMethodId("agent-login"), process.agentDescriptor.authMethods[0].Agent.Id)
+	require.Equal(t, acpsdk.AuthMethodId("terminal-login"), process.agentDescriptor.authMethods[1].Terminal.Id)
 	require.Equal(t, "helper-agent", process.agentDescriptor.agentInfo.Name)
 	require.Equal(t, "1.2.3", process.agentDescriptor.agentInfo.Version)
 	require.Equal(t, testConnectionSnapshot{
@@ -229,6 +230,17 @@ func newHelperAgentForTerminalAuth(
 	terminalAuth bool,
 ) *ACPAgent {
 	t.Helper()
+	return newHelperAgentWithOptions(t, mode, stderr, terminalAuth)
+}
+
+func newHelperAgentWithOptions(
+	t *testing.T,
+	mode string,
+	stderr io.Writer,
+	terminalAuth bool,
+	extraOptions ...Option,
+) *ACPAgent {
+	t.Helper()
 	executable, err := os.Executable()
 	require.NoError(t, err)
 	terminalAuthValue := "0"
@@ -250,6 +262,7 @@ func newHelperAgentForTerminalAuth(
 	if terminalAuth {
 		options = append(options, WithTerminalAuthHandler(noopTerminalAuth))
 	}
+	options = append(options, extraOptions...)
 	acpAgent, err := New(config, options...)
 	require.NoError(t, err)
 	t.Cleanup(func() {
