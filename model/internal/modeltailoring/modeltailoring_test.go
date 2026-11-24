@@ -768,3 +768,144 @@ func TestObserveSerializedMessages(t *testing.T) {
 		}
 	})
 }
+
+func TestObserveExtraFieldMessageOverrides(t *testing.T) {
+	t.Run("skips without observer", func(t *testing.T) {
+		req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
+		extra := map[string]any{"messages": []any{}}
+		allocs := testing.AllocsPerRun(100, func() {
+			ObserveExtraFieldMessageOverrides(
+				context.Background(),
+				"openai.Model",
+				req,
+				"messages",
+				true,
+				extra,
+			)
+		})
+		require.Zero(t, allocs)
+	})
+
+	t.Run("sjson path matching", func(t *testing.T) {
+		tests := []struct {
+			path string
+			want bool
+		}{
+			{path: "messages", want: true},
+			{path: "messages.0.content", want: true},
+			{path: "messages.-1", want: true},
+			{path: "messages.#(role==\"user\").content", want: true},
+			{path: ":messages", want: true},
+			{path: ":messages.0.content", want: true},
+			{path: `\m\e\s\s\a\g\e\s`, want: true},
+			{path: `\m\e\s\s\a\g\e\s.0.content`, want: true},
+			{path: "mess*", want: true},
+			{path: "message?", want: true},
+			{path: "*", want: true},
+			{path: "@this", want: true},
+			{path: "foo|messages", want: true},
+			{path: "", want: false},
+			{path: "metadata", want: false},
+			{path: "metadata.messages", want: false},
+			{path: "messages_meta", want: false},
+			{path: `messages\.bak`, want: false},
+			{path: `\:messages`, want: false},
+			{path: "prompt_cache_key", want: false},
+			{path: "thinking.type", want: false},
+		}
+		for _, tc := range tests {
+			t.Run(tc.path, func(t *testing.T) {
+				require.Equal(
+					t,
+					tc.want,
+					sjsonPathTargetsField(tc.path, "messages"),
+				)
+			})
+		}
+	})
+
+	t.Run("records unknown for matching sjson or literal keys", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			sjsonPaths bool
+			maps       []map[string]any
+			req        *model.Request
+			wantCount  int
+			wantBefore int
+		}{
+			{
+				name:       "sjson subpath hit",
+				sjsonPaths: true,
+				maps: []map[string]any{
+					{"metadata": "ok"},
+					{"messages.0.content": "rewritten"},
+				},
+				req: &model.Request{Messages: []model.Message{
+					model.NewSystemMessage("sys"),
+					model.NewUserMessage("u1"),
+				}},
+				wantCount:  1,
+				wantBefore: 2,
+			},
+			{
+				name:       "sjson non-message fields ignored",
+				sjsonPaths: true,
+				maps: []map[string]any{
+					{"prompt_cache_key": "k1"},
+					{"metadata.messages": "ignored"},
+				},
+				req: &model.Request{Messages: []model.Message{
+					model.NewUserMessage("u1"),
+				}},
+				wantCount: 0,
+			},
+			{
+				name:       "literal mode matches exact key only",
+				sjsonPaths: false,
+				maps: []map[string]any{
+					{"messages.0.content": "literal-key"},
+				},
+				req: &model.Request{Messages: []model.Message{
+					model.NewUserMessage("u1"),
+				}},
+				wantCount: 0,
+			},
+			{
+				name:       "literal mode hit with nil request",
+				sjsonPaths: false,
+				maps: []map[string]any{
+					{"messages": []any{}},
+				},
+				req:        nil,
+				wantCount:  1,
+				wantBefore: 0,
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, observer := modelrequest.ObserveTokenTailoring(
+					context.Background(),
+					nil,
+				)
+				ObserveExtraFieldMessageOverrides(
+					ctx,
+					"openai.Model",
+					tc.req,
+					"messages",
+					tc.sjsonPaths,
+					tc.maps...,
+				)
+				records := observer.Snapshot()
+				require.Len(t, records, tc.wantCount)
+				if tc.wantCount > 0 {
+					require.Equal(t, modelrequest.TokenTailoringRecord{
+						Provider:       "openai.Model",
+						BeforeMessages: tc.wantBefore,
+						AfterMessages:  tc.wantBefore,
+						Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+					}, records[0])
+				}
+			})
+		}
+	})
+}

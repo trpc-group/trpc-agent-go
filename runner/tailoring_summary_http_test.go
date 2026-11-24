@@ -455,3 +455,163 @@ func TestOpenAIHTTP_DefaultOpenAICacheReorderWithoutTailoringPreservesSummarySna
 	require.True(t, snap.view.Bound)
 	require.True(t, snap.forkPresent)
 }
+
+func TestOpenAIHTTP_ExtraFieldsMessageOverrideInvalidatesSummarySnapshots(
+	t *testing.T,
+) {
+	history := []model.Message{
+		model.NewUserMessage("old question"),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"q":"x"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("call_1", "search", "tool output"),
+	}
+	twoMessages := []map[string]any{
+		{"role": "system", "content": "system prompt"},
+		{"role": "user", "content": "current question"},
+	}
+
+	tests := []struct {
+		name               string
+		modelExtraFields   map[string]any
+		requestExtraFields map[string]any
+		wantSentLen        int
+		wantFirstContent   string
+		wantBound          bool
+		wantFork           bool
+	}{
+		{
+			name: "request ExtraFields replacing messages invalidates view and fork",
+			requestExtraFields: map[string]any{
+				"messages": twoMessages,
+			},
+			wantSentLen: 2,
+			wantBound:   false,
+			wantFork:    false,
+		},
+		{
+			name: "request ExtraFields subpath mutating messages.0.content invalidates view and fork",
+			requestExtraFields: map[string]any{
+				"messages.0.content": "rewritten system",
+			},
+			wantSentLen:      5,
+			wantFirstContent: "rewritten system",
+			wantBound:        false,
+			wantFork:         false,
+		},
+		{
+			name: "model WithExtraFields replacing messages invalidates view and fork",
+			modelExtraFields: map[string]any{
+				"messages": twoMessages,
+			},
+			wantSentLen: 2,
+			wantBound:   false,
+			wantFork:    false,
+		},
+		{
+			name: "model WithExtraFields subpath mutating messages.0.content invalidates view and fork",
+			modelExtraFields: map[string]any{
+				"messages.0.content": "rewritten system",
+			},
+			wantSentLen:      5,
+			wantFirstContent: "rewritten system",
+			wantBound:        false,
+			wantFork:         false,
+		},
+		{
+			name: "non-message model and request ExtraFields preserve rebased view and fork",
+			modelExtraFields: map[string]any{
+				"prompt_cache_key": "cache-k1",
+			},
+			requestExtraFields: map[string]any{
+				"metadata": map[string]any{"trace_id": "t1"},
+			},
+			wantSentLen: 5,
+			wantBound:   true,
+			wantFork:    true,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			server, sentMessages := newOpenAIHTTPRecordingServer(t)
+			recSvc := &recordingSummarySessionService{
+				Service: inmemory.NewSessionService(),
+			}
+			key := session.Key{
+				AppName:   "app",
+				UserID:    fmt.Sprintf("ef-u-%d", i),
+				SessionID: fmt.Sprintf("ef-s-%d", i),
+			}
+			seedSessionMessages(t, ctx, recSvc, key, key.AppName, "qa", history)
+
+			modelOpts := []openai.Option{
+				openai.WithBaseURL(server.URL),
+				openai.WithAPIKey("test-key"),
+				openai.WithEnableTokenTailoring(true),
+				openai.WithMaxInputTokens(10_000),
+				openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+			}
+			if tt.modelExtraFields != nil {
+				modelOpts = append(
+					modelOpts,
+					openai.WithExtraFields(tt.modelExtraFields),
+				)
+			}
+			m := openai.New("gpt-4o", modelOpts...)
+
+			agentOpts := []llmagent.Option{
+				llmagent.WithModel(m),
+				llmagent.WithInstruction("system prompt"),
+				llmagent.WithAddSessionSummary(true),
+			}
+			if tt.requestExtraFields != nil {
+				extraCopy := tt.requestExtraFields
+				callbacks := model.NewCallbacks().RegisterBeforeModel(
+					func(
+						_ context.Context,
+						args *model.BeforeModelArgs,
+					) (*model.BeforeModelResult, error) {
+						args.Request.ExtraFields = extraCopy
+						return nil, nil
+					},
+				)
+				agentOpts = append(
+					agentOpts,
+					llmagent.WithModelCallbacks(callbacks),
+				)
+			}
+			ag := llmagent.New("qa", agentOpts...)
+			r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
+			t.Cleanup(func() { _ = r.Close() })
+
+			runSingleTurn(t, ctx, r, key, "current question")
+
+			sent := sentMessages()
+			require.Len(t, sent, tt.wantSentLen)
+			if tt.wantFirstContent != "" {
+				require.Equal(t, tt.wantFirstContent, sent[0]["content"])
+			}
+			snap := recSvc.latest()
+			require.True(t, snap.viewPresent)
+			require.Equal(t, tt.wantBound, snap.view.Bound)
+			if !tt.wantBound {
+				require.Equal(
+					t,
+					summaryview.BindingReasonInvalidated,
+					snap.view.BindingReason,
+				)
+			}
+			require.Equal(t, tt.wantFork, snap.forkPresent)
+		})
+	}
+}

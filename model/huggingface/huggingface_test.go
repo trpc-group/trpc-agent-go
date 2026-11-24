@@ -4383,3 +4383,121 @@ func TestGenerateContent_HTTPPlaceholderThenCallbackOverrideRecordsReduction(t *
 	require.Equal(t, 5, records[1].BeforeMessages)
 	require.Equal(t, 2, records[1].AfterMessages)
 }
+
+func TestGenerateContent_HTTPExtraFieldsMessageOverrideRecordsUnknown(t *testing.T) {
+	twoMessages := []map[string]any{
+		{"role": "system", "content": "sys"},
+		{"role": "user", "content": "current question"},
+	}
+
+	tests := []struct {
+		name               string
+		modelExtraFields   map[string]any
+		requestExtraFields map[string]any
+		wantSentLen        int
+		wantProvenances    []imodelrequest.TokenTailoringProvenance
+	}{
+		{
+			name: "request ExtraFields overriding messages records unknown",
+			requestExtraFields: map[string]any{
+				"messages": twoMessages,
+			},
+			wantSentLen: 2,
+			wantProvenances: []imodelrequest.TokenTailoringProvenance{
+				imodelrequest.TokenTailoringProvenancePreserved,
+				imodelrequest.TokenTailoringProvenanceUnknown,
+			},
+		},
+		{
+			name: "model WithExtraFields overriding messages records unknown",
+			modelExtraFields: map[string]any{
+				"messages": twoMessages,
+			},
+			wantSentLen: 2,
+			wantProvenances: []imodelrequest.TokenTailoringProvenance{
+				imodelrequest.TokenTailoringProvenancePreserved,
+				imodelrequest.TokenTailoringProvenanceUnknown,
+			},
+		},
+		{
+			name: "non-message ExtraFields keep preserved only",
+			modelExtraFields: map[string]any{
+				"trace_id": "t1",
+			},
+			requestExtraFields: map[string]any{
+				"metadata": map[string]any{"k": "v"},
+			},
+			wantSentLen: 5,
+			wantProvenances: []imodelrequest.TokenTailoringProvenance{
+				imodelrequest.TokenTailoringProvenancePreserved,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sentMessages []map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				var body struct {
+					Messages []map[string]any `json:"messages"`
+				}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				sentMessages = body.Messages
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"hf-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+			}))
+			defer server.Close()
+
+			opts := []Option{
+				WithBaseURL(server.URL),
+				WithAPIKey(ApiKey),
+				WithEnableTokenTailoring(true),
+				WithMaxInputTokens(10_000),
+			}
+			if tt.modelExtraFields != nil {
+				opts = append(opts, WithExtraFields(tt.modelExtraFields))
+			}
+			m, err := New("test-model", opts...)
+			require.NoError(t, err)
+
+			ctx, observer := imodelrequest.ObserveTokenTailoring(
+				context.Background(),
+				nil,
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewSystemMessage("sys"),
+					model.NewUserMessage("old question"),
+					{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Type: "function",
+							ID:   "call_1",
+							Function: model.FunctionDefinitionParam{
+								Name:      "search",
+								Arguments: []byte(`{"q":"x"}`),
+							},
+						}},
+					},
+					model.NewToolMessage("call_1", "search", "tool output"),
+					model.NewUserMessage("current question"),
+				},
+				ExtraFields: tt.requestExtraFields,
+			}
+			ch, err := m.GenerateContent(ctx, req)
+			require.NoError(t, err)
+			for range ch {
+			}
+
+			require.Len(t, sentMessages, tt.wantSentLen)
+			records := observer.Snapshot()
+			require.Len(t, records, len(tt.wantProvenances))
+			for i, want := range tt.wantProvenances {
+				require.Equal(t, want, records[i].Provenance)
+			}
+		})
+	}
+}

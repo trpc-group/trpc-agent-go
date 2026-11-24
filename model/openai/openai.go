@@ -678,6 +678,15 @@ func (m *Model) prepareChatRequest(
 		request,
 		imodelrequest.ToolsDisabled(ctx) && !m.preserveToolsWhenDisabled,
 	)
+	modeltailoring.ObserveExtraFieldMessageOverrides(
+		ctx,
+		"openai.Model",
+		request,
+		"messages",
+		true,
+		m.extraFields,
+		request.ExtraFields,
+	)
 	return chatRequest, opts, nil
 }
 

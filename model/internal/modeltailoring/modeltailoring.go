@@ -173,6 +173,112 @@ func extractCanonicalMessagesField(
 	return canonical, count, nil
 }
 
+// ObserveExtraFieldMessageOverrides records an unknown provider change when
+// any model- or request-level extra-fields map targets the outbound messages
+// field (or, when sjsonPaths is true, any sjson subpath or non-simple selector
+// that could mutate it).
+//
+// When no observer is attached to ctx, ObserveExtraFieldMessageOverrides is a
+// no-op.
+func ObserveExtraFieldMessageOverrides(
+	ctx context.Context,
+	provider string,
+	request *model.Request,
+	messagesField string,
+	sjsonPaths bool,
+	extraFieldMaps ...map[string]any,
+) {
+	if !modelrequest.HasTokenTailoringObserver(ctx) {
+		return
+	}
+	if !extraFieldsTargetField(messagesField, sjsonPaths, extraFieldMaps...) {
+		return
+	}
+	msgCount := 0
+	if request != nil {
+		msgCount = len(request.Messages)
+	}
+	modelrequest.RecordTokenTailoring(
+		ctx,
+		modelrequest.TokenTailoringRecord{
+			Provider:       provider,
+			BeforeMessages: msgCount,
+			AfterMessages:  msgCount,
+			Provenance:     modelrequest.TokenTailoringProvenanceUnknown,
+		},
+	)
+}
+
+func extraFieldsTargetField(
+	field string,
+	sjsonPaths bool,
+	maps ...map[string]any,
+) bool {
+	for _, fields := range maps {
+		for key := range fields {
+			if sjsonPaths {
+				if sjsonPathTargetsField(key, field) {
+					return true
+				}
+			} else if key == field {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sjsonPathTargetsField reports whether an sjson path targets top-level key
+// field or any subpath beneath it, failing closed on non-simple query tokens
+// in the first segment.
+func sjsonPathTargetsField(path string, field string) bool {
+	if path == "" {
+		return false
+	}
+	if path[0] == ':' {
+		path = path[1:]
+	}
+	var unescaped []byte
+	for i := 0; i < len(path); i++ {
+		ch := path[i]
+		if ch == '.' {
+			if unescaped != nil {
+				return string(unescaped) == field
+			}
+			return path[:i] == field
+		}
+		if !isSimpleSJSONChar(ch) {
+			return true
+		}
+		if ch == '\\' {
+			if unescaped == nil {
+				unescaped = append(unescaped, path[:i]...)
+			}
+			i++
+			if i < len(path) {
+				unescaped = append(unescaped, path[i])
+			}
+			continue
+		}
+		if unescaped != nil {
+			unescaped = append(unescaped, ch)
+		}
+	}
+	if unescaped != nil {
+		return string(unescaped) == field
+	}
+	return path == field
+}
+
+func isSimpleSJSONChar(ch byte) bool {
+	switch ch {
+	case '|', '#', '@', '*', '?':
+		return false
+	default:
+		return true
+	}
+}
+
 func classifyMessageChange(
 	before []model.Message,
 	after []model.Message,

@@ -128,6 +128,15 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert request: %w", err)
 	}
+	modeltailoring.ObserveExtraFieldMessageOverrides(
+		ctx,
+		"huggingface.Model",
+		request,
+		"messages",
+		false,
+		m.extraFields,
+		hfRequest.ExtraFields,
+	)
 
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish

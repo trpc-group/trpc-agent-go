@@ -19,8 +19,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan"
@@ -29,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type recordingSummarySessionService struct {
@@ -67,6 +71,59 @@ func (s *recordingSummarySessionService) latest() summaryEnqueueSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls[len(s.calls)-1]
+}
+
+// hunyuanFlowAgent drives llmflow directly without importing agent/llmagent,
+// keeping model/hunyuan's test dependency graph minimal for downstream modules.
+type hunyuanFlowAgent struct {
+	name  string
+	model model.Model
+	flow  *llmflow.Flow
+}
+
+func newHunyuanFlowAgent(
+	name string,
+	instruction string,
+	m model.Model,
+) *hunyuanFlowAgent {
+	requestProcessors := []flow.RequestProcessor{
+		processor.NewBasicRequestProcessor(
+			processor.WithGenerationConfig(model.GenerationConfig{Stream: false}),
+		),
+		processor.NewInstructionRequestProcessor(instruction, ""),
+		processor.NewContentRequestProcessor(
+			processor.WithAddSessionSummary(true),
+		),
+	}
+	return &hunyuanFlowAgent{
+		name:  name,
+		model: m,
+		flow: llmflow.New(
+			requestProcessors,
+			nil,
+			llmflow.Options{ChannelBufferSize: 16},
+		),
+	}
+}
+
+func (a *hunyuanFlowAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *hunyuanFlowAgent) Tools() []tool.Tool { return nil }
+
+func (a *hunyuanFlowAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *hunyuanFlowAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (a *hunyuanFlowAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	invocation.Agent = a
+	invocation.AgentName = a.name
+	invocation.Model = a.model
+	return a.flow.Run(ctx, invocation)
 }
 
 func newHunyuanHTTPRecordingServer(
@@ -230,12 +287,7 @@ func TestHunyuanHTTP_PlaceholderThenChatRequestCallbackRewriteInvalidatesSummary
 				hunyuan.WithMaxInputTokens(10_000),
 				hunyuan.WithChatRequestCallback(tt.callback),
 			)
-			ag := llmagent.New(
-				"qa",
-				llmagent.WithModel(m),
-				llmagent.WithInstruction("system prompt"),
-				llmagent.WithAddSessionSummary(true),
-			)
+			ag := newHunyuanFlowAgent("qa", "system prompt", m)
 			r := runner.NewRunner(key.AppName, ag, runner.WithSessionService(recSvc))
 			t.Cleanup(func() { _ = r.Close() })
 
