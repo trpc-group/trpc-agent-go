@@ -18,10 +18,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -537,6 +540,70 @@ func TestNativeLateToolResultKeepsNewUserTurn(t *testing.T) {
 	processor = NewContentRequestProcessor(WithMaxHistoryRuns(2))
 	trimmed := processor.getIncrementHistoryAfterCutoff(inv, nil, summaryHistoryCutoff{})
 	require.Equal(t, []model.Message{next}, trimmed.messages, "a truncated call must take its real result with it")
+}
+
+func TestInterruptedToolResultsExtendRetainedWindow(t *testing.T) {
+	call := interruptedTestCall(t, "a", "b", "c")
+	result := model.NewToolMessage("a", "lookup", "real result")
+	next := model.NewUserMessage("follow up")
+	events := timedTestEvents(time.Now().UTC(),
+		toolTranscriptTestEvent("r1", "i1", model.NewUserMessage("first question"), ""),
+		toolTranscriptTestEvent("r1", "i1", call, ""),
+		toolTranscriptTestEvent("r1", "i1", result, model.ObjectTypeToolResponse),
+		toolTranscriptTestEvent("r2", "i2", next, ""),
+	)
+	events[0].Author, events[3].Author = "user", "user"
+	before := persistTestEvents(t, events)
+	inv := testInvocation(events, "i2", "r2", next)
+	inv.Model = &interruptedRoundModel{}
+	p := NewContentRequestProcessor(WithMaxHistoryRuns(3))
+	got := p.getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+	require.Len(t, got, 5)
+	require.Equal(t, []model.Message{call, result}, got[:2])
+	for i, id := range []string{"b", "c"} {
+		require.Equal(t, model.RoleTool, got[i+2].Role)
+		require.Equal(t, id, got[i+2].ToolID)
+		require.Contains(t, got[i+2].Content, "unknown")
+	}
+	require.Equal(t, next, got[4])
+	require.Equal(t, before, inv.Session.Events)
+}
+
+func TestInterruptedToolProjectionFailure(t *testing.T) {
+	for _, stage := range []string{"bind", "reproject"} {
+		t.Run(stage, func(t *testing.T) {
+			core, logs := observer.New(zap.DebugLevel)
+			previous := log.Default
+			log.Default = zap.New(core).Sugar()
+			t.Cleanup(func() { log.Default = previous })
+			call := interruptedTestCall(t, "original")
+			invalid := *call.ProviderData
+			invalid.Payload = json.RawMessage(`{"private_tool_argument":true}`)
+			var opts []ContentOption
+			if stage == "bind" {
+				call.ProviderData = &invalid
+			} else {
+				opts = append(opts, WithEventMessageProjector(func(_ *agent.Invocation, _ event.Event, msg model.Message) model.Message {
+					if msg.ProviderData != nil {
+						msg.ProviderData = &invalid
+					}
+					return msg
+				}))
+			}
+			events := timedTestEvents(time.Now().UTC(), toolTranscriptTestEvent("r1", "i1", call, ""))
+			next := model.NewUserMessage("follow up")
+			inv := testInvocation(events, "i2", "r2", next)
+			inv.Model = &interruptedRoundModel{}
+			got := NewContentRequestProcessor(opts...).getIncrementMessagesAfterCutoff(inv, nil, summaryHistoryCutoff{})
+			require.Len(t, got, 2)
+			require.Equal(t, &invalid, got[0].ProviderData)
+			require.Equal(t, next, got[1])
+			entries := logs.FilterMessageSnippet("Interrupted tool history projection failed").All()
+			require.Len(t, entries, 1)
+			require.Equal(t, fmt.Sprintf("Interrupted tool history projection failed: stage=%s event_id=%q protocol=%q",
+				stage, events[0].ID, testProviderDataProvider), entries[0].Message)
+		})
+	}
 }
 
 func TestLateResultsFromTwoSupersededRounds(t *testing.T) {

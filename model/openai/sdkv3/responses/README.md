@@ -565,9 +565,12 @@ summary cutoffs, and `MaxHistoryRuns` behave as they do for legacy history.
 - When a summary cutoff runs through a native tool round, the original record
   and every result that answers its calls are restored together. Legacy
   history keeps restoring only the calls whose results follow the cutoff.
-- `MaxHistoryRuns` still counts messages. Only a pending native round, a
-  native call record followed solely by its tool results, may extend the
-  limit, and only by that round. Completed native rounds are removed whole.
+- `MaxHistoryRuns` still counts messages. A pending native call followed solely
+  by its tool results can extend the window to retain that round. When a new
+  user turn follows an interrupted call that remains in the window, each missing
+  result adds one request-only output after trimming. The outgoing history
+  can therefore exceed the message limit. Completed native rounds are
+  removed whole.
 - `ToolTranscriptModeOmitPreviousCompleted` rebases completed tool rounds of
   earlier requests: their calls and results are removed, visible text remains
   as ordinary assistant history, and the native record and its reasoning are

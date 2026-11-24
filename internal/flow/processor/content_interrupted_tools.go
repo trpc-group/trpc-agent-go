@@ -15,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -87,7 +88,11 @@ func (p *ContentRequestProcessor) bindNativeToolRounds(
 		}
 		seenNativeReply[evt.InvocationID] = true
 		native, err := project(msg.ProviderData)
-		if err != nil || len(native.ToolCalls) == 0 {
+		if err != nil {
+			log.Debugf("Interrupted tool history projection failed: stage=bind event_id=%q protocol=%q", evt.ID, msg.ProviderData.Protocol)
+			continue
+		}
+		if len(native.ToolCalls) == 0 {
 			continue
 		}
 		rounds[evt.ID] = nativeToolRoundBinding{source: msg.ProviderData, display: msg.ToolCalls, native: native.ToolCalls}
@@ -164,6 +169,7 @@ func (rounds nativeToolRoundBindings) useNativeCalls(history projectedHistory, p
 		if data != round.source && (data.Model != round.source.Model || !bytes.Equal(data.Payload, round.source.Payload)) {
 			msg, err := project(data)
 			if err != nil {
+				log.Debugf("Interrupted tool history projection failed: stage=reproject event_id=%q protocol=%q", id, data.Protocol)
 				delete(rounds, id)
 				continue
 			}
