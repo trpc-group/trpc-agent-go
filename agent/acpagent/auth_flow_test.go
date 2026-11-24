@@ -418,6 +418,38 @@ func TestWithSessionAuthenticationConcurrentRequestsAuthenticateOnce(t *testing.
 	require.Equal(t, int32(1), handlerCalls.Load())
 }
 
+func TestAuthenticateStopsWhenProcessContextEnds(t *testing.T) {
+	t.Parallel()
+
+	processCtx, cancelProcess := context.WithCancel(context.Background())
+	handlerStarted := make(chan struct{})
+	manager := &connectionManager{
+		authSelector: AuthMethodSelectorFunc(func(
+			ctx context.Context,
+			_ AuthChallenge,
+		) (AuthSelection, error) {
+			close(handlerStarted)
+			<-ctx.Done()
+			return AuthSelection{}, ctx.Err()
+		}),
+	}
+	process := &processConnection{ctx: processCtx}
+	result := make(chan error, 1)
+	go func() {
+		result <- manager.authenticate(
+			context.Background(),
+			process,
+			AuthChallenge{
+				Operation: string(sessionAcquisitionNew),
+				Methods:   advertisedAuthMethods(helperInitializeResponse().AuthMethods),
+			},
+		)
+	}()
+	<-handlerStarted
+	cancelProcess()
+	require.ErrorIs(t, <-result, context.Canceled)
+}
+
 func agentLoginSelector() AuthMethodSelectorFunc {
 	return AuthMethodSelectorFunc(func(
 		context.Context,

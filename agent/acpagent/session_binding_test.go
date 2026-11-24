@@ -210,6 +210,201 @@ func TestACPSessionPromptGateSerializesOnlyMatchingSession(t *testing.T) {
 	first.releasePrompt()
 }
 
+func TestAcquireSessionRestoresWithResumeWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(t, "resume_success", io.Discard, false)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "resume-session",
+	})
+	persistedID := acpsdk.SessionId("persisted-session")
+	setPersistedSessionState(t, acpAgent, invocation.Session, persistedID)
+
+	binding, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, persistedID, binding.id)
+}
+
+func TestAcquireSessionRestoresWithLoadWhenResumeUnsupported(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(t, "load_success", io.Discard, false)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "load-session",
+	})
+	persistedID := acpsdk.SessionId("persisted-session")
+	setPersistedSessionState(t, acpAgent, invocation.Session, persistedID)
+
+	binding, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, persistedID, binding.id)
+}
+
+func TestAcquireSessionPrefersResumeWhenBothCapabilitiesExist(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(t, "resume_both_success", io.Discard, false)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "resume-both",
+	})
+	persistedID := acpsdk.SessionId("persisted-session")
+	setPersistedSessionState(t, acpAgent, invocation.Session, persistedID)
+
+	binding, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, persistedID, binding.id)
+}
+
+func TestAcquireSessionCreatesNewWhenRecoveryUnsupported(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"new_only",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "new-session",
+	})
+	setPersistedSessionState(
+		t,
+		acpAgent,
+		invocation.Session,
+		acpsdk.SessionId("unusable-session"),
+	)
+
+	binding, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, acpsdk.SessionId("helper-session-1"), binding.id)
+}
+
+func TestAcquireSessionUnknownRecoveryClearsAndCreatesOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "resume", mode: "resume_unknown"},
+		{name: "load", mode: "load_unknown"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			acpAgent := newHelperAgentWithOptions(
+				t,
+				test.mode,
+				io.Discard,
+				false,
+				WithAuthMethodSelectorFunc(agentLoginSelector()),
+			)
+			service := inmemory.NewSessionService()
+			invocation := newSessionInvocation(t, service, session.Key{
+				AppName:   "app",
+				UserID:    "user",
+				SessionID: test.name,
+			})
+			staleID := acpsdk.SessionId("stale-session")
+			setPersistedSessionState(t, acpAgent, invocation.Session, staleID)
+
+			binding, err := acpAgent.acquireSession(context.Background(), invocation)
+			require.NoError(t, err)
+			require.Equal(t, acpsdk.SessionId("helper-session-1"), binding.id)
+			keys := newACPSessionStateKeys("acp-helper")
+			raw, ok := invocation.Session.GetState(keys.sessionID)
+			require.True(t, ok)
+			require.Equal(t, string(binding.id), string(raw))
+		})
+	}
+}
+
+func TestAcquireSessionRecreatesSameKeyForNewSessionGeneration(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"wait",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "recreated",
+	}
+	firstInvocation := newSessionInvocation(t, service, key)
+	first, err := acpAgent.acquireSession(context.Background(), firstInvocation)
+	require.NoError(t, err)
+
+	recreated := session.NewSession(
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		session.WithSessionCreatedAt(firstInvocation.Session.CreatedAt.Add(time.Second)),
+	)
+	secondInvocation := &agent.Invocation{
+		Session:        recreated,
+		SessionService: service,
+	}
+	second, err := acpAgent.acquireSession(context.Background(), secondInvocation)
+	require.NoError(t, err)
+	require.NotEqual(t, first.id, second.id)
+	require.Equal(t, acpsdk.SessionId("helper-session-2"), second.id)
+	require.Len(t, acpAgent.sessions.byKey, 1)
+}
+
+func TestAcquireSessionTTLReplacementAttemptsOldSessionClose(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"close_error",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "close-old",
+	}
+	firstInvocation := newSessionInvocation(t, service, key)
+	_, err := acpAgent.acquireSession(context.Background(), firstInvocation)
+	require.NoError(t, err)
+
+	recreated := session.NewSession(
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		session.WithSessionCreatedAt(firstInvocation.Session.CreatedAt.Add(time.Second)),
+	)
+	secondInvocation := &agent.Invocation{
+		Session:        recreated,
+		SessionService: service,
+	}
+	binding, err := acpAgent.acquireSession(context.Background(), secondInvocation)
+	require.Nil(t, binding)
+	require.ErrorContains(t, err, "session close called")
+}
+
 func newSessionInvocation(
 	t *testing.T,
 	service session.Service,
@@ -222,6 +417,19 @@ func newSessionInvocation(
 		Session:        sess,
 		SessionService: service,
 	}
+}
+
+func setPersistedSessionState(
+	t *testing.T,
+	acpAgent *ACPAgent,
+	target *session.Session,
+	sessionID acpsdk.SessionId,
+) {
+	t.Helper()
+	keys := newACPSessionStateKeys(acpAgent.config.Name)
+	target.SetState(keys.sessionID, []byte(sessionID))
+	target.SetState(keys.launchFingerprint, []byte(acpAgent.launchFingerprint))
+	target.SetState(keys.agentVersion, []byte("1.2.3"))
 }
 
 func newGatedACPSession() *acpSession {

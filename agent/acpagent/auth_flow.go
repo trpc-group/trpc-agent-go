@@ -101,15 +101,17 @@ func (m *connectionManager) authenticate(
 	process *processConnection,
 	challenge AuthChallenge,
 ) error {
-	if err := ctx.Err(); err != nil {
+	authCtx, cancel := mergeContexts(ctx, process.ctx)
+	defer cancel()
+	if err := authCtx.Err(); err != nil {
 		return err
 	}
 	result := process.authGroup.DoChan(authSingleflightKey, func() (any, error) {
-		return nil, m.performAgentAuthentication(ctx, process, challenge)
+		return nil, m.performAgentAuthentication(authCtx, process, challenge)
 	})
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-authCtx.Done():
+		return authCtx.Err()
 	case result := <-result:
 		return result.Err
 	}

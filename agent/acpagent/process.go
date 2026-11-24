@@ -45,6 +45,7 @@ type processConnection struct {
 	cmd             *exec.Cmd
 	stdin           io.WriteCloser
 	connection      *acpsdk.ClientSideConnection
+	ctx             context.Context
 	cancel          context.CancelFunc
 	done            chan struct{}
 	waitErr         error
@@ -168,6 +169,7 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 			stdin,
 			stdout,
 		),
+		ctx:    processCtx,
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}, nil
@@ -180,6 +182,7 @@ func (m *connectionManager) wait(process *processConnection) {
 	m.mu.Lock()
 	process.waitErr = err
 	if m.current == process {
+		m.activeTurns.failAll(processFailureError(err))
 		m.current = nil
 		m.state = lifecycleStopped
 	}
@@ -259,6 +262,18 @@ func (m *connectionManager) processError(process *processConnection) error {
 	}
 }
 
+func (p *processConnection) failureWithin(timeout time.Duration) error {
+	if p == nil {
+		return errProcessDone
+	}
+	select {
+	case <-p.done:
+		return processFailureError(p.waitErr)
+	case <-time.After(timeout):
+		return nil
+	}
+}
+
 func mergeEnvironment(base, overrides []string) []string {
 	merged := append([]string(nil), base...)
 	indexes := make(map[string]int, len(merged))
@@ -278,4 +293,11 @@ func mergeEnvironment(base, overrides []string) []string {
 		merged = append(merged, entry)
 	}
 	return merged
+}
+
+func processFailureError(err error) error {
+	if err == nil {
+		return errors.New("acpagent: process exited")
+	}
+	return fmt.Errorf("acpagent: process exited: %w", err)
 }

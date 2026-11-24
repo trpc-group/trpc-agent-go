@@ -42,6 +42,7 @@ type acpSession struct {
 	generation uint64
 	process    *processConnection
 	promptGate chan struct{}
+	createdAt  time.Time
 	stateDelta session.StateMap
 	stateOnce  sync.Once
 }
@@ -126,9 +127,54 @@ func (a *ACPAgent) acquireSessionOnce(
 	process *processConnection,
 	key session.Key,
 ) (*acpSession, error) {
-	if binding := a.sessions.get(key, process.generation); binding != nil {
-		binding.applySessionState(invocation.Session)
-		return binding, nil
+	createdAt := invocation.Session.CreatedAt
+	existing := a.sessions.lookup(key)
+	sessionIDHint := acpsdk.SessionId("")
+	if existing != nil {
+		switch {
+		case !sameACPSession(existing, invocation.Session):
+			if err := a.closeReplacedSession(process, existing); err != nil {
+				return nil, err
+			}
+			a.sessions.remove(key, existing)
+			if err := a.clearPersistedSessionID(ctx, invocation); err != nil {
+				return nil, err
+			}
+		case existing.generation == process.generation &&
+			existing.process == process:
+			existing.applySessionState(invocation.Session)
+			return existing, nil
+		default:
+			sessionIDHint = existing.id
+			a.sessions.remove(key, existing)
+		}
+	}
+
+	sessionID := sessionIDHint
+	if sessionID == "" {
+		sessionID = a.persistedSessionID(invocation.Session)
+	}
+	if sessionID != "" {
+		supported, err := a.restoreACPSession(ctx, process, sessionID)
+		if err != nil {
+			if isUnknownSessionError(err) {
+				if clearErr := a.clearPersistedSessionID(ctx, invocation); clearErr != nil {
+					return nil, errors.Join(err, clearErr)
+				}
+			} else {
+				return nil, err
+			}
+		} else if supported {
+			binding := a.newSessionBinding(
+				key,
+				sessionID,
+				process,
+				createdAt,
+				nil,
+			)
+			a.sessions.put(binding)
+			return binding, nil
+		}
 	}
 
 	var response acpsdk.NewSessionResponse
@@ -152,23 +198,144 @@ func (a *ACPAgent) acquireSessionOnce(
 	state := a.sessionState(response.SessionId, process)
 	if err := invocation.SessionService.UpdateSessionState(ctx, key, state); err != nil {
 		persistErr := fmt.Errorf("acpagent: persist ACP session state: %w", err)
-		closeErr := closeRejectedACPSession(process, response.SessionId)
+		closeErr := closeACPSession(process, response.SessionId)
 		return nil, errors.Join(persistErr, closeErr)
 	}
 	for stateKey, value := range state {
 		invocation.Session.SetState(stateKey, value)
 	}
+	binding := a.newSessionBinding(
+		key,
+		response.SessionId,
+		process,
+		createdAt,
+		cloneSessionState(state),
+	)
+	a.sessions.put(binding)
+	return binding, nil
+}
+
+func (a *ACPAgent) restoreACPSession(
+	ctx context.Context,
+	process *processConnection,
+	sessionID acpsdk.SessionId,
+) (bool, error) {
+	if process.agentDescriptor.agentCapabilities.SessionCapabilities.Resume != nil {
+		return true, a.connections.withSessionAuthentication(
+			ctx,
+			process,
+			sessionAcquisitionResume,
+			func(callCtx context.Context) error {
+				_, err := process.connection.ResumeSession(
+					callCtx,
+					acpsdk.ResumeSessionRequest{
+						SessionId:  sessionID,
+						Cwd:        a.config.WorkDir,
+						McpServers: []acpsdk.McpServer{},
+					},
+				)
+				return err
+			},
+		)
+	}
+	if process.agentDescriptor.agentCapabilities.LoadSession {
+		return true, a.connections.withSessionAuthentication(
+			ctx,
+			process,
+			sessionAcquisitionLoad,
+			func(callCtx context.Context) error {
+				_, err := process.connection.LoadSession(
+					callCtx,
+					acpsdk.LoadSessionRequest{
+						SessionId:  sessionID,
+						Cwd:        a.config.WorkDir,
+						McpServers: []acpsdk.McpServer{},
+					},
+				)
+				return err
+			},
+		)
+	}
+	return false, nil
+}
+
+func (a *ACPAgent) persistedSessionID(target *session.Session) acpsdk.SessionId {
+	if target == nil {
+		return ""
+	}
+	keys := newACPSessionStateKeys(a.config.Name)
+	rawID, ok := target.GetState(keys.sessionID)
+	if !ok || len(rawID) == 0 {
+		return ""
+	}
+	rawFingerprint, ok := target.GetState(keys.launchFingerprint)
+	if !ok || string(rawFingerprint) != a.launchFingerprint {
+		return ""
+	}
+	return acpsdk.SessionId(rawID)
+}
+
+func (a *ACPAgent) clearPersistedSessionID(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) error {
+	key := session.Key{
+		AppName:   invocation.Session.AppName,
+		UserID:    invocation.Session.UserID,
+		SessionID: invocation.Session.ID,
+	}
+	stateKey := newACPSessionStateKeys(a.config.Name).sessionID
+	if err := invocation.SessionService.UpdateSessionState(ctx, key, session.StateMap{
+		stateKey: nil,
+	}); err != nil {
+		return fmt.Errorf("acpagent: clear stale ACP session ID: %w", err)
+	}
+	invocation.Session.SetState(stateKey, nil)
+	return nil
+}
+
+func (a *ACPAgent) closeReplacedSession(
+	current *processConnection,
+	old *acpSession,
+) error {
+	if old == nil || old.process == nil || old.process != current {
+		return nil
+	}
+	err := closeACPSession(old.process, old.id)
+	if errors.Is(err, errSessionCloseUnsupported) {
+		return nil
+	}
+	return err
+}
+
+func (a *ACPAgent) newSessionBinding(
+	key session.Key,
+	sessionID acpsdk.SessionId,
+	process *processConnection,
+	createdAt time.Time,
+	stateDelta session.StateMap,
+) *acpSession {
 	binding := &acpSession{
 		key:        key,
-		id:         response.SessionId,
+		id:         sessionID,
 		generation: process.generation,
 		process:    process,
 		promptGate: make(chan struct{}, 1),
-		stateDelta: cloneSessionState(state),
+		createdAt:  createdAt,
+		stateDelta: stateDelta,
 	}
 	binding.promptGate <- struct{}{}
-	a.sessions.put(binding)
-	return binding, nil
+	return binding
+}
+
+func sameACPSession(binding *acpSession, target *session.Session) bool {
+	if binding == nil || target == nil {
+		return false
+	}
+	if binding.createdAt.IsZero() || target.CreatedAt.IsZero() {
+		return binding.createdAt.IsZero() && target.CreatedAt.IsZero()
+	}
+	return binding.createdAt.Equal(target.CreatedAt)
 }
 
 func (a *ACPAgent) sessionState(
@@ -187,17 +354,22 @@ func (a *ACPAgent) sessionState(
 	}
 }
 
-func (s *acpSessionStore) get(
-	key session.Key,
-	generation uint64,
-) *acpSession {
+func (s *acpSessionStore) lookup(key session.Key) *acpSession {
 	s.mu.RLock()
 	binding := s.byKey[key]
 	s.mu.RUnlock()
-	if binding == nil || binding.generation != generation {
-		return nil
-	}
 	return binding
+}
+
+func (s *acpSessionStore) remove(key session.Key, binding *acpSession) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.byKey[key] == binding {
+		delete(s.byKey, key)
+	}
+	s.mu.Unlock()
 }
 
 func (s *acpSessionStore) put(binding *acpSession) {
@@ -254,7 +426,7 @@ func (s *acpSession) releasePrompt() {
 	s.promptGate <- struct{}{}
 }
 
-func closeRejectedACPSession(
+func closeACPSession(
 	process *processConnection,
 	sessionID acpsdk.SessionId,
 ) error {
@@ -273,7 +445,7 @@ func closeRejectedACPSession(
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("acpagent: close rejected ACP session: %w", err)
+		return fmt.Errorf("acpagent: close ACP session: %w", err)
 	}
 	return nil
 }

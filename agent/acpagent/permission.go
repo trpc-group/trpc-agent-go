@@ -45,7 +45,7 @@ func (c *protocolClient) checkPermission(
 	if err != nil {
 		return rejectedPermissionResponse(request.Options)
 	}
-	policyCtx, cancel := mergePermissionContexts(ctx, turn.ctx)
+	policyCtx, cancel := mergeContexts(ctx, turn.ctx)
 	defer cancel()
 	if policyCtx.Err() != nil {
 		return cancelledPermissionResponse()
@@ -77,7 +77,7 @@ func (c *protocolClient) checkPermission(
 	}
 }
 
-func mergePermissionContexts(
+func mergeContexts(
 	requestCtx context.Context,
 	turnCtx context.Context,
 ) (context.Context, context.CancelFunc) {

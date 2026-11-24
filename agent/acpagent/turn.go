@@ -26,6 +26,8 @@ type activeTurn struct {
 	updates      chan acpsdk.SessionNotification
 	overflow     chan struct{}
 	overflowOnce sync.Once
+	failureMu    sync.Mutex
+	failure      error
 }
 
 const defaultSessionUpdateQueueSize = 64
@@ -67,12 +69,33 @@ func (t *activeTurn) enqueue(notification acpsdk.SessionNotification) error {
 	default:
 		t.overflowOnce.Do(func() {
 			close(t.overflow)
-			if t.cancel != nil {
-				t.cancel()
-			}
+			t.fail(errSessionUpdateOverflow)
 		})
 		return errSessionUpdateOverflow
 	}
+}
+
+func (t *activeTurn) fail(err error) {
+	if t == nil {
+		return
+	}
+	t.failureMu.Lock()
+	if t.failure == nil && err != nil {
+		t.failure = err
+	}
+	t.failureMu.Unlock()
+	if t.cancel != nil {
+		t.cancel()
+	}
+}
+
+func (t *activeTurn) failureError() error {
+	if t == nil {
+		return nil
+	}
+	t.failureMu.Lock()
+	defer t.failureMu.Unlock()
+	return t.failure
 }
 
 func (t *activeTurn) overflowed() <-chan struct{} {
@@ -122,4 +145,19 @@ func (r *activeTurnRegistry) get(sessionID acpsdk.SessionId) (*activeTurn, bool)
 	turn, ok := r.turns[sessionID]
 	r.mu.RUnlock()
 	return turn, ok
+}
+
+func (r *activeTurnRegistry) failAll(err error) {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	turns := make([]*activeTurn, 0, len(r.turns))
+	for _, turn := range r.turns {
+		turns = append(turns, turn)
+	}
+	r.mu.RUnlock()
+	for _, turn := range turns {
+		turn.fail(err)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,8 @@ func TestACPHelperProcess(t *testing.T) {
 	authCalls := 0
 	sessionCount := 0
 	sessions := make(map[acpsdk.SessionId]struct{})
+	var pendingCancelID json.RawMessage
+	var pendingCancelSession acpsdk.SessionId
 	for {
 		var request helperRequest
 		if err := decoder.Decode(&request); err != nil {
@@ -67,7 +70,7 @@ func TestACPHelperProcess(t *testing.T) {
 				writeHelperError(request.ID, acpsdk.NewInternalError("initialize failed"))
 				os.Exit(1)
 			}
-			response := helperInitializeResponse()
+			response := helperInitializeResponseForMode(mode)
 			if mode == "bad_protocol" {
 				response.ProtocolVersion = supportedProtocolVersion + 1
 			}
@@ -75,6 +78,7 @@ func TestACPHelperProcess(t *testing.T) {
 			initialized = true
 			switch mode {
 			case "exit_after_init":
+				time.Sleep(100 * time.Millisecond)
 				os.Exit(7)
 			case "hang":
 				time.Sleep(time.Hour)
@@ -120,6 +124,15 @@ func TestACPHelperProcess(t *testing.T) {
 				})
 				continue
 			}
+			if mode == "prompt_process_exit" {
+				writeHelperNotification(params.SessionId, acpsdk.UpdateAgentMessageText("partial"))
+				os.Exit(7)
+			}
+			if mode == "prompt_cancel" {
+				pendingCancelID = append(json.RawMessage(nil), request.ID...)
+				pendingCancelSession = params.SessionId
+				continue
+			}
 			helperWritePromptUpdates(params.SessionId, mode)
 			writeHelperResult(request.ID, acpsdk.PromptResponse{
 				StopReason: acpsdk.StopReasonEndTurn,
@@ -130,7 +143,60 @@ func TestACPHelperProcess(t *testing.T) {
 				},
 			})
 		case acpsdk.AgentMethodSessionCancel:
+			var params acpsdk.CancelNotification
+			_ = json.Unmarshal(request.Params, &params)
+			if len(pendingCancelID) > 0 && params.SessionId == pendingCancelSession {
+				writeHelperResult(pendingCancelID, acpsdk.PromptResponse{
+					StopReason: acpsdk.StopReasonCancelled,
+				})
+				pendingCancelID = nil
+				pendingCancelSession = ""
+			}
 			continue
+		case acpsdk.AgentMethodSessionResume:
+			if !strings.HasPrefix(mode, "resume_") {
+				writeHelperError(request.ID, acpsdk.NewMethodNotFound(request.Method))
+				continue
+			}
+			var params acpsdk.ResumeSessionRequest
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				writeHelperError(request.ID, acpsdk.NewInvalidParams(err.Error()))
+				continue
+			}
+			if mode == "resume_unknown" {
+				writeHelperError(request.ID, helperUnknownSessionError(params.SessionId))
+				continue
+			}
+			if mode == "resume_error" {
+				writeHelperError(request.ID, acpsdk.NewInternalError("resume failed"))
+				continue
+			}
+			sessions[params.SessionId] = struct{}{}
+			writeHelperResult(request.ID, acpsdk.ResumeSessionResponse{})
+		case acpsdk.AgentMethodSessionLoad:
+			if mode == "resume_both_success" {
+				writeHelperError(request.ID, acpsdk.NewInternalError("load must not be called"))
+				continue
+			}
+			if !strings.HasPrefix(mode, "load_") && mode != "prompt_process_exit" {
+				writeHelperError(request.ID, acpsdk.NewMethodNotFound(request.Method))
+				continue
+			}
+			var params acpsdk.LoadSessionRequest
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				writeHelperError(request.ID, acpsdk.NewInvalidParams(err.Error()))
+				continue
+			}
+			if mode == "load_unknown" {
+				writeHelperError(request.ID, helperUnknownSessionError(params.SessionId))
+				continue
+			}
+			if mode == "load_error" {
+				writeHelperError(request.ID, acpsdk.NewInternalError("load failed"))
+				continue
+			}
+			sessions[params.SessionId] = struct{}{}
+			writeHelperResult(request.ID, acpsdk.LoadSessionResponse{})
 		case acpsdk.AgentMethodAuthenticate:
 			authCalls++
 			if authCalls > 1 {
@@ -189,13 +255,30 @@ func validateHelperInitializeRequest(request acpsdk.InitializeRequest) error {
 }
 
 func helperInitializeResponse() acpsdk.InitializeResponse {
+	return helperInitializeResponseForMode("")
+}
+
+func helperInitializeResponseForMode(mode string) acpsdk.InitializeResponse {
+	sessionCapabilities := acpsdk.SessionCapabilities{
+		Close: &acpsdk.SessionCloseCapabilities{},
+	}
+	loadSession := true
+	if strings.HasPrefix(mode, "resume_") {
+		loadSession = false
+		sessionCapabilities.Resume = &acpsdk.SessionResumeCapabilities{}
+	}
+	if mode == "resume_both_success" {
+		loadSession = true
+		sessionCapabilities.Resume = &acpsdk.SessionResumeCapabilities{}
+	}
+	if mode == "new_only" {
+		loadSession = false
+	}
 	return acpsdk.InitializeResponse{
 		ProtocolVersion: supportedProtocolVersion,
 		AgentCapabilities: acpsdk.AgentCapabilities{
-			LoadSession: true,
-			SessionCapabilities: acpsdk.SessionCapabilities{
-				Close: &acpsdk.SessionCloseCapabilities{},
-			},
+			LoadSession:         loadSession,
+			SessionCapabilities: sessionCapabilities,
 		},
 		AgentInfo: &acpsdk.Implementation{
 			Name:    "helper-agent",
@@ -216,6 +299,14 @@ func helperInitializeResponse() acpsdk.InitializeResponse {
 				},
 			},
 		},
+	}
+}
+
+func helperUnknownSessionError(sessionID acpsdk.SessionId) *acpsdk.RequestError {
+	return &acpsdk.RequestError{
+		Code:    -32002,
+		Message: "Resource not found",
+		Data:    map[string]any{"sessionId": sessionID},
 	}
 }
 

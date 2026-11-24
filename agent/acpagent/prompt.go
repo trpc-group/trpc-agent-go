@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -74,8 +75,9 @@ func (a *ACPAgent) runPrompt(
 	out chan<- *event.Event,
 ) {
 	defer close(out)
+	eventCtx := context.WithoutCancel(ctx)
 	if err := session.acquirePrompt(ctx); err != nil {
-		a.emitTerminalError(ctx, invocation, session, out, err)
+		a.emitTerminalError(eventCtx, invocation, session, out, err)
 		return
 	}
 	defer session.releasePrompt()
@@ -110,16 +112,16 @@ func (a *ACPAgent) runPrompt(
 	for {
 		select {
 		case <-turn.overflowed():
-			a.emitTerminalError(ctx, invocation, session, out, errSessionUpdateOverflow)
+			a.emitTerminalError(eventCtx, invocation, session, out, errSessionUpdateOverflow)
 			return
 		case notification := <-turn.updates:
 			updates, err := translator.translate(notification)
 			if err != nil {
-				a.emitTerminalError(ctx, invocation, session, out, err)
+				a.emitTerminalError(eventCtx, invocation, session, out, err)
 				return
 			}
 			for _, update := range updates {
-				if err := a.emitEvent(ctx, invocation, session, out, update); err != nil {
+				if err := a.emitEvent(eventCtx, invocation, session, out, update); err != nil {
 					return
 				}
 			}
@@ -129,18 +131,18 @@ func (a *ACPAgent) runPrompt(
 				case notification := <-turn.updates:
 					updates, err := translator.translate(notification)
 					if err != nil {
-						a.emitTerminalError(ctx, invocation, session, out, err)
+						a.emitTerminalError(eventCtx, invocation, session, out, err)
 						return
 					}
 					for _, update := range updates {
-						if err := a.emitEvent(ctx, invocation, session, out, update); err != nil {
+						if err := a.emitEvent(eventCtx, invocation, session, out, update); err != nil {
 							return
 						}
 					}
 				default:
 					if turn.hasOverflowed() {
 						a.emitTerminalError(
-							ctx,
+							eventCtx,
 							invocation,
 							session,
 							out,
@@ -149,11 +151,22 @@ func (a *ACPAgent) runPrompt(
 						return
 					}
 					if result.err != nil {
-						a.emitTerminalError(ctx, invocation, session, out, result.err)
+						terminalErr := result.err
+						if ctx.Err() == nil {
+							if processErr := session.process.failureWithin(
+								200 * time.Millisecond,
+							); processErr != nil {
+								terminalErr = processErr
+							}
+						}
+						if turnErr := turn.failureError(); turnErr != nil {
+							terminalErr = turnErr
+						}
+						a.emitTerminalError(eventCtx, invocation, session, out, terminalErr)
 						return
 					}
 					final := translator.finalEvent(result.response)
-					if err := a.emitEvent(ctx, invocation, session, out, final); err != nil {
+					if err := a.emitEvent(eventCtx, invocation, session, out, final); err != nil {
 						return
 					}
 					return

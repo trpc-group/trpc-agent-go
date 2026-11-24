@@ -117,3 +117,87 @@ func TestRunReturnsExplicitErrorOnSessionUpdateOverflow(t *testing.T) {
 	}
 	require.NotNil(t, overflowErr)
 }
+
+func TestRunContextCancellationSendsCancelAndKeepsProcess(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"prompt_cancel",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "prompt-cancel",
+	})
+	invocation.Message = model.NewUserMessage("hello")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	events, err := acpAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	collected := make(chan []*event.Event, 1)
+	go func() {
+		var got []*event.Event
+		for evt := range events {
+			got = append(got, evt)
+		}
+		collected <- got
+	}()
+	select {
+	case got := <-collected:
+		require.NotEmpty(t, got)
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt cancellation did not finish")
+	}
+	require.Equal(t, lifecycleRunning,
+		snapshotConnectionManager(acpAgent.connections).state)
+}
+
+func TestRunProcessExitFailsTurnAndNextRunRebuilds(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"prompt_process_exit",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "process-exit",
+	})
+	invocation.Message = model.NewUserMessage("hello")
+
+	firstEvents, err := acpAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	var firstError *event.Event
+	for evt := range firstEvents {
+		if evt.Error != nil {
+			firstError = evt
+		}
+	}
+	require.NotNil(t, firstError)
+	require.Contains(t, firstError.Error.Message, "process exited")
+	require.Equal(t, lifecycleStopped,
+		snapshotConnectionManager(acpAgent.connections).state)
+	require.Equal(t, uint64(1),
+		snapshotConnectionManager(acpAgent.connections).generation)
+
+	invocation.Message = model.NewUserMessage("again")
+	secondEvents, err := acpAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range secondEvents {
+	}
+	require.Equal(t, uint64(2),
+		snapshotConnectionManager(acpAgent.connections).generation)
+}
