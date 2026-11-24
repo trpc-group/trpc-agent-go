@@ -287,7 +287,7 @@ func TestWithSessionAuthenticationAgentAuth(t *testing.T) {
 	require.Equal(t, "session/new", handlerOperation)
 	require.Equal(t, 2, handlerMethodCount)
 	require.Equal(t, 2, calls)
-	require.Equal(t, acpsdk.SessionId("helper-session"), response.SessionId)
+	require.Equal(t, acpsdk.SessionId("helper-session-1"), response.SessionId)
 }
 
 func TestWithSessionAuthenticationAuthenticateError(t *testing.T) {

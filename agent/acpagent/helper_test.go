@@ -35,6 +35,7 @@ func TestACPHelperProcess(t *testing.T) {
 	initialized := false
 	authenticated := false
 	authCalls := 0
+	sessionCount := 0
 	for {
 		var request helperRequest
 		if err := decoder.Decode(&request); err != nil {
@@ -87,9 +88,20 @@ func TestACPHelperProcess(t *testing.T) {
 				writeHelperError(request.ID, acpsdk.NewAuthRequired(helperAuthData()))
 				continue
 			}
+			sessionCount++
 			writeHelperResult(request.ID, acpsdk.NewSessionResponse{
-				SessionId: "helper-session",
+				SessionId: acpsdk.SessionId(fmt.Sprintf("helper-session-%d", sessionCount)),
 			})
+		case acpsdk.AgentMethodSessionClose:
+			if !initialized {
+				writeHelperError(request.ID, acpsdk.NewInvalidRequest("not initialized"))
+				continue
+			}
+			if mode == "close_error" {
+				writeHelperError(request.ID, acpsdk.NewInternalError("session close called"))
+				continue
+			}
+			writeHelperResult(request.ID, acpsdk.CloseSessionResponse{})
 		case acpsdk.AgentMethodAuthenticate:
 			authCalls++
 			if authCalls > 1 {
@@ -152,6 +164,9 @@ func helperInitializeResponse() acpsdk.InitializeResponse {
 		ProtocolVersion: supportedProtocolVersion,
 		AgentCapabilities: acpsdk.AgentCapabilities{
 			LoadSession: true,
+			SessionCapabilities: acpsdk.SessionCapabilities{
+				Close: &acpsdk.SessionCloseCapabilities{},
+			},
 		},
 		AgentInfo: &acpsdk.Implementation{
 			Name:    "helper-agent",

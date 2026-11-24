@@ -12,6 +12,7 @@ package acpagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -27,6 +28,8 @@ type ACPAgent struct {
 	authMethodSelector  AuthMethodSelector
 	terminalAuthHandler TerminalAuthHandler
 	activeTurns         *activeTurnRegistry
+	sessions            *acpSessionStore
+	launchFingerprint   string
 	connections         *connectionManager
 	closeOnce           sync.Once
 	closeErr            error
@@ -49,12 +52,18 @@ func New(config ACPConfig, opts ...Option) (*ACPAgent, error) {
 		options.stderr = discardWriter{}
 	}
 	config = config.clone()
+	launchFingerprint, err := computeLaunchFingerprint(config)
+	if err != nil {
+		return nil, fmt.Errorf("acpagent: compute launch fingerprint: %w", err)
+	}
 	activeTurns := newActiveTurnRegistry()
 	return &ACPAgent{
 		config:              config,
 		authMethodSelector:  options.authMethodSelector,
 		terminalAuthHandler: options.terminalAuthHandler,
 		activeTurns:         activeTurns,
+		sessions:            newACPSessionStore(),
+		launchFingerprint:   launchFingerprint,
 		connections: newConnectionManager(
 			config,
 			options.stderr,
