@@ -85,8 +85,8 @@ func (u *usageDetails) empty() bool {
 //   - "exclusive" (Anthropic, Bedrock): Input already represents uncached input
 //     tokens and is left untouched while dropping the duplicate InputCached alias.
 //
-// When cache_accounting is absent (legacy spans), it falls back to inferring
-// from cache buckets for backward compatibility.
+// When cache_accounting is absent or unknown, it preserves the legacy cache
+// bucket heuristic for backward compatibility.
 func (u usageDetails) normalized(accounting string) usageDetails {
 	switch accounting {
 	case semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive:
@@ -105,19 +105,14 @@ func (u usageDetails) normalized(accounting string) usageDetails {
 		return u
 	}
 
-	// Backward-compatible fallback when cache_accounting is not present on the span.
-	if u.InputCacheRead != 0 {
-		// Anthropic/Bedrock and explicit cache_read_tokens buckets:
-		// drop the duplicate InputCached compatibility alias.
+	// Preserve the legacy heuristic when cache_accounting is absent or unknown.
+	if u.InputCacheRead != 0 || u.InputCacheCreation != 0 {
+		// Prefer provider-specific buckets and drop the duplicate compatibility alias.
 		u.InputCached = 0
 		return u
 	}
-	if u.InputCached != 0 {
-		// OpenAI-compatible inclusive semantics: keep cached and cache_creation in
-		// their own buckets and convert the inclusive input count to the uncached remainder.
-		u.Input = max(u.Input-u.InputCached-u.InputCacheCreation, 0)
-		return u
-	}
+	// Without provider-specific buckets, cached input is a subset of input.
+	u.Input = max(u.Input-u.InputCached, 0)
 	return u
 }
 
