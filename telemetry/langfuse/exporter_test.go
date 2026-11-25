@@ -672,24 +672,24 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			},
 		},
 		{
-			name:                "with OpenAI cached and cache_creation tokens (legacy fallback without accounting)",
+			name:                "with cached and cache_creation tokens (legacy fallback without accounting)",
 			inputTokens:         600,
 			outputTokens:        80,
 			cachedTokens:        256,
 			cacheCreationTokens: 256,
 			expectedUsage: map[string]int64{
-				"input":                88,
+				"input":                600,
 				"output":               80,
-				"input_cached":         256,
 				"input_cache_creation": 256,
 			},
 		},
 		{
-			name:                "with OpenAI cached and cache_creation exceeding input",
+			name:                "with OpenAI inclusive cached and cache_creation exceeding input",
 			inputTokens:         300,
 			outputTokens:        40,
 			cachedTokens:        200,
 			cacheCreationTokens: 200,
+			cacheAccounting:     semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
 			expectedUsage: map[string]int64{
 				"output":               40,
 				"input_cached":         200,

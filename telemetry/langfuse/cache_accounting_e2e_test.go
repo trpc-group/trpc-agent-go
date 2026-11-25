@@ -240,6 +240,22 @@ func TestRunnerToLangfuse_PromptCacheAccounting(t *testing.T) {
 		})))
 	})
 
+	t.Run("user-built cached and creation usage preserves legacy buckets", func(t *testing.T) {
+		want := map[string]int64{"input": 100, "output": 11, "input_cache_creation": 10}
+		require.Equal(t, want, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
+			args.Response.Usage = &model.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 11,
+				TotalTokens:      111,
+				PromptTokensDetails: model.PromptTokensDetails{
+					CachedTokens:        80,
+					CacheCreationTokens: 10,
+				},
+			}
+			return nil
+		})))
+	})
+
 	t.Run("composite candidate keeps the returned response accounting directly and via failover/hedge", func(t *testing.T) {
 		failoverWrapped, err := failover.New(failover.WithCandidates(&compositeModel{name: "composite"}))
 		require.NoError(t, err)

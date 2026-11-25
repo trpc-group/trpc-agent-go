@@ -242,6 +242,35 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			},
 		},
 		{
+			name: "undeclared accounting preserves legacy cached and creation buckets",
+			usage: usageDetails{
+				Input:              100,
+				Output:             10,
+				InputCached:        80,
+				InputCacheCreation: 10,
+			},
+			want: usageDetails{
+				Input:              100,
+				Output:             10,
+				InputCacheCreation: 10,
+			},
+		},
+		{
+			name: "unknown accounting preserves legacy cached and creation buckets",
+			usage: usageDetails{
+				Input:              100,
+				Output:             10,
+				InputCached:        80,
+				InputCacheCreation: 10,
+			},
+			accounting: "unknown",
+			want: usageDetails{
+				Input:              100,
+				Output:             10,
+				InputCacheCreation: 10,
+			},
+		},
+		{
 			name: "provider cache details take precedence",
 			usage: usageDetails{
 				Input:              20,
