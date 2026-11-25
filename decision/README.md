@@ -11,6 +11,11 @@ levels. Callers choose the evidence, thresholds, and subsequent action.
   servers. Set the API root in `systemone.Config.BaseURL` without
   `/v1/systemone`. Configure the key and model required by the server; local Laya
   can omit them when its deployment provides defaults.
+- `decision/gemini` calls the [Gemini Decisions REST API](https://aistudio.google.com/docs/decisions-api).
+  Use `gemini.New("gemini-decision-1", apiKey, nil)` and pass the same
+  `decision.Request` to the returned client. Gemini accepts JSON evidence as
+  serialized text. It reports confidence for all three question kinds. A
+  blocked batch or an incomplete response fails the call.
 - `model/openai/sdkv3/decisions` uses the official [OpenAI Decisions API][api]
   through the existing SDK v3 module (Go 1.25+). Set `OPENAI_API_KEY` and
   optionally `OPENAI_BASE_URL`, or pass OpenAI SDK options to `decisions.New`.
