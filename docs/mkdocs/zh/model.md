@@ -742,6 +742,9 @@ OpenAI-compatible Chat Completions 适配器对 Prompt Cache 扩展字段的读�
 `WithAccumulateChunkTokenUsage` 回调时，最终值由回调的返回值决定，因此
 上报累计快照的服务方可以保留最新一次快照。
 
+结束标记之后的 usage-only chunk 仍会累加 token 计数，并在聚合后的响应中
+保留各个 choice 最近一次非空的 `finish_reason`。
+
 `TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
 OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator
 通常不需要创建或合并 `TimingInfo`。

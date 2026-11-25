@@ -760,3 +760,85 @@ func TestGenerateContentDetailOnlyCacheUsageEndToEnd(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateContentStreamingUsageAfterFinishReason(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage string
+		want  model.Usage
+	}{
+		{
+			name:  "cached tokens",
+			usage: `{"prompt_tokens_details":{"cached_tokens":64}}`,
+			want:  model.Usage{PromptTokensDetails: model.PromptTokensDetails{CachedTokens: 64}},
+		},
+		{
+			name:  "cache write tokens",
+			usage: `{"prompt_tokens_details":{"cache_write_tokens":256}}`,
+			want:  model.Usage{PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 256}},
+		},
+		{
+			name:  "cache read tokens",
+			usage: `{"prompt_tokens_details":{"cache_read_tokens":128}}`,
+			want:  model.Usage{PromptTokensDetails: model.PromptTokensDetails{CacheReadTokens: 128}},
+		},
+		{
+			name:  "reasoning tokens",
+			usage: `{"completion_tokens_details":{"reasoning_tokens":32}}`,
+			want:  model.Usage{CompletionTokensDetails: model.CompletionTokensDetails{ReasoningTokens: 32}},
+		},
+	}
+	for _, tt := range tests {
+		for _, reason := range []string{"stop", "length"} {
+			for _, delta := range []string{`{}`, `{"tool_calls":[]}`} {
+				t.Run(tt.name+"/"+reason+"/"+delta, func(t *testing.T) {
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						chunks := []string{
+							`{"id":"usage-after-finish","choices":[{"index":0,"delta":{"role":"assistant","content":"answer"}}]}`,
+							fmt.Sprintf(`{"id":"usage-after-finish","choices":[{"index":0,"delta":{},"finish_reason":%q}]}`, reason),
+							fmt.Sprintf(`{"id":"usage-after-finish","choices":[{"index":0,"delta":%s,"finish_reason":null}],"usage":%s}`, delta, tt.usage),
+							`[DONE]`,
+						}
+						for _, chunk := range chunks {
+							fmt.Fprintf(w, "data: %s\n\n", chunk)
+						}
+					}))
+					defer server.Close()
+
+					var callbackAcc *openai.ChatCompletionAccumulator
+					var callbackErr error
+					m := New("test-model", WithBaseURL(server.URL), WithAPIKey("test-key"),
+						WithChatStreamCompleteCallback(func(_ context.Context, _ *openai.ChatCompletionNewParams,
+							acc *openai.ChatCompletionAccumulator, err error) {
+							callbackAcc, callbackErr = acc, err
+						}))
+					ch, err := m.GenerateContent(context.Background(), &model.Request{
+						Messages:         []model.Message{model.NewUserMessage("hi")},
+						GenerationConfig: model.GenerationConfig{Stream: true},
+					})
+					require.NoError(t, err)
+					var final *model.Response
+					for response := range ch {
+						if response.Done {
+							final = response
+						}
+					}
+					require.NotNil(t, final)
+					require.Nil(t, final.Error)
+					require.Len(t, final.Choices, 1)
+					assert.Equal(t, "answer", final.Choices[0].Message.Content)
+					require.NotNil(t, final.Choices[0].FinishReason)
+					assert.Equal(t, reason, *final.Choices[0].FinishReason)
+					require.NotNil(t, final.Usage)
+					assert.Equal(t, tt.want, *final.Usage)
+					require.NoError(t, callbackErr)
+					require.NotNil(t, callbackAcc)
+					require.Len(t, callbackAcc.Choices, 1)
+					assert.Equal(t, reason, callbackAcc.Choices[0].FinishReason)
+					assert.Equal(t, tt.want, completionUsageToModelUsage(callbackAcc.Usage))
+				})
+			}
+		}
+	}
+}

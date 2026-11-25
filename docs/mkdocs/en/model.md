@@ -771,6 +771,10 @@ default accumulation of prompt, completion, and total tokens. When a
 determines the final cache counts, so providers that report cumulative
 snapshots can keep the latest one.
 
+Usage-only chunks after a finish marker still contribute token counts while
+preserving the latest non-empty `finish_reason` for each choice in the
+accumulated response.
+
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
 accumulator, so custom token accumulation normally does not need to create or
