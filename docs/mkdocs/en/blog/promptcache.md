@@ -379,6 +379,18 @@ Telemetry also splits token types:
 - `input_cache_creation`
 - `output`
 
+These Langfuse buckets are mutually exclusive. Providers count prompt tokens
+differently: OpenAI-compatible APIs (Chat Completions and Responses) and Gemini
+include cached and cache-write tokens in `prompt_tokens`, while Anthropic and
+Bedrock exclude them. Model adapters declare this on the usage they return, and
+LLM spans carry it as `gen_ai.usage.input_tokens.cache_accounting`
+(`inclusive` or `exclusive`, written whenever cache counters are present).
+The Langfuse exporter uses it to derive the uncached `input` bucket, so a
+write-only OpenAI turn such as `prompt_tokens=1774, cache_write_tokens=1771`
+exports `input=3, input_cache_creation=1771` instead of counting the cache
+writes twice. Usage built by custom code carries no declaration (the attribute
+value is empty) and keeps the previous heuristic normalization.
+
 #### Troubleshooting Streaming Usage
 
 For streaming requests, OpenAI-compatible providers commonly send usage in a

@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gomock "go.uber.org/mock/gomock"
 	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -933,6 +934,10 @@ func TestModel_buildFinalResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildFinalResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil {
+				usagemeta.SetPromptCacheAccounting(tt.want.Usage, usagemeta.PromptCacheAccountingInclusive)
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}
@@ -1048,6 +1053,10 @@ func TestModel_buildChunkResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildChunkResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil {
+				usagemeta.SetPromptCacheAccounting(tt.want.Usage, usagemeta.PromptCacheAccountingInclusive)
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}

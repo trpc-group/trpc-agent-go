@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -664,6 +665,24 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	return attrs
 }
 
+// appendPromptCacheAccountingAttribute records whether input_tokens includes
+// the prompt cache counters, using the accounting mode carried by usage.
+//
+// The attribute is only written when usage reports prompt cache counters. An
+// undeclared mode is written as an empty string rather than omitted so that a
+// later usage snapshot on the same streaming span (for example, a response
+// replaced by an AfterModel callback) cannot inherit an earlier chunk's mode;
+// consumers treat the empty value as unknown.
+func appendPromptCacheAccountingAttribute(attrs []attribute.KeyValue, usage *model.Usage) []attribute.KeyValue {
+	if usage == nil || usage.PromptTokensDetails == (model.PromptTokensDetails{}) {
+		return attrs
+	}
+	return append(attrs, attribute.String(
+		semconvtrace.KeyGenAIUsageInputTokensCacheAccounting,
+		string(usagemeta.GetPromptCacheAccounting(usage)),
+	))
+}
+
 // buildResponseAttributes builds response-related attributes.
 func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []attribute.KeyValue {
 	if rsp == nil {
@@ -699,9 +718,10 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cacheRead))
 		}
 		if cacheCreation := rsp.Usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
-			// Anthropic: cache_creation_tokens
+			// Prompt cache writes (Anthropic, Bedrock, OpenAI-compatible cache_write_tokens)
 			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
 		}
+		attrs = appendPromptCacheAccountingAttribute(attrs, rsp.Usage)
 	}
 
 	// Add choices attributes

@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -324,6 +325,7 @@ func (m *Model) processStreamEvents(
 							CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
 						},
 					}
+					markExclusivePromptCacheAccounting(usage)
 				}
 			}
 		}
@@ -448,6 +450,7 @@ func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput)
 				CacheReadTokens:     int(aws.ToInt32(output.Usage.CacheReadInputTokens)),
 			},
 		}
+		markExclusivePromptCacheAccounting(response.Usage)
 	}
 
 	return response
@@ -1020,4 +1023,10 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 	case responseChan <- errorResponse:
 	case <-ctx.Done():
 	}
+}
+
+// markExclusivePromptCacheAccounting declares that Bedrock Converse
+// inputTokens exclude cache-read and cache-write tokens.
+func markExclusivePromptCacheAccounting(usage *model.Usage) {
+	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingExclusive)
 }

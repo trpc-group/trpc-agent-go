@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 func TestConstants(t *testing.T) {
@@ -110,9 +111,10 @@ func TestConstantNamingConvention(t *testing.T) {
 
 func TestUsageDetailsNormalized(t *testing.T) {
 	tests := []struct {
-		name  string
-		usage usageDetails
-		want  usageDetails
+		name       string
+		usage      usageDetails
+		accounting string
+		want       usageDetails
 	}{
 		{
 			name:  "without cache",
@@ -133,6 +135,84 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			name:  "cached input exceeds input",
 			usage: usageDetails{Input: 20, Output: 10, InputCached: 30},
 			want:  usageDetails{Output: 10, InputCached: 30},
+		},
+		{
+			name: "explicit inclusive write-only deducts cache creation from input",
+			usage: usageDetails{
+				Input:              1774,
+				Output:             5,
+				InputCacheCreation: 1771,
+			},
+			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
+			want: usageDetails{
+				Input:              3,
+				Output:             5,
+				InputCacheCreation: 1771,
+			},
+		},
+		{
+			name: "explicit inclusive cached and cache creation deducts both",
+			usage: usageDetails{
+				Input:              3211,
+				Output:             28,
+				InputCached:        3170,
+				InputCacheCreation: 38,
+			},
+			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
+			want: usageDetails{
+				Input:              3,
+				Output:             28,
+				InputCached:        3170,
+				InputCacheCreation: 38,
+			},
+		},
+		{
+			name: "explicit inclusive cache read drops alias and deducts read and creation",
+			usage: usageDetails{
+				Input:              3193,
+				Output:             24,
+				InputCached:        3167,
+				InputCacheRead:     3167,
+				InputCacheCreation: 23,
+			},
+			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
+			want: usageDetails{
+				Input:              3,
+				Output:             24,
+				InputCacheRead:     3167,
+				InputCacheCreation: 23,
+			},
+		},
+		{
+			name: "explicit exclusive cache creation preserves input",
+			usage: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCacheCreation: 80,
+			},
+			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive,
+			want: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCacheCreation: 80,
+			},
+		},
+		{
+			name: "explicit exclusive cache details drop cached alias and preserve input",
+			usage: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCached:        70,
+				InputCacheRead:     70,
+				InputCacheCreation: 10,
+			},
+			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive,
+			want: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCacheRead:     70,
+				InputCacheCreation: 10,
+			},
 		},
 		{
 			name: "provider cache read replaces compatibility alias",
@@ -181,7 +261,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tt.usage.normalized())
+			assert.Equal(t, tt.want, tt.usage.normalized(tt.accounting))
 		})
 	}
 }

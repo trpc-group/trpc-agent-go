@@ -9,7 +9,11 @@
 
 package model
 
-import "time"
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
+)
 
 // Error type constants for ResponseError.Type field.
 const (
@@ -132,6 +136,41 @@ type Usage struct {
 
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+
+	// promptCacheAccounting records whether PromptTokens includes or excludes
+	// the prompt cache counters in PromptTokensDetails. It is framework
+	// metadata set by model adapters through internal/usagemeta, deliberately
+	// unexported and not serialized so that it is not part of the public API
+	// or wire format, while still traveling with the Usage value through
+	// copies, Clone, callbacks, and model wrappers.
+	promptCacheAccounting usagemeta.PromptCacheAccounting
+}
+
+func init() {
+	usagemeta.Register(getUsagePromptCacheAccounting, setUsagePromptCacheAccounting)
+}
+
+func getUsagePromptCacheAccounting(usage any) usagemeta.PromptCacheAccounting {
+	u, ok := usage.(*Usage)
+	if !ok || u == nil {
+		return usagemeta.PromptCacheAccountingUnspecified
+	}
+	return u.promptCacheAccounting
+}
+
+func setUsagePromptCacheAccounting(usage any, accounting usagemeta.PromptCacheAccounting) {
+	u, ok := usage.(*Usage)
+	if !ok || u == nil {
+		return
+	}
+	if !accounting.Valid() {
+		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
+		return
+	}
+	if u.PromptTokensDetails == (PromptTokensDetails{}) {
+		return
+	}
+	u.promptCacheAccounting = accounting
 }
 
 // PromptTokensDetails is the details of the prompt tokens.
@@ -228,13 +267,11 @@ func (rsp *Response) Clone() *Response {
 		clone.Choices[i].Delta.ProviderData = choice.Delta.ProviderData.clone()
 	}
 	if rsp.Usage != nil {
-		clone.Usage = &Usage{
-			PromptTokens:            rsp.Usage.PromptTokens,
-			CompletionTokens:        rsp.Usage.CompletionTokens,
-			TotalTokens:             rsp.Usage.TotalTokens,
-			PromptTokensDetails:     rsp.Usage.PromptTokensDetails,
-			CompletionTokensDetails: rsp.Usage.CompletionTokensDetails,
-		}
+		// Copy the whole value so unexported framework metadata (such as
+		// prompt cache accounting) is preserved, then deep copy pointers.
+		usage := *rsp.Usage
+		usage.TimingInfo = nil
+		clone.Usage = &usage
 		// Deep copy TimingInfo if present
 		if rsp.Usage.TimingInfo != nil {
 			clone.Usage.TimingInfo = &TimingInfo{

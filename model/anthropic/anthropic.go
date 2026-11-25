@@ -30,6 +30,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -633,6 +634,7 @@ func (m *Model) handleNonStreamingResponse(
 				CacheReadTokens:     int(message.Usage.CacheReadInputTokens),
 			},
 		}
+		markExclusivePromptCacheAccounting(response.Usage)
 	}
 	// Emit final response.
 	select {
@@ -1001,7 +1003,7 @@ func buildStreamingFinalResponse(acc anthropic.Message) *model.Response {
 	}
 	// Build final response.
 	now := time.Now()
-	return &model.Response{
+	resp := &model.Response{
 		Object:  model.ObjectTypeChatCompletion,
 		ID:      acc.ID,
 		Created: now.Unix(),
@@ -1031,6 +1033,8 @@ func buildStreamingFinalResponse(acc anthropic.Message) *model.Response {
 		Done:      true,
 		IsPartial: false,
 	}
+	markExclusivePromptCacheAccounting(resp.Usage)
+	return resp
 }
 
 // sendErrorResponse sends an error response through the channel.
@@ -1508,4 +1512,10 @@ func convertSystemMessageContent(message model.Message) ([]anthropic.TextBlockPa
 		}
 	}
 	return blocks, nil
+}
+
+// markExclusivePromptCacheAccounting declares that Anthropic input_tokens
+// exclude cache-read and cache-creation tokens.
+func markExclusivePromptCacheAccounting(usage *model.Usage) {
+	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingExclusive)
 }

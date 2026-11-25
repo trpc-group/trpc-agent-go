@@ -26,6 +26,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1114,7 +1115,7 @@ func mapUsage(resp *responses.Response) *model.Usage {
 		u.OutputTokensDetails.ReasoningTokens == 0 {
 		return nil
 	}
-	return &model.Usage{
+	usage := &model.Usage{
 		PromptTokens:     int(u.InputTokens),
 		CompletionTokens: int(u.OutputTokens),
 		TotalTokens:      int(u.TotalTokens),
@@ -1127,6 +1128,9 @@ func mapUsage(resp *responses.Response) *model.Usage {
 			ReasoningTokens: int(u.OutputTokensDetails.ReasoningTokens),
 		},
 	}
+	// Responses API input_tokens include cached and cache-write tokens.
+	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingInclusive)
+	return usage
 }
 
 func responseUsageCacheTokens(u responses.ResponseUsage) (cacheRead, cacheCreation int) {
