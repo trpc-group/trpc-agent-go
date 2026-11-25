@@ -44,6 +44,24 @@ func TestUsagePromptCacheAccounting_NoCacheCountersKeepsZeroComparable(t *testin
 	assert.True(t, *empty == (Usage{}))
 }
 
+func TestUsagePromptCacheAccounting_ClearedCacheCountersClearAccounting(t *testing.T) {
+	for _, accounting := range []usagemeta.PromptCacheAccounting{
+		usagemeta.PromptCacheAccountingInclusive,
+		usagemeta.PromptCacheAccountingExclusive,
+	} {
+		t.Run(string(accounting), func(t *testing.T) {
+			u := &Usage{PromptTokens: 100, PromptTokensDetails: PromptTokensDetails{CacheCreationTokens: 80}}
+			usagemeta.SetPromptCacheAccounting(u, accounting)
+			require.Equal(t, accounting, usagemeta.GetPromptCacheAccounting(u))
+
+			u.PromptTokensDetails = PromptTokensDetails{}
+			usagemeta.SetPromptCacheAccounting(u, accounting)
+			assert.Equal(t, usagemeta.PromptCacheAccountingUnspecified, usagemeta.GetPromptCacheAccounting(u))
+			assert.True(t, *u == (Usage{PromptTokens: 100}))
+		})
+	}
+}
+
 func TestUsagePromptCacheAccounting_InvalidInputs(t *testing.T) {
 	var nilUsage *Usage
 	assert.NotPanics(t, func() {
@@ -107,6 +125,11 @@ func TestUsagePromptCacheAccounting_NotSerialized(t *testing.T) {
 	marked, err := json.Marshal(u)
 	require.NoError(t, err)
 	assert.JSONEq(t, string(plain), string(marked))
+
+	var restored Usage
+	require.NoError(t, json.Unmarshal(marked, &restored))
+	usagemeta.SetPromptCacheAccounting(u, usagemeta.PromptCacheAccountingUnspecified)
+	assert.Equal(t, *u, restored)
 }
 
 func TestUsagePromptCacheAccounting_UnmarshalReusedUsage(t *testing.T) {
@@ -146,6 +169,34 @@ func TestUsagePromptCacheAccounting_UnmarshalReusedUsage(t *testing.T) {
 			}
 			want.promptCacheAccounting = tc.wantAccounting
 			assert.Equal(t, Usage(want), u)
+		})
+	}
+}
+
+func BenchmarkUsageUnmarshalJSON(b *testing.B) {
+	data := []byte(`{"prompt_tokens":100,"completion_tokens":11,"total_tokens":111,"prompt_tokens_details":{"cache_creation_tokens":80}}`)
+	for _, tc := range []struct {
+		name  string
+		usage Usage
+	}{
+		{name: "fresh"},
+		{
+			name: "marked",
+			usage: Usage{
+				PromptTokens:          100,
+				PromptTokensDetails:   PromptTokensDetails{CacheCreationTokens: 80},
+				promptCacheAccounting: usagemeta.PromptCacheAccountingInclusive,
+			},
+		},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				u := tc.usage
+				if err := json.Unmarshal(data, &u); err != nil {
+					b.Fatal(err)
+				}
+			}
 		})
 	}
 }

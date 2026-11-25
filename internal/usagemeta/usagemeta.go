@@ -68,7 +68,8 @@ func GetPromptCacheAccounting(usage any) PromptCacheAccounting {
 // The mode is only recorded when usage carries at least one prompt cache
 // counter, because it is meaningless otherwise; this also keeps Usage values
 // without cache counters comparable to their zero-valued literals. Passing
-// PromptCacheAccountingUnspecified clears any recorded mode.
+// PromptCacheAccountingUnspecified or usage without prompt cache counters clears
+// any recorded mode.
 func SetPromptCacheAccounting(usage any, accounting PromptCacheAccounting) {
 	if usage == nil || setPromptCacheAccounting == nil {
 		return

@@ -155,6 +155,9 @@ type Usage struct {
 func (u *Usage) UnmarshalJSON(data []byte) error {
 	type usageJSON Usage
 	err := json.Unmarshal(data, (*usageJSON)(u))
+	if u == nil || u.promptCacheAccounting == usagemeta.PromptCacheAccountingUnspecified {
+		return err
+	}
 	// Inspect field presence rather than comparing counts: a replacement can
 	// have the same counts but different accounting. A type error can also
 	// leave public fields partially updated, so inspect them even on failure.
@@ -162,7 +165,7 @@ func (u *Usage) UnmarshalJSON(data []byte) error {
 		Tokens  json.RawMessage `json:"prompt_tokens"`
 		Details json.RawMessage `json:"prompt_tokens_details"`
 	}
-	if u != nil && json.Unmarshal(data, &prompt) == nil && (len(prompt.Tokens) != 0 || len(prompt.Details) != 0) {
+	if json.Unmarshal(data, &prompt) == nil && (len(prompt.Tokens) != 0 || len(prompt.Details) != 0) {
 		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
 	}
 	return err
@@ -190,6 +193,7 @@ func setUsagePromptCacheAccounting(usage any, accounting usagemeta.PromptCacheAc
 		return
 	}
 	if u.PromptTokensDetails == (PromptTokensDetails{}) {
+		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
 		return
 	}
 	u.promptCacheAccounting = accounting
