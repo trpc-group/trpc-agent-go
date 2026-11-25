@@ -10,6 +10,7 @@
 package model
 
 import (
+	"encoding/json"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
@@ -144,6 +145,27 @@ type Usage struct {
 	// or wire format, while still traveling with the Usage value through
 	// copies, Clone, callbacks, and model wrappers.
 	promptCacheAccounting usagemeta.PromptCacheAccounting
+}
+
+// UnmarshalJSON decodes usage fields with the usual encoding/json semantics:
+// omitted fields retain their values and null leaves the value unchanged.
+// Decoding prompt_tokens or prompt_tokens_details clears internal prompt cache
+// accounting, which is not represented in JSON, even when Usage is reused.
+// Updates that omit both prompt fields preserve the existing accounting.
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	type usageJSON Usage
+	err := json.Unmarshal(data, (*usageJSON)(u))
+	// Inspect field presence rather than comparing counts: a replacement can
+	// have the same counts but different accounting. A type error can also
+	// leave public fields partially updated, so inspect them even on failure.
+	var prompt struct {
+		Tokens  json.RawMessage `json:"prompt_tokens"`
+		Details json.RawMessage `json:"prompt_tokens_details"`
+	}
+	if u != nil && json.Unmarshal(data, &prompt) == nil && (len(prompt.Tokens) != 0 || len(prompt.Details) != 0) {
+		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
+	}
+	return err
 }
 
 func init() {

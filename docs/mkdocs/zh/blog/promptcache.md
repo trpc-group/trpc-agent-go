@@ -411,6 +411,17 @@ OpenAI-compatible API（Chat Completions 与 Responses）和 Gemini 的
 缓存写入。由自定义代码构造的 usage 不带口径声明（属性值为空），沿用原有的
 启发式归一化。
 
+口径元数据不会序列化。解码 JSON 中的 `prompt_tokens` 或
+`prompt_tokens_details` 时，即使复用已有的 `Usage`，也会清除口径声明。
+未提供的公开字段保留原值；仅更新输出字段或解码 JSON `null` 会保留口径。
+流式 span 在后续包含 token 计数的 usage 快照移除缓存时，会同步清除
+此前的缓存计数与口径。没有 token 计数的 chunk（包括仅含 timing 的 usage）
+保留前一个快照。
+
+`Usage` 实现了 `json.Unmarshaler`。如果自定义结构体匿名嵌入 `Usage`，提升的
+方法也会接管该结构体的 JSON 解码；包装结构体还有其他字段时，应使用具名字段
+或显式实现解码方法。
+
 #### 流式 Usage 排障
 
 在流式请求中，OpenAI-compatible 服务通常会在最后发送一个只包含 usage

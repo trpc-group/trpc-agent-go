@@ -184,6 +184,13 @@ func TestRunnerToLangfuse_PromptCacheAccounting(t *testing.T) {
 		})))
 	})
 
+	t.Run("JSON output-only edit keeps inclusive", func(t *testing.T) {
+		require.Equal(t, inclusive111, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
+			require.NoError(t, json.Unmarshal([]byte(`{"usage":{"completion_tokens":11,"total_tokens":111}}`), args.Response))
+			return nil
+		})))
+	})
+
 	t.Run("output-only edit on shallow copy followed by Clone keeps inclusive", func(t *testing.T) {
 		require.Equal(t, inclusive111, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
 			copied := *args.Response
@@ -240,6 +247,21 @@ func TestRunnerToLangfuse_PromptCacheAccounting(t *testing.T) {
 		})))
 	})
 
+	t.Run("JSON replacement of a reused response clears accounting", func(t *testing.T) {
+		require.Equal(t, exclusive191, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
+			replacement := &model.Response{
+				ID: "json-replacement", Model: "gpt-5", Done: true,
+				Choices: []model.Choice{{Message: model.NewAssistantMessage("replacement")}},
+				Usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111,
+					PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80}},
+			}
+			data, err := json.Marshal(replacement)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, args.Response))
+			return nil
+		})))
+	})
+
 	t.Run("user-built cached and creation usage preserves legacy buckets", func(t *testing.T) {
 		want := map[string]int64{"input": 100, "output": 11, "input_cache_creation": 10}
 		require.Equal(t, want, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
@@ -282,4 +304,55 @@ func TestRunnerToLangfuse_PromptCacheAccounting(t *testing.T) {
 			})
 		}
 	})
+}
+
+// cacheUsageStreamModel emits an inclusive snapshot before its final response,
+// as streaming providers can do when reporting cumulative usage.
+type cacheUsageStreamModel struct{}
+
+func (*cacheUsageStreamModel) Info() model.Info { return model.Info{Name: "cache-usage-stream"} }
+
+func (m *cacheUsageStreamModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
+	usage := &model.Usage{
+		PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110,
+		PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
+	}
+	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingInclusive)
+	partial := &model.Response{
+		ID: "stream", Model: m.Info().Name, IsPartial: true, Usage: usage,
+		Choices: []model.Choice{{Delta: model.NewAssistantMessage("hello")}},
+	}
+	final := partial.Clone()
+	final.IsPartial, final.Done = false, true
+	final.Choices = []model.Choice{{Message: model.NewAssistantMessage("hello")}}
+	ch := make(chan *model.Response, 2)
+	ch <- partial
+	ch <- final
+	close(ch)
+	return ch, nil
+}
+
+func TestRunnerToLangfuse_StreamingCacheRemoval(t *testing.T) {
+	recorder := useLangfuseTestSpanRecorder(t)
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(_ context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			if args.Response.Done {
+				args.Response.Usage = &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111}
+			}
+			return nil, nil
+		},
+	)
+	r := runner.NewRunner("test-app", llmagent.New("test-agent",
+		llmagent.WithModel(&cacheUsageStreamModel{}),
+		llmagent.WithModelCallbacks(callbacks),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+	))
+	defer r.Close()
+	events, err := r.Run(context.Background(), "user-1", "session-1", model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	for ev := range events {
+		require.Nil(t, ev.Error)
+	}
+	require.Equal(t, map[string]int64{"input": 100, "output": 11},
+		extractChatUsageDetails(t, recorder.Ended(), "cache-usage-stream"))
 }

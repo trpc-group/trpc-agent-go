@@ -391,6 +391,18 @@ exports `input=3, input_cache_creation=1771` instead of counting the cache
 writes twice. Usage built by custom code carries no declaration (the attribute
 value is empty) and keeps the previous heuristic normalization.
 
+Accounting metadata is not serialized. Decoding JSON `prompt_tokens` or
+`prompt_tokens_details` clears the declaration even when reusing an existing
+`Usage`. Omitted public fields retain their values; output-only updates and JSON
+`null` preserve the declaration. Streaming spans clear
+previous cache counters and accounting when a later token-bearing usage snapshot
+removes them. Chunks without token counts, including timing-only usage, preserve
+the preceding snapshot.
+
+`Usage` implements `json.Unmarshaler`. If a custom struct anonymously embeds
+`Usage`, the promoted method also handles that struct's JSON decoding; use a
+named field or an explicit unmarshaler when the wrapper has additional fields.
+
 #### Troubleshooting Streaming Usage
 
 For streaming requests, OpenAI-compatible providers commonly send usage in a

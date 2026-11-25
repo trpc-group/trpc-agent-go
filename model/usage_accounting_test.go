@@ -108,3 +108,44 @@ func TestUsagePromptCacheAccounting_NotSerialized(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, string(plain), string(marked))
 }
+
+func TestUsagePromptCacheAccounting_UnmarshalReusedUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		data           string
+		wantAccounting usagemeta.PromptCacheAccounting
+	}{
+		{name: "replacement", data: `{"prompt_tokens":100,"completion_tokens":11,"total_tokens":111,"prompt_tokens_details":{"cache_creation_tokens":80}}`},
+		{name: "output-only update", data: `{"completion_tokens":11}`, wantAccounting: usagemeta.PromptCacheAccountingInclusive},
+		{name: "empty object", data: `{}`, wantAccounting: usagemeta.PromptCacheAccountingInclusive},
+		{name: "cache-only replacement", data: `{"prompt_tokens_details":{"cache_creation_tokens":80}}`},
+		{name: "case-insensitive prompt replacement", data: `{"PROMPT_TOKENS":100}`},
+		{name: "duplicate prompt field ending with null", data: `{"prompt_tokens":90,"prompt_tokens":null}`},
+		{name: "null is a no-op", data: " \nnull\t", wantAccounting: usagemeta.PromptCacheAccountingInclusive},
+		{name: "syntax error preserves value", data: `{"prompt_tokens":`, wantAccounting: usagemeta.PromptCacheAccountingInclusive},
+		{name: "type error with partial update", data: `{"prompt_tokens":90,"completion_tokens":"invalid"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := Usage{
+				PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110,
+				PromptTokensDetails: PromptTokensDetails{CacheCreationTokens: 80},
+				TimingInfo:          &TimingInfo{FirstTokenDuration: 123},
+			}
+			usagemeta.SetPromptCacheAccounting(&u, usagemeta.PromptCacheAccountingInclusive)
+			// Decode the same public fields without a custom unmarshaler to
+			// check that omitted fields, null, and decode errors remain compatible.
+			type plainUsage Usage
+			want := plainUsage(u)
+			wantErr := json.Unmarshal([]byte(tc.data), &want)
+			err := json.Unmarshal([]byte(tc.data), &u)
+			if wantErr != nil {
+				require.Error(t, err)
+				assert.IsType(t, wantErr, err)
+			} else {
+				require.NoError(t, err)
+			}
+			want.promptCacheAccounting = tc.wantAccounting
+			assert.Equal(t, Usage(want), u)
+		})
+	}
+}
