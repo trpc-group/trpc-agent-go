@@ -1769,6 +1769,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#switching-models-and-resuming-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Switching models and resuming tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tool-search" class="md-nav__link">
     <span class="md-ellipsis">
       Tool search
@@ -5520,6 +5529,15 @@
   <a href="#callbacks-and-model-history" class="md-nav__link">
     <span class="md-ellipsis">
       Callbacks and model history
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#switching-models-and-resuming-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Switching models and resuming tools
     </span>
   </a>
   
@@ -9337,6 +9355,33 @@ current execution and does not rewrite native history. Redacting display fields
 alone leaves the original text in ProviderData. Keep the record when resuming an
 unfinished tool round. See the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output">adapter README</a>
 for a complete SDK-based callback and model wrapper requirements.</p>
+<h3 id="switching-models-and-resuming-tools">Switching models and resuming tools</h3>
+<p>Switching between Responses models replays completed native items, including
+encrypted reasoning. The receiving service decides whether it can reuse them.
+Set <code>responses.WithCrossModelReasoningPolicy(responses.CrossModelReasoningPolicyOmitEncryptedContent)</code> on the target to omit
+only the encrypted reasoning field from other configured models on each request.
+The session retains the original records. The target still receives the reasoning
+item with its ID and summary. If it looks up that ID, it may return HTTP 400
+when the original response used <code>store=false</code> (the adapter default).
+Switching to the built-in Chat Completions adapter sends the visible history,
+matching tool results to calls by <code>call_id</code>. Conversion happens on the outgoing
+request, so switching back can replay the native items kept in the session.
+When the visible text still matches its native version, missing URL citations
+are appended as plain links. Clearing a text-only reply in a callback also removes its citations from Chat.
+Chat omits completed tool search calls and their outputs, while keeping ordinary
+function calls and results. Chat exposes the current request's allowed tools,
+including deferred registrations. A tool returned only by a previous search
+does not enter the Chat directory. Switching back to Responses replays the
+saved search items. A later call to an expired run-scoped tool requires a new search.</p>
+<ul>
+<li><strong>Runner with an LLMAgent.</strong> With <code>agent.WithResume(true)</code>, the agent checks
+  the producing protocol and model name before executing a pending native tool
+  call. Selecting a different model at this point fails before tool execution.</li>
+<li><strong>Graph.</strong> Resuming a checkpoint from before a tools node runs that node
+  before the next LLM node selects its model. Once the results are checkpointed,
+  resuming the latest checkpoint after a model error reuses those results.
+  Explicitly replaying an earlier checkpoint can run the same tool again.</li>
+</ul>
 <h3 id="tool-search">Tool search</h3>
 <p>Tool search lets the model load tool definitions when it needs them. It is
 opt-in on the Responses model and requires a model that supports
@@ -9528,7 +9573,7 @@ the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/
 <ul>
 <li>Every request sends the full client-managed conversation. <code>store=false</code> is the default. <code>WithStore(true)</code> changes provider-side storage only. In ordinary <code>LLMAgent</code> and <code>Runner</code> use, application code does not read or edit <code>Message.ProviderData</code>. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.</li>
 <li>Downstream modules need a root release that contains <code>Message.ProviderData</code> and <code>Info.ProviderDataProtocol</code>; tool search also needs <code>model.ProviderActionCompleter</code>, <code>model.ProviderDataRequestProjector</code>, and <code>tool.ToolSetDescriber</code>, and the examples use <code>tool/deferred</code>. Publish the required root release before the adapter release. Repository-relative <code>replace</code> directives are for local development and are not inherited. <code>model.Message</code> and <code>model.Info</code> gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.</li>
-<li>Message JSON stores <code>Message.ProviderData</code> under <code>provider_data</code>, with <code>provider</code>, <code>model</code>, and <code>payload</code> keys. The payload is opaque to the framework. The <code>Info</code> JSON key is <code>ProviderDataProtocol</code> and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown <code>provider_data</code> field when they rewrite a session, so do not route native sessions through older writers.</li>
+<li>Message JSON stores <code>Message.ProviderData</code> under <code>provider_data</code>, with <code>provider</code>, <code>model</code>, and <code>payload</code> keys. The payload is opaque to the framework. The <code>Info</code> JSON key is <code>ProviderDataProtocol</code> and is omitted when empty. The framework validates the record and the receiving adapter’s support for its protocol. Pending native actions require the original producer. Older framework versions may drop the unknown <code>provider_data</code> field when they rewrite a session, so do not route native sessions through older writers.</li>
 <li>Server-managed continuation through <code>previous_response_id</code> or <code>conversation</code>, hosted tools other than tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. <code>openai.WithShowToolCallDelta</code> is not a Responses option. <code>Stop</code>, presence penalty, frequency penalty, and logprobs are rejected. <code>MaxTokens</code>, <code>Temperature</code>, and <code>TopP</code> are sent when set. The examples set only <code>GenerationConfig.Stream</code>.</li>
 <li>Function calls run through the framework's tool executor rather than OpenAI-hosted tools. <code>Runner</code> only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed <code>Message.ToolCalls</code>, and tool results only from the committed tool message.</li>
 <li>History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md">Responses adapter README</a>.</li>
@@ -10861,7 +10906,7 @@ the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 25, 2026 09:38:47 UTC">2026-11-25 09:38:47</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 25, 2026 09:42:15 UTC">2026-11-25 09:42:15</span>
   </span>
 
     
