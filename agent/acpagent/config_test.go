@@ -29,87 +29,96 @@ func (f terminalAuthHandlerFunc) RunTerminalAuth(
 	return f(ctx, request)
 }
 
-func TestNewValidatesACPConfig(t *testing.T) {
+func TestNewValidatesOptions(t *testing.T) {
 	t.Parallel()
 
 	workDir := t.TempDir()
-	valid := ACPConfig{
-		Name:    "acp-test",
-		Command: "agent",
-		WorkDir: workDir,
-	}
 	tests := []struct {
-		name   string
-		mutate func(*ACPConfig)
-		want   string
+		name      string
+		agentName string
+		options   []Option
+		want      string
 	}{
 		{
-			name: "empty name",
-			mutate: func(config *ACPConfig) {
-				config.Name = " "
+			name:      "empty name",
+			agentName: " ",
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(workDir),
 			},
 			want: "name is required",
 		},
 		{
 			name: "empty command",
-			mutate: func(config *ACPConfig) {
-				config.Command = ""
+			options: []Option{
+				WithWorkDir(workDir),
 			},
 			want: "command is required",
 		},
 		{
 			name: "empty work directory",
-			mutate: func(config *ACPConfig) {
-				config.WorkDir = ""
+			options: []Option{
+				WithCommand("agent"),
 			},
 			want: "work directory is required",
 		},
 		{
 			name: "command with NUL",
-			mutate: func(config *ACPConfig) {
-				config.Command = "agent\x00"
+			options: []Option{
+				WithCommand("agent\x00"),
+				WithWorkDir(workDir),
 			},
 			want: "command contains a NUL byte",
 		},
 		{
 			name: "relative work directory",
-			mutate: func(config *ACPConfig) {
-				config.WorkDir = filepath.Join(".", "relative")
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(filepath.Join(".", "relative")),
 			},
 			want: "work directory must be absolute",
 		},
 		{
 			name: "work directory with NUL",
-			mutate: func(config *ACPConfig) {
-				config.WorkDir = workDir + "\x00"
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(workDir + "\x00"),
 			},
 			want: "work directory contains a NUL byte",
 		},
 		{
 			name: "negative idle timeout",
-			mutate: func(config *ACPConfig) {
-				config.IdleTimeout = -time.Second
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(workDir),
+				WithIdleTimeout(-time.Second),
 			},
 			want: "idle timeout must not be negative",
 		},
 		{
 			name: "env without equals",
-			mutate: func(config *ACPConfig) {
-				config.Env = []string{"INVALID"}
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(workDir),
+				WithEnv("INVALID"),
 			},
 			want: "must use KEY=VALUE",
 		},
 		{
 			name: "env with empty key",
-			mutate: func(config *ACPConfig) {
-				config.Env = []string{"=value"}
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(workDir),
+				WithEnv("=value"),
 			},
 			want: "empty key",
 		},
 		{
 			name: "env with NUL",
-			mutate: func(config *ACPConfig) {
-				config.Env = []string{"KEY=value\x00"}
+			options: []Option{
+				WithCommand("agent"),
+				WithWorkDir(workDir),
+				WithEnv("KEY=value\x00"),
 			},
 			want: "NUL byte",
 		},
@@ -118,9 +127,15 @@ func TestNewValidatesACPConfig(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			config := valid
-			test.mutate(&config)
-			_, err := New(config, WithTerminalAuthHandler(noopTerminalAuth))
+			agentName := test.agentName
+			if agentName == "" {
+				agentName = "acp-test"
+			}
+			options := append(
+				[]Option{WithTerminalAuthHandler(noopTerminalAuth)},
+				test.options...,
+			)
+			_, err := New(agentName, options...)
 			require.ErrorContains(t, err, test.want)
 		})
 	}
@@ -129,12 +144,14 @@ func TestNewValidatesACPConfig(t *testing.T) {
 func TestNewAllowsMissingTerminalAuthHandler(t *testing.T) {
 	t.Parallel()
 
-	acpAgent, err := New(validACPConfig(t))
+	name, options := validACPOptions(t)
+	acpAgent, err := New(name, options...)
 	require.NoError(t, err)
 	require.Nil(t, acpAgent.terminalAuthHandler)
 	require.NoError(t, acpAgent.Close())
 
-	acpAgent, err = New(validACPConfig(t), WithTerminalAuthHandler(nil))
+	options = append(options, WithTerminalAuthHandler(nil))
+	acpAgent, err = New(name, options...)
 	require.NoError(t, err)
 	require.Nil(t, acpAgent.terminalAuthHandler)
 	require.NoError(t, acpAgent.Close())
@@ -143,21 +160,27 @@ func TestNewAllowsMissingTerminalAuthHandler(t *testing.T) {
 func TestNewDoesNotStartProcessAndCopiesSlices(t *testing.T) {
 	t.Parallel()
 
-	config := validACPConfig(t)
-	config.Args = []string{"--mode", "test"}
-	config.Env = []string{"ACP_TEST=1"}
-	config.Description = "test agent"
-	config.IdleTimeout = time.Second
-	acpAgent, err := New(
-		config,
+	name, options := validACPOptions(t)
+	args := []string{"--mode", "test"}
+	env := []string{"ACP_TEST=1"}
+	options = append(
+		options,
+		WithDescription("test agent"),
+		WithArgs(args...),
+		WithEnv(env...),
+		WithIdleTimeout(time.Second),
 		WithTerminalAuthHandler(noopTerminalAuth),
 		WithStderrWriter(nil),
+	)
+	acpAgent, err := New(
+		name,
+		options...,
 	)
 	require.NoError(t, err)
 	defer require.NoError(t, acpAgent.Close())
 
-	config.Args[0] = "mutated"
-	config.Env[0] = "ACP_TEST=mutated"
+	args[0] = "mutated"
+	env[0] = "ACP_TEST=mutated"
 	require.Equal(t, []string{"--mode", "test"}, acpAgent.config.Args)
 	require.Equal(t, []string{"ACP_TEST=1"}, acpAgent.config.Env)
 	require.Equal(t, time.Second, acpAgent.config.IdleTimeout)
@@ -165,8 +188,8 @@ func TestNewDoesNotStartProcessAndCopiesSlices(t *testing.T) {
 		state: lifecycleStopped,
 	}, snapshotConnectionManager(acpAgent.connections))
 	require.Equal(t, agent.Info{
-		Name:        config.Name,
-		Description: config.Description,
+		Name:        name,
+		Description: "test agent",
 	}, acpAgent.Info())
 	require.Nil(t, acpAgent.Tools())
 	require.Nil(t, acpAgent.SubAgents())
@@ -176,7 +199,9 @@ func TestNewDoesNotStartProcessAndCopiesSlices(t *testing.T) {
 func TestRunValidatesInvocation(t *testing.T) {
 	t.Parallel()
 
-	acpAgent, err := New(validACPConfig(t), WithTerminalAuthHandler(noopTerminalAuth))
+	name, options := validACPOptions(t)
+	options = append(options, WithTerminalAuthHandler(noopTerminalAuth))
+	acpAgent, err := New(name, options...)
 	require.NoError(t, err)
 	defer require.NoError(t, acpAgent.Close())
 
@@ -199,12 +224,11 @@ func TestMergeEnvironment(t *testing.T) {
 	require.Equal(t, []string{"A=3", "B=5", "C=4"}, got)
 }
 
-func validACPConfig(t *testing.T) ACPConfig {
+func validACPOptions(t *testing.T) (string, []Option) {
 	t.Helper()
-	return ACPConfig{
-		Name:    "acp-test",
-		Command: "agent",
-		WorkDir: t.TempDir(),
+	return "acp-test", []Option{
+		WithCommand("agent"),
+		WithWorkDir(t.TempDir()),
 	}
 }
 

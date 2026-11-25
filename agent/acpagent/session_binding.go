@@ -98,6 +98,8 @@ func (a *ACPAgent) acquireSession(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	releaseActivity := a.connections.beginActivity()
+	defer releaseActivity()
 	process, err := a.connections.connect(ctx)
 	if err != nil {
 		return nil, err
@@ -119,6 +121,39 @@ func (a *ACPAgent) acquireSession(
 		}
 		return binding, nil
 	}
+}
+
+// CloseSession closes the ACP session mapped to key.
+//
+// CloseSession is idempotent: closing an unmapped session returns nil. Persisted
+// ACP session state is retained; a later acquire can recover it or create a new
+// session after an Unknown Session response.
+func (a *ACPAgent) CloseSession(ctx context.Context, key session.Key) error {
+	if a == nil {
+		return nil
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("acpagent: invalid session key: %w", err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	releaseActivity := a.connections.beginActivity()
+	defer releaseActivity()
+
+	binding := a.sessions.lookup(key)
+	if binding == nil {
+		return nil
+	}
+	if err := binding.acquirePrompt(ctx); err != nil {
+		return err
+	}
+	defer binding.releasePrompt()
+	if err := closeACPSession(ctx, binding.process, binding.id); err != nil {
+		return err
+	}
+	a.sessions.remove(key, binding)
+	return nil
 }
 
 func (a *ACPAgent) acquireSessionOnce(
@@ -198,7 +233,7 @@ func (a *ACPAgent) acquireSessionOnce(
 	state := a.sessionState(response.SessionId, process)
 	if err := invocation.SessionService.UpdateSessionState(ctx, key, state); err != nil {
 		persistErr := fmt.Errorf("acpagent: persist ACP session state: %w", err)
-		closeErr := closeACPSession(process, response.SessionId)
+		closeErr := closeACPSessionWithTimeout(process, response.SessionId)
 		return nil, errors.Join(persistErr, closeErr)
 	}
 	for stateKey, value := range state {
@@ -301,7 +336,7 @@ func (a *ACPAgent) closeReplacedSession(
 	if old == nil || old.process == nil || old.process != current {
 		return nil
 	}
-	err := closeACPSession(old.process, old.id)
+	err := closeACPSessionWithTimeout(old.process, old.id)
 	if errors.Is(err, errSessionCloseUnsupported) {
 		return nil
 	}
@@ -426,7 +461,17 @@ func (s *acpSession) releasePrompt() {
 	s.promptGate <- struct{}{}
 }
 
+func closeACPSessionWithTimeout(
+	process *processConnection,
+	sessionID acpsdk.SessionId,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultSessionCloseTimeout)
+	defer cancel()
+	return closeACPSession(ctx, process, sessionID)
+}
+
 func closeACPSession(
+	ctx context.Context,
 	process *processConnection,
 	sessionID acpsdk.SessionId,
 ) error {
@@ -436,8 +481,9 @@ func closeACPSession(
 	if process.agentDescriptor.agentCapabilities.SessionCapabilities.Close == nil {
 		return errSessionCloseUnsupported
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultSessionCloseTimeout)
-	defer cancel()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	_, err := process.connection.CloseSession(ctx, acpsdk.CloseSessionRequest{
 		SessionId: sessionID,
 	})
@@ -455,7 +501,7 @@ func isUnknownSessionError(err error) bool {
 	return errors.As(err, &requestErr) && requestErr.Code == -32002
 }
 
-func computeLaunchFingerprint(config ACPConfig) (string, error) {
+func computeLaunchFingerprint(config processConfig) (string, error) {
 	envKeys := make([]string, 0, len(config.Env))
 	for _, entry := range config.Env {
 		key, _, _ := strings.Cut(entry, "=")

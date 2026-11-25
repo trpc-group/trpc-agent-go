@@ -22,6 +22,8 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"golang.org/x/sync/singleflight"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const defaultCloseTimeout = 5 * time.Second
@@ -54,12 +56,13 @@ type processConnection struct {
 }
 
 type connectionManager struct {
-	config       ACPConfig
+	config       processConfig
 	stderr       io.Writer
 	closeTimeout time.Duration
 	activeTurns  *activeTurnRegistry
 	authSelector AuthMethodSelector
 	terminalAuth bool
+	idleTimeout  time.Duration
 
 	mu         sync.Mutex
 	startMu    sync.Mutex
@@ -69,10 +72,16 @@ type connectionManager struct {
 	closed     bool
 	closeOnce  sync.Once
 	closeErr   error
+
+	activityMu         sync.Mutex
+	activeOperations   int
+	activityGeneration uint64
+	idleTimer          *time.Timer
+	activityClosed     bool
 }
 
 func newConnectionManager(
-	config ACPConfig,
+	config processConfig,
 	stderr io.Writer,
 	activeTurns *activeTurnRegistry,
 	authSelector AuthMethodSelector,
@@ -85,6 +94,7 @@ func newConnectionManager(
 		activeTurns:  activeTurns,
 		authSelector: authSelector,
 		terminalAuth: terminalAuth,
+		idleTimeout:  config.IdleTimeout,
 	}
 }
 
@@ -199,6 +209,7 @@ func (m *connectionManager) stopStartedProcess(process *processConnection) {
 
 func (m *connectionManager) close() error {
 	m.closeOnce.Do(func() {
+		m.stopIdleTimer()
 		m.startMu.Lock()
 		m.mu.Lock()
 		m.closed = true
@@ -224,6 +235,98 @@ func (m *connectionManager) close() error {
 		m.mu.Unlock()
 	})
 	return m.closeErr
+}
+
+func (m *connectionManager) beginActivity() func() {
+	m.activityMu.Lock()
+	m.activityGeneration++
+	m.activeOperations++
+	m.stopIdleTimerLocked()
+	m.activityMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.activityMu.Lock()
+			if m.activeOperations > 0 {
+				m.activeOperations--
+			}
+			if m.activeOperations == 0 {
+				m.scheduleIdleLocked()
+			}
+			m.activityMu.Unlock()
+		})
+	}
+}
+
+func (m *connectionManager) scheduleIdleLocked() {
+	if m.activityClosed || m.idleTimeout <= 0 || m.idleTimer != nil {
+		return
+	}
+	m.activityGeneration++
+	generation := m.activityGeneration
+	m.idleTimer = time.AfterFunc(m.idleTimeout, func() {
+		m.reclaimIdleProcess(generation)
+	})
+}
+
+func (m *connectionManager) stopIdleTimer() {
+	m.activityMu.Lock()
+	m.activityGeneration++
+	m.activityClosed = true
+	m.stopIdleTimerLocked()
+	m.activityMu.Unlock()
+}
+
+func (m *connectionManager) stopIdleTimerLocked() {
+	if m.idleTimer != nil {
+		m.idleTimer.Stop()
+		m.idleTimer = nil
+	}
+}
+
+func (m *connectionManager) reclaimIdleProcess(generation uint64) {
+	m.activityMu.Lock()
+	if m.activityClosed ||
+		m.activityGeneration != generation ||
+		m.activeOperations > 0 {
+		m.activityMu.Unlock()
+		return
+	}
+	m.idleTimer = nil
+	defer m.activityMu.Unlock()
+
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	process := m.current
+	if process == nil {
+		m.mu.Unlock()
+		return
+	}
+	m.state = lifecycleClosing
+	m.mu.Unlock()
+
+	closeErr := m.closeProcess(process)
+	m.mu.Lock()
+	if m.current == process {
+		m.current = nil
+	}
+	m.state = lifecycleStopped
+	m.mu.Unlock()
+	if closeErr != nil {
+		log.WarnContext(
+			context.Background(),
+			"ACP process idle close failed",
+			"error",
+			closeErr,
+		)
+	}
 }
 
 func (m *connectionManager) closeProcess(process *processConnection) error {

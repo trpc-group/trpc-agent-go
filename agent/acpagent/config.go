@@ -17,8 +17,7 @@ import (
 	"time"
 )
 
-// ACPConfig configures an external ACP agent process.
-type ACPConfig struct {
+type processConfig struct {
 	// Name is the agent name reported to the framework and used for state namespacing.
 	Name string
 	// Description is the optional agent description reported to the framework.
@@ -35,7 +34,7 @@ type ACPConfig struct {
 	IdleTimeout time.Duration
 }
 
-func (c ACPConfig) validate() error {
+func (c processConfig) validate() error {
 	if strings.TrimSpace(c.Name) == "" {
 		return errors.New("acpagent: name is required")
 	}
@@ -72,7 +71,7 @@ func (c ACPConfig) validate() error {
 	return nil
 }
 
-func (c ACPConfig) clone() ACPConfig {
+func (c processConfig) clone() processConfig {
 	c.Args = append([]string(nil), c.Args...)
 	c.Env = append([]string(nil), c.Env...)
 	return c

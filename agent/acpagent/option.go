@@ -9,15 +9,68 @@
 
 package acpagent
 
-import "io"
+import (
+	"io"
+	"time"
+)
 
 // Option configures an ACPAgent.
 type Option func(*options)
 
 type options struct {
+	description         string
+	command             string
+	args                []string
+	env                 []string
+	workDir             string
+	idleTimeout         time.Duration
 	authMethodSelector  AuthMethodSelector
 	terminalAuthHandler TerminalAuthHandler
 	stderr              io.Writer
+}
+
+// WithDescription sets the agent description reported to the framework.
+func WithDescription(description string) Option {
+	return func(options *options) {
+		options.description = description
+	}
+}
+
+// WithCommand sets the ACP agent executable.
+func WithCommand(command string) Option {
+	return func(options *options) {
+		options.command = command
+	}
+}
+
+// WithArgs appends arguments passed to the ACP agent executable.
+func WithArgs(args ...string) Option {
+	return func(options *options) {
+		options.args = append(options.args, args...)
+	}
+}
+
+// WithEnv appends process environment entries in KEY=VALUE form.
+func WithEnv(env ...string) Option {
+	return func(options *options) {
+		options.env = append(options.env, env...)
+	}
+}
+
+// WithWorkDir sets the absolute working directory for the ACP agent process.
+func WithWorkDir(workDir string) Option {
+	return func(options *options) {
+		options.workDir = workDir
+	}
+}
+
+// WithIdleTimeout sets the shared process idle recycling timeout.
+//
+// Zero disables idle recycling.
+func WithIdleTimeout(timeout time.Duration) Option {
+	return func(options *options) {
+		options.idleTimeout = timeout
+	}
 }
 
 // WithAuthMethodSelector sets the selector used to choose authentication methods.

@@ -22,7 +22,7 @@ import (
 
 // ACPAgent adapts an external ACP agent process to agent.Agent.
 type ACPAgent struct {
-	config              ACPConfig
+	config              processConfig
 	authMethodSelector  AuthMethodSelector
 	terminalAuthHandler TerminalAuthHandler
 	activeTurns         *activeTurnRegistry
@@ -36,10 +36,7 @@ type ACPAgent struct {
 var _ agent.Agent = (*ACPAgent)(nil)
 
 // New creates an ACP agent adapter without starting the external process.
-func New(config ACPConfig, opts ...Option) (*ACPAgent, error) {
-	if err := config.validate(); err != nil {
-		return nil, err
-	}
+func New(name string, opts ...Option) (*ACPAgent, error) {
 	options := options{stderr: discardWriter{}}
 	for _, opt := range opts {
 		if opt != nil {
@@ -48,6 +45,18 @@ func New(config ACPConfig, opts ...Option) (*ACPAgent, error) {
 	}
 	if options.stderr == nil {
 		options.stderr = discardWriter{}
+	}
+	config := processConfig{
+		Name:        name,
+		Description: options.description,
+		Command:     options.command,
+		Args:        options.args,
+		Env:         options.env,
+		WorkDir:     options.workDir,
+		IdleTimeout: options.idleTimeout,
+	}
+	if err := config.validate(); err != nil {
+		return nil, err
 	}
 	config = config.clone()
 	launchFingerprint, err := computeLaunchFingerprint(config)
@@ -84,8 +93,10 @@ func (a *ACPAgent) Run(
 	if err != nil {
 		return nil, err
 	}
+	releaseActivity := a.connections.beginActivity()
 	session, err := a.acquireSession(ctx, invocation)
 	if err != nil {
+		releaseActivity()
 		return nil, err
 	}
 	if ctx == nil {
@@ -93,7 +104,10 @@ func (a *ACPAgent) Run(
 	}
 	runCtx := agent.CloneContext(ctx)
 	out := make(chan *event.Event)
-	go a.runPrompt(runCtx, invocation, session, content, out)
+	go func() {
+		defer releaseActivity()
+		a.runPrompt(runCtx, invocation, session, content, out)
+	}()
 	return out, nil
 }
 

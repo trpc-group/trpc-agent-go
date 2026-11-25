@@ -66,7 +66,9 @@ func TestAgentProcessLifecycle(t *testing.T) {
 func TestAgentCloseIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	acpAgent, err := New(validACPConfig(t), WithTerminalAuthHandler(noopTerminalAuth))
+	name, options := validACPOptions(t)
+	options = append(options, WithTerminalAuthHandler(noopTerminalAuth))
+	acpAgent, err := New(name, options...)
 	require.NoError(t, err)
 	require.NoError(t, acpAgent.Close())
 	require.NoError(t, acpAgent.Close())
@@ -112,9 +114,13 @@ func TestAgentProcessAbnormalExit(t *testing.T) {
 func TestAgentProcessStartFailureKeepsManagerStopped(t *testing.T) {
 	t.Parallel()
 
-	config := validACPConfig(t)
-	config.Command = t.TempDir() + "/missing-agent"
-	acpAgent, err := New(config, WithTerminalAuthHandler(noopTerminalAuth))
+	name, options := validACPOptions(t)
+	options = append(
+		options,
+		WithCommand(t.TempDir()+"/missing-agent"),
+		WithTerminalAuthHandler(noopTerminalAuth),
+	)
+	acpAgent, err := New(name, options...)
 	require.NoError(t, err)
 
 	process, err := acpAgent.connections.connect(context.Background())
@@ -241,13 +247,32 @@ func newHelperAgentWithOptions(
 	extraOptions ...Option,
 ) *ACPAgent {
 	t.Helper()
+	return newHelperAgentWithConfig(
+		t,
+		mode,
+		stderr,
+		terminalAuth,
+		nil,
+		extraOptions...,
+	)
+}
+
+func newHelperAgentWithConfig(
+	t *testing.T,
+	mode string,
+	stderr io.Writer,
+	terminalAuth bool,
+	configure func(*processConfig),
+	extraOptions ...Option,
+) *ACPAgent {
+	t.Helper()
 	executable, err := os.Executable()
 	require.NoError(t, err)
 	terminalAuthValue := "0"
 	if terminalAuth {
 		terminalAuthValue = "1"
 	}
-	config := ACPConfig{
+	config := processConfig{
 		Name:    "acp-helper",
 		Command: executable,
 		Args:    []string{"-test.run=^TestACPHelperProcess$"},
@@ -258,12 +283,23 @@ func newHelperAgentWithOptions(
 		},
 		WorkDir: t.TempDir(),
 	}
-	options := []Option{WithStderrWriter(stderr)}
+	if configure != nil {
+		configure(&config)
+	}
+	options := []Option{
+		WithDescription(config.Description),
+		WithCommand(config.Command),
+		WithArgs(config.Args...),
+		WithEnv(config.Env...),
+		WithWorkDir(config.WorkDir),
+		WithIdleTimeout(config.IdleTimeout),
+		WithStderrWriter(stderr),
+	}
 	if terminalAuth {
 		options = append(options, WithTerminalAuthHandler(noopTerminalAuth))
 	}
 	options = append(options, extraOptions...)
-	acpAgent, err := New(config, options...)
+	acpAgent, err := New(config.Name, options...)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = acpAgent.Close()

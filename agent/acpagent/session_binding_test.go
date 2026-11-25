@@ -22,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -54,6 +55,7 @@ func TestAcquireSessionMapsFullKeyAndPersistsState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotSame(t, firstBinding, secondBinding)
 	require.NotEqual(t, firstBinding.id, secondBinding.id)
+	require.Same(t, firstBinding.process, secondBinding.process)
 	require.Equal(t, snapshotConnectionManager(acpAgent.connections).generation,
 		firstBinding.generation)
 	require.Equal(t, firstBinding.generation, secondBinding.generation)
@@ -80,6 +82,153 @@ func TestAcquireSessionMapsFullKeyAndPersistsState(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, firstBinding, again)
 	require.Len(t, acpAgent.sessions.byKey, 2)
+}
+
+func TestCloseSessionIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"wait",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "close-session",
+	}
+	invocation := newSessionInvocation(t, service, key)
+	_, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+
+	require.NoError(t, acpAgent.CloseSession(context.Background(), key))
+	require.NoError(t, acpAgent.CloseSession(context.Background(), key))
+	require.Len(t, acpAgent.sessions.byKey, 0)
+	require.Equal(t, lifecycleRunning,
+		snapshotConnectionManager(acpAgent.connections).state)
+}
+
+func TestCloseSessionErrorKeepsMapping(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"close_error",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "close-error",
+	}
+	invocation := newSessionInvocation(t, service, key)
+	_, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+
+	err = acpAgent.CloseSession(context.Background(), key)
+	require.ErrorContains(t, err, "session close called")
+	require.Len(t, acpAgent.sessions.byKey, 1)
+}
+
+func TestCloseSessionHonorsContextWhileWaitingForPrompt(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithOptions(
+		t,
+		"wait",
+		io.Discard,
+		false,
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "close-wait",
+	}
+	invocation := newSessionInvocation(t, service, key)
+	binding, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.NoError(t, binding.acquirePrompt(context.Background()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = acpAgent.CloseSession(ctx, key)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Len(t, acpAgent.sessions.byKey, 1)
+	binding.releasePrompt()
+}
+
+func TestIdleTimeoutStopsProcessAndRecoversSession(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithConfig(
+		t,
+		"load_success",
+		io.Discard,
+		false,
+		func(config *processConfig) {
+			config.IdleTimeout = 100 * time.Millisecond
+		},
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "idle",
+	})
+	first, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first.generation)
+
+	require.Eventually(t, func() bool {
+		return snapshotConnectionManager(acpAgent.connections).state == lifecycleStopped
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Len(t, acpAgent.sessions.byKey, 1)
+
+	second, err := acpAgent.acquireSession(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, first.id, second.id)
+	require.Equal(t, uint64(2), second.generation)
+}
+
+func TestIdleTimeoutDoesNotReclaimActivePrompt(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := newHelperAgentWithConfig(
+		t,
+		"prompt_cancel",
+		io.Discard,
+		false,
+		func(config *processConfig) {
+			config.IdleTimeout = 50 * time.Millisecond
+		},
+		WithAuthMethodSelectorFunc(agentLoginSelector()),
+	)
+	service := inmemory.NewSessionService()
+	invocation := newSessionInvocation(t, service, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "idle-active",
+	})
+	invocation.Message = model.NewUserMessage("hello")
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := acpAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	time.Sleep(150 * time.Millisecond)
+	require.Equal(t, lifecycleRunning,
+		snapshotConnectionManager(acpAgent.connections).state)
+	cancel()
+	for range events {
+	}
 }
 
 func TestAcquireSessionConcurrentSameKeyCreatesOneACPSession(t *testing.T) {
@@ -158,7 +307,11 @@ func TestAcquireSessionPersistenceFailureClosesNewACPSession(t *testing.T) {
 func TestComputeLaunchFingerprintExcludesEnvValues(t *testing.T) {
 	t.Parallel()
 
-	base := validACPConfig(t)
+	base := processConfig{
+		Name:    "acp-test",
+		Command: "agent",
+		WorkDir: t.TempDir(),
+	}
 	base.Args = []string{"--mode", "acp"}
 	base.Env = []string{"TOKEN=secret", "MODE=test"}
 	first, err := computeLaunchFingerprint(base)
