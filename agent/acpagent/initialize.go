@@ -35,7 +35,12 @@ func newInitializeRequest(terminalAuth bool) acpsdk.InitializeRequest {
 			Auth: acpsdk.AuthCapabilities{
 				Terminal: terminalAuth,
 			},
-			Fs:       acpsdk.FileSystemCapabilities{},
+			Fs: acpsdk.FileSystemCapabilities{},
+			Session: &acpsdk.ClientSessionCapabilities{
+				ConfigOptions: &acpsdk.SessionConfigOptionsCapabilities{
+					Boolean: &acpsdk.BooleanConfigOptionCapabilities{},
+				},
+			},
 			Terminal: false,
 		},
 	}
@@ -107,6 +112,7 @@ func (m *connectionManager) initialize(
 			"load_session", process.agentDescriptor.agentCapabilities.LoadSession,
 			"resume_session", process.agentDescriptor.agentCapabilities.SessionCapabilities.Resume != nil,
 			"close_session", process.agentDescriptor.agentCapabilities.SessionCapabilities.Close != nil,
+			"boolean_config_options", true,
 			"duration", time.Since(started),
 		)...,
 	)

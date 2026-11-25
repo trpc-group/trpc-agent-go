@@ -18,6 +18,7 @@ import (
 // protocolClient implements ACP client callbacks.
 type protocolClient struct {
 	activeTurns *activeTurnRegistry
+	sessions    *acpSessionStore
 }
 
 var _ acpsdk.Client = (*protocolClient)(nil)
@@ -49,6 +50,18 @@ func (c *protocolClient) SessionUpdate(
 	ctx context.Context,
 	notification acpsdk.SessionNotification,
 ) error {
+	if update := notification.Update.ConfigOptionUpdate; update != nil && c.sessions != nil {
+		binding := c.sessions.lookupByID(notification.SessionId)
+		if binding != nil {
+			binding.replaceSessionConfig(update.ConfigOptions)
+		} else {
+			debugContext(
+				ctx,
+				"acpagent: session config update dropped without a session binding",
+				"session_id", string(notification.SessionId),
+			)
+		}
+	}
 	turn, ok := c.activeTurns.get(notification.SessionId)
 	if !ok {
 		debugContext(

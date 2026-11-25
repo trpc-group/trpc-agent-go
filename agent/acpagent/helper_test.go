@@ -38,6 +38,8 @@ func TestACPHelperProcess(t *testing.T) {
 	authCalls := 0
 	sessionCount := 0
 	sessions := make(map[acpsdk.SessionId]struct{})
+	model := "model-1"
+	readOnly := false
 	var pendingCancelID json.RawMessage
 	var pendingCancelSession acpsdk.SessionId
 	for {
@@ -96,7 +98,10 @@ func TestACPHelperProcess(t *testing.T) {
 			sessionCount++
 			sessionID := acpsdk.SessionId(fmt.Sprintf("helper-session-%d", sessionCount))
 			sessions[sessionID] = struct{}{}
-			writeHelperResult(request.ID, acpsdk.NewSessionResponse{SessionId: sessionID})
+			writeHelperResult(request.ID, acpsdk.NewSessionResponse{
+				SessionId:     sessionID,
+				ConfigOptions: helperSessionConfigOptions(model, readOnly),
+			})
 		case acpsdk.AgentMethodSessionClose:
 			if !initialized {
 				writeHelperError(request.ID, acpsdk.NewInvalidRequest("not initialized"))
@@ -132,6 +137,17 @@ func TestACPHelperProcess(t *testing.T) {
 				pendingCancelID = append(json.RawMessage(nil), request.ID...)
 				pendingCancelSession = params.SessionId
 				continue
+			}
+			if mode == "prompt_config_update" {
+				model = "model-2"
+				writeHelperNotification(
+					params.SessionId,
+					acpsdk.SessionUpdate{
+						ConfigOptionUpdate: &acpsdk.SessionConfigOptionUpdate{
+							ConfigOptions: helperSessionConfigOptions(model, readOnly),
+						},
+					},
+				)
 			}
 			helperWritePromptUpdates(params.SessionId, mode)
 			writeHelperResult(request.ID, acpsdk.PromptResponse{
@@ -172,7 +188,9 @@ func TestACPHelperProcess(t *testing.T) {
 				continue
 			}
 			sessions[params.SessionId] = struct{}{}
-			writeHelperResult(request.ID, acpsdk.ResumeSessionResponse{})
+			writeHelperResult(request.ID, acpsdk.ResumeSessionResponse{
+				ConfigOptions: helperSessionConfigOptions(model, readOnly),
+			})
 		case acpsdk.AgentMethodSessionLoad:
 			if mode == "resume_both_success" {
 				writeHelperError(request.ID, acpsdk.NewInternalError("load must not be called"))
@@ -196,7 +214,41 @@ func TestACPHelperProcess(t *testing.T) {
 				continue
 			}
 			sessions[params.SessionId] = struct{}{}
-			writeHelperResult(request.ID, acpsdk.LoadSessionResponse{})
+			writeHelperResult(request.ID, acpsdk.LoadSessionResponse{
+				ConfigOptions: helperSessionConfigOptions(model, readOnly),
+			})
+		case acpsdk.AgentMethodSessionSetConfigOption:
+			if mode == "set_config_error" {
+				writeHelperError(request.ID, acpsdk.NewInternalError("set config failed"))
+				continue
+			}
+			var params acpsdk.SetSessionConfigOptionRequest
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				writeHelperError(request.ID, acpsdk.NewInvalidParams(err.Error()))
+				continue
+			}
+			switch {
+			case params.ValueId != nil:
+				if params.ValueId.ConfigId != "model" ||
+					(params.ValueId.Value != "model-1" &&
+						params.ValueId.Value != "model-2") {
+					writeHelperError(request.ID, acpsdk.NewInvalidParams("unknown select config option"))
+					continue
+				}
+				model = string(params.ValueId.Value)
+			case params.Boolean != nil:
+				if params.Boolean.ConfigId != "read_only" {
+					writeHelperError(request.ID, acpsdk.NewInvalidParams("unknown boolean config option"))
+					continue
+				}
+				readOnly = params.Boolean.Value
+			default:
+				writeHelperError(request.ID, acpsdk.NewInvalidParams("missing config option value"))
+				continue
+			}
+			writeHelperResult(request.ID, acpsdk.SetSessionConfigOptionResponse{
+				ConfigOptions: helperSessionConfigOptions(model, readOnly),
+			})
 		case acpsdk.AgentMethodAuthenticate:
 			authCalls++
 			if authCalls > 1 {
@@ -250,6 +302,11 @@ func validateHelperInitializeRequest(request acpsdk.InitializeRequest) error {
 	}
 	if request.ClientCapabilities.Terminal {
 		return fmt.Errorf("terminal capability was advertised")
+	}
+	if request.ClientCapabilities.Session == nil ||
+		request.ClientCapabilities.Session.ConfigOptions == nil ||
+		request.ClientCapabilities.Session.ConfigOptions.Boolean == nil {
+		return fmt.Errorf("boolean session config capability was not advertised")
 	}
 	return nil
 }
@@ -329,6 +386,45 @@ func writeHelperError(id json.RawMessage, requestErr *acpsdk.RequestError) {
 func helperAuthData() map[string]any {
 	return map[string]any{
 		"loginUrl": "https://example.test/login",
+	}
+}
+
+func helperSessionConfigOptions(model string, readOnly bool) []acpsdk.SessionConfigOption {
+	modelCategory := acpsdk.SessionConfigOptionCategoryModel
+	modelValues := acpsdk.SessionConfigSelectOptionsUngrouped{
+		{
+			Value:       "model-1",
+			Name:        "Model 1",
+			Description: acpsdk.Ptr("The first model"),
+		},
+		{
+			Value: "model-2",
+			Name:  "Model 2",
+		},
+	}
+	return []acpsdk.SessionConfigOption{
+		{
+			Select: &acpsdk.SessionConfigOptionSelect{
+				Id:           "model",
+				Name:         "Model",
+				Description:  acpsdk.Ptr("Select the model"),
+				Category:     &modelCategory,
+				Type:         "select",
+				CurrentValue: acpsdk.SessionConfigValueId(model),
+				Options: acpsdk.SessionConfigSelectOptions{
+					Ungrouped: &modelValues,
+				},
+			},
+		},
+		{
+			Boolean: &acpsdk.SessionConfigOptionBoolean{
+				Id:           "read_only",
+				Name:         "Read Only",
+				Description:  acpsdk.Ptr("Prevent file modifications"),
+				Type:         "boolean",
+				CurrentValue: readOnly,
+			},
+		},
 	}
 }
 

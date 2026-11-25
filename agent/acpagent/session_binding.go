@@ -45,11 +45,14 @@ type acpSession struct {
 	createdAt  time.Time
 	stateDelta session.StateMap
 	stateOnce  sync.Once
+	configMu   sync.RWMutex
+	config     sessionConfiguration
 }
 
 type acpSessionStore struct {
 	mu      sync.RWMutex
 	byKey   map[session.Key]*acpSession
+	byID    map[acpsdk.SessionId]*acpSession
 	acquire singleflight.Group
 }
 
@@ -62,6 +65,7 @@ type acpSessionStateKeys struct {
 func newACPSessionStore() *acpSessionStore {
 	return &acpSessionStore{
 		byKey: make(map[session.Key]*acpSession),
+		byID:  make(map[acpsdk.SessionId]*acpSession),
 	}
 }
 
@@ -249,7 +253,7 @@ func (a *ACPAgent) acquireSessionOnce(
 				"acp_session_id", string(sessionID),
 			)...,
 		)
-		supported, err := a.restoreACPSession(ctx, process, sessionID)
+		supported, config, err := a.restoreACPSession(ctx, process, sessionID)
 		if err != nil {
 			if isUnknownSessionError(err) {
 				warnContext(
@@ -275,6 +279,7 @@ func (a *ACPAgent) acquireSessionOnce(
 				process,
 				createdAt,
 				nil,
+				config,
 			)
 			a.sessions.put(binding)
 			return binding, nil
@@ -337,6 +342,7 @@ func (a *ACPAgent) acquireSessionOnce(
 		process,
 		createdAt,
 		cloneSessionState(state),
+		newSessionConfiguration(response.ConfigOptions),
 	)
 	a.sessions.put(binding)
 	infoContext(
@@ -351,7 +357,7 @@ func (a *ACPAgent) restoreACPSession(
 	ctx context.Context,
 	process *processConnection,
 	sessionID acpsdk.SessionId,
-) (bool, error) {
+) (bool, sessionConfiguration, error) {
 	if process.agentDescriptor.agentCapabilities.SessionCapabilities.Resume != nil {
 		debugContext(
 			ctx,
@@ -362,12 +368,13 @@ func (a *ACPAgent) restoreACPSession(
 				"acp_session_id", string(sessionID),
 			)...,
 		)
-		return true, a.connections.withSessionAuthentication(
+		var config sessionConfiguration
+		err := a.connections.withSessionAuthentication(
 			ctx,
 			process,
 			sessionAcquisitionResume,
 			func(callCtx context.Context) error {
-				_, err := process.connection.ResumeSession(
+				response, err := process.connection.ResumeSession(
 					callCtx,
 					acpsdk.ResumeSessionRequest{
 						SessionId:  sessionID,
@@ -376,6 +383,7 @@ func (a *ACPAgent) restoreACPSession(
 					},
 				)
 				if err == nil {
+					config = newSessionConfiguration(response.ConfigOptions)
 					infoContext(
 						ctx,
 						"acpagent: resumed ACP session",
@@ -389,6 +397,7 @@ func (a *ACPAgent) restoreACPSession(
 				return err
 			},
 		)
+		return true, config, err
 	}
 	if process.agentDescriptor.agentCapabilities.LoadSession {
 		debugContext(
@@ -400,12 +409,13 @@ func (a *ACPAgent) restoreACPSession(
 				"acp_session_id", string(sessionID),
 			)...,
 		)
-		return true, a.connections.withSessionAuthentication(
+		var config sessionConfiguration
+		err := a.connections.withSessionAuthentication(
 			ctx,
 			process,
 			sessionAcquisitionLoad,
 			func(callCtx context.Context) error {
-				_, err := process.connection.LoadSession(
+				response, err := process.connection.LoadSession(
 					callCtx,
 					acpsdk.LoadSessionRequest{
 						SessionId:  sessionID,
@@ -414,6 +424,7 @@ func (a *ACPAgent) restoreACPSession(
 					},
 				)
 				if err == nil {
+					config = newSessionConfiguration(response.ConfigOptions)
 					infoContext(
 						ctx,
 						"acpagent: loaded ACP session",
@@ -427,8 +438,9 @@ func (a *ACPAgent) restoreACPSession(
 				return err
 			},
 		)
+		return true, config, err
 	}
-	return false, nil
+	return false, sessionConfiguration{}, nil
 }
 
 func (a *ACPAgent) persistedSessionID(target *session.Session) acpsdk.SessionId {
@@ -495,6 +507,7 @@ func (a *ACPAgent) newSessionBinding(
 	process *processConnection,
 	createdAt time.Time,
 	stateDelta session.StateMap,
+	config sessionConfiguration,
 ) *acpSession {
 	binding := &acpSession{
 		key:        key,
@@ -504,6 +517,7 @@ func (a *ACPAgent) newSessionBinding(
 		promptGate: make(chan struct{}, 1),
 		createdAt:  createdAt,
 		stateDelta: stateDelta,
+		config:     config.clone(),
 	}
 	binding.promptGate <- struct{}{}
 	return binding
@@ -542,6 +556,13 @@ func (s *acpSessionStore) lookup(key session.Key) *acpSession {
 	return binding
 }
 
+func (s *acpSessionStore) lookupByID(sessionID acpsdk.SessionId) *acpSession {
+	s.mu.RLock()
+	binding := s.byID[sessionID]
+	s.mu.RUnlock()
+	return binding
+}
+
 func (s *acpSessionStore) remove(key session.Key, binding *acpSession) {
 	if s == nil {
 		return
@@ -549,6 +570,9 @@ func (s *acpSessionStore) remove(key session.Key, binding *acpSession) {
 	s.mu.Lock()
 	if s.byKey[key] == binding {
 		delete(s.byKey, key)
+	}
+	if binding != nil && s.byID[binding.id] == binding {
+		delete(s.byID, binding.id)
 	}
 	s.mu.Unlock()
 }
@@ -558,7 +582,13 @@ func (s *acpSessionStore) put(binding *acpSession) {
 		return
 	}
 	s.mu.Lock()
+	if existing := s.byKey[binding.key]; existing != nil &&
+		existing != binding &&
+		s.byID[existing.id] == existing {
+		delete(s.byID, existing.id)
+	}
 	s.byKey[binding.key] = binding
+	s.byID[binding.id] = binding
 	s.mu.Unlock()
 }
 

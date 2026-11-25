@@ -62,6 +62,7 @@ type connectionManager struct {
 	stderr       io.Writer
 	closeTimeout time.Duration
 	activeTurns  *activeTurnRegistry
+	sessions     *acpSessionStore
 	authSelector AuthMethodSelector
 	terminalAuth bool
 	idleTimeout  time.Duration
@@ -86,6 +87,7 @@ func newConnectionManager(
 	config processConfig,
 	stderr io.Writer,
 	activeTurns *activeTurnRegistry,
+	sessions *acpSessionStore,
 	authSelector AuthMethodSelector,
 	terminalAuth bool,
 ) *connectionManager {
@@ -94,6 +96,7 @@ func newConnectionManager(
 		stderr:       stderr,
 		closeTimeout: defaultCloseTimeout,
 		activeTurns:  activeTurns,
+		sessions:     sessions,
 		authSelector: authSelector,
 		terminalAuth: terminalAuth,
 		idleTimeout:  config.IdleTimeout,
@@ -215,7 +218,10 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 		cmd:   cmd,
 		stdin: stdin,
 		connection: acpsdk.NewClientSideConnection(
-			&protocolClient{activeTurns: m.activeTurns},
+			&protocolClient{
+				activeTurns: m.activeTurns,
+				sessions:    m.sessions,
+			},
 			stdin,
 			stdout,
 		),

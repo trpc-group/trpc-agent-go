@@ -96,6 +96,8 @@ func sessionUpdateKind(update acpsdk.SessionUpdate) string {
 		return "tool_call_update"
 	case update.Plan != nil:
 		return "plan"
+	case update.ConfigOptionUpdate != nil:
+		return "config_option_update"
 	default:
 		return "unknown"
 	}

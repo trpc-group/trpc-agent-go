@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	acpToolUpdateExtension = "trpc_agent.acp.tool_call"
-	acpPlanExtension       = "trpc_agent.acp.plan"
+	acpToolUpdateExtension    = "trpc_agent.acp.tool_call"
+	acpPlanExtension          = "trpc_agent.acp.plan"
+	acpSessionConfigExtension = "trpc_agent.acp.session_config"
 )
 
 type observedToolCall struct {
@@ -80,6 +81,8 @@ func (t *sessionUpdateTranslator) translate(
 		return t.toolCallUpdateEvent(update.ToolCallUpdate)
 	case update.Plan != nil:
 		return t.planEvent(update.Plan)
+	case update.ConfigOptionUpdate != nil:
+		return t.configOptionUpdateEvent(update.ConfigOptionUpdate)
 	default:
 		return nil, nil
 	}
@@ -221,6 +224,28 @@ func (t *sessionUpdateTranslator) planEvent(
 	evt := event.NewResponseEvent(t.invocationID, t.author, response)
 	evt.Extensions = map[string]json.RawMessage{
 		acpPlanExtension: raw,
+	}
+	return []*event.Event{evt}, nil
+}
+
+func (t *sessionUpdateTranslator) configOptionUpdateEvent(
+	update *acpsdk.SessionConfigOptionUpdate,
+) ([]*event.Event, error) {
+	if update == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(newSessionConfiguration(update.ConfigOptions).snapshot())
+	if err != nil {
+		return nil, fmt.Errorf("acpagent: marshal session config update: %w", err)
+	}
+	response := &model.Response{
+		Object:    model.ObjectTypeChatCompletionChunk,
+		Done:      false,
+		IsPartial: true,
+	}
+	evt := event.NewResponseEvent(t.invocationID, t.author, response)
+	evt.Extensions = map[string]json.RawMessage{
+		acpSessionConfigExtension: raw,
 	}
 	return []*event.Event{evt}, nil
 }

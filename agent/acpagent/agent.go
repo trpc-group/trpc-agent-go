@@ -74,17 +74,19 @@ func New(name string, opts ...Option) (*ACPAgent, error) {
 		"launch_fingerprint", launchFingerprint,
 	)
 	activeTurns := newActiveTurnRegistry()
+	sessions := newACPSessionStore()
 	return &ACPAgent{
 		config:              config,
 		authMethodSelector:  options.authMethodSelector,
 		terminalAuthHandler: options.terminalAuthHandler,
 		activeTurns:         activeTurns,
-		sessions:            newACPSessionStore(),
+		sessions:            sessions,
 		launchFingerprint:   launchFingerprint,
 		connections: newConnectionManager(
 			config,
 			options.stderr,
 			activeTurns,
+			sessions,
 			options.authMethodSelector,
 			options.terminalAuthHandler != nil,
 		),

@@ -39,6 +39,9 @@ func TestNewInitializeRequestAdvertisesRequiredCapabilities(t *testing.T) {
 			require.False(t, request.ClientCapabilities.Fs.WriteTextFile)
 			require.False(t, request.ClientCapabilities.Terminal)
 			require.Nil(t, request.ClientCapabilities.Elicitation)
+			require.NotNil(t, request.ClientCapabilities.Session)
+			require.NotNil(t, request.ClientCapabilities.Session.ConfigOptions)
+			require.NotNil(t, request.ClientCapabilities.Session.ConfigOptions.Boolean)
 		})
 	}
 }
