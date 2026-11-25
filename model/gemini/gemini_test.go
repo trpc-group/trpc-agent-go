@@ -824,7 +824,8 @@ func TestModel_buildFinalResponse(t *testing.T) {
 					UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 						PromptTokenCount:        1,
 						CandidatesTokenCount:    1,
-						TotalTokenCount:         2,
+						TotalTokenCount:         9,
+						ThoughtsTokenCount:      7,
 						CachedContentTokenCount: 1,
 					},
 				},
@@ -861,10 +862,13 @@ func TestModel_buildFinalResponse(t *testing.T) {
 				},
 				Usage: &model.Usage{
 					PromptTokens:     1,
-					TotalTokens:      2,
+					TotalTokens:      9,
 					CompletionTokens: 1,
 					PromptTokensDetails: model.PromptTokensDetails{
 						CachedTokens: 1,
+					},
+					CompletionTokensDetails: model.CompletionTokensDetails{
+						ReasoningTokens: 7,
 					},
 				},
 			},
@@ -1899,8 +1903,9 @@ func TestModel_GenerateContentStreamingUsesLatestUsageSnapshot(t *testing.T) {
 		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 			PromptTokenCount:        100,
 			CandidatesTokenCount:    4,
-			TotalTokenCount:         104,
+			TotalTokenCount:         111,
 			CachedContentTokenCount: 80,
+			ThoughtsTokenCount:      7,
 		},
 	}
 	chunkWithRepeatedCache := &genai.GenerateContentResponse{
@@ -1916,8 +1921,9 @@ func TestModel_GenerateContentStreamingUsesLatestUsageSnapshot(t *testing.T) {
 		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 			PromptTokenCount:        100,
 			CandidatesTokenCount:    10,
-			TotalTokenCount:         110,
+			TotalTokenCount:         120,
 			CachedContentTokenCount: 80,
+			ThoughtsTokenCount:      10,
 		},
 	}
 	chunkWithoutUsage := &genai.GenerateContentResponse{
@@ -1965,13 +1971,16 @@ func TestModel_GenerateContentStreamingUsesLatestUsageSnapshot(t *testing.T) {
 		assert.Equal(t, "hello world", final.Choices[0].Message.Content)
 		assert.Equal(t, 100, final.Usage.PromptTokens)
 		assert.Equal(t, 10, final.Usage.CompletionTokens)
-		assert.Equal(t, 110, final.Usage.TotalTokens)
+		assert.Equal(t, 120, final.Usage.TotalTokens)
 		assert.Equal(t, 80, final.Usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 10, final.Usage.CompletionTokensDetails.ReasoningTokens)
 	}
 	if assert.NotNil(t, callbackFinal) && assert.NotNil(t, callbackFinal.Usage) {
 		assert.Equal(t, 100, callbackFinal.Usage.PromptTokens)
-		assert.Equal(t, 110, callbackFinal.Usage.TotalTokens)
+		assert.Equal(t, 10, callbackFinal.Usage.CompletionTokens)
+		assert.Equal(t, 120, callbackFinal.Usage.TotalTokens)
 		assert.Equal(t, 80, callbackFinal.Usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 10, callbackFinal.Usage.CompletionTokensDetails.ReasoningTokens)
 	}
 }
 

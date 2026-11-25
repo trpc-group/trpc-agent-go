@@ -319,6 +319,8 @@ type CompletionTokensDetails struct {
 
 对于 OpenAI-compatible 服务，返回中的 `completion_tokens_details.reasoning_tokens` 会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。当服务方没有消耗或没有上报 reasoning tokens 时，该值可能为 `0`；如果希望 reasoning 模型进入推理行为，请按模型能力设置 `ReasoningEffort` 和/或 `ThinkingEnabled`。
 
+对于 Gemini，流式和非流式响应中的 `usageMetadata.thoughtsTokenCount` 均会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。流式最终用量保留各分块中最新的非零 token 计数，包括缓存和推理 token；尾随分块未携带用量时会保留之前的计数。
+
 ## OpenAI Model
 
 ### 模型名称参数

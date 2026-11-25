@@ -329,6 +329,8 @@ type CompletionTokensDetails struct {
 
 For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is mapped to `Usage.CompletionTokensDetails.ReasoningTokens`. The value may be `0` when the provider does not spend or report reasoning tokens; for reasoning models, set `ReasoningEffort` and/or `ThinkingEnabled` when you want to request reasoning behavior.
 
+For Gemini, `usageMetadata.thoughtsTokenCount` maps to `Usage.CompletionTokensDetails.ReasoningTokens` in both streaming and non-streaming responses. Final streaming usage keeps the latest non-zero token counts across chunks, including cached and reasoning tokens, and preserves them when trailing chunks omit usage.
+
 ## OpenAI Model
 
 ### Model Name Parameter

@@ -122,11 +122,14 @@ func TestAccumulator_PreservesLatestPromptCacheUsageSnapshot(t *testing.T) {
 			Usage: &model.Usage{
 				PromptTokens:     100,
 				CompletionTokens: 5,
-				TotalTokens:      105,
+				TotalTokens:      112,
 				PromptTokensDetails: model.PromptTokensDetails{
 					CachedTokens:        80,
 					CacheCreationTokens: 10,
 					CacheReadTokens:     5,
+				},
+				CompletionTokensDetails: model.CompletionTokensDetails{
+					ReasoningTokens: 7,
 				},
 			},
 		})
@@ -140,11 +143,14 @@ func TestAccumulator_PreservesLatestPromptCacheUsageSnapshot(t *testing.T) {
 			Usage: &model.Usage{
 				PromptTokens:     100,
 				CompletionTokens: 15,
-				TotalTokens:      115,
+				TotalTokens:      125,
 				PromptTokensDetails: model.PromptTokensDetails{
 					CachedTokens:        80,
 					CacheCreationTokens: 10,
 					CacheReadTokens:     5,
+				},
+				CompletionTokensDetails: model.CompletionTokensDetails{
+					ReasoningTokens: 10,
 				},
 			},
 		})
@@ -162,10 +168,11 @@ func TestAccumulator_PreservesLatestPromptCacheUsageSnapshot(t *testing.T) {
 		if assert.NotNil(t, got.Usage) {
 			assert.Equal(t, 100, got.Usage.PromptTokens)
 			assert.Equal(t, 15, got.Usage.CompletionTokens)
-			assert.Equal(t, 115, got.Usage.TotalTokens)
+			assert.Equal(t, 125, got.Usage.TotalTokens)
 			assert.Equal(t, 80, got.Usage.PromptTokensDetails.CachedTokens)
 			assert.Equal(t, 10, got.Usage.PromptTokensDetails.CacheCreationTokens)
 			assert.Equal(t, 5, got.Usage.PromptTokensDetails.CacheReadTokens)
+			assert.Equal(t, 10, got.Usage.CompletionTokensDetails.ReasoningTokens)
 		}
 	})
 
