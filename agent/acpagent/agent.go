@@ -17,7 +17,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -61,7 +60,7 @@ func New(name string, opts ...Option) (*ACPAgent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acpagent: compute launch fingerprint: %w", err)
 	}
-	log.Debug(
+	debug(
 		"acpagent: created agent",
 		"agent", config.Name,
 		"command", config.Command,
@@ -161,7 +160,7 @@ func (a *ACPAgent) Close() error {
 		return nil
 	}
 	a.closeOnce.Do(func() {
-		log.Debug("acpagent: closing agent", "agent", a.config.Name)
+		debug("acpagent: closing agent", "agent", a.config.Name)
 		a.closeErr = a.connections.close()
 	})
 	return a.closeErr

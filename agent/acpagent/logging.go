@@ -11,6 +11,9 @@ package acpagent
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -19,20 +22,64 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+func debug(message string, fields ...any) {
+	log.Debug(formatLogMessage(message, fields...))
+}
+
 func debugContext(ctx context.Context, message string, fields ...any) {
-	log.DebugContext(ctx, append([]any{message}, fields...)...)
+	log.DebugContext(ctx, formatLogMessage(message, fields...))
+}
+
+func info(message string, fields ...any) {
+	log.Info(formatLogMessage(message, fields...))
 }
 
 func infoContext(ctx context.Context, message string, fields ...any) {
-	log.InfoContext(ctx, append([]any{message}, fields...)...)
+	log.InfoContext(ctx, formatLogMessage(message, fields...))
 }
 
 func warnContext(ctx context.Context, message string, fields ...any) {
-	log.WarnContext(ctx, append([]any{message}, fields...)...)
+	log.WarnContext(ctx, formatLogMessage(message, fields...))
 }
 
 func errorContext(ctx context.Context, message string, fields ...any) {
-	log.ErrorContext(ctx, append([]any{message}, fields...)...)
+	log.ErrorContext(ctx, formatLogMessage(message, fields...))
+}
+
+func errorLog(message string, fields ...any) {
+	log.Error(formatLogMessage(message, fields...))
+}
+
+func formatLogMessage(message string, fields ...any) string {
+	if len(fields) == 0 {
+		return message
+	}
+	var output strings.Builder
+	output.WriteString(message)
+	for index := 0; index < len(fields); index += 2 {
+		key, ok := fields[index].(string)
+		if !ok || key == "" {
+			key = fmt.Sprint(fields[index])
+		}
+		output.WriteByte(' ')
+		output.WriteString(key)
+		if index+1 < len(fields) {
+			output.WriteByte('=')
+			output.WriteString(formatLogValue(fields[index+1]))
+		}
+	}
+	return output.String()
+}
+
+func formatLogValue(value any) string {
+	text := fmt.Sprint(value)
+	if text == "" {
+		return `""`
+	}
+	if strings.ContainsAny(text, " \t\r\n\"") {
+		return strconv.Quote(text)
+	}
+	return text
 }
 
 func processLogFields(process *processConnection) []any {

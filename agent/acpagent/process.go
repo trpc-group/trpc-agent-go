@@ -22,8 +22,6 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"golang.org/x/sync/singleflight"
-
-	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const defaultCloseTimeout = 5 * time.Second
@@ -168,7 +166,7 @@ func (m *connectionManager) connect(ctx context.Context) (*processConnection, er
 }
 
 func (m *connectionManager) startProcess() (*processConnection, error) {
-	log.Debug(
+	debug(
 		"acpagent: starting process",
 		"agent", m.config.Name,
 		"command", m.config.Command,
@@ -191,7 +189,7 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 	if err != nil {
 		cancel()
 		err = fmt.Errorf("acpagent: create process stdin: %w", err)
-		log.Error("acpagent: failed to create process stdin", "agent", m.config.Name, "error", err)
+		errorLog("acpagent: failed to create process stdin", "agent", m.config.Name, "error", err)
 		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -199,17 +197,17 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 		_ = stdin.Close()
 		cancel()
 		err = fmt.Errorf("acpagent: create process stdout: %w", err)
-		log.Error("acpagent: failed to create process stdout", "agent", m.config.Name, "error", err)
+		errorLog("acpagent: failed to create process stdout", "agent", m.config.Name, "error", err)
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		cancel()
 		err = fmt.Errorf("acpagent: start agent process: %w", err)
-		log.Error("acpagent: failed to start process", "agent", m.config.Name, "error", err)
+		errorLog("acpagent: failed to start process", "agent", m.config.Name, "error", err)
 		return nil, err
 	}
-	log.Info(
+	info(
 		"acpagent: process started",
 		"agent", m.config.Name,
 		"pid", cmd.Process.Pid,
