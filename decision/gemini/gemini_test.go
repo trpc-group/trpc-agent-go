@@ -196,6 +196,29 @@ func TestDecideRejectsInvalidChoiceAndScore(t *testing.T) {
 	}
 }
 
+func TestDecideProviderErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body, want string
+	}{
+		{"structured reason", 400, `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"test-key and private ticket","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","metadata":{"key":"test-key"}}]}}`, "HTTP 400 INVALID_ARGUMENT (API_KEY_INVALID)"},
+		{"unrelated detail", 403, `{"error":{"status":"PERMISSION_DENIED","details":[{"@type":"other","reason":"UNRELATED"}]}}`, "HTTP 403 PERMISSION_DENIED"},
+		{"unstructured values", 400, `{"error":{"code":"private ticket","status":"invalid status","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"private ticket"}]}}`, "HTTP 400"},
+		{"non JSON", 502, "<html>Bad gateway</html>", "HTTP 502"},
+		{"oversized response", 400, `{"error":{"message":"` + strings.Repeat("x", 64<<10) + `","status":"INVALID_ARGUMENT"}}`, "HTTP 400"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := testClient(t, func(*http.Request) (*http.Response, error) {
+				return response(tc.status, tc.body), nil
+			})
+			answer, err := client.Decide(context.Background(), batchRequest())
+			require.Nil(t, answer)
+			require.EqualError(t, err, "gemini decisions: "+tc.want)
+		})
+	}
+}
 func TestDecideHTTPErrorAndCancellation(t *testing.T) {
 	t.Run("safety block", func(t *testing.T) {
 		calls := 0

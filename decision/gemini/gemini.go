@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -93,13 +94,7 @@ func (c *Client) Decide(ctx context.Context, req decision.Request) (*decision.Re
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		var failure struct {
-			Error struct {
-				Code json.RawMessage `json:"code"`
-			}
-		}
-		_ = json.NewDecoder(io.LimitReader(res.Body, 65536)).Decode(&failure)
-		return nil, fmt.Errorf("gemini decisions: HTTP %d (code %s)", res.StatusCode, failure.Error.Code)
+		return nil, responseError(res)
 	}
 	result, err := decodeResponse(res.Body, req, questions)
 	if err != nil {
@@ -107,4 +102,40 @@ func (c *Client) Decide(ctx context.Context, req decision.Request) (*decision.Re
 	}
 	result.RequestID = res.Header.Get("X-Request-ID")
 	return result, nil
+}
+
+var errorIdentifier = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,62}$`)
+
+func responseError(res *http.Response) error {
+	var failure struct {
+		Error struct {
+			Code    json.RawMessage
+			Status  string
+			Details []struct {
+				Type   string `json:"@type"`
+				Reason string
+			}
+		}
+	}
+	// Free-form messages and metadata may contain request content.
+	var detail string
+	if err := json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&failure); err == nil {
+		if errorIdentifier.MatchString(failure.Error.Status) {
+			detail = " " + failure.Error.Status
+		}
+		for _, d := range failure.Error.Details {
+			if d.Type == "type.googleapis.com/google.rpc.ErrorInfo" && errorIdentifier.MatchString(d.Reason) {
+				detail += " (" + d.Reason + ")"
+				break
+			}
+		}
+		var code string
+		if json.Unmarshal(failure.Error.Code, &code) == nil {
+			switch code {
+			case "safety", "prohibited_content", "blocklist", "image_safety", "content_blocked":
+				detail += " (code " + code + ")"
+			}
+		}
+	}
+	return fmt.Errorf("gemini decisions: HTTP %d%s", res.StatusCode, detail)
 }
