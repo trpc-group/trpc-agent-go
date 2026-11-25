@@ -6997,11 +6997,11 @@ totals:</p>
 </tr>
 <tr>
 <td><code>PromptTokensDetails.CacheCreationTokens</code></td>
-<td>Tokens used to create an explicit provider cache. Populated from <code>prompt_tokens_details.cache_creation_tokens</code> when a gateway reports it</td>
+<td>Prompt tokens written to cache. OpenAI-compatible adapters resolve <code>cache_write_tokens</code> → <code>cache_creation_tokens</code> → <code>cache_creation_input_tokens</code> (first positive value wins), first in <code>prompt_tokens_details</code> (<code>input_tokens_details</code> for the Responses API, whose native <code>cache_write_tokens</code> field is used first) and then in top-level <code>usage</code>; Anthropic and Bedrock map their native cache-write fields</td>
 </tr>
 <tr>
 <td><code>PromptTokensDetails.CacheReadTokens</code></td>
-<td>Tokens read from an explicit provider cache. Populated from <code>prompt_tokens_details.cache_read_tokens</code> when a gateway reports it</td>
+<td>Tokens read from an explicit provider cache. OpenAI-compatible adapters read <code>cache_read_tokens</code> only from <code>prompt_tokens_details</code> (or <code>input_tokens_details</code> in Responses API), with no top-level <code>usage</code> fallback; Anthropic and Bedrock map their native cache-read fields</td>
 </tr>
 <tr>
 <td><code>CompletionTokensDetails.ReasoningTokens</code></td>
@@ -7025,16 +7025,32 @@ totals:</p>
 <code>WithAccumulateChunkTokenUsage</code> belongs to the OpenAI-compatible adapter, so
 its callback only receives fields that the upstream OpenAI-compatible response
 and adapter mapping support. Other provider-specific fields remain zero.</p>
-<p>The OpenAI-compatible adapter also surfaces prompt cache counts that gateways
-report in <code>prompt_tokens_details</code>: <code>cache_read_tokens</code> maps to
-<code>PromptTokensDetails.CacheReadTokens</code>, and <code>cache_creation_tokens</code> maps to
-<code>PromptTokensDetails.CacheCreationTokens</code>. Providers that follow the OpenAI
-schema strictly leave both counts at <code>0</code>.</p>
+<p>The OpenAI-compatible Chat Completions adapter reads extended prompt cache
+counts with distinct locations and precedence (providers that do not report
+these fields leave them at <code>0</code>):</p>
+<ul>
+<li><strong>Cache reads</strong>: read only from <code>prompt_tokens_details.cache_read_tokens</code>
+  into <code>PromptTokensDetails.CacheReadTokens</code> (top-level <code>usage.cache_read_tokens</code>
+  is not supported); standard <code>prompt_tokens_details.cached_tokens</code> continues
+  to map to <code>PromptTokensDetails.CachedTokens</code>.</li>
+<li><strong>Cache writes</strong>: resolved in the order <code>cache_write_tokens</code> →
+  <code>cache_creation_tokens</code> → <code>cache_creation_input_tokens</code>, taking the first
+  positive integer into <code>PromptTokensDetails.CacheCreationTokens</code>. Aliases
+  reported together are never summed (for example, <code>cache_write_tokens=256</code>
+  with <code>cache_creation_tokens=128</code> yields <code>256</code>), and a zero-valued placeholder
+  does not hide a later alias. <code>prompt_tokens_details</code> is checked first; the
+  same order is then applied to top-level <code>usage</code> only when no detail field is
+  positive. The Responses API adapter uses the same order after its native
+  <code>input_tokens_details.cache_write_tokens</code> field.</li>
+</ul>
 <p>In streaming responses both counts accumulate across chunks, matching the
 default accumulation of prompt, completion, and total tokens. When a
 <code>WithAccumulateChunkTokenUsage</code> callback is configured, its return value
 determines the final cache counts, so providers that report cumulative
 snapshots can keep the latest one.</p>
+<p>Usage-only chunks after a finish marker still contribute token counts while
+preserving the latest non-empty <code>finish_reason</code> for each choice in the
+accumulated response.</p>
 <p><code>TimingInfo</code> contains <code>FirstTokenDuration</code> and <code>ReasoningDuration</code>. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
 accumulator, so custom token accumulation normally does not need to create or
@@ -10845,7 +10861,7 @@ the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 25, 2026 06:26:51 UTC">2026-11-25 06:26:51</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 25, 2026 09:38:47 UTC">2026-11-25 09:38:47</span>
   </span>
 
     
