@@ -75,6 +75,16 @@ func (a *ACPAgent) runPrompt(
 	out chan<- *event.Event,
 ) {
 	defer close(out)
+	started := time.Now()
+	fields := acpSessionLogFields(session)
+	if invocation != nil {
+		fields = append(fields, "invocation_id", invocation.InvocationID)
+	}
+	debugContext(
+		ctx,
+		"acpagent: prompt started",
+		append(fields, "content_blocks", len(content))...,
+	)
 	eventCtx := context.WithoutCancel(ctx)
 	if err := session.acquirePrompt(ctx); err != nil {
 		a.emitTerminalError(eventCtx, invocation, session, out, err)
@@ -169,6 +179,23 @@ func (a *ACPAgent) runPrompt(
 					if err := a.emitEvent(eventCtx, invocation, session, out, final); err != nil {
 						return
 					}
+					completionFields := append(
+						fields,
+						"duration", time.Since(started),
+						"stop_reason", string(result.response.StopReason),
+						"text_bytes", len(translator.text.String()),
+						"reasoning_bytes", len(translator.reasoning.String()),
+						"tool_count", len(translator.tools),
+					)
+					if result.response.Usage != nil {
+						completionFields = append(
+							completionFields,
+							"input_tokens", result.response.Usage.InputTokens,
+							"output_tokens", result.response.Usage.OutputTokens,
+							"total_tokens", result.response.Usage.TotalTokens,
+						)
+					}
+					debugContext(eventCtx, "acpagent: prompt completed", completionFields...)
 					return
 				}
 			}
@@ -187,7 +214,15 @@ func (a *ACPAgent) emitEvent(
 		return nil
 	}
 	session.applyStateDelta(evt)
-	return agent.EmitEvent(ctx, invocation, out, evt)
+	err := agent.EmitEvent(ctx, invocation, out, evt)
+	if err != nil {
+		fields := acpSessionLogFields(session)
+		if invocation != nil {
+			fields = append(fields, "invocation_id", invocation.InvocationID)
+		}
+		warnContext(ctx, "acpagent: emit event failed", append(fields, "error", err)...)
+	}
+	return err
 }
 
 func (a *ACPAgent) emitTerminalError(
@@ -199,6 +234,19 @@ func (a *ACPAgent) emitTerminalError(
 ) {
 	if err == nil {
 		err = errors.New("acpagent: prompt failed")
+	}
+	fields := acpSessionLogFields(session)
+	if invocation != nil {
+		fields = append(fields, "invocation_id", invocation.InvocationID)
+	}
+	fields = append(fields, "error", err)
+	switch {
+	case errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, errSessionUpdateOverflow):
+		warnContext(ctx, "acpagent: prompt stopped", fields...)
+	default:
+		errorContext(ctx, "acpagent: prompt failed", fields...)
 	}
 	evt := event.NewErrorEvent(
 		invocation.InvocationID,

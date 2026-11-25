@@ -69,10 +69,32 @@ func (m *connectionManager) withSessionAuthentication(
 	if !ok {
 		return err
 	}
+	debugContext(
+		ctx,
+		"acpagent: authentication required",
+		append(
+			append(
+				processLogFields(process),
+				"operation", string(operation),
+				"method_count", len(required.Methods),
+			),
+			authMethodLogFields(required.Methods)...,
+		)...,
+	)
 	if len(required.Methods) == 0 {
+		warnContext(
+			ctx,
+			"acpagent: authentication required without advertised methods",
+			append(processLogFields(process), "operation", string(operation))...,
+		)
 		return errors.Join(required, errNoAdvertisedAuthMethods)
 	}
 	if m.authSelector == nil {
+		warnContext(
+			ctx,
+			"acpagent: authentication required without a selector",
+			append(processLogFields(process), "operation", string(operation))...,
+		)
 		return required
 	}
 	challenge := AuthChallenge{
@@ -83,12 +105,22 @@ func (m *connectionManager) withSessionAuthentication(
 		return err
 	}
 
+	debugContext(
+		ctx,
+		"acpagent: retrying operation after authentication",
+		append(processLogFields(process), "operation", string(operation))...,
+	)
 	if err := run(ctx); err != nil {
 		if retryRequired, ok := authenticationRequiredError(
 			string(operation),
 			process.agentDescriptor.authMethods,
 			err,
 		); ok {
+			warnContext(
+				ctx,
+				"acpagent: operation still requires authentication after retry",
+				append(processLogFields(process), "operation", string(operation), "error", err)...,
+			)
 			return retryRequired
 		}
 		return err
@@ -124,15 +156,47 @@ func (m *connectionManager) performAgentAuthentication(
 ) error {
 	selection, err := m.authSelector.SelectAuthMethod(ctx, challenge)
 	if err != nil {
-		return fmt.Errorf("acpagent: select authentication method: %w", err)
+		err = fmt.Errorf("acpagent: select authentication method: %w", err)
+		errorContext(
+			ctx,
+			"acpagent: select authentication method failed",
+			append(processLogFields(process), "operation", challenge.Operation, "error", err)...,
+		)
+		return err
 	}
 	if selection.MethodID == "" {
+		warnContext(
+			ctx,
+			"acpagent: authentication selector returned an empty method id",
+			append(processLogFields(process), "operation", challenge.Operation)...,
+		)
 		return errAuthMethodRequired
 	}
 	method, ok := findAuthMethod(challenge.Methods, selection.MethodID)
 	if !ok {
-		return fmt.Errorf("%w: %q", errAuthMethodNotFound, selection.MethodID)
+		err = fmt.Errorf("%w: %q", errAuthMethodNotFound, selection.MethodID)
+		warnContext(
+			ctx,
+			"acpagent: selected authentication method was not advertised",
+			append(
+				processLogFields(process),
+				"operation", challenge.Operation,
+				"method_id", selection.MethodID,
+				"error", err,
+			)...,
+		)
+		return err
 	}
+	infoContext(
+		ctx,
+		"acpagent: selected authentication method",
+		append(
+			processLogFields(process),
+			"operation", challenge.Operation,
+			"method_id", method.ID,
+			"method_type", method.Type,
+		)...,
+	)
 	switch method.Type {
 	case AuthMethodTypeAgent:
 		_, err := process.connection.Authenticate(ctx, acpsdk.AuthenticateRequest{
@@ -140,13 +204,54 @@ func (m *connectionManager) performAgentAuthentication(
 			Meta:     selection.Meta,
 		})
 		if err != nil {
-			return fmt.Errorf("acpagent: authenticate: %w", err)
+			err = fmt.Errorf("acpagent: authenticate: %w", err)
+			errorContext(
+				ctx,
+				"acpagent: agent authentication request failed",
+				append(
+					processLogFields(process),
+					"operation", challenge.Operation,
+					"method_id", method.ID,
+					"error", err,
+				)...,
+			)
+			return err
 		}
+		infoContext(
+			ctx,
+			"acpagent: agent authentication completed",
+			append(
+				processLogFields(process),
+				"operation", challenge.Operation,
+				"method_id", method.ID,
+			)...,
+		)
 		return nil
 	case AuthMethodTypeTerminal:
+		warnContext(
+			ctx,
+			"acpagent: terminal authentication is not implemented",
+			append(
+				processLogFields(process),
+				"operation", challenge.Operation,
+				"method_id", method.ID,
+			)...,
+		)
 		return errTerminalAuthPending
 	default:
-		return fmt.Errorf("acpagent: unsupported authentication method type %q", method.Type)
+		err := fmt.Errorf("acpagent: unsupported authentication method type %q", method.Type)
+		warnContext(
+			ctx,
+			"acpagent: unsupported authentication method type",
+			append(
+				processLogFields(process),
+				"operation", challenge.Operation,
+				"method_id", method.ID,
+				"method_type", method.Type,
+				"error", err,
+			)...,
+		)
+		return err
 	}
 }
 

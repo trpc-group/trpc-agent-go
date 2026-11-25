@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 )
@@ -47,6 +48,16 @@ func (m *connectionManager) initialize(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	started := time.Now()
+	debugContext(
+		ctx,
+		"acpagent: initializing connection",
+		append(
+			processLogFields(process),
+			"protocol_version", supportedProtocolVersion,
+			"terminal_auth", m.terminalAuth,
+		)...,
+	)
 	response, err := process.connection.Initialize(
 		ctx,
 		newInitializeRequest(m.terminalAuth),
@@ -55,17 +66,50 @@ func (m *connectionManager) initialize(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = errors.Join(err, ctxErr)
 		}
-		return fmt.Errorf("acpagent: initialize connection: %w", err)
+		err = fmt.Errorf("acpagent: initialize connection: %w", err)
+		errorContext(
+			ctx,
+			"acpagent: initialize connection failed",
+			append(processLogFields(process), "duration", time.Since(started), "error", err)...,
+		)
+		return err
 	}
 	if response.ProtocolVersion != supportedProtocolVersion {
-		return fmt.Errorf(
+		err := fmt.Errorf(
 			"%w: got %d, want %d",
 			errUnsupportedProtocolVersion,
 			response.ProtocolVersion,
 			supportedProtocolVersion,
 		)
+		errorContext(
+			ctx,
+			"acpagent: unsupported protocol version",
+			append(processLogFields(process), "duration", time.Since(started), "error", err)...,
+		)
+		return err
 	}
 	process.agentDescriptor = captureACPAgentDescriptor(response)
+	agentName := ""
+	agentVersion := ""
+	if process.agentDescriptor.agentInfo != nil {
+		agentName = process.agentDescriptor.agentInfo.Name
+		agentVersion = process.agentDescriptor.agentInfo.Version
+	}
+	infoContext(
+		ctx,
+		"acpagent: connection initialized",
+		append(
+			processLogFields(process),
+			"protocol_version", response.ProtocolVersion,
+			"agent_name", agentName,
+			"agent_version", agentVersion,
+			"auth_method_count", len(response.AuthMethods),
+			"load_session", process.agentDescriptor.agentCapabilities.LoadSession,
+			"resume_session", process.agentDescriptor.agentCapabilities.SessionCapabilities.Resume != nil,
+			"close_session", process.agentDescriptor.agentCapabilities.SessionCapabilities.Close != nil,
+			"duration", time.Since(started),
+		)...,
+	)
 	return nil
 }
 

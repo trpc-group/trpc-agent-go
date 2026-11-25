@@ -81,10 +81,20 @@ func (a *ACPAgent) acquireSession(
 	if invocation == nil {
 		return nil, errors.New("acpagent: invocation is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if invocation.Session == nil {
-		return nil, errors.New("acpagent: invocation session is nil")
+		err := errors.New("acpagent: invocation session is nil")
+		warnContext(ctx, "acpagent: invalid invocation session", "error", err)
+		return nil, err
 	}
 	if invocation.SessionService == nil {
+		warnContext(
+			ctx,
+			"acpagent: session service is required",
+			append(invocationLogFields(invocation), "error", errSessionServiceRequired)...,
+		)
 		return nil, errSessionServiceRequired
 	}
 	key := session.Key{
@@ -93,10 +103,9 @@ func (a *ACPAgent) acquireSession(
 		SessionID: invocation.Session.ID,
 	}
 	if err := key.CheckSessionKey(); err != nil {
-		return nil, fmt.Errorf("acpagent: invalid session key: %w", err)
-	}
-	if ctx == nil {
-		ctx = context.Background()
+		err = fmt.Errorf("acpagent: invalid session key: %w", err)
+		warnContext(ctx, "acpagent: invalid session key", append(sessionLogFields(key), "error", err)...)
+		return nil, err
 	}
 	releaseActivity := a.connections.beginActivity()
 	defer releaseActivity()
@@ -104,20 +113,27 @@ func (a *ACPAgent) acquireSession(
 	if err != nil {
 		return nil, err
 	}
+	fields := append(sessionLogFields(key), processLogFields(process)...)
+	fields = append(fields, "agent", a.config.Name)
+	debugContext(ctx, "acpagent: acquiring ACP session", fields...)
 	flightKey := key.AppName + "\x00" + key.UserID + "\x00" + key.SessionID
 	result := a.sessions.acquire.DoChan(flightKey, func() (any, error) {
 		return a.acquireSessionOnce(ctx, invocation, process, key)
 	})
 	select {
 	case <-ctx.Done():
+		debugContext(ctx, "acpagent: session acquisition canceled", append(fields, "error", ctx.Err())...)
 		return nil, ctx.Err()
 	case result := <-result:
 		if result.Err != nil {
+			errorContext(ctx, "acpagent: session acquisition failed", append(fields, "error", result.Err)...)
 			return nil, result.Err
 		}
 		binding, ok := result.Val.(*acpSession)
 		if !ok {
-			return nil, errors.New("acpagent: invalid session acquisition result")
+			err := errors.New("acpagent: invalid session acquisition result")
+			errorContext(ctx, "acpagent: invalid session acquisition result", append(fields, "error", err)...)
+			return nil, err
 		}
 		return binding, nil
 	}
@@ -132,27 +148,42 @@ func (a *ACPAgent) CloseSession(ctx context.Context, key session.Key) error {
 	if a == nil {
 		return nil
 	}
-	if err := key.CheckSessionKey(); err != nil {
-		return fmt.Errorf("acpagent: invalid session key: %w", err)
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := key.CheckSessionKey(); err != nil {
+		err = fmt.Errorf("acpagent: invalid session key: %w", err)
+		warnContext(ctx, "acpagent: invalid session key", append(sessionLogFields(key), "error", err)...)
+		return err
+	}
 	releaseActivity := a.connections.beginActivity()
 	defer releaseActivity()
+	debugContext(ctx, "acpagent: closing ACP session", sessionLogFields(key)...)
 
 	binding := a.sessions.lookup(key)
 	if binding == nil {
+		debugContext(ctx, "acpagent: no ACP session binding to close", sessionLogFields(key)...)
 		return nil
 	}
 	if err := binding.acquirePrompt(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			debugContext(ctx, "acpagent: close ACP session canceled while waiting for prompt", acpSessionLogFields(binding)...)
+		} else {
+			warnContext(ctx, "acpagent: close ACP session failed to acquire prompt gate", append(acpSessionLogFields(binding), "error", err)...)
+		}
 		return err
 	}
 	defer binding.releasePrompt()
 	if err := closeACPSession(ctx, binding.process, binding.id); err != nil {
+		if errors.Is(err, errSessionCloseUnsupported) {
+			debugContext(ctx, "acpagent: session close is not supported", acpSessionLogFields(binding)...)
+		} else {
+			warnContext(ctx, "acpagent: close ACP session failed", append(acpSessionLogFields(binding), "error", err)...)
+		}
 		return err
 	}
 	a.sessions.remove(key, binding)
+	infoContext(ctx, "acpagent: closed ACP session", acpSessionLogFields(binding)...)
 	return nil
 }
 
@@ -168,6 +199,11 @@ func (a *ACPAgent) acquireSessionOnce(
 	if existing != nil {
 		switch {
 		case !sameACPSession(existing, invocation.Session):
+			infoContext(
+				ctx,
+				"acpagent: replacing ACP session binding",
+				append(acpSessionLogFields(existing), "agent", a.config.Name)...,
+			)
 			if err := a.closeReplacedSession(process, existing); err != nil {
 				return nil, err
 			}
@@ -178,10 +214,24 @@ func (a *ACPAgent) acquireSessionOnce(
 		case existing.generation == process.generation &&
 			existing.process == process:
 			existing.applySessionState(invocation.Session)
+			debugContext(
+				ctx,
+				"acpagent: reusing ACP session binding",
+				append(acpSessionLogFields(existing), "agent", a.config.Name)...,
+			)
 			return existing, nil
 		default:
 			sessionIDHint = existing.id
 			a.sessions.remove(key, existing)
+			debugContext(
+				ctx,
+				"acpagent: rebinding ACP session to a new process",
+				append(
+					acpSessionLogFields(existing),
+					"agent", a.config.Name,
+					"new_generation", process.generation,
+				)...,
+			)
 		}
 	}
 
@@ -190,9 +240,28 @@ func (a *ACPAgent) acquireSessionOnce(
 		sessionID = a.persistedSessionID(invocation.Session)
 	}
 	if sessionID != "" {
+		debugContext(
+			ctx,
+			"acpagent: restoring ACP session",
+			append(
+				sessionLogFields(key),
+				"agent", a.config.Name,
+				"acp_session_id", string(sessionID),
+			)...,
+		)
 		supported, err := a.restoreACPSession(ctx, process, sessionID)
 		if err != nil {
 			if isUnknownSessionError(err) {
+				warnContext(
+					ctx,
+					"acpagent: persisted ACP session is unknown; clearing session state",
+					append(
+						sessionLogFields(key),
+						"agent", a.config.Name,
+						"acp_session_id", string(sessionID),
+						"error", err,
+					)...,
+				)
 				if clearErr := a.clearPersistedSessionID(ctx, invocation); clearErr != nil {
 					return nil, errors.Join(err, clearErr)
 				}
@@ -210,9 +279,22 @@ func (a *ACPAgent) acquireSessionOnce(
 			a.sessions.put(binding)
 			return binding, nil
 		}
+		debugContext(
+			ctx,
+			"acpagent: ACP session cannot be restored; creating a new session",
+			append(sessionLogFields(key), "agent", a.config.Name)...,
+		)
 	}
 
 	var response acpsdk.NewSessionResponse
+	debugContext(
+		ctx,
+		"acpagent: creating ACP session",
+		append(
+			sessionLogFields(key),
+			processLogFields(process)...,
+		)...,
+	)
 	err := a.connections.withSessionAuthentication(
 		ctx,
 		process,
@@ -234,6 +316,16 @@ func (a *ACPAgent) acquireSessionOnce(
 	if err := invocation.SessionService.UpdateSessionState(ctx, key, state); err != nil {
 		persistErr := fmt.Errorf("acpagent: persist ACP session state: %w", err)
 		closeErr := closeACPSessionWithTimeout(process, response.SessionId)
+		errorContext(
+			ctx,
+			"acpagent: persist ACP session state failed",
+			append(
+				sessionLogFields(key),
+				"agent", a.config.Name,
+				"acp_session_id", string(response.SessionId),
+				"error", errors.Join(persistErr, closeErr),
+			)...,
+		)
 		return nil, errors.Join(persistErr, closeErr)
 	}
 	for stateKey, value := range state {
@@ -247,6 +339,11 @@ func (a *ACPAgent) acquireSessionOnce(
 		cloneSessionState(state),
 	)
 	a.sessions.put(binding)
+	infoContext(
+		ctx,
+		"acpagent: created ACP session",
+		append(acpSessionLogFields(binding), "agent", a.config.Name)...,
+	)
 	return binding, nil
 }
 
@@ -256,6 +353,15 @@ func (a *ACPAgent) restoreACPSession(
 	sessionID acpsdk.SessionId,
 ) (bool, error) {
 	if process.agentDescriptor.agentCapabilities.SessionCapabilities.Resume != nil {
+		debugContext(
+			ctx,
+			"acpagent: resuming ACP session",
+			append(
+				processLogFields(process),
+				"agent", a.config.Name,
+				"acp_session_id", string(sessionID),
+			)...,
+		)
 		return true, a.connections.withSessionAuthentication(
 			ctx,
 			process,
@@ -269,11 +375,31 @@ func (a *ACPAgent) restoreACPSession(
 						McpServers: []acpsdk.McpServer{},
 					},
 				)
+				if err == nil {
+					infoContext(
+						ctx,
+						"acpagent: resumed ACP session",
+						append(
+							processLogFields(process),
+							"agent", a.config.Name,
+							"acp_session_id", string(sessionID),
+						)...,
+					)
+				}
 				return err
 			},
 		)
 	}
 	if process.agentDescriptor.agentCapabilities.LoadSession {
+		debugContext(
+			ctx,
+			"acpagent: loading ACP session",
+			append(
+				processLogFields(process),
+				"agent", a.config.Name,
+				"acp_session_id", string(sessionID),
+			)...,
+		)
 		return true, a.connections.withSessionAuthentication(
 			ctx,
 			process,
@@ -287,6 +413,17 @@ func (a *ACPAgent) restoreACPSession(
 						McpServers: []acpsdk.McpServer{},
 					},
 				)
+				if err == nil {
+					infoContext(
+						ctx,
+						"acpagent: loaded ACP session",
+						append(
+							processLogFields(process),
+							"agent", a.config.Name,
+							"acp_session_id", string(sessionID),
+						)...,
+					)
+				}
 				return err
 			},
 		)
@@ -326,6 +463,15 @@ func (a *ACPAgent) clearPersistedSessionID(
 		return fmt.Errorf("acpagent: clear stale ACP session ID: %w", err)
 	}
 	invocation.Session.SetState(stateKey, nil)
+	debugContext(
+		ctx,
+		"acpagent: cleared persisted ACP session id",
+		append(
+			sessionLogFields(key),
+			"agent", a.config.Name,
+			"state_key", stateKey,
+		)...,
+	)
 	return nil
 }
 
@@ -475,19 +621,42 @@ func closeACPSession(
 	process *processConnection,
 	sessionID acpsdk.SessionId,
 ) error {
-	if process == nil || process.connection == nil {
-		return errors.New("acpagent: ACP process is unavailable for session cleanup")
-	}
-	if process.agentDescriptor.agentCapabilities.SessionCapabilities.Close == nil {
-		return errSessionCloseUnsupported
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if process == nil || process.connection == nil {
+		err := errors.New("acpagent: ACP process is unavailable for session cleanup")
+		warnContext(
+			ctx,
+			"acpagent: ACP process is unavailable for session cleanup",
+			"acp_session_id", string(sessionID),
+			"error", err,
+		)
+		return err
+	}
+	if process.agentDescriptor.agentCapabilities.SessionCapabilities.Close == nil {
+		debugContext(
+			ctx,
+			"acpagent: session close capability is not advertised",
+			append(
+				processLogFields(process),
+				"acp_session_id", string(sessionID),
+			)...,
+		)
+		return errSessionCloseUnsupported
 	}
 	_, err := process.connection.CloseSession(ctx, acpsdk.CloseSessionRequest{
 		SessionId: sessionID,
 	})
 	if isUnknownSessionError(err) {
+		debugContext(
+			ctx,
+			"acpagent: ACP session is already unknown during close",
+			append(
+				processLogFields(process),
+				"acp_session_id", string(sessionID),
+			)...,
+		)
 		return nil
 	}
 	if err != nil {

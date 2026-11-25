@@ -52,6 +52,7 @@ type processConnection struct {
 	done            chan struct{}
 	waitErr         error
 	stderr          *processStderr
+	startedAt       time.Time
 	agentDescriptor acpAgentDescriptor
 	authGroup       singleflight.Group
 }
@@ -111,10 +112,20 @@ func (m *connectionManager) connect(ctx context.Context) (*processConnection, er
 	if m.current != nil {
 		current := m.current
 		m.mu.Unlock()
+		debugContext(
+			ctx,
+			"acpagent: reusing process",
+			append(processLogFields(current), "agent", m.config.Name)...,
+		)
 		return current, nil
 	}
 	m.state = lifecycleStarting
 	m.mu.Unlock()
+	debugContext(
+		ctx,
+		"acpagent: starting connection",
+		"agent", m.config.Name,
+	)
 
 	process, err := m.startProcess()
 	if err != nil {
@@ -143,12 +154,25 @@ func (m *connectionManager) connect(ctx context.Context) (*processConnection, er
 	m.current = process
 	m.state = lifecycleRunning
 	m.mu.Unlock()
+	infoContext(
+		ctx,
+		"acpagent: process ready",
+		append(processLogFields(process), "agent", m.config.Name)...,
+	)
 
 	go m.wait(process)
 	return process, nil
 }
 
 func (m *connectionManager) startProcess() (*processConnection, error) {
+	log.Debug(
+		"acpagent: starting process",
+		"agent", m.config.Name,
+		"command", m.config.Command,
+		"work_dir", m.config.WorkDir,
+		"arg_count", len(m.config.Args),
+		"env_count", len(m.config.Env),
+	)
 	processCtx, cancel := context.WithCancel(context.Background())
 	//nolint:gosec // The executable is explicit ACP agent configuration.
 	cmd := exec.CommandContext(processCtx, m.config.Command, m.config.Args...)
@@ -163,19 +187,30 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("acpagent: create process stdin: %w", err)
+		err = fmt.Errorf("acpagent: create process stdin: %w", err)
+		log.Error("acpagent: failed to create process stdin", "agent", m.config.Name, "error", err)
+		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
 		cancel()
-		return nil, fmt.Errorf("acpagent: create process stdout: %w", err)
+		err = fmt.Errorf("acpagent: create process stdout: %w", err)
+		log.Error("acpagent: failed to create process stdout", "agent", m.config.Name, "error", err)
+		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		cancel()
-		return nil, fmt.Errorf("acpagent: start agent process: %w", err)
+		err = fmt.Errorf("acpagent: start agent process: %w", err)
+		log.Error("acpagent: failed to start process", "agent", m.config.Name, "error", err)
+		return nil, err
 	}
+	log.Info(
+		"acpagent: process started",
+		"agent", m.config.Name,
+		"pid", cmd.Process.Pid,
+	)
 	return &processConnection{
 		cmd:   cmd,
 		stdin: stdin,
@@ -184,10 +219,11 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 			stdin,
 			stdout,
 		),
-		ctx:    processCtx,
-		cancel: cancel,
-		done:   make(chan struct{}),
-		stderr: stderr,
+		ctx:       processCtx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		stderr:    stderr,
+		startedAt: time.Now(),
 	}, nil
 }
 
@@ -200,24 +236,33 @@ func (m *connectionManager) wait(process *processConnection) {
 	process.waitErr = err
 	var (
 		failureErr error
+		duration   time.Duration
 		unexpected bool
 	)
 	if m.current == process {
 		unexpected = m.state == lifecycleRunning
 		failureErr = process.failureError()
+		duration = time.Since(process.startedAt)
 		m.activeTurns.failAll(failureErr)
 		m.current = nil
 		m.state = lifecycleStopped
 	}
 	m.mu.Unlock()
 	close(process.done)
-	if unexpected {
-		log.Errorf(
-			"acpagent: process %q exited unexpectedly: %v",
-			m.config.Name,
-			failureErr,
-		)
+	if failureErr == nil {
+		return
 	}
+	fields := append(
+		processLogFields(process),
+		"agent", m.config.Name,
+		"duration", duration,
+		"error", failureErr,
+	)
+	if unexpected {
+		errorContext(context.Background(), "acpagent: process exited unexpectedly", fields...)
+		return
+	}
+	debugContext(context.Background(), "acpagent: process exited after shutdown", fields...)
 }
 
 func (m *connectionManager) stopStartedProcess(process *processConnection) {
@@ -230,6 +275,7 @@ func (m *connectionManager) stopStartedProcess(process *processConnection) {
 
 func (m *connectionManager) close() error {
 	m.closeOnce.Do(func() {
+		debugContext(context.Background(), "acpagent: closing connection", "agent", m.config.Name)
 		m.stopIdleTimer()
 		m.startMu.Lock()
 		m.mu.Lock()
@@ -245,6 +291,7 @@ func (m *connectionManager) close() error {
 			m.mu.Lock()
 			m.state = lifecycleStopped
 			m.mu.Unlock()
+			debugContext(context.Background(), "acpagent: closed without a running process", "agent", m.config.Name)
 			return
 		}
 		m.closeErr = m.closeProcess(process)
@@ -254,6 +301,19 @@ func (m *connectionManager) close() error {
 		}
 		m.state = lifecycleStopped
 		m.mu.Unlock()
+		if m.closeErr != nil {
+			warnContext(
+				context.Background(),
+				"acpagent: close process failed",
+				append(processLogFields(process), "agent", m.config.Name, "error", m.closeErr)...,
+			)
+		} else {
+			debugContext(
+				context.Background(),
+				"acpagent: closed process",
+				append(processLogFields(process), "agent", m.config.Name)...,
+			)
+		}
 	})
 	return m.closeErr
 }
@@ -332,6 +392,15 @@ func (m *connectionManager) reclaimIdleProcess(generation uint64) {
 	}
 	m.state = lifecycleClosing
 	m.mu.Unlock()
+	infoContext(
+		context.Background(),
+		"acpagent: reclaiming idle process",
+		append(
+			processLogFields(process),
+			"agent", m.config.Name,
+			"idle_timeout", m.idleTimeout,
+		)...,
+	)
 
 	closeErr := m.closeProcess(process)
 	m.mu.Lock()
@@ -341,13 +410,18 @@ func (m *connectionManager) reclaimIdleProcess(generation uint64) {
 	m.state = lifecycleStopped
 	m.mu.Unlock()
 	if closeErr != nil {
-		log.WarnContext(
+		warnContext(
 			context.Background(),
-			"ACP process idle close failed",
-			"error",
-			closeErr,
+			"acpagent: idle process close failed",
+			append(processLogFields(process), "agent", m.config.Name, "error", closeErr)...,
 		)
+		return
 	}
+	infoContext(
+		context.Background(),
+		"acpagent: reclaimed idle process",
+		append(processLogFields(process), "agent", m.config.Name)...,
+	)
 }
 
 func (m *connectionManager) closeProcess(process *processConnection) error {

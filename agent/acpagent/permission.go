@@ -32,47 +32,123 @@ func (c *protocolClient) checkPermission(
 	}
 	turn, ok := c.activeTurns.get(request.SessionId)
 	if !ok || turn == nil || turn.invocation == nil {
+		warnContext(
+			ctx,
+			"acpagent: permission request has no active turn",
+			"session_id", string(request.SessionId),
+			"tool_call_id", string(request.ToolCall.ToolCallId),
+		)
 		return cancelledPermissionResponse()
 	}
 	if turn.ctx != nil && turn.ctx.Err() != nil {
+		debugContext(
+			ctx,
+			"acpagent: permission request ignored for canceled turn",
+			"session_id", string(request.SessionId),
+			"invocation_id", turn.invocation.InvocationID,
+			"tool_call_id", string(request.ToolCall.ToolCallId),
+		)
 		return cancelledPermissionResponse()
 	}
 	policy := turn.invocation.RunOptions.ToolPermissionPolicy
 	if policy == nil {
+		warnContext(
+			ctx,
+			"acpagent: permission request rejected because no policy is configured",
+			"session_id", string(request.SessionId),
+			"invocation_id", turn.invocation.InvocationID,
+			"tool_call_id", string(request.ToolCall.ToolCallId),
+		)
 		return rejectedPermissionResponse(request.Options)
 	}
 	permissionRequest, err := permissionRequestFromACP(request.ToolCall)
 	if err != nil {
+		warnContext(
+			ctx,
+			"acpagent: failed to build permission request",
+			"session_id", string(request.SessionId),
+			"invocation_id", turn.invocation.InvocationID,
+			"tool_call_id", string(request.ToolCall.ToolCallId),
+			"error", err,
+		)
 		return rejectedPermissionResponse(request.Options)
 	}
+	permissionFields := []any{
+		"session_id", string(request.SessionId),
+		"invocation_id", turn.invocation.InvocationID,
+		"tool_call_id", permissionRequest.ToolCallID,
+		"tool_name", permissionRequest.ToolName,
+		"tool_kind", permissionToolKind(request.ToolCall.Kind),
+	}
+	debugContext(ctx, "acpagent: checking tool permission", permissionFields...)
 	policyCtx, cancel := mergeContexts(ctx, turn.ctx)
 	defer cancel()
 	if policyCtx.Err() != nil {
+		debugContext(
+			ctx,
+			"acpagent: permission check canceled",
+			append(permissionFields, "error", policyCtx.Err())...,
+		)
 		return cancelledPermissionResponse()
 	}
 	decision, err := policy.CheckToolPermission(policyCtx, permissionRequest)
 	if policyCtx.Err() != nil {
+		debugContext(
+			ctx,
+			"acpagent: permission check canceled",
+			append(permissionFields, "error", policyCtx.Err())...,
+		)
 		return cancelledPermissionResponse()
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			debugContext(
+				ctx,
+				"acpagent: permission check canceled",
+				append(permissionFields, "error", err)...,
+			)
 			return cancelledPermissionResponse()
 		}
+		warnContext(
+			ctx,
+			"acpagent: permission policy failed",
+			append(permissionFields, "error", err)...,
+		)
 		return rejectedPermissionResponse(request.Options)
 	}
 	decision, err = tool.NormalizePermissionDecision(decision)
 	if err != nil {
+		warnContext(
+			ctx,
+			"acpagent: permission decision is invalid",
+			append(permissionFields, "error", err)...,
+		)
 		return rejectedPermissionResponse(request.Options)
 	}
 	switch decision.Action {
 	case tool.PermissionActionAllow:
+		infoContext(
+			ctx,
+			"acpagent: tool permission allowed",
+			append(permissionFields, "decision", decision.Action)...,
+		)
 		return selectedPermissionResponse(
 			request.Options,
 			acpsdk.PermissionOptionKindAllowOnce,
 		)
 	case tool.PermissionActionDeny, tool.PermissionActionAsk:
+		infoContext(
+			ctx,
+			"acpagent: tool permission denied",
+			append(permissionFields, "decision", decision.Action)...,
+		)
 		return rejectedPermissionResponse(request.Options)
 	default:
+		infoContext(
+			ctx,
+			"acpagent: tool permission denied",
+			append(permissionFields, "decision", decision.Action)...,
+		)
 		return rejectedPermissionResponse(request.Options)
 	}
 }
@@ -152,6 +228,13 @@ func permissionToolMetadata(kind *acpsdk.ToolKind) tool.ToolMetadata {
 	default:
 		return tool.ToolMetadata{}
 	}
+}
+
+func permissionToolKind(kind *acpsdk.ToolKind) string {
+	if kind == nil {
+		return ""
+	}
+	return string(*kind)
 }
 
 func selectedPermissionResponse(

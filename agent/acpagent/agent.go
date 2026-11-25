@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -60,6 +61,18 @@ func New(name string, opts ...Option) (*ACPAgent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acpagent: compute launch fingerprint: %w", err)
 	}
+	log.Debug(
+		"acpagent: created agent",
+		"agent", config.Name,
+		"command", config.Command,
+		"work_dir", config.WorkDir,
+		"arg_count", len(config.Args),
+		"env_count", len(config.Env),
+		"idle_timeout", config.IdleTimeout,
+		"terminal_auth", options.terminalAuthHandler != nil,
+		"auth_selector", options.authMethodSelector != nil,
+		"launch_fingerprint", launchFingerprint,
+	)
 	activeTurns := newActiveTurnRegistry()
 	return &ACPAgent{
 		config:              config,
@@ -83,11 +96,21 @@ func (a *ACPAgent) Run(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
-	if invocation == nil {
-		return nil, errors.New("acpagent: invocation is nil")
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	if invocation == nil {
+		err := errors.New("acpagent: invocation is nil")
+		warnContext(ctx, "acpagent: invalid invocation", "error", err)
+		return nil, err
+	}
+	fields := invocationLogFields(invocation)
+	fields = append(fields, "content_parts", len(invocation.Message.ContentParts))
+	debugContext(ctx, "acpagent: starting invocation", fields...)
 	content, err := promptContentFromMessage(invocation.Message)
 	if err != nil {
+		fields = append(fields, "error", err)
+		warnContext(ctx, "acpagent: failed to build prompt", fields...)
 		return nil, err
 	}
 	releaseActivity := a.connections.beginActivity()
@@ -95,9 +118,6 @@ func (a *ACPAgent) Run(
 	if err != nil {
 		releaseActivity()
 		return nil, err
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	runCtx := agent.CloneContext(ctx)
 	out := make(chan *event.Event)
@@ -139,6 +159,7 @@ func (a *ACPAgent) Close() error {
 		return nil
 	}
 	a.closeOnce.Do(func() {
+		log.Debug("acpagent: closing agent", "agent", a.config.Name)
 		a.closeErr = a.connections.close()
 	})
 	return a.closeErr
