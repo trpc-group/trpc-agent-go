@@ -438,6 +438,16 @@ func WithAccumulateChunkTokenUsage(a AccumulateChunkUsage) Option {
 	}
 }
 
+func hasUsageTokens(usage model.Usage) bool {
+	return usage.PromptTokens != 0 ||
+		usage.CompletionTokens != 0 ||
+		usage.TotalTokens != 0 ||
+		usage.PromptTokensDetails.CachedTokens != 0 ||
+		usage.PromptTokensDetails.CacheReadTokens != 0 ||
+		usage.PromptTokensDetails.CacheCreationTokens != 0 ||
+		usage.CompletionTokensDetails.ReasoningTokens != 0
+}
+
 // inverseOpenAISDKAddChunkUsage calculates the inverse of OPENAISKDAddChunkUsage, related to the current openai sdk version
 func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage {
 	return model.Usage{
@@ -458,9 +468,9 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 // completionUsageToModelUsage converts openai.CompletionUsage to model.Usage.
 //
 // Besides the OpenAI-standard cached_tokens, the conversion surfaces the prompt
-// cache read and cache write counts that gateways report in
-// prompt_tokens_details. Those counts stay 0 for providers that follow the
-// OpenAI schema strictly.
+// cache read and cache write counts that providers and gateways report in
+// prompt_tokens_details (and top-level usage fallback for cache writes). Those
+// counts stay 0 for providers that do not report them.
 func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
 	cacheReadTokens, cacheCreationTokens := usageCacheTokens(usage)
 	return model.Usage{

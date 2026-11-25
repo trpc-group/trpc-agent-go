@@ -16,10 +16,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
@@ -1080,12 +1082,36 @@ func projectOutput(output []responses.ResponseOutputItemUnion, tools *toolPlan) 
 	return out, payload, nil
 }
 
+const (
+	extraFieldCacheReadTokens          = "cache_read_tokens"           // #nosec G101 - JSON field name, not a credential.
+	extraFieldCacheCreationTokens      = "cache_creation_tokens"       // #nosec G101 - JSON field name, not a credential.
+	extraFieldCacheWriteTokens         = "cache_write_tokens"          // #nosec G101 - JSON field name, not a credential.
+	extraFieldCacheCreationInputTokens = "cache_creation_input_tokens" // #nosec G101 - JSON field name, not a credential.
+)
+
+// cacheWriteFieldPrecedence is the alias order used to resolve the prompt
+// cache write count when the native InputTokensDetails.CacheWriteTokens field
+// is absent. It matches model/openai Chat Completions and applies to both
+// input_tokens_details and top-level usage.
+var cacheWriteFieldPrecedence = []string{
+	extraFieldCacheWriteTokens,
+	extraFieldCacheCreationTokens,
+	extraFieldCacheCreationInputTokens,
+}
+
 func mapUsage(resp *responses.Response) *model.Usage {
 	if resp == nil {
 		return nil
 	}
 	u := resp.Usage
-	if u.InputTokens == 0 && u.OutputTokens == 0 && u.TotalTokens == 0 {
+	cacheRead, cacheCreation := responseUsageCacheTokens(u)
+	if u.InputTokens == 0 &&
+		u.OutputTokens == 0 &&
+		u.TotalTokens == 0 &&
+		u.InputTokensDetails.CachedTokens == 0 &&
+		cacheRead == 0 &&
+		cacheCreation == 0 &&
+		u.OutputTokensDetails.ReasoningTokens == 0 {
 		return nil
 	}
 	return &model.Usage{
@@ -1093,12 +1119,53 @@ func mapUsage(resp *responses.Response) *model.Usage {
 		CompletionTokens: int(u.OutputTokens),
 		TotalTokens:      int(u.TotalTokens),
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(u.InputTokensDetails.CachedTokens),
+			CachedTokens:        int(u.InputTokensDetails.CachedTokens),
+			CacheCreationTokens: cacheCreation,
+			CacheReadTokens:     cacheRead,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(u.OutputTokensDetails.ReasoningTokens),
 		},
 	}
+}
+
+func responseUsageCacheTokens(u responses.ResponseUsage) (cacheRead, cacheCreation int) {
+	detailFields := u.InputTokensDetails.JSON.ExtraFields
+	usageFields := u.JSON.ExtraFields
+	cacheRead = extraTokenCount(detailFields[extraFieldCacheReadTokens])
+	if u.InputTokensDetails.CacheWriteTokens > 0 {
+		cacheCreation = int(u.InputTokensDetails.CacheWriteTokens)
+		return cacheRead, cacheCreation
+	}
+	cacheCreation = firstPositiveExtraTokenCount(detailFields, cacheWriteFieldPrecedence...)
+	if cacheCreation == 0 && len(usageFields) > 0 {
+		cacheCreation = firstPositiveExtraTokenCount(usageFields, cacheWriteFieldPrecedence...)
+	}
+	return cacheRead, cacheCreation
+}
+
+func firstPositiveExtraTokenCount(fields map[string]respjson.Field, keys ...string) int {
+	if len(fields) == 0 {
+		return 0
+	}
+	for _, key := range keys {
+		if count := extraTokenCount(fields[key]); count > 0 {
+			return count
+		}
+	}
+	return 0
+}
+
+func extraTokenCount(field respjson.Field) int {
+	raw := field.Raw()
+	if raw == "" {
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || count < 0 {
+		return 0
+	}
+	return count
 }
 
 func firstNonEmpty(values ...string) string {

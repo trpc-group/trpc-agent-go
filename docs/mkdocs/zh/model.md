@@ -711,8 +711,8 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 | `CompletionTokens` | 服务方上报的模型输出 token 总量 |
 | `TotalTokens` | 服务方上报的总 token，通常等于 prompt 加 completion |
 | `PromptTokensDetails.CachedTokens` | OpenAI-compatible Prompt Cache 命中的输入 token，通常是 `PromptTokens` 的子集 |
-| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token。网关上报 `prompt_tokens_details.cache_creation_tokens` 时填充 |
-| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token。网关上报 `prompt_tokens_details.cache_read_tokens` 时填充 |
+| `PromptTokensDetails.CacheCreationTokens` | 写入/创建缓存的输入 token。OpenAI-compatible 适配器按 `cache_write_tokens` → `cache_creation_tokens` → `cache_creation_input_tokens` 取首个正值，先查 `prompt_tokens_details`（Responses API 为 `input_tokens_details`，并优先使用原生 `cache_write_tokens` 字段），再回退顶层 `usage`；Anthropic/Bedrock 则映射其原生缓存写入字段 |
+| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token。OpenAI-compatible 适配器仅从 `prompt_tokens_details.cache_read_tokens`（Responses API 为 `input_tokens_details.cache_read_tokens`）读取，无顶层 `usage` 回退；Anthropic/Bedrock 则映射其原生缓存读字段 |
 | `CompletionTokensDetails.ReasoningTokens` | Completion usage 中服务方上报的推理 token |
 | `TimingInfo` | 可选的框架耗时信息，不属于计费 token |
 | `TimingInfo.FirstTokenDuration` | 每次模型调用从请求开始到第一个有效 reasoning、content 或 tool-call chunk 的耗时，多个模型调用会累加 |
@@ -723,15 +723,27 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 只会收到上游 OpenAI-compatible 响应和 adapter 映射支持的字段；其他服务方
 专用字段保持为零。
 
-OpenAI-compatible adapter 还会读取网关放在 `prompt_tokens_details` 里的
-Prompt Cache 计数：`cache_read_tokens` 映射到
-`PromptTokensDetails.CacheReadTokens`，`cache_creation_tokens` 映射到
-`PromptTokensDetails.CacheCreationTokens`。严格遵循 OpenAI schema 的服务方
-这两个值保持为 `0`。
+OpenAI-compatible Chat Completions 适配器对 Prompt Cache 扩展字段的读取位置
+与优先级如下（未上报这些字段的服务方对应值保持为 `0`）：
+
+- **缓存读取**：仅从 `prompt_tokens_details.cache_read_tokens` 读取并映射到
+  `PromptTokensDetails.CacheReadTokens`（不支持顶层 `usage` 回退）；标准
+  `prompt_tokens_details.cached_tokens` 仍映射到 `PromptTokensDetails.CachedTokens`。
+- **缓存写入**：按 `cache_write_tokens` → `cache_creation_tokens` →
+  `cache_creation_input_tokens` 顺序取首个正整数，映射到
+  `PromptTokensDetails.CacheCreationTokens`。同时上报的别名不会相加（例如
+  `cache_write_tokens=256` 与 `cache_creation_tokens=128` 同时出现时取
+  `256`），值为 0 的占位字段也不会遮蔽后续别名。先检查
+  `prompt_tokens_details`，均无正值时再按相同顺序回退检查顶层 `usage`。
+  Responses API 适配器在原生 `input_tokens_details.cache_write_tokens` 之后
+  使用相同顺序。
 
 流式响应中这两个计数与其他 token 字段一样按 chunk 累加；配置了
 `WithAccumulateChunkTokenUsage` 回调时，最终值由回调的返回值决定，因此
 上报累计快照的服务方可以保留最新一次快照。
+
+结束标记之后的 usage-only chunk 仍会累加 token 计数，并在聚合后的响应中
+保留各个 choice 最近一次非空的 `finish_reason`。
 
 `TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
 OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator

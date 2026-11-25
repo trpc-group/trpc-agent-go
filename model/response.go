@@ -136,11 +136,17 @@ type Usage struct {
 
 // PromptTokensDetails is the details of the prompt tokens.
 type PromptTokensDetails struct {
-	// CachedTokens is the number of cached tokens in the prompt.
+	// CachedTokens is the number of cached tokens read from prompt cache
+	// (OpenAI-compatible cached_tokens, Gemini cachedContentTokenCount, and a
+	// compatibility alias for Anthropic/Bedrock cache reads).
 	CachedTokens int `json:"cached_tokens"`
-	// CacheCreationTokens is the number of tokens used to create the cache (Anthropic).
+	// CacheCreationTokens is the number of prompt tokens written to cache
+	// (e.g., OpenAI/compatible cache_write_tokens or cache_creation_tokens,
+	// Anthropic cache_creation_input_tokens, Bedrock cacheWriteInputTokens).
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
-	// CacheReadTokens is the number of tokens read from cache (Anthropic).
+	// CacheReadTokens is the number of prompt tokens read from an explicit
+	// provider cache (e.g., Anthropic cache_read_input_tokens, Bedrock
+	// cacheReadInputTokens, or gateway cache_read_tokens).
 	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 }
 

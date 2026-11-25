@@ -1958,9 +1958,7 @@ func hasAccumulatorPayloadBeyondReasoning(
 		}
 	}
 
-	return chunk.Usage.CompletionTokens > 0 ||
-		chunk.Usage.PromptTokens > 0 ||
-		chunk.Usage.TotalTokens > 0
+	return hasUsageTokens(completionUsageToModelUsage(chunk.Usage))
 }
 
 // toolCallIndexState tracks provider indices separately from accumulator indices
@@ -2537,11 +2535,11 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 	}
 
 	// Tool calls are only meaningful when the array is non-empty.
-	if delta.JSON.ToolCalls.Valid() {
-		return len(delta.ToolCalls) == 0
+	if delta.JSON.ToolCalls.Valid() && len(delta.ToolCalls) > 0 {
+		return false
 	}
 
-	if chunk.Usage.CompletionTokens > 0 || chunk.Usage.PromptTokens > 0 || chunk.Usage.TotalTokens > 0 {
+	if hasUsageTokens(completionUsageToModelUsage(chunk.Usage)) {
 		return false
 	}
 
@@ -2806,7 +2804,7 @@ func (m *Model) createFinalResponse(
 	// This is consistent with the non-streaming createResponseFromCompletion
 	// path and prevents the Langfuse exporter from seeing zero-valued usage
 	// attributes that get filtered out by usageDetails.empty().
-	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
+	if hasUsageTokens(usage) {
 		finalResponse.Usage = &usage
 	}
 
@@ -2967,8 +2965,8 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	// streaming createFinalResponse path. This prevents the Langfuse exporter
 	// from seeing zero-valued usage attributes that get filtered out by
 	// usageDetails.empty().
-	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 || chatCompletion.Usage.TotalTokens > 0 {
-		usage := completionUsageToModelUsage(chatCompletion.Usage)
+	usage := completionUsageToModelUsage(chatCompletion.Usage)
+	if hasUsageTokens(usage) {
 		response.Usage = &usage
 	}
 

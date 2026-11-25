@@ -735,8 +735,8 @@ The accumulator state is a complete `model.Usage` value:
 | `CompletionTokens` | Total generated output tokens reported by the provider |
 | `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
 | `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
-| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache. Populated from `prompt_tokens_details.cache_creation_tokens` when a gateway reports it |
-| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. Populated from `prompt_tokens_details.cache_read_tokens` when a gateway reports it |
+| `PromptTokensDetails.CacheCreationTokens` | Prompt tokens written to cache. OpenAI-compatible adapters resolve `cache_write_tokens` → `cache_creation_tokens` → `cache_creation_input_tokens` (first positive value wins), first in `prompt_tokens_details` (`input_tokens_details` for the Responses API, whose native `cache_write_tokens` field is used first) and then in top-level `usage`; Anthropic and Bedrock map their native cache-write fields |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. OpenAI-compatible adapters read `cache_read_tokens` only from `prompt_tokens_details` (or `input_tokens_details` in Responses API), with no top-level `usage` fallback; Anthropic and Bedrock map their native cache-read fields |
 | `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
 | `TimingInfo` | Optional framework timing metadata, not billable token usage |
 | `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
@@ -747,17 +747,33 @@ These fields form a provider-agnostic structure.
 its callback only receives fields that the upstream OpenAI-compatible response
 and adapter mapping support. Other provider-specific fields remain zero.
 
-The OpenAI-compatible adapter also surfaces prompt cache counts that gateways
-report in `prompt_tokens_details`: `cache_read_tokens` maps to
-`PromptTokensDetails.CacheReadTokens`, and `cache_creation_tokens` maps to
-`PromptTokensDetails.CacheCreationTokens`. Providers that follow the OpenAI
-schema strictly leave both counts at `0`.
+The OpenAI-compatible Chat Completions adapter reads extended prompt cache
+counts with distinct locations and precedence (providers that do not report
+these fields leave them at `0`):
+
+- **Cache reads**: read only from `prompt_tokens_details.cache_read_tokens`
+  into `PromptTokensDetails.CacheReadTokens` (top-level `usage.cache_read_tokens`
+  is not supported); standard `prompt_tokens_details.cached_tokens` continues
+  to map to `PromptTokensDetails.CachedTokens`.
+- **Cache writes**: resolved in the order `cache_write_tokens` →
+  `cache_creation_tokens` → `cache_creation_input_tokens`, taking the first
+  positive integer into `PromptTokensDetails.CacheCreationTokens`. Aliases
+  reported together are never summed (for example, `cache_write_tokens=256`
+  with `cache_creation_tokens=128` yields `256`), and a zero-valued placeholder
+  does not hide a later alias. `prompt_tokens_details` is checked first; the
+  same order is then applied to top-level `usage` only when no detail field is
+  positive. The Responses API adapter uses the same order after its native
+  `input_tokens_details.cache_write_tokens` field.
 
 In streaming responses both counts accumulate across chunks, matching the
 default accumulation of prompt, completion, and total tokens. When a
 `WithAccumulateChunkTokenUsage` callback is configured, its return value
 determines the final cache counts, so providers that report cumulative
 snapshots can keep the latest one.
+
+Usage-only chunks after a finish marker still contribute token counts while
+preserving the latest non-empty `finish_reason` for each choice in the
+accumulated response.
 
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
