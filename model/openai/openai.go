@@ -36,6 +36,7 @@ import (
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -712,6 +713,7 @@ func (m *Model) GenerateContent(
 		defer close(responseChan)
 		defer reporter.End()
 		emit := func(resp *model.Response) bool {
+			markInclusivePromptCacheAccounting(resp)
 			reporter.TrackResponse(resp)
 			select {
 			case responseChan <- resp:
@@ -727,6 +729,14 @@ func (m *Model) GenerateContent(
 		}
 	}()
 	return responseChan, nil
+}
+
+// markInclusivePromptCacheAccounting declares that Chat Completions
+// prompt_tokens include cached and cache-write tokens on an emitted response.
+func markInclusivePromptCacheAccounting(resp *model.Response) {
+	if resp != nil && resp.Usage != nil {
+		usagemeta.SetPromptCacheAccounting(resp.Usage, usagemeta.PromptCacheAccountingInclusive)
+	}
 }
 
 // GenerateContentIter implements the model.IterModel interface.
@@ -751,6 +761,7 @@ func (m *Model) GenerateContentIter(
 			if ctx.Err() != nil {
 				return false
 			}
+			markInclusivePromptCacheAccounting(resp)
 			reporter.TrackResponse(resp)
 			return yield(resp)
 		}

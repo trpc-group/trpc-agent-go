@@ -24,6 +24,7 @@ import (
 	"google.golang.org/genai"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
+	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -592,7 +593,7 @@ func (m *Model) completionUsageToModelUsage(usage *genai.GenerateContentResponse
 	if usage == nil {
 		return nil
 	}
-	return &model.Usage{
+	u := &model.Usage{
 		PromptTokens:     int(usage.PromptTokenCount),
 		CompletionTokens: int(usage.CandidatesTokenCount),
 		TotalTokens:      int(usage.TotalTokenCount),
@@ -603,6 +604,9 @@ func (m *Model) completionUsageToModelUsage(usage *genai.GenerateContentResponse
 			ReasoningTokens: int(usage.ThoughtsTokenCount),
 		},
 	}
+	// Gemini promptTokenCount includes cachedContentTokenCount.
+	usagemeta.SetPromptCacheAccounting(u, usagemeta.PromptCacheAccountingInclusive)
+	return u
 }
 
 // applyTokenTailoring performs best-effort token tailoring if configured.

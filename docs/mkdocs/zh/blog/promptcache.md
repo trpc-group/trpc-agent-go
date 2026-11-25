@@ -400,6 +400,17 @@ Telemetry 层也会拆分 token 类型。`internal/telemetry` 包会记录：
 - `input_cache_creation`
 - `output`
 
+这些 Langfuse 分桶互不重叠。不同服务方对输入 token 的计数口径不同：
+OpenAI-compatible API（Chat Completions 与 Responses）和 Gemini 的
+`prompt_tokens` 包含缓存读取与缓存写入 token，Anthropic 和 Bedrock 则不包含。
+模型适配器会在返回的 usage 上声明该口径，LLM span 通过
+`gen_ai.usage.input_tokens.cache_accounting`（`inclusive` 或 `exclusive`，
+只要存在缓存计数就会写入）携带该信息。Langfuse exporter 据此计算未缓存的
+`input` 分桶，因此 `prompt_tokens=1774, cache_write_tokens=1771` 这类仅有缓存
+写入的 OpenAI 请求会导出 `input=3, input_cache_creation=1771`，而不会重复计算
+缓存写入。由自定义代码构造的 usage 不带口径声明（属性值为空），沿用原有的
+启发式归一化。
+
 #### 流式 Usage 排障
 
 在流式请求中，OpenAI-compatible 服务通常会在最后发送一个只包含 usage
