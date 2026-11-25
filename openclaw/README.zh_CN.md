@@ -686,8 +686,13 @@ Completions API 在 GPT-5.4 及更新的模型上，不支持在推理强度不�
 而 `gpt-5.6-sol` 在省略该字段时默认使用 `medium`。因此默认情况下推理处于关闭状态，
 这与 `gpt-5` 不同。
 
-如需调整，请设置 `model.generation_config.reasoning_effort`。显式设置的值会原样发送，
-因此仅在不需要调用工具的运行中使用非 `none` 的值。其他模型名称不会应用此默认值。
+如需调整，请设置 `model.generation_config.reasoning_effort`。显式设置的值会原样发送。
+在 Chat Completions 中，只要请求声明了函数工具，推理强度不为 `none` 就会失败，即使模型
+并未调用工具。OpenClaw 默认会声明其宿主工具，因此仅在不发送任何工具声明的运行中使用
+其他推理强度。其他模型名称不会应用此默认值。
+
+此默认值仅适用于由 OpenClaw 自行构建的模型。已预先构建并传入的模型（例如通过
+`WithModelCatalog` 传入）不会经过这一设置，请自行为这些模型设置推理强度。
 
 ### 请求级模型选择
 

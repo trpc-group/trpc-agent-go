@@ -844,8 +844,15 @@ the field is omitted. Reasoning is therefore off by default, which differs
 from `gpt-5`.
 
 To change it, set `model.generation_config.reasoning_effort`. An explicit
-value is sent unchanged, so use a value other than `none` only for runs
-that do not call tools. Other model names do not get this default.
+value is sent unchanged. On Chat Completions, a request that declares
+function tools fails with any effort other than `none`, even if the model
+never calls a tool. OpenClaw declares its host tools by default, so use
+another effort only for runs that send no tool declarations. Other model
+names do not get this default.
+
+The default applies only to models that OpenClaw builds itself. Models
+passed in already constructed, for example through `WithModelCatalog`,
+skip this setup, so set the reasoning effort on those models yourself.
 
 ### Request-scoped model selection
 
