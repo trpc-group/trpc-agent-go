@@ -27,6 +27,40 @@ func (m providerDataInfoModel) GenerateContent(context.Context, *model.Request) 
 
 func (m providerDataInfoModel) Info() model.Info { return m.info }
 
+type providerHistoryModel struct {
+	providerDataInfoModel
+	protocol string
+}
+
+func (m providerHistoryModel) SupportsProviderHistory(protocol string) bool {
+	return protocol == m.protocol
+}
+
+func TestProviderHistoryRequiresSupportFromEveryCandidate(t *testing.T) {
+	info := model.Info{Name: "gpt-5", ProviderDataProtocol: "openai.responses"}
+	supporting := providerHistoryModel{providerDataInfoModel{info}, "openai.responses"}
+	otherProtocol := providerHistoryModel{providerDataInfoModel{info}, "other"}
+	legacy := providerDataInfoModel{info}
+	for _, tt := range []struct {
+		name       string
+		candidates []model.Model
+		want       bool
+	}{
+		{"all support", []model.Model{supporting, supporting}, true},
+		{"secondary does not implement", []model.Model{supporting, legacy}, false},
+		{"primary does not implement", []model.Model{legacy, supporting}, false},
+		{"secondary supports another protocol", []model.Model{supporting, otherProtocol}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			routed, err := New(WithCandidates(tt.candidates...))
+			require.NoError(t, err)
+			consumer, ok := routed.(model.ProviderHistoryConsumer)
+			require.True(t, ok)
+			require.Equal(t, tt.want, consumer.SupportsProviderHistory("openai.responses"))
+		})
+	}
+}
+
 func TestNewNativeProviderDataCandidates(t *testing.T) {
 	native := providerDataInfoModel{info: model.Info{Name: "gpt-5", ProviderDataProtocol: "openai.responses"}}
 

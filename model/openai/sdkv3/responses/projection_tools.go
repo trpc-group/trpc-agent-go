@@ -11,6 +11,7 @@ package responses
 import (
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -22,12 +23,12 @@ func reconcileProjectedToolNames(request *model.Request, before, after *model.Pr
 	var oldItems []nativeItem
 	var err error
 	if before != nil {
-		oldItems, err = parseNativeItems(before.Payload, true)
+		oldItems, err = responseshistory.ReadCompletedWithToolSearch(before.Payload)
 		if err != nil {
 			return err
 		}
 	}
-	newItems, err := parseNativeItems(after.Payload, true)
+	newItems, err := responseshistory.ReadCompletedWithToolSearch(after.Payload)
 	if err != nil {
 		return err
 	}

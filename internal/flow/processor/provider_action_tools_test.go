@@ -15,8 +15,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -103,4 +105,35 @@ func TestExecutionRequestUsesExactActionBindingAndPreservesCallbackNames(t *test
 	require.NoError(t, err)
 	memberTools = executionToolsForCall(ctx, response.Choices[0].Message.ToolCalls[1], request.Tools)
 	require.NotContains(t, memberTools, "crm.orders", "bindings do not survive the next response")
+}
+
+func TestSearchBindingUsesProducerOfResultInSelectedHistory(t *testing.T) {
+	identity := providerdata.ActionToolIdentity{Name: "lookup"}
+	first := providerActionResult("search-1")
+	first.ProviderData.Model = "model-a"
+	second := providerActionResult("search-1")
+	resultEvent := func(msg model.Message, selection tool.Tool) event.Event {
+		e := event.NewResponseEvent("run", "agent", &model.Response{Done: true,
+			Choices: []model.Choice{{Message: msg}}})
+		recordActionToolKeys(e, map[string]tool.Tool{actionIdentityKey(identity): selection})
+		return *e
+	}
+	// The session contains two producers' results. Each request selects one.
+	sess := &session.Session{Events: []event.Event{
+		resultEvent(first, unavailableActionTool("sandbox")),
+		resultEvent(second, nil),
+	}}
+	inv := agent.NewInvocation(agent.WithInvocationModel(plainNativeModel{}), agent.WithInvocationSession(sess))
+	inv.AgentName = "agent"
+	for _, tc := range []struct {
+		result  model.Message
+		expired bool
+	}{{first, true}, {second, false}} {
+		req := &model.Request{Messages: []model.Message{tc.result}}
+		state := actionToolsForInvocation(inv)
+		ctx, _, err := state.collect(context.Background(), inv, req, []model.Message{})
+		require.NoError(t, err)
+		actions := providerdata.ActionToolsFromContext(ctx)
+		require.Equal(t, tc.expired, actions.Expired("search-1", identity))
+	}
 }

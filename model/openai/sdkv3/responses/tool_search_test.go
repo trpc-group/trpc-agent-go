@@ -413,7 +413,7 @@ func TestClientToolSearchCompletesSearchCalls(t *testing.T) {
 		Messages: []model.Message{model.NewUserMessage("orders"), projected.Choices[0].Message, result},
 		Tools:    tools,
 	}
-	items, err := convertMessages(next.Messages, "gpt-5")
+	items, err := (&Model{name: "gpt-5"}).convertMessages(next.Messages)
 	require.NoError(t, err)
 	encoded, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -463,6 +463,10 @@ func TestHostedSearchHistoryKeepsLoadedEagerMemberRouting(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, key, mustFunctionName(t, plan, "billing", "lookup"))
 		require.Equal(t, key, mustFunctionName(t, projectionToolPlan(request), "billing", "lookup"))
+		// A later model may replay this history with tool search disabled.
+		plan, err = New("another-model").planTools(context.Background(), request)
+		require.NoError(t, err)
+		require.Equal(t, key, mustFunctionName(t, plan, "billing", "lookup"))
 	}
 }
 
@@ -645,8 +649,14 @@ func TestClientToolSearchResumeSkipsSavedResults(t *testing.T) {
 		{"type":"tool_search_output","execution":"client","call_id":"s1","status":"completed","tools":[
 		{"type":"function","name":"first","defer_loading":true,"parameters":{"type":"object"}}]}]`),
 	}}
+	storedPending := response.Choices[0].Message
+	storedData := *storedPending.ProviderData
+	storedData.Payload = json.RawMessage(`[
+		{"arguments":{"query":"first"},"status":"completed","call_id":"s1","execution":"client","id":"ts1","type":"tool_search_call"},
+		{"arguments":{"query":"second"},"status":"completed","call_id":"s2","execution":"client","id":"ts2","type":"tool_search_call"}]`)
+	storedPending.ProviderData = &storedData
 	request := &model.Request{
-		Messages: []model.Message{response.Choices[0].Message, saved},
+		Messages: []model.Message{storedPending, saved},
 		Tools: agentTools(t, []tool.Tool{
 			deferred.Tool(searchTestTool{name: "first"}),
 			deferred.Tool(searchTestTool{name: "second"}),
@@ -662,7 +672,7 @@ func TestClientToolSearchResumeSkipsSavedResults(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, results)
 	require.Equal(t, []string{"s2"}, handled, "saved results never rerun a handler")
-	_, err = convertMessages(request.Messages, "gpt-5")
+	_, err = (&Model{name: "gpt-5"}).convertMessages(request.Messages)
 	require.NoError(t, err, "the recovered round can be sent to the model")
 }
 
@@ -743,22 +753,195 @@ func TestToolSearchHistoryPairing(t *testing.T) {
 			`{"type":"tool_search_output","id":"tso_2","execution":"server","call_id":null,"status":"completed","tools":[]}]`),
 	}}
 	user := model.NewUserMessage("hi")
-	_, err := convertMessages([]model.Message{user, call, output("s1"), hosted}, "gpt-5")
+	_, err := (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, call, output("s1"), hosted})
 	require.NoError(t, err)
-	_, err = convertMessages([]model.Message{user, call}, "gpt-5")
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, call})
 	require.ErrorContains(t, err, `client tool_search_call "s1" has no tool_search_output`)
-	_, err = convertMessages([]model.Message{user, output("s1")}, "gpt-5")
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, output("s1")})
 	require.ErrorContains(t, err, "has no preceding tool_search_call")
-	_, err = convertMessages([]model.Message{user, call, output("s1"), output("s1")}, "gpt-5")
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, call, output("s1"), output("s1")})
 	require.ErrorContains(t, err, "duplicate tool_search_output")
 	mismatched := output("s1")
 	mismatched.ToolID = "other"
-	_, err = convertMessages([]model.Message{user, call, mismatched}, "gpt-5")
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, call, mismatched})
 	require.ErrorContains(t, err, "may only record the client tool_search_output")
+	wrongProducer := output("s1")
+	wrongData := *wrongProducer.ProviderData
+	wrongData.Model = "another-model"
+	wrongProducer.ProviderData = &wrongData
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, call, wrongProducer})
+	require.ErrorContains(t, err, `belongs to model "another-model", but its call belongs to model "gpt-5"`)
+	otherCall := call
+	otherData := *call.ProviderData
+	otherData.Model = "another-model"
+	otherCall.ProviderData = &otherData
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, otherCall, wrongProducer})
+	require.NoError(t, err, "a complete search from another model remains replayable")
 	onAssistant := output("s1")
 	onAssistant.Role = model.RoleAssistant
-	_, err = convertMessages([]model.Message{user, call, onAssistant}, "gpt-5")
+	_, err = (&Model{name: "gpt-5"}).convertMessages([]model.Message{user, call, onAssistant})
 	require.ErrorContains(t, err, "must be recorded on a tool message")
+}
+
+func TestCrossModelSearchHistoryReplayedInOrder(t *testing.T) {
+	const reasoning = `{"type":"reasoning","id":"rs_a","summary":[{"type":"summary_text","text":"thinking"}],"encrypted_content":"cipher","future":{"integer":9007199254740993}}`
+	const hostedCall = `{"type":"tool_search_call","id":"ts_hosted","execution":"server","status":"completed","arguments":{"paths":["catalog"]},"future":"call"}`
+	const hostedOutput = `{"type":"tool_search_output","id":"tso_hosted","execution":"server","status":"completed","tools":[],"future":"output"}`
+	const clientCall = `{"type":"tool_search_call","id":"ts_client","execution":"client","call_id":"search_a","status":"completed","arguments":{"query":"catalog"}}`
+	const clientOutput = `{"type":"tool_search_output","id":"tso_client","execution":"client","call_id":"search_a","status":"completed","tools":[],"future":{"integer":9007199254740993}}`
+	assistant := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-a", Payload: json.RawMessage(`[` + reasoning + `,` + hostedCall + `,` + hostedOutput + `,` + clientCall + `]`),
+	}}
+	result := model.Message{Role: model.RoleTool, ToolID: "search_a", ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-a", Payload: json.RawMessage(`[` + clientOutput + `]`),
+	}}
+	for _, tc := range []struct {
+		name       string
+		opts       []Option
+		wantReason string
+	}{
+		{name: "default preserves reasoning", wantReason: reasoning},
+		{name: "omit only foreign ciphertext", opts: []Option{WithCrossModelReasoningPolicy(CrossModelReasoningPolicyOmitEncryptedContent)},
+			wantReason: `{"type":"reasoning","id":"rs_a","summary":[{"type":"summary_text","text":"thinking"}],"future":{"integer":9007199254740993}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan map[string]json.RawMessage, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- mustReadJSONBody(t, r)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"response_b","status":"completed","output":[{"type":"message","id":"msg_b","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`)
+			}))
+			defer server.Close()
+			opts := append([]Option{WithAPIKey("test"), WithBaseURL(server.URL)}, tc.opts...)
+			m := New("model-b", opts...)
+			request := &model.Request{Messages: []model.Message{model.NewUserMessage("first"), assistant, result, model.NewUserMessage("continue")}}
+			before, err := json.Marshal(request.Messages)
+			require.NoError(t, err)
+			ch, err := m.GenerateContent(context.Background(), request)
+			require.NoError(t, err)
+			responses := collect(t, ch)
+			require.Len(t, responses, 1)
+			require.Nil(t, responses[0].Error)
+			var input []json.RawMessage
+			require.NoError(t, json.Unmarshal((<-requests)["input"], &input))
+			require.Len(t, input, 7)
+			for i, want := range []string{tc.wantReason, hostedCall, hostedOutput, clientCall, clientOutput} {
+				require.JSONEq(t, want, string(input[i+1]))
+			}
+			require.Contains(t, string(input[1]), `"integer":9007199254740993`)
+			require.Contains(t, string(input[5]), `"integer":9007199254740993`)
+			after, err := json.Marshal(request.Messages)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
+func TestClientSearchNewRoundDoesNotReuseOldModelResult(t *testing.T) {
+	for _, oldModel := range []string{"model-a", "model-b"} {
+		t.Run(oldModel, func(t *testing.T) {
+			var handled []string
+			m := New("model-b", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
+				handled = append(handled, req.Query)
+				return nil, nil
+			}))
+			old := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+				Protocol: responseProvider, Model: oldModel, Payload: json.RawMessage(`[{"type":"tool_search_call","id":"ts_old","execution":"client","call_id":"same_id","arguments":{"query":"old"}}]`),
+			}}
+			saved := model.Message{Role: model.RoleTool, ToolID: "same_id", ProviderData: &model.ProviderData{
+				Protocol: responseProvider, Model: oldModel, Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"same_id","tools":[]}]`),
+			}}
+			pending := &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+				Protocol: responseProvider, Model: "model-b", Payload: json.RawMessage(`[{"type":"tool_search_call","id":"ts_new","execution":"client","call_id":"same_id","arguments":{"query":"new"}}]`),
+			}}}}}
+			request := &model.Request{Messages: []model.Message{old, saved}}
+			ctx := context.Background()
+			if oldModel == "model-b" {
+				// The framework knows this is a fresh round even when the prior
+				// response and new response have identical native content.
+				old.ProviderData.Payload = pending.Choices[0].Message.ProviderData.Payload
+				ctx = providerdata.WithActionTools(ctx, &providerdata.ActionTools{SavedResults: []model.Message{}})
+			}
+			messages, err := m.CompleteProviderActions(ctx, request, pending)
+			require.NoError(t, err)
+			require.Equal(t, []string{"new"}, handled)
+			require.Len(t, messages, 1)
+			require.Equal(t, "same_id", messages[0].ToolID)
+		})
+	}
+}
+
+func TestClientSearchExactSavedResultsSkipOnlyCurrentRound(t *testing.T) {
+	var handled []string
+	m := New("model-b", WithClientToolSearch(func(_ context.Context, req *ToolSearchRequest) ([]ToolSearchEntry, error) {
+		handled = append(handled, req.CallID)
+		return nil, nil
+	}))
+	pending := &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-b", Payload: json.RawMessage(`[
+		{"type":"tool_search_call","execution":"client","call_id":"first","arguments":{"query":"first"}},
+		{"type":"tool_search_call","execution":"client","call_id":"second","arguments":{"query":"second"}}]`),
+	}}}}}
+	saved := model.Message{Role: model.RoleTool, ToolID: "first", ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-b", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"first","tools":[]}]`),
+	}}
+	ctx := providerdata.WithActionTools(context.Background(), &providerdata.ActionTools{SavedResults: []model.Message{saved}})
+	results, err := m.CompleteProviderActions(ctx, &model.Request{}, pending)
+	require.NoError(t, err)
+	require.Equal(t, []string{"second"}, handled)
+	require.Len(t, results, 1)
+	require.Equal(t, "second", results[0].ToolID)
+
+	foreign := saved
+	foreignData := *saved.ProviderData
+	foreignData.Model = "model-a"
+	foreign.ProviderData = &foreignData
+	ctx = providerdata.WithActionTools(context.Background(), &providerdata.ActionTools{SavedResults: []model.Message{foreign}})
+	_, err = m.CompleteProviderActions(ctx, &model.Request{}, pending)
+	require.ErrorContains(t, err, "invalid saved search result")
+}
+
+func TestClientSearchRejectsInvalidForeignSavedResults(t *testing.T) {
+	m := New("model-b", WithClientToolSearch(func(context.Context, *ToolSearchRequest) ([]ToolSearchEntry, error) {
+		return nil, nil
+	}))
+	call := model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-a", Payload: json.RawMessage(`[{"type":"tool_search_call","execution":"client","call_id":"old","arguments":{}}]`),
+	}}
+	result := model.Message{Role: model.RoleTool, ToolID: "old", ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-a", Payload: json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"old","tools":[]}]`),
+	}}
+	pending := &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, ProviderData: &model.ProviderData{
+		Protocol: responseProvider, Model: "model-b", Payload: json.RawMessage(`[{"type":"tool_search_call","execution":"client","call_id":"new","arguments":{}}]`),
+	}}}}}
+	wrongProducer := result
+	wrongData := *result.ProviderData
+	wrongData.Model = "model-c"
+	wrongProducer.ProviderData = &wrongData
+	malformed := result
+	malformedData := *result.ProviderData
+	malformedData.Payload = json.RawMessage(`[{"type":"tool_search_output","execution":"client","call_id":"different","tools":[]}]`)
+	malformed.ProviderData = &malformedData
+	malformedCall := call
+	malformedCallData := *call.ProviderData
+	malformedCallData.Payload = json.RawMessage(`[{"type":"tool_search_call","execution":"client","call_id":"old","arguments":[]}]`)
+	malformedCall.ProviderData = &malformedCallData
+	for _, tc := range []struct {
+		name     string
+		messages []model.Message
+	}{
+		{"orphan", []model.Message{result}},
+		{"producer mismatch", []model.Message{call, wrongProducer}},
+		{"wrong call id", []model.Message{call, malformed}},
+		{"duplicate output", []model.Message{call, result, result}},
+		{"malformed call", []model.Message{malformedCall, result}},
+		{"unanswered call", []model.Message{call}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := m.CompleteProviderActions(context.Background(), &model.Request{Messages: tc.messages}, pending)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestStreamingToolSearchProjection(t *testing.T) {

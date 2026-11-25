@@ -84,6 +84,20 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
+	p.CompleteRound(ctx, invocation, req, rsp, nil, ch)
+}
+
+// CompleteRound completes a response using only persisted tool results from
+// its own round to suppress duplicate actions. The request still contains the
+// selected history and its previously loaded tools.
+func (p *ProviderActionResponseProcessor) CompleteRound(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	rsp *model.Response,
+	round []model.Message,
+	ch chan<- *event.Event,
+) {
 	if invocation == nil || invocation.Model == nil ||
 		!providerdata.ResponseRequestsActions(rsp) {
 		return
@@ -94,7 +108,13 @@ func (p *ProviderActionResponseProcessor) ProcessResponse(
 	state := actionToolsForInvocation(invocation)
 	if completer, ok := invocation.Model.(model.ProviderActionCompleter); ok {
 		var actionCtx context.Context
-		actionCtx, staged, err = state.collect(ctx, invocation, req)
+		savedResults := make([]model.Message, 0, len(round))
+		for _, message := range round {
+			if message.Role == model.RoleTool {
+				savedResults = append(savedResults, message)
+			}
+		}
+		actionCtx, staged, err = state.collect(ctx, invocation, req, savedResults)
 		if err == nil {
 			messages, err = completer.CompleteProviderActions(actionCtx, req, rsp)
 		}

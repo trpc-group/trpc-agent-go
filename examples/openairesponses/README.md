@@ -295,6 +295,11 @@ The full contract is in the
 - This module does not demonstrate server-managed `previous_response_id` or
   `conversation` continuation, background responses, hosted tools other than
   tool search, or approval flows.
+- Between completed turns, selecting another Responses model replays the saved
+  native input. Selecting the built-in Chat Completions model sends the visible
+  conversation and pairs each tool result with its call by ID. When this
+  Runner resumes a pending native tool call with `agent.WithResume(true)`,
+  it requires the producing protocol and configured model.
 - History, callbacks, model switching, compatibility, recovery, versioning,
   and release limits are defined in the
   [adapter README](../../model/openai/sdkv3/responses/README.md).

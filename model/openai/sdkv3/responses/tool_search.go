@@ -10,7 +10,6 @@
 package responses
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +22,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -124,6 +124,10 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 	if request == nil {
 		return nil
 	}
+	return projectionToolPlanWithHistory(request, scanToolSearchHistory(request.Messages))
+}
+
+func projectionToolPlanWithHistory(request *model.Request, history toolSearchHistory) *toolPlan {
 	plan := &toolPlan{
 		functions:     make(map[wireFunction]string),
 		flat:          make(map[string]string),
@@ -148,7 +152,6 @@ func projectionToolPlan(request *model.Request) *toolPlan {
 			plan.exposedFlat[t.Declaration().Name] = true
 		}
 	}
-	history := scanToolSearchHistory(request.Messages)
 	plan.searchOrigins = history.origins
 	plan.addLoadedFunctions(history.loaded)
 	return plan
@@ -257,7 +260,7 @@ func (p *toolPlan) searchExecutionKey(fn wireFunction) (string, error) {
 // Hosted search is declared when anything is deferred or history contains it.
 func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPlan, error) {
 	if m.toolSearch.mode == toolSearchDisabled {
-		return plainToolPlan(request.Tools)
+		return plainToolPlan(request)
 	}
 	if m.toolSearch.mode == toolSearchClient && m.toolSearch.handler == nil {
 		return nil, errors.New("openai/responses: client tool search requires a handler")
@@ -303,12 +306,17 @@ func (m *Model) planTools(ctx context.Context, request *model.Request) (*toolPla
 	return p.plan, nil
 }
 
-func plainToolPlan(tools map[string]tool.Tool) (*toolPlan, error) {
+func plainToolPlan(request *model.Request) (*toolPlan, error) {
 	plan := &toolPlan{}
-	if len(tools) == 0 {
+	history := scanToolSearchHistory(request.Messages)
+	if history.seen {
+		// Loaded namespaced tools can still be called after search is disabled.
+		plan = projectionToolPlanWithHistory(request, history)
+	}
+	if len(request.Tools) == 0 {
 		return plan, nil
 	}
-	params, err := convertTools(tools)
+	params, err := convertTools(request.Tools)
 	if err != nil {
 		return nil, err
 	}
@@ -520,20 +528,23 @@ func namespaceFunctionParam(name string, decl *tool.Declaration, deferred bool) 
 type toolSearchHistory struct {
 	seen bool
 	// loaded holds functions loaded by earlier tool_search_output items.
-	loaded  map[wireFunction]bool
-	origins map[wireFunction]string
+	loaded         map[wireFunction]bool
+	origins        map[wireFunction]string
+	clientProducer map[string]string // client search call ID to producing model
 }
 
 func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 	history := toolSearchHistory{
-		loaded: make(map[wireFunction]bool), origins: make(map[wireFunction]string),
+		loaded:         make(map[wireFunction]bool),
+		origins:        make(map[wireFunction]string),
+		clientProducer: make(map[string]string),
 	}
 	for _, msg := range messages {
 		if msg.ProviderData == nil || msg.ProviderData.Protocol != responseProvider {
 			continue
 		}
-		var items []nativeItem
-		if err := json.Unmarshal(msg.ProviderData.Payload, &items); err != nil {
+		items, err := responseshistory.ReadCompletedWithToolSearch(msg.ProviderData.Payload)
+		if err != nil {
 			continue
 		}
 		for _, item := range items {
@@ -545,50 +556,47 @@ func scanToolSearchHistory(messages []model.Message) toolSearchHistory {
 				origin := ""
 				if msg.Role == model.RoleTool && item.Execution == executionClient && item.CallID == msg.ToolID {
 					origin = item.CallID
+					history.clientProducer[origin] = msg.ProviderData.Model
 				}
-				// Reserve top-level identities first, regardless of result order.
-				// A namespace member cannot own the same qualified execution key.
-				for _, raw := range item.Tools {
-					var definition struct{ Type, Name string }
-					if json.Unmarshal(raw, &definition) == nil && definition.Type == functionToolType {
-						history.loaded[wireFunction{name: definition.Name}] = true
+				forEachSearchFunction(item.Tools, func(fn wireFunction) {
+					history.loaded[fn] = true
+					if origin != "" {
+						history.origins[fn] = origin
+					} else if item.Execution == executionServer {
+						history.supersedeForeignBinding(fn, msg.ProviderData.Model)
 					}
-				}
-				for _, loaded := range item.Tools {
-					markLoadedTools(history, origin, loaded)
-				}
+				})
 			}
 		}
 	}
 	return history
 }
 
-func markLoadedTools(history toolSearchHistory, origin string, raw json.RawMessage) {
-	var definition struct {
-		Type  string `json:"type"`
-		Name  string `json:"name"`
-		Tools []struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
-		} `json:"tools"`
+// A hosted lookup from the same model keeps its existing client binding.
+func (h toolSearchHistory) supersedeForeignBinding(fn wireFunction, producer string) {
+	if original := h.clientProducer[h.origins[fn]]; original != "" && original != producer {
+		delete(h.origins, fn)
 	}
-	if err := json.Unmarshal(raw, &definition); err != nil {
-		return
-	}
-	switch definition.Type {
-	case functionToolType:
-		fn := wireFunction{name: definition.Name}
-		history.loaded[fn] = true
-		if origin != "" {
-			history.origins[fn] = origin
+}
+
+// forEachSearchFunction visits exact wire identities explicitly loaded by a search.
+func forEachSearchFunction(tools []json.RawMessage, visit func(wireFunction)) {
+	for _, raw := range tools {
+		var definition struct {
+			Type  string
+			Name  string
+			Tools []struct{ Type, Name string }
 		}
-	case "namespace":
-		for _, member := range definition.Tools {
-			if member.Type == functionToolType {
-				fn := wireFunction{namespace: definition.Name, name: member.Name}
-				history.loaded[fn] = true
-				if origin != "" {
-					history.origins[fn] = origin
+		if json.Unmarshal(raw, &definition) != nil {
+			continue
+		}
+		switch definition.Type {
+		case functionToolType:
+			visit(wireFunction{name: definition.Name})
+		case "namespace":
+			for _, member := range definition.Tools {
+				if member.Type == functionToolType {
+					visit(wireFunction{namespace: definition.Name, name: member.Name})
 				}
 			}
 		}
@@ -603,13 +611,22 @@ func resolveActionBindings(request *model.Request, message model.Message) ([]pro
 	if request == nil || message.ProviderData == nil || message.ProviderData.Protocol != responseProvider {
 		return nil, nil
 	}
-	items, err := parseNativeItems(message.ProviderData.Payload, true)
+	items, err := responseshistory.ReadCompletedWithToolSearch(message.ProviderData.Payload)
 	if err != nil {
 		return nil, err
 	}
-	plan := projectionToolPlan(request)
+	history := scanToolSearchHistory(request.Messages)
+	plan := projectionToolPlanWithHistory(request, history)
 	var bindings []providerdata.ActionBinding
 	for _, item := range items {
+		if item.Type == outputTypeToolSearchOutput && item.Execution == executionServer {
+			// A hosted result supersedes the client selection for later calls
+			// in this response, just as it does in persisted history.
+			forEachSearchFunction(item.Tools, func(fn wireFunction) {
+				history.supersedeForeignBinding(fn, message.ProviderData.Model)
+			})
+			continue
+		}
 		if item.Type != outputTypeFunctionCall {
 			continue
 		}
@@ -653,19 +670,6 @@ func resolveActionBindings(request *model.Request, message model.Message) ([]pro
 	return bindings, nil
 }
 
-// clientSearchArguments returns the JSON object of tool search arguments,
-// decoding arguments that a compatible service sent as a JSON string.
-func clientSearchArguments(raw json.RawMessage) []byte {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) > 0 && trimmed[0] == '"' {
-		var encoded string
-		if err := json.Unmarshal(trimmed, &encoded); err == nil {
-			return []byte(encoded)
-		}
-	}
-	return trimmed
-}
-
 // CompleteProviderActions implements model.ProviderActionCompleter. It runs
 // the client tool search handler for each client tool_search_call in response
 // and returns one tool message per call. Each message carries the complete
@@ -692,7 +696,13 @@ func (m *Model) CompleteProviderActions(
 	if request == nil {
 		return nil, errors.New("openai/responses: client tool search requires the model request")
 	}
-	answered, err := answeredClientSearchCalls(request.Messages, m.Info())
+	results := request.Messages
+	exact := false
+	if actions := providerdata.ActionToolsFromContext(ctx); actions != nil && actions.SavedResults != nil {
+		results = actions.SavedResults
+		exact = true
+	}
+	answered, err := answeredClientSearchCalls(results, m.Info(), exact)
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +721,7 @@ func (m *Model) CompleteProviderActions(
 		}
 		searchReq := &ToolSearchRequest{
 			CallID:    call.CallID,
-			Arguments: append(json.RawMessage(nil), clientSearchArguments(call.Arguments)...),
+			Arguments: append(json.RawMessage(nil), call.SearchArguments()...),
 		}
 		for _, entry := range plan.deferred {
 			if !loaded[wireFunction{namespace: entry.Namespace, name: entry.Name}] {
@@ -740,27 +750,57 @@ func (m *Model) CompleteProviderActions(
 	return messages, nil
 }
 
-func answeredClientSearchCalls(messages []model.Message, info model.Info) (map[string]bool, error) {
+func answeredClientSearchCalls(messages []model.Message, info model.Info, exact bool) (map[string]bool, error) {
 	answered := make(map[string]bool)
-	for _, message := range messages {
-		if message.Role != model.RoleTool || message.ProviderData == nil {
+	previous := newCallTracker()
+	for _, msg := range messages {
+		data := msg.ProviderData
+		// A direct caller may supply completed searches from previous models
+		// alongside this round. Validate their pairs without counting them here.
+		foreign := !exact && data != nil && data.Protocol == info.ProviderDataProtocol && data.Model != info.Name
+		switch {
+		case msg.Role == model.RoleTool && data != nil:
+		case exact:
+			return nil, errors.New("openai/responses: invalid saved search result")
+		case msg.Role == model.RoleAssistant && foreign:
+		default:
 			continue
 		}
-		if err := providerdata.ValidateMessage(message, info); err != nil {
+		producer := info
+		if foreign {
+			producer.Name = data.Model
+		}
+		if err := providerdata.ValidateMessage(msg, producer); err != nil {
 			return nil, fmt.Errorf("openai/responses: invalid saved search result: %w", err)
 		}
-		items, err := parseNativeItems(message.ProviderData.Payload, true)
+		items, err := responseshistory.ReadCompletedWithToolSearch(data.Payload)
 		if err != nil {
 			return nil, fmt.Errorf("openai/responses: invalid saved search result: %w", err)
 		}
+		if msg.Role == model.RoleTool && !isClientSearchResult(items, msg.ToolID) {
+			return nil, fmt.Errorf("openai/responses: invalid saved search result: tool message does not answer call_id %q", msg.ToolID)
+		}
+		if !foreign {
+			answered[msg.ToolID] = true
+			continue
+		}
 		for _, item := range items {
-			if item.Type != outputTypeToolSearchOutput || item.Execution != executionClient || item.CallID != message.ToolID {
-				return nil, fmt.Errorf("openai/responses: saved search result does not answer call_id %q", message.ToolID)
+			if item.Type == outputTypeToolSearchCall || item.Type == outputTypeToolSearchOutput {
+				if err := previous.track(item, msg.Role, producer.Name); err != nil {
+					return nil, fmt.Errorf("openai/responses: invalid saved search history: %w", err)
+				}
 			}
-			answered[item.CallID] = true
 		}
 	}
+	if err := previous.checkSearchResults(); err != nil {
+		return nil, fmt.Errorf("openai/responses: invalid saved search history: %w", err)
+	}
 	return answered, nil
+}
+
+func isClientSearchResult(items []nativeItem, callID string) bool {
+	return len(items) == 1 && items[0].Type == outputTypeToolSearchOutput &&
+		items[0].Execution == executionClient && items[0].CallID == callID
 }
 
 // pendingToolSearchCalls returns the client tool search calls recorded in a
@@ -789,7 +829,7 @@ func pendingToolSearchCalls(response *model.Response, info model.Info) ([]native
 }
 
 func clientSearchItems(data *model.ProviderData) ([]nativeItem, error) {
-	items, err := parseNativeItems(data.Payload, true)
+	items, err := responseshistory.ReadCompletedWithToolSearch(data.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("openai/responses: invalid provider data items: %w", err)
 	}

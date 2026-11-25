@@ -628,14 +628,15 @@ func (f *Flow) resumePendingToolCalls(
 		Tools: make(map[string]tool.Tool),
 	}
 	f.populateRequestTools(ctx, invocation, req)
+	var round []model.Message
 	if providerdata.ResponseHasData(lastResp) {
-		f.populateResumeProviderDataHistory(invocation, req, lastResp)
+		round = f.populateResumeProviderDataHistory(invocation, req, lastResp)
 	}
 
 	for _, rp := range f.responseProcessors {
 		switch resumeRP := rp.(type) {
 		case *processor.ProviderActionResponseProcessor:
-			resumeRP.ProcessResponse(ctx, invocation, req, lastResp, eventChan)
+			resumeRP.CompleteRound(ctx, invocation, req, lastResp, round, eventChan)
 			if invocation.EndInvocation {
 				return
 			}
@@ -654,14 +655,14 @@ func (f *Flow) populateResumeProviderDataHistory(
 	invocation *agent.Invocation,
 	req *model.Request,
 	pending *model.Response,
-) {
+) []model.Message {
 	for _, requestProcessor := range f.requestProcessors {
 		contentProcessor, ok := requestProcessor.(*processor.ContentRequestProcessor)
 		if !ok {
 			continue
 		}
 		if invocation == nil || invocation.Session == nil {
-			return
+			return nil
 		}
 		// The pending response comes from the session in pendingToolCallResponse.
 		// Split one locked snapshot so later events cannot move the original
@@ -684,14 +685,15 @@ func (f *Flow) populateResumeProviderDataHistory(
 			// The disjoint suffix contains the pending record and any results
 			// already saved from this round for action-level deduplication.
 			req.Messages = append(req.Messages, suffix...)
-			return
+			return suffix
 		}
 		// Preserve the prior fallback if a caller supplied a response that is
 		// not in the session snapshot.
 		req.Messages = persistedProviderDataHistory(view, nil)
-		return
+		return persistedProviderDataHistory(view, pending)
 	}
 	req.Messages = persistedProviderDataHistory(invocation, nil)
+	return persistedProviderDataHistory(invocation, pending)
 }
 
 // persistedProviderDataHistory supplies native records to a resumed provider
@@ -3369,7 +3371,7 @@ func (f *Flow) generateContentSeq(
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
 	if callModel != nil && providerdata.MessagesHaveData(llmRequest.Messages) {
-		if err := providerdata.ValidateMessages(llmRequest.Messages, callModel.Info()); err != nil {
+		if err := providerdata.ValidateHistory(llmRequest.Messages, callModel); err != nil {
 			return nil, err
 		}
 	}

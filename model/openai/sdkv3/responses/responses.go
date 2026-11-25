@@ -30,12 +30,13 @@ type builtinTools = modelrequest.BuiltinTools
 // It supports concurrent requests.
 type Model struct {
 	builtinTools
-	client            openai.Client
-	name              string
-	store             bool
-	channelBufferSize int
-	extraFields       map[string]any
-	toolSearch        toolSearchConfig
+	client                    openai.Client
+	name                      string
+	store                     bool
+	crossModelReasoningPolicy CrossModelReasoningPolicy
+	channelBufferSize         int
+	extraFields               map[string]any
+	toolSearch                toolSearchConfig
 }
 
 // New creates a Responses API adapter with client-managed history and
@@ -57,19 +58,27 @@ func New(name string, opts ...Option) *Model {
 	))
 	clientOpts = append(clientOpts, o.openaiOptions...)
 	return &Model{
-		builtinTools:      builtinTools(o.toolSearch.mode == toolSearchClient),
-		client:            openai.NewClient(clientOpts...),
-		name:              name,
-		store:             o.store,
-		channelBufferSize: o.channelBufferSize,
-		extraFields:       o.extraFields,
-		toolSearch:        o.toolSearch,
+		builtinTools:              builtinTools(o.toolSearch.mode == toolSearchClient),
+		client:                    openai.NewClient(clientOpts...),
+		name:                      name,
+		store:                     o.store,
+		crossModelReasoningPolicy: o.crossModelReasoningPolicy,
+		channelBufferSize:         o.channelBufferSize,
+		extraFields:               o.extraFields,
+		toolSearch:                o.toolSearch,
 	}
 }
 
 // Info implements model.Model.
 func (m *Model) Info() model.Info {
 	return model.Info{Name: m.name, ProviderDataProtocol: responseProvider}
+}
+
+// SupportsProviderHistory reports whether the adapter can replay native
+// history produced using protocol. The target service determines whether it
+// can use the replayed data.
+func (m *Model) SupportsProviderHistory(protocol string) bool {
+	return protocol == responseProvider
 }
 
 // ProjectProviderData rebuilds display fields and tool calls from a completed
@@ -118,6 +127,11 @@ func (m *Model) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
+	switch m.crossModelReasoningPolicy {
+	case CrossModelReasoningPolicyReplay, CrossModelReasoningPolicyOmitEncryptedContent:
+	default:
+		return nil, fmt.Errorf("openai/responses: invalid cross-model reasoning policy %d", m.crossModelReasoningPolicy)
+	}
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}

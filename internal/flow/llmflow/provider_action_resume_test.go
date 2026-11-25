@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -41,11 +42,13 @@ func savedActionResult(id string) model.Message {
 type resumePartialActionModel struct {
 	resumeActionModel
 	history []model.Message
+	saved   []model.Message
 }
 
-func (m *resumePartialActionModel) CompleteProviderActions(_ context.Context, req *model.Request, _ *model.Response) ([]model.Message, error) {
+func (m *resumePartialActionModel) CompleteProviderActions(ctx context.Context, req *model.Request, _ *model.Response) ([]model.Message, error) {
 	m.completions++
 	m.history = req.Messages
+	m.saved = providerdata.ActionToolsFromContext(ctx).SavedResults
 	return []model.Message{savedActionResult("a2")}, nil
 }
 
@@ -89,7 +92,9 @@ func TestRun_WithResumeAfterPartialProviderActionPersistence(t *testing.T) {
 			require.NotEqual(t, source, pending.ID)
 			first := event.NewResponseEvent("old", "agent-resume", &model.Response{Done: true,
 				Choices: []model.Choice{{Message: savedActionResult("a1")}}})
-			sess := &session.Session{Events: []event.Event{*pending, *first}}
+			earlier := event.NewResponseEvent("earlier", "agent-resume", &model.Response{Done: true,
+				Choices: []model.Choice{{Message: savedActionResult("older-search")}}})
+			sess := &session.Session{Events: []event.Event{*earlier, *pending, *first}}
 			if trailingError {
 				failure := event.NewErrorEvent("old", "agent-resume", model.ErrorTypeFlowError, "action interrupted")
 				failure.Choices = []model.Choice{{Message: model.NewAssistantMessage(errorcontent.FallbackMessage)}}
@@ -125,8 +130,10 @@ func TestRun_WithResumeAfterPartialProviderActionPersistence(t *testing.T) {
 			require.Equal(t, []string{"a2"}, resultIDs)
 			require.Equal(t, 1, llm.completions)
 			require.Equal(t, 1, llm.requests)
-			require.Len(t, llm.history, 2)
-			require.Equal(t, "a1", llm.history[1].ToolID)
+			require.Len(t, llm.history, 3)
+			require.Equal(t, "older-search", llm.history[0].ToolID)
+			require.Equal(t, []model.Message{savedActionResult("a1")}, llm.saved,
+				"only results from the interrupted round suppress execution")
 		})
 	}
 }

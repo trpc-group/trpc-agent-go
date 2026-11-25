@@ -2361,6 +2361,17 @@ go run ./tools -streaming=false
 需要恢复未完成的工具轮时，保留该轮的 ProviderData。完整示例和模型包装器要求见
 [适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)。
 
+### 切换模型与恢复工具调用
+
+在 Responses 模型之间切换时，框架按原顺序发送已完成的原生记录，包括加密推理，由目标服务决定能否复用。
+在目标模型上设置 `responses.WithCrossModelReasoningPolicy(responses.CrossModelReasoningPolicyOmitEncryptedContent)` 后，每次请求都会省略其他配置模型的历史推理项中的 `encrypted_content`，会话仍保留原始记录。目标服务收到的推理项仍包含原有的 ID 和摘要。如果目标服务需要按 ID 查找该项，而生成该项时使用了默认的 `store=false`，请求仍可能返回 HTTP 400。
+切到内置 Chat Completions 适配器时，本次请求携带可见历史，并按 `call_id` 匹配工具调用和结果。
+原生正文与可见正文一致时，URL 引用中尚未出现的链接会作为普通文本附在本次请求中。回调改写正文后，使用改写后的内容；清空纯文本回复时，Chat 也会省略该回复的引用。切回 Responses 后仍可使用会话中保存的原生记录。Chat 跳过已配对的原生工具搜索调用和结果，保留普通函数调用及结果。Chat 会发送当前请求过滤后允许使用的工具，包括注册为延迟加载的工具。只有旧搜索结果里才有的工具不会加入 Chat 工具列表。切回 Responses 时会重放保存的搜索记录；后续调用已过期的临时工具时，需要重新搜索。
+
+- **Runner 运行 LLMAgent 时**，`agent.WithResume(true)` 会在执行挂起的原生工具调用前核对产生该调用的协议和模型名。此时换模型会在工具执行前报错。
+- **Graph 从 checkpoint 恢复时**，如果中断点在工具节点前，Graph 会先执行工具，随后由下一个 LLM 节点选择模型。
+  工具结果写入 checkpoint 后，即使下游模型报错，从最新 checkpoint 恢复也会复用已保存的结果。显式重放工具执行前的旧 checkpoint，可能再次执行同一个工具调用。
+
 ### 工具搜索
 
 工具搜索（tool search）让模型在需要时再加载工具定义。它需要在 Responses 模型上显式开启，
@@ -2487,7 +2498,7 @@ billing := staticToolSet{
 
 - 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
 - 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本；使用工具搜索还需要 `model.ProviderActionCompleter`、`model.ProviderDataRequestProjector` 和 `tool.ToolSetDescriber`，以上示例还使用了 `tool/deferred`。所需的根模块版本要先于适配器版本发布。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
-- 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。适配器会拒绝协议或配置模型不匹配，以及格式无效的 ProviderData 记录。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
+- 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。框架校验记录格式以及接收适配器对该协议的支持。恢复挂起的原生操作时，还需匹配原生产者。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
 - 通过 `previous_response_id` 或 `conversation` 做服务端续接、工具搜索以外的托管工具、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
 - 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
 - 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。

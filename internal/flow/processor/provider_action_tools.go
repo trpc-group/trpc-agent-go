@@ -29,6 +29,7 @@ import (
 const actionToolsExtension = "trpc.provider_action.tool_bindings.v1"
 
 type actionToolState struct {
+	producer      model.Info
 	live          map[string]map[string]tool.Tool // result call ID -> encoded identity -> tool
 	saved         map[string]json.RawMessage
 	response      *model.Response
@@ -36,38 +37,59 @@ type actionToolState struct {
 }
 
 func actionToolsForInvocation(inv *agent.Invocation) *actionToolState {
-	info := inv.Model.Info()
+	return actionToolsForProducer(inv, inv.Model.Info())
+}
+
+func actionToolsForProducer(inv *agent.Invocation, info model.Info) *actionToolState {
 	key := fmt.Sprintf("model:action-tools:%q:%q", info.ProviderDataProtocol, info.Name)
 	if state, ok := agent.GetStateValue[*actionToolState](inv, key); ok {
 		return state
 	}
-	state := &actionToolState{live: make(map[string]map[string]tool.Tool)}
+	state := &actionToolState{producer: info, live: make(map[string]map[string]tool.Tool)}
 	inv.SetState(key, state)
 	return state
 }
 
+// Each result belongs to the model that produced it. Model switches can put
+// several producers in a request, and call IDs are local to their history.
+func actionResultStates(inv *agent.Invocation, req *model.Request) map[string]*actionToolState {
+	states := make(map[string]*actionToolState)
+	if req == nil {
+		return states
+	}
+	protocol := inv.Model.Info().ProviderDataProtocol
+	for _, msg := range req.Messages {
+		data := msg.ProviderData
+		if msg.Role == model.RoleTool && data != nil && data.Protocol == protocol {
+			states[msg.ToolID] = actionToolsForProducer(inv, model.Info{Name: data.Model, ProviderDataProtocol: protocol})
+		}
+	}
+	return states
+}
+
 // collect stages the bindings for one action batch. A nil value denotes the
 // registered tool, which should follow the next request's active directory.
-func (s *actionToolState) collect(ctx context.Context, inv *agent.Invocation, req *model.Request) (
+func (s *actionToolState) collect(ctx context.Context, inv *agent.Invocation, req *model.Request, savedResults []model.Message) (
 	context.Context, map[string]map[string]tool.Tool, error,
 ) {
 	saved := make(map[string]map[string]bool)
-	if req != nil {
-		for _, message := range req.Messages {
-			if !isActionResult(message, inv.Model.Info()) {
-				continue
-			}
-			bindings, err := s.persistedBindings(inv, message.ToolID)
-			if err != nil {
-				return nil, nil, err
-			}
-			saved[message.ToolID] = bindings
+	origins := actionResultStates(inv, req)
+	for id, origin := range origins {
+		bindings, err := origin.persistedBindings(inv, id)
+		if err != nil {
+			return nil, nil, err
 		}
+		saved[id] = bindings
 	}
 	staged := make(map[string]map[string]tool.Tool)
 	actions := &providerdata.ActionTools{
+		SavedResults: savedResults,
 		Expired: func(id string, identity providerdata.ActionToolIdentity) bool {
-			_, missing := resolveActionTool(s.live[id], saved[id], identity)
+			origin := origins[id]
+			if origin == nil {
+				origin = s
+			}
+			_, missing := resolveActionTool(origin.live[id], saved[id], identity)
 			return missing
 		},
 		Bind: func(id, name string, identity providerdata.ActionToolIdentity, t tool.Tool) bool {
@@ -112,7 +134,6 @@ func (s *actionToolState) savedBindings(inv *agent.Invocation) map[string]json.R
 	if inv.Session == nil {
 		return s.saved
 	}
-	info := inv.Model.Info()
 	inv.Session.EventMu.RLock()
 	defer inv.Session.EventMu.RUnlock()
 	for i := range inv.Session.Events {
@@ -123,7 +144,7 @@ func (s *actionToolState) savedBindings(inv *agent.Invocation) map[string]json.R
 		}
 		for _, choice := range e.Choices {
 			msg := choice.Message
-			if isActionResult(msg, info) {
+			if isActionResult(msg, s.producer) {
 				s.saved[msg.ToolID] = bindings
 			}
 		}
@@ -214,6 +235,7 @@ func withActionExecutionBindings(ctx context.Context, inv *agent.Invocation, req
 		withResults.Messages = append(append([]model.Message(nil), req.Messages...), state.justCompleted...)
 		bindingRequest = &withResults
 	}
+	var origins map[string]*actionToolState
 	executions := make(map[string]actionExecutionTool)
 	for _, choice := range rsp.Choices {
 		bindings, err := providerdata.ResolveActionBindings(bindingRequest, choice.Message)
@@ -224,7 +246,14 @@ func withActionExecutionBindings(ctx context.Context, inv *agent.Invocation, req
 			if !hasActionCall(choice.Message.ToolCalls, binding) {
 				continue
 			}
-			t, err := state.executionTool(inv, binding)
+			if origins == nil {
+				origins = actionResultStates(inv, bindingRequest)
+			}
+			origin := origins[binding.ActionID]
+			if origin == nil {
+				origin = state
+			}
+			t, err := origin.executionTool(inv, binding)
 			if err != nil {
 				return ctx, err
 			}

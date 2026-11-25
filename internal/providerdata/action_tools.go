@@ -87,8 +87,12 @@ func decoderFor(protocol string) actionDecoder {
 // ActionTools connects one provider action to the caller's tool executor.
 // Expired reports whether an exact prior action binding needs rediscovery.
 type ActionTools struct {
-	Expired func(callID string, identity ActionToolIdentity) bool
-	Bind    func(callID, name string, identity ActionToolIdentity, t tool.Tool) bool
+	// SavedResults identifies results already persisted for the action round
+	// being resumed. Flows provide an empty slice for a fresh response. A nil
+	// slice leaves recovery to a direct caller's request history.
+	SavedResults []model.Message
+	Expired      func(callID string, identity ActionToolIdentity) bool
+	Bind         func(callID, name string, identity ActionToolIdentity, t tool.Tool) bool
 }
 
 // WithActionTools lets a completer return bindings without changing the model
