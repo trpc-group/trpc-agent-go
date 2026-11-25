@@ -369,7 +369,7 @@ tRPC-Agent-Go defines provider-agnostic usage fields in the `model` package:
 - `model.Usage.PromptTokensDetails.CacheReadTokens`
 - `model.Usage.PromptTokensDetails.CacheCreationTokens`
 
-For OpenAI-compatible APIs, `CachedTokens` is the main field. `CacheReadTokens` and `CacheCreationTokens` primarily serve explicit cache mechanisms such as Anthropic Prompt Caching.
+For OpenAI-compatible APIs, `CachedTokens` tracks cache read hits, while provider-reported cache-write fields (`cache_write_tokens`, `cache_creation_tokens`, or `cache_creation_input_tokens` in `prompt_tokens_details`, with top-level `usage` fallback) map by priority to `CacheCreationTokens` (shared with Anthropic and Bedrock cache writes). `CacheReadTokens` primarily serves Anthropic, Bedrock, and gateways that report `prompt_tokens_details.cache_read_tokens`.
 
 Telemetry also splits token types:
 

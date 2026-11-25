@@ -640,3 +640,104 @@ func TestProviderDataModelBindingUsesConfiguredName(t *testing.T) {
 	_, err = convertMessages([]model.Message{message}, "resolved-name")
 	require.ErrorContains(t, err, "belongs to protocol")
 }
+
+func TestMapUsageCacheWriteTokensAndAliases(t *testing.T) {
+	require.Nil(t, mapUsage(nil))
+	require.Nil(t, mapUsage(decodeResponse(t, `{"id":"r0","status":"completed","output":[]}`)))
+
+	tests := []struct {
+		name              string
+		raw               string
+		wantCached        int
+		wantCacheRead     int
+		wantCacheCreation int
+	}{
+		{
+			name:              "native input_tokens_details cache_write_tokens",
+			raw:               `{"id":"r1","status":"completed","output":[],"usage":{"input_tokens":309,"output_tokens":82,"total_tokens":391,"input_tokens_details":{"cached_tokens":32,"cache_write_tokens":256},"output_tokens_details":{"reasoning_tokens":60}}}`,
+			wantCached:        32,
+			wantCacheCreation: 256,
+		},
+		{
+			name:              "native cache_write_tokens takes priority over extra aliases",
+			raw:               `{"id":"r2","status":"completed","output":[],"usage":{"input_tokens":309,"output_tokens":82,"total_tokens":391,"input_tokens_details":{"cache_write_tokens":256,"cache_creation_tokens":128}}}`,
+			wantCacheCreation: 256,
+		},
+		{
+			name:              "gateway extra fields cache_creation_tokens and cache_read_tokens",
+			raw:               `{"id":"r3","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cache_read_tokens":200,"cache_creation_tokens":100}}}`,
+			wantCacheRead:     200,
+			wantCacheCreation: 100,
+		},
+		{
+			name:              "input_tokens_details cache_creation_input_tokens alias",
+			raw:               `{"id":"r4","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cached_tokens":200,"cache_creation_input_tokens":150}}}`,
+			wantCached:        200,
+			wantCacheCreation: 150,
+		},
+		{
+			name:              "top-level usage cache_creation_input_tokens fallback",
+			raw:               `{"id":"r5","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cached_tokens":200},"cache_creation_input_tokens":150}}`,
+			wantCached:        200,
+			wantCacheCreation: 150,
+		},
+		{
+			name:              "top-level usage cache_write_tokens fallback when details empty",
+			raw:               `{"id":"r5b","status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"cache_write_tokens":64}}`,
+			wantCacheCreation: 64,
+		},
+		{
+			name:              "extra cache_write_tokens takes priority over other detail aliases",
+			raw:               `{"id":"r5c","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cache_creation_input_tokens":64,"cache_creation_tokens":128}}}`,
+			wantCacheCreation: 128,
+		},
+		{
+			name:              "top-level usage uses the same precedence as Chat Completions",
+			raw:               `{"id":"r5d","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"cache_creation_input_tokens":64,"cache_creation_tokens":128,"cache_write_tokens":256}}`,
+			wantCacheCreation: 256,
+		},
+		{
+			name: "invalid extra values ignored",
+			raw:  `{"id":"r6","status":"completed","output":[],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110,"input_tokens_details":{"cache_read_tokens":"bad","cache_creation_tokens":-5}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := mapUsage(decodeResponse(t, tt.raw))
+			require.NotNil(t, usage)
+			require.Equal(t, tt.wantCached, usage.PromptTokensDetails.CachedTokens)
+			require.Equal(t, tt.wantCacheRead, usage.PromptTokensDetails.CacheReadTokens)
+			require.Equal(t, tt.wantCacheCreation, usage.PromptTokensDetails.CacheCreationTokens)
+		})
+	}
+}
+
+func TestGenerateContent_StreamingCacheWriteTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(w,
+			`{"type":"response.output_text.delta","delta":"hello"}`,
+			`{"type":"response.completed","response":{"id":"resp_stream_cache","object":"response","created_at":1700000000,"status":"completed","model":"gpt-5","output":[{"type":"message","id":"m1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":309,"output_tokens":82,"total_tokens":391,"input_tokens_details":{"cached_tokens":32,"cache_write_tokens":256},"output_tokens_details":{"reasoning_tokens":60}}}}`,
+		)
+	}))
+	defer srv.Close()
+
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+	results := collect(t, ch)
+	require.NotEmpty(t, results)
+	final := results[len(results)-1]
+	require.True(t, final.Done)
+	require.NotNil(t, final.Usage)
+	require.Equal(t, 309, final.Usage.PromptTokens)
+	require.Equal(t, 82, final.Usage.CompletionTokens)
+	require.Equal(t, 391, final.Usage.TotalTokens)
+	require.Equal(t, 32, final.Usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, final.Usage.PromptTokensDetails.CacheReadTokens)
+	require.Equal(t, 256, final.Usage.PromptTokensDetails.CacheCreationTokens)
+	require.Equal(t, 60, final.Usage.CompletionTokensDetails.ReasoningTokens)
+}
