@@ -37,14 +37,11 @@ var _ agent.Agent = (*ACPAgent)(nil)
 
 // New creates an ACP agent adapter without starting the external process.
 func New(name string, opts ...Option) (*ACPAgent, error) {
-	options := options{stderr: discardWriter{}}
+	options := defaultOptions
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&options)
 		}
-	}
-	if options.stderr == nil {
-		options.stderr = discardWriter{}
 	}
 	config := processConfig{
 		Name:        name,
@@ -145,10 +142,4 @@ func (a *ACPAgent) Close() error {
 		a.closeErr = a.connections.close()
 	})
 	return a.closeErr
-}
-
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (int, error) {
-	return len(p), nil
 }

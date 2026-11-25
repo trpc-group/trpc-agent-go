@@ -89,6 +89,7 @@ func TestConnectReturnsInitializeError(t *testing.T) {
 	require.Nil(t, process)
 	require.ErrorContains(t, err, "initialize connection")
 	require.ErrorContains(t, err, "initialize failed")
+	require.ErrorContains(t, err, "acp helper stderr")
 	require.Equal(t, testConnectionSnapshot{
 		state: lifecycleStopped,
 	}, snapshotConnectionManager(acpAgent.connections))

@@ -29,6 +29,10 @@ type options struct {
 	stderr              io.Writer
 }
 
+var defaultOptions = options{
+	stderr: platformStderrWriter{},
+}
+
 // WithDescription sets the agent description reported to the framework.
 func WithDescription(description string) Option {
 	return func(options *options) {
@@ -106,7 +110,13 @@ func WithTerminalAuthHandler(handler TerminalAuthHandler) Option {
 
 // WithStderrWriter sets the destination for the ACP agent's standard error.
 //
-// A nil writer discards standard error.
+// By default, standard error is written line by line to the framework log at
+// info level. A non-nil writer replaces that default and receives the raw
+// process output. A nil writer disables standard error forwarding.
+//
+// The framework does not close or flush the writer. The writer may be called
+// from an internal goroutine while the process is running and should not block
+// indefinitely.
 func WithStderrWriter(writer io.Writer) Option {
 	return func(options *options) {
 		options.stderr = writer

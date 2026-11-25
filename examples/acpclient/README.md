@@ -10,6 +10,7 @@ It demonstrates:
 - multiple prompts in one framework Session
 - `CloseSession` for the mapped ACP Session
 - shared process recycling through `IdleTimeout`
+- forwarding the external agent's `stderr` for local diagnostics
 
 ## Requirements
 
@@ -61,3 +62,6 @@ Useful interactive commands:
   `AuthSelection.Meta` by a real application.
 - Terminal Auth is not configured in this example. The client therefore
   advertises `auth.terminal=false`.
+- The example forwards the external agent's raw `stderr` to the example
+  process's `stderr`. Library users that do not set a writer get line-oriented
+  forwarding through the framework log.

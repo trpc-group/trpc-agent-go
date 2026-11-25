@@ -188,6 +188,7 @@ func TestRunProcessExitFailsTurnAndNextRunRebuilds(t *testing.T) {
 	}
 	require.NotNil(t, firstError)
 	require.Contains(t, firstError.Error.Message, "process exited")
+	require.Contains(t, firstError.Error.Message, "acp helper stderr")
 	require.Equal(t, lifecycleStopped,
 		snapshotConnectionManager(acpAgent.connections).state)
 	require.Equal(t, uint64(1),

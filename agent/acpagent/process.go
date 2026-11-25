@@ -51,6 +51,7 @@ type processConnection struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	waitErr         error
+	stderr          *processStderr
 	agentDescriptor acpAgentDescriptor
 	authGroup       singleflight.Group
 }
@@ -127,7 +128,7 @@ func (m *connectionManager) connect(ctx context.Context) (*processConnection, er
 		m.mu.Lock()
 		m.state = lifecycleStopped
 		m.mu.Unlock()
-		return nil, err
+		return nil, process.withStderr(err)
 	}
 
 	m.mu.Lock()
@@ -153,7 +154,11 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 	cmd := exec.CommandContext(processCtx, m.config.Command, m.config.Args...)
 	cmd.Dir = m.config.WorkDir
 	cmd.Env = mergeEnvironment(os.Environ(), m.config.Env)
-	cmd.Stderr = m.stderr
+	var stderr *processStderr
+	if m.stderr != nil {
+		stderr = newProcessStderr(m.config.Name, m.stderr)
+		cmd.Stderr = stderr
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -182,28 +187,44 @@ func (m *connectionManager) startProcess() (*processConnection, error) {
 		ctx:    processCtx,
 		cancel: cancel,
 		done:   make(chan struct{}),
+		stderr: stderr,
 	}, nil
 }
 
 func (m *connectionManager) wait(process *processConnection) {
 	err := process.cmd.Wait()
+	process.flushStderr()
 	process.cancel()
 
 	m.mu.Lock()
 	process.waitErr = err
+	var (
+		failureErr error
+		unexpected bool
+	)
 	if m.current == process {
-		m.activeTurns.failAll(processFailureError(err))
+		unexpected = m.state == lifecycleRunning
+		failureErr = process.failureError()
+		m.activeTurns.failAll(failureErr)
 		m.current = nil
 		m.state = lifecycleStopped
 	}
 	m.mu.Unlock()
 	close(process.done)
+	if unexpected {
+		log.Errorf(
+			"acpagent: process %q exited unexpectedly: %v",
+			m.config.Name,
+			failureErr,
+		)
+	}
 }
 
 func (m *connectionManager) stopStartedProcess(process *processConnection) {
 	_ = process.stdin.Close()
 	process.cancel()
 	process.waitErr = process.cmd.Wait()
+	process.flushStderr()
 	close(process.done)
 }
 
@@ -357,9 +378,7 @@ func (m *connectionManager) processError(process *processConnection) error {
 	}
 	select {
 	case <-process.done:
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return process.waitErr
+		return process.failureError()
 	default:
 		return nil
 	}
@@ -371,7 +390,7 @@ func (p *processConnection) failureWithin(timeout time.Duration) error {
 	}
 	select {
 	case <-p.done:
-		return processFailureError(p.waitErr)
+		return p.failureError()
 	case <-time.After(timeout):
 		return nil
 	}
@@ -398,9 +417,47 @@ func mergeEnvironment(base, overrides []string) []string {
 	return merged
 }
 
-func processFailureError(err error) error {
-	if err == nil {
-		return errors.New("acpagent: process exited")
+func (p *processConnection) flushStderr() {
+	if p == nil || p.stderr == nil {
+		return
 	}
-	return fmt.Errorf("acpagent: process exited: %w", err)
+	p.stderr.Flush()
+}
+
+func (p *processConnection) stderrTail() string {
+	if p == nil || p.stderr == nil {
+		return ""
+	}
+	return p.stderr.Tail()
+}
+
+func (p *processConnection) failureError() error {
+	if p == nil {
+		return errProcessDone
+	}
+	return processFailureError(p.waitErr, p.stderrTail())
+}
+
+func (p *processConnection) withStderr(err error) error {
+	if err == nil {
+		return nil
+	}
+	stderr := p.stderrTail()
+	if stderr == "" {
+		return err
+	}
+	return fmt.Errorf("%w\nacpagent stderr:\n%s", err, stderr)
+}
+
+func processFailureError(err error, stderr string) error {
+	var failure error
+	if err == nil {
+		failure = errors.New("acpagent: process exited")
+	} else {
+		failure = fmt.Errorf("acpagent: process exited: %w", err)
+	}
+	if stderr == "" {
+		return failure
+	}
+	return fmt.Errorf("%w\nacpagent stderr:\n%s", failure, stderr)
 }

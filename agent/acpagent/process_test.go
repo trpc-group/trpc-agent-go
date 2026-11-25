@@ -108,6 +108,7 @@ func TestAgentProcessAbnormalExit(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, runErr, &exitErr)
 	require.Equal(t, 7, exitErr.ExitCode())
+	require.ErrorContains(t, runErr, "acp helper stderr")
 	require.NoError(t, acpAgent.Close())
 }
 

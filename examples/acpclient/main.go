@@ -74,6 +74,7 @@ func main() {
 		acpagent.WithArgs([]string(args)...),
 		acpagent.WithWorkDir(absoluteWorkDir),
 		acpagent.WithIdleTimeout(*idleTimeout),
+		acpagent.WithStderrWriter(os.Stderr),
 		acpagent.WithAuthMethodSelectorFunc(selectAgentAuth),
 	)
 	if err != nil {

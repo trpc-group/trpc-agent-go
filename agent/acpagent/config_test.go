@@ -196,6 +196,22 @@ func TestNewDoesNotStartProcessAndCopiesSlices(t *testing.T) {
 	require.Nil(t, acpAgent.FindSubAgent("missing"))
 }
 
+func TestNewStderrDefaultsToFrameworkLog(t *testing.T) {
+	t.Parallel()
+
+	name, options := validACPOptions(t)
+	acpAgent, err := New(name, options...)
+	require.NoError(t, err)
+	require.IsType(t, platformStderrWriter{}, acpAgent.connections.stderr)
+	require.NoError(t, acpAgent.Close())
+
+	options = append(options, WithStderrWriter(nil))
+	acpAgent, err = New(name, options...)
+	require.NoError(t, err)
+	require.Nil(t, acpAgent.connections.stderr)
+	require.NoError(t, acpAgent.Close())
+}
+
 func TestRunValidatesInvocation(t *testing.T) {
 	t.Parallel()
 
