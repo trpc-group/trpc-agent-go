@@ -6401,6 +6401,7 @@ explicit defaults.</p>
 </span><span id="__span-9-47"><a id="__codelineno-9-47" name="__codelineno-9-47"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>For OpenAI-compatible providers, <code>completion_tokens_details.reasoning_tokens</code> is mapped to <code>Usage.CompletionTokensDetails.ReasoningTokens</code>. The value may be <code>0</code> when the provider does not spend or report reasoning tokens; for reasoning models, set <code>ReasoningEffort</code> and/or <code>ThinkingEnabled</code> when you want to request reasoning behavior.</p>
+<p>For Gemini, <code>usageMetadata.thoughtsTokenCount</code> maps to <code>Usage.CompletionTokensDetails.ReasoningTokens</code> in both streaming and non-streaming responses. Final streaming usage keeps the latest non-zero token counts across chunks, including cached and reasoning tokens, and preserves them when trailing chunks omit usage.</p>
 <h2 id="openai-model">OpenAI Model</h2>
 <h3 id="model-name-parameter">Model Name Parameter</h3>
 <p>When creating an OpenAI model instance using <code>openai.New(name string, opts ...Option)</code>, the first parameter is the actual model name that gets sent to the OpenAI API, as the <strong>specific model identifier</strong> that tells the API which language model to use.</p>
@@ -10844,7 +10845,7 @@ the <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 24, 2026 01:41:21 UTC">2026-11-24 01:41:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 25, 2026 06:26:51 UTC">2026-11-25 06:26:51</span>
   </span>
 
     
