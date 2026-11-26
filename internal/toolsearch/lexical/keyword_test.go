@@ -77,6 +77,7 @@ func TestQueryScore(t *testing.T) {
 		{"folded ascii term with word boundaries", "s", "other", "aſb", 3},
 		{"plus alone is optional", "+ lookup", "get", "lookup", 3},
 		{"required all-separator term stays literal", "+_", "mcp__tool", "_", 13},
+		{"name separators alone do not satisfy a required underscore", "+_", "mcp__tool", "", 0},
 		{"repeated scoring does not alter the document", "get", "get_invoice", "", 10},
 	}
 	for _, tt := range tests {
