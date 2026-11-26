@@ -42,6 +42,10 @@ const (
 	// WithToolboxes rejects empty Name so the two never collide.
 	defaultNamespace = ""
 
+	// exactNameScore is the overwhelming score given when a whole query exactly
+	// equals a tool name, keeping that tool first in multi-query merge sorting.
+	exactNameScore = 1000
+
 	// defaultMaxResults is the default cap on keyword-search results.
 	defaultMaxResults = 5
 

@@ -187,7 +187,7 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 			added++
 			// Newly added tools do not need forgetting: they were never indexed.
 		}
-		p.indexTool(entry.tool, box.name, box.description)
+		p.indexTool(entry.tool)
 		p.deferredNames[name] = struct{}{}
 		p.namespaceByTool[name] = box.name
 		box.toolNames[name] = struct{}{}

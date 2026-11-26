@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -277,7 +276,37 @@ func toolToText(t tool.Tool) string {
 	if decl == nil {
 		return ""
 	}
-	return toolsearch.EmbeddingText(decl.Name, decl)
+	parts := []string{
+		fmt.Sprintf("Tool: %s", decl.Name),
+		fmt.Sprintf("Description: %s", decl.Description),
+	}
+	if decl.InputSchema != nil && len(decl.InputSchema.Properties) > 0 {
+		keys := make([]string, 0, len(decl.InputSchema.Properties))
+		for name := range decl.InputSchema.Properties {
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		descs := make([]string, 0, len(keys))
+		for _, name := range keys {
+			info := decl.InputSchema.Properties[name]
+			if info == nil {
+				continue
+			}
+			paramType := strings.TrimSpace(info.Type)
+			if paramType == "" {
+				if info.Items != nil {
+					paramType = "array"
+				} else if len(info.Properties) > 0 {
+					paramType = "object"
+				}
+			}
+			descs = append(descs, fmt.Sprintf("%s (%s): %s", name, paramType, strings.TrimSpace(info.Description)))
+		}
+		if len(descs) > 0 {
+			parts = append(parts, "Parameters: "+strings.Join(descs, ", "))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // --- Embedding search path wired into tool_search ---

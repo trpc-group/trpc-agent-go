@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	searchrank "trpc.group/trpc-go/trpc-agent-go/internal/toolsearch"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsearch/lexical"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -25,7 +25,7 @@ import (
 // surfaced in search results.
 type toolMetadata struct {
 	Description string
-	document    searchrank.Document
+	document    lexical.Document
 }
 
 // searchRequest is the normalized, pre-parsed view of toolSearchInput used by
@@ -234,35 +234,160 @@ func splitByCap(names []string, maxResults int) (selected, overflow []string) {
 	return names, nil
 }
 
-// searchToolsByQueries scores each query independently within the candidate
-// set, merges by best score per tool, sorts by (score desc, parts asc, name
-// asc), then splits at maxResults: top entries load with schemas, the rest are
-// returned as name-only additional_candidates.
-//
-// A non-empty namespace scopes scoring to that toolbox. An empty namespace
-// searches every deferred tool and adds a per-tool namespace bias so a
-// generic-verb tool in the wrong domain does not out-rank the right-domain
-// tool at the same raw score. Denied tools are dropped from the candidate set
-// before scoring so they never consume max_results slots. The caller must hold
-// p.mu (read).
+// searchToolsByQueries ranks scoped, permitted tools by their best query
+// score, optional namespace bonus, name-part count, and name. The caller must
+// hold p.mu (read).
 func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxResults int, allAllowed map[string]bool) (selected, overflow []string) {
-	candidatesSet := p.deferredNames
+	candidates := p.deferredNames
 	if namespace != "" {
 		box := p.toolboxByName[namespace]
 		if box == nil {
 			return nil, nil
 		}
-		candidatesSet = box.toolNames
+		candidates = box.toolNames
 	}
-	lookup := func(name string) *searchrank.Document {
-		meta := p.metaByName[name]
-		if meta == nil || (allAllowed != nil && !allAllowed[name]) {
-			return nil
+	if len(queries) == 0 || len(candidates) == 0 {
+		return nil, nil
+	}
+
+	var exactNames map[string]struct{}
+	var prepared []lexical.Query
+	for _, raw := range queries {
+		query := strings.TrimSpace(raw)
+		if query == "" {
+			continue
 		}
-		return &meta.document
+		if name, ok := p.nameByLower[strings.ToLower(query)]; ok {
+			if _, inScope := candidates[name]; inScope && (allAllowed == nil || allAllowed[name]) {
+				// One exact name needs neither a catalog walk nor tie-breaking.
+				if len(queries) == 1 {
+					return []string{name}, nil
+				}
+				if exactNames == nil {
+					exactNames = make(map[string]struct{})
+				}
+				exactNames[name] = struct{}{}
+				continue
+			}
+		}
+		// A canonical name that is denied or outside the namespace does not
+		// shadow ordinary keyword matches.
+		if query, ok := lexical.ParseQuery(query); ok {
+			prepared = append(prepared, query)
+		}
 	}
-	ranked := searchrank.RankNames(queries, candidatesSet, p.nameByLower, lookup)
+
+	// Tools with the same score and part count share a rank. This keeps
+	// allocation proportional to actual hits and avoids repeating those two
+	// values for every tool in a dense result.
+	type rank struct{ score, parts int }
+	groups := make(map[rank][]string)
+	var ranks []rank
+	total := 0
+	applyBias := namespace == "" && !p.isDefaultOnly()
+	var namespaceTerms []lexical.Term
+	namespaceScores := make(map[string]int)
+	addHit := func(name string, doc *lexical.Document, score int) {
+		if applyBias {
+			ns := p.namespaceByTool[name]
+			if ns != defaultNamespace {
+				bias, scored := namespaceScores[ns]
+				if !scored {
+					bias = p.scoreNamespace(ns, queries, &namespaceTerms)
+					namespaceScores[ns] = bias
+				}
+				score += bias
+			}
+		}
+		key := rank{score: score, parts: doc.NamePartCount()}
+		if len(groups[key]) == 0 {
+			ranks = append(ranks, key)
+		}
+		groups[key] = append(groups[key], name)
+		total++
+	}
+
+	if len(prepared) == 0 {
+		for name := range exactNames {
+			addHit(name, &p.metaByName[name].document, exactNameScore)
+		}
+	} else {
+		for name := range candidates {
+			if allAllowed != nil && !allAllowed[name] {
+				continue
+			}
+			meta := p.metaByName[name]
+			if meta == nil {
+				continue
+			}
+			best := 0
+			if _, exact := exactNames[name]; exact {
+				best = exactNameScore
+			}
+			for i := range prepared {
+				if score := prepared[i].Score(&meta.document); score > best {
+					best = score
+				}
+			}
+			if best > 0 {
+				addHit(name, &meta.document, best)
+			}
+		}
+	}
+	if len(ranks) == 0 {
+		return nil, nil
+	}
+	if len(ranks) == 1 {
+		names := groups[ranks[0]]
+		sort.Strings(names)
+		return splitByCap(names, maxResults)
+	}
+	sort.Slice(ranks, func(i, j int) bool {
+		if ranks[i].score != ranks[j].score {
+			return ranks[i].score > ranks[j].score
+		}
+		return ranks[i].parts < ranks[j].parts
+	})
+	ranked := make([]string, 0, total)
+	for _, key := range ranks {
+		names := groups[key]
+		sort.Strings(names)
+		ranked = append(ranked, names...)
+	}
 	return splitByCap(ranked, maxResults)
+}
+
+// scoreNamespace counts distinct query terms matching a toolbox description.
+func (p *Plugin) scoreNamespace(namespace string, queries []string, terms *[]lexical.Term) int {
+	box := p.toolboxByName[namespace]
+	if box == nil || box.description == "" {
+		return 0
+	}
+	// Build the namespace terms only when an actual hit has a description
+	// to match. Required compound tokens stay intact for the namespace bonus.
+	if *terms == nil {
+		seen := make(map[string]struct{})
+		*terms = make([]lexical.Term, 0)
+		for _, query := range queries {
+			for _, token := range lexical.Tokenize(query) {
+				if strings.HasPrefix(token, "+") && len(token) > 1 {
+					token = token[1:]
+				}
+				if _, ok := seen[token]; !ok {
+					seen[token] = struct{}{}
+					*terms = append(*terms, lexical.CompileTerm(token))
+				}
+			}
+		}
+	}
+	description := strings.ToLower(box.description)
+	score := 0
+	for _, term := range *terms {
+		if term.Matches(description) {
+			score++
+		}
+	}
+	return score
 }
 
 // catalogEntry is one namespace summary in error payloads.

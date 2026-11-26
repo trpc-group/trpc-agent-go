@@ -131,6 +131,42 @@ func TestSearchByQueries_ExactAndLexicalHitsAfterPermissionFiltering(t *testing.
 	assert.Equal(t, []string{"b_alpha_beta"}, overflow)
 }
 
+func TestSearchByQueries_MultipleExactNames(t *testing.T) {
+	p := New(nil, WithToolboxes([]Toolbox{
+		{Name: "other", Tools: []tool.Tool{newTestTool("a_report", "")}},
+		{Name: "billing", Description: "z_report", Tools: []tool.Tool{
+			newTestTool("z_report", ""),
+			newTestTool("z_report_details", "z_report"),
+		}},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	result := callSearch(t, ctx, p, toolSearchInput{
+		Queries: []string{" A_REPORT ", "Z_REPORT", "a_report"}, MaxResults: 1,
+	})
+	assert.Equal(t, []string{"z_report"}, toolNames(result.Tools))
+	assert.Equal(t, []string{"a_report"}, result.AdditionalCandidates)
+}
+
+func TestSearchByQueries_NamespaceBiasCountsDistinctWholeTokens(t *testing.T) {
+	p := New(nil, WithToolboxes([]Toolbox{
+		{Name: "other", Description: "lookup invoice id", Tools: []tool.Tool{
+			newTestTool("a_record", "lookup invoice id"),
+		}},
+		{Name: "billing", Description: "invoice-id region", Tools: []tool.Tool{
+			newTestTool("z_record", "lookup invoice id"),
+		}},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	result := callSearch(t, ctx, p, toolSearchInput{
+		Queries:    []string{"+invoice-id lookup", "+lookup", "lookup lookup lookup", "region"},
+		MaxResults: 1,
+	})
+	assert.Equal(t, []string{"z_record"}, toolNames(result.Tools))
+	assert.Equal(t, []string{"a_record"}, result.AdditionalCandidates)
+}
+
 func BenchmarkKeywordSearch(b *testing.B) {
 	for _, size := range []int{100, 1000, 5000} {
 		tools := make([]tool.Tool, size)
