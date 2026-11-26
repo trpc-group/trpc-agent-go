@@ -9,6 +9,7 @@
 package toolsearch
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,4 +129,28 @@ func TestSearchByQueries_ExactAndLexicalHitsAfterPermissionFiltering(t *testing.
 	assert.Empty(t, errPayload)
 	assert.Equal(t, []string{"m_target"}, selected)
 	assert.Equal(t, []string{"b_alpha_beta"}, overflow)
+}
+
+func BenchmarkKeywordSearch(b *testing.B) {
+	for _, size := range []int{100, 1000, 5000} {
+		tools := make([]tool.Tool, size)
+		for i := range tools {
+			description := "regular operation"
+			if i%100 == 0 {
+				description = "rare record"
+			}
+			tools[i] = newTestTool(fmt.Sprintf("tool_%04d", i), description)
+		}
+		p := New(nil, WithDeferredTools(tools))
+		for _, query := range []string{"absent", "rare", "regular", "tool_0000"} {
+			b.Run(fmt.Sprintf("%d/%s", size, query), func(b *testing.B) {
+				req := searchRequest{queries: []string{query}, maxResults: 5}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					p.resolveSelection(req, nil)
+				}
+			})
+		}
+	}
 }

@@ -254,53 +254,14 @@ func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxRes
 		}
 		candidatesSet = box.toolNames
 	}
-	eligible := func(name string) bool {
-		return p.metaByName[name] != nil && (allAllowed == nil || allAllowed[name])
-	}
-	// A single canonical exact hit needs no catalog scan or ranking. Keep the
-	// scope and permission checks before using the index fast path.
-	if len(queries) == 1 {
-		lower := strings.ToLower(strings.TrimSpace(queries[0]))
-		if name, ok := p.nameByLower[lower]; lower != "" && ok {
-			if _, inScope := candidatesSet[name]; inScope && eligible(name) {
-				return []string{name}, nil
-			}
+	lookup := func(name string) *searchrank.Document {
+		meta := p.metaByName[name]
+		if meta == nil || (allAllowed != nil && !allAllowed[name]) {
+			return nil
 		}
+		return &meta.document
 	}
-	names := make([]string, 0, len(candidatesSet))
-	for name := range candidatesSet {
-		// Filter before scoring so denied tools never consume result slots.
-		if eligible(name) {
-			names = append(names, name)
-		}
-	}
-	// The ranker preserves input order for true ties. Sorting names here keeps
-	// the plugin's established (score, name-part count, name) ordering.
-	sort.Strings(names)
-	documents := make([]searchrank.Document, len(names))
-	for i, name := range names {
-		documents[i] = p.metaByName[name].document
-	}
-	// Only queried canonical names need an index. Scope or permission filtering
-	// can remove a canonical alias while leaving other lexical hits eligible.
-	exactNames := make(map[string]int, len(queries))
-	for _, query := range queries {
-		lower := strings.ToLower(strings.TrimSpace(query))
-		if name, ok := p.nameByLower[lower]; ok {
-			index := sort.SearchStrings(names, name)
-			if index < len(names) && names[index] == name {
-				exactNames[lower] = index
-			}
-		}
-	}
-	matches := searchrank.RankWithExactNames(queries, documents, exactNames)
-	if len(matches) == 0 {
-		return nil, nil
-	}
-	ranked := make([]string, len(matches))
-	for i, match := range matches {
-		ranked[i] = names[match.Index]
-	}
+	ranked := searchrank.RankNames(queries, candidatesSet, p.nameByLower, lookup)
 	return splitByCap(ranked, maxResults)
 }
 

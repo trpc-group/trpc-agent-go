@@ -72,17 +72,6 @@ func TestSplitRequiredTerm(t *testing.T) {
 	assert.Equal(t, []string{"_"}, splitRequiredTerm("_"))
 }
 
-func TestBuildScoringTerms(t *testing.T) {
-	// No required terms → returns optional as-is.
-	assert.Equal(t, []string{"a", "b"}, buildScoringTerms(nil, []string{"a", "b"}))
-
-	// Required terms are split on _/-.
-	assert.Equal(t, []string{"create", "invoice", "extra"}, buildScoringTerms([]string{"create_invoice"}, []string{"extra"}))
-
-	// Multiple required terms.
-	assert.Equal(t, []string{"a", "b", "c", "d"}, buildScoringTerms([]string{"a_b", "c-d"}, nil))
-}
-
 func TestCompileTermPatterns(t *testing.T) {
 	// ASCII terms get compiled regex.
 	patterns := compileTermPatterns([]string{"hello", "world"})
@@ -133,8 +122,6 @@ func TestMatchesAllRequired(t *testing.T) {
 	assert.True(t, matchesAllRequired(meta, []string{"create", "invoice"}, patterns))
 	// One misses (name part doesn't match, description doesn't contain "missing").
 	assert.False(t, matchesAllRequired(meta, []string{"create", "missing"}, patterns))
-	// Compound term split: "create_invoice" → "create" and "invoice" both match.
-	assert.True(t, matchesAllRequired(meta, []string{"create_invoice"}, patterns))
 }
 
 func TestNameOrDescHasTerm(t *testing.T) {
@@ -248,6 +235,16 @@ func TestRank_QueryContracts(t *testing.T) {
 			want: []Match{{Index: 2, Score: 1000}, {Index: 0, Score: 26}},
 		},
 		{
+			name:    "all parts of multiple required terms must match",
+			queries: []string{"+create_invoice +customer-id extra"},
+			candidates: []Document{
+				NewDocument("create_invoice", "customer id extra", "", ""),
+				NewDocument("create_invoice", "customer extra", "", ""),
+				NewDocument("create", "customer id extra", "", ""),
+			},
+			want: []Match{{Index: 0, Score: 29}},
+		},
+		{
 			name:    "unicode punctuation and description matching",
 			queries: []string{"WEATHER，天气"},
 			candidates: []Document{
@@ -294,21 +291,21 @@ func TestRank_QueryContracts(t *testing.T) {
 	}
 }
 
-func TestRankWithExactNames_CanonicalScope(t *testing.T) {
-	candidates := []Document{
+func TestRankNames_CanonicalScope(t *testing.T) {
+	docs := []Document{
 		NewDocument("CREATE_INVOICE", "", "first", ""),
 		NewDocument("create_invoice_extra", "create_invoice", "first", ""),
 		NewDocument("create_invoice", "", "second", ""),
 	}
-	// A caller can choose one case-insensitive canonical alias.
-	assertRanking(t, []Match{{Index: 2, Score: 1000}}, RankWithExactNames(
-		[]string{"CREATE_INVOICE"}, candidates, map[string]int{"create_invoice": 2},
-	))
-	// When the canonical alias is outside the caller's scope, all scoped tools
-	// remain eligible for ordinary lexical scoring; aliases do not gain 1000.
-	assertRanking(t, []Match{{Index: 1, Score: 13}, {Index: 0, Score: 10}}, RankWithExactNames(
-		[]string{"create_invoice"}, candidates[:2], map[string]int{"create_invoice": 2},
-	))
+	names := map[string]struct{}{"CREATE_INVOICE": {}, "create_invoice_extra": {}, "create_invoice": {}}
+	byName := map[string]*Document{
+		"CREATE_INVOICE": &docs[0], "create_invoice_extra": &docs[1], "create_invoice": &docs[2],
+	}
+	lookup := func(name string) *Document { return byName[name] }
+	canonical := map[string]string{"create_invoice": "create_invoice"}
+	assert.Equal(t, []string{"create_invoice"}, RankNames([]string{"CREATE_INVOICE"}, names, canonical, lookup))
+	delete(names, "create_invoice")
+	assert.Equal(t, []string{"create_invoice_extra", "CREATE_INVOICE"}, RankNames([]string{"CREATE_INVOICE"}, names, canonical, lookup))
 }
 
 func TestRank_ReusesDocumentsWithoutMutation(t *testing.T) {

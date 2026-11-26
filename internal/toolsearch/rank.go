@@ -66,57 +66,27 @@ type Match struct {
 // Namespace bias does not contribute to either count.
 // Rank never modifies the queries or candidates and returns nil for no matches.
 func Rank(queries []string, candidates []Document) []Match {
-	return rank(queries, candidates, nil, false)
-}
-
-// RankWithExactNames ranks candidates using the caller's canonical name lookup
-// for whole-query matches. Keys must be lowercase names and values must be
-// candidate indices. Missing names use lexical matching, and invalid indices
-// are ignored. This lets callers preserve scope and alias rules without
-// duplicating the ranking algorithm. The lookup is not modified.
-func RankWithExactNames(queries []string, candidates []Document, exactNames map[string]int) []Match {
-	return rank(queries, candidates, exactNames, true)
-}
-
-func rank(queries []string, candidates []Document, exactNames map[string]int, canonical bool) []Match {
 	if len(queries) == 0 || len(candidates) == 0 {
 		return nil
 	}
-	best := make([]Match, len(candidates))
-	for _, query := range queries {
-		scoreQueryInto(candidates, query, exactNames, canonical, best)
-	}
-
-	var terms []string
-	var patterns map[string]*regexp.Regexp
-	var biasReady bool
-	biasByDescription := make(map[string]int)
-	// Compact into the score buffer; writes only replace entries already read.
-	matches := best[:0]
-	for index := range candidates {
-		match := best[index]
-		if match.Score <= 0 {
-			continue
-		}
-		doc := &candidates[index]
-		if doc.namespace != "" && doc.namespaceDescLower != "" {
-			if !biasReady {
-				terms = namespaceTerms(queries)
-				patterns = compileTermPatterns(terms)
-				biasReady = true
+	scorer := prepareScorer(queries, func(lower string) (string, bool) {
+		for i := range candidates {
+			if candidates[i].nameLower == lower {
+				return lower, true
 			}
-			bias, cached := biasByDescription[doc.namespaceDescLower]
-			if !cached {
-				for _, term := range terms {
-					if matchTermInText(term, doc.namespaceDescLower, patterns) {
-						bias++
-					}
-				}
-				biasByDescription[doc.namespaceDescLower] = bias
-			}
-			match.Score += bias
 		}
-		matches = append(matches, match)
+		return "", false
+	})
+	matches := make([]Match, 0, len(candidates))
+	for i := range candidates {
+		doc := &candidates[i]
+		score := scorer.best(doc.nameLower, doc)
+		if score.score > 0 {
+			matches = append(matches, Match{
+				Index: i, Score: score.score,
+				MatchedTerms: score.terms, NameMatches: score.names,
+			})
+		}
 	}
 	if len(matches) == 0 {
 		return nil
@@ -135,52 +105,162 @@ func rank(queries []string, candidates []Document, exactNames map[string]int, ca
 	return matches
 }
 
-func mergeMatch(best []Match, index int, score queryScore) {
-	if score.score > best[index].Score {
-		best[index] = Match{
-			Index: index, Score: score.score,
-			MatchedTerms: score.terms, NameMatches: score.names,
-		}
+// RankNames ranks a named catalog by score, then by ascending name-part count
+// and name. canonical maps lowercase names to the catalog's chosen spelling.
+// lookup returns a borrowed document or nil for an ineligible name. A canonical
+// name outside names or excluded by lookup falls back to lexical matching.
+// Inputs must remain stable during the call. No matches yields nil.
+func RankNames(
+	queries []string, names map[string]struct{}, canonical map[string]string,
+	lookup func(string) *Document,
+) []string {
+	if len(queries) == 0 || len(names) == 0 {
+		return nil
 	}
-}
-
-func scoreQueryInto(candidates []Document, query string, exactNames map[string]int, canonical bool, best []Match) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return
+	resolveExact := func(lower string) (string, bool) {
+		name, ok := canonical[lower]
+		_, inScope := names[name]
+		return name, ok && inScope && lookup(name) != nil
 	}
-	lower := strings.ToLower(query)
-	if canonical {
-		if index, ok := exactNames[lower]; ok && index >= 0 && index < len(candidates) {
-			mergeMatch(best, index, queryScore{score: exactNameScore, terms: 1, names: 1})
-			return
-		}
-	} else {
-		exact := false
-		for i := range candidates {
-			if candidates[i].nameLower == lower {
-				mergeMatch(best, i, queryScore{score: exactNameScore, terms: 1, names: 1})
-				exact = true
+	// A single exact hit needs no lexical scoring or catalog traversal.
+	if len(queries) == 1 {
+		lower := strings.ToLower(strings.TrimSpace(queries[0]))
+		if lower != "" {
+			if name, ok := resolveExact(lower); ok {
+				return []string{name}
 			}
 		}
-		if exact {
-			return
-		}
 	}
-	tokens := tokenizeQuery(query)
-	if len(tokens) == 0 {
-		return
-	}
-	required, optional := parseQueryTerms(tokens)
-	terms := buildScoringTerms(required, optional)
-	patterns := compileTermPatterns(terms)
-	for i := range candidates {
-		doc := &candidates[i]
-		if !matchesAllRequired(doc, required, patterns) {
+	scorer := prepareScorer(queries, resolveExact)
+	// Names with the same score and part count share a rank. Sorting the
+	// names in each group avoids storing those two values for every hit.
+	type rank struct{ score, parts int }
+	groups := make(map[rank][]string)
+	var ranks []rank
+	total := 0
+	for name := range names {
+		doc := lookup(name)
+		if doc == nil {
 			continue
 		}
-		mergeMatch(best, i, scoreToolForQuery(doc, terms, patterns))
+		score := scorer.best(name, doc).score
+		if score == 0 {
+			continue
+		}
+		key := rank{score: score, parts: len(doc.parts)}
+		group := groups[key]
+		if len(group) == 0 {
+			ranks = append(ranks, key)
+		}
+		groups[key] = append(group, name)
+		total++
 	}
+	if len(ranks) == 0 {
+		return nil
+	}
+	if len(ranks) == 1 {
+		group := groups[ranks[0]]
+		sort.Strings(group)
+		return group
+	}
+	sort.Slice(ranks, func(i, j int) bool {
+		if ranks[i].score != ranks[j].score {
+			return ranks[i].score > ranks[j].score
+		}
+		return ranks[i].parts < ranks[j].parts
+	})
+	ranked := make([]string, 0, total)
+	for _, key := range ranks {
+		group := groups[key]
+		sort.Strings(group)
+		ranked = append(ranked, group...)
+	}
+	return ranked
+}
+
+type preparedQuery struct {
+	exact    string
+	required []string
+	terms    []string
+	patterns map[string]*regexp.Regexp
+}
+
+type queryScorer struct {
+	queries      []preparedQuery
+	raw          []string
+	bias         map[string]int
+	biasTerms    []string
+	biasPatterns map[string]*regexp.Regexp
+}
+
+func prepareScorer(raw []string, resolveExact func(string) (string, bool)) queryScorer {
+	scorer := queryScorer{raw: raw}
+	for _, query := range raw {
+		lower := strings.ToLower(strings.TrimSpace(query))
+		if lower == "" {
+			continue
+		}
+		if name, ok := resolveExact(lower); ok {
+			scorer.queries = append(scorer.queries, preparedQuery{exact: name})
+			continue
+		}
+		required, optional := parseQueryTerms(tokenizeQuery(lower))
+		// Required compound terms match their individual parts. Split once
+		// per query so walking a large catalog does not allocate per document.
+		var parts []string
+		for _, term := range required {
+			parts = append(parts, splitRequiredTerm(term)...)
+		}
+		terms := optional
+		if len(parts) > 0 {
+			terms = append(parts, optional...)
+		}
+		scorer.queries = append(scorer.queries, preparedQuery{
+			required: parts, terms: terms, patterns: compileTermPatterns(terms),
+		})
+	}
+	return scorer
+}
+
+func (s *queryScorer) best(name string, doc *Document) queryScore {
+	var best queryScore
+	for i := range s.queries {
+		q := &s.queries[i]
+		var score queryScore
+		if q.exact != "" {
+			if q.exact == name {
+				score = queryScore{score: exactNameScore, terms: 1, names: 1}
+			}
+		} else if matchesAllRequired(doc, q.required, q.patterns) {
+			score = scoreToolForQuery(doc, q.terms, q.patterns)
+		}
+		if score.score > best.score {
+			best = score
+		}
+	}
+	if best.score > 0 && doc.namespace != "" && doc.namespaceDescLower != "" {
+		best.score += s.namespaceBias(doc.namespaceDescLower)
+	}
+	return best
+}
+
+func (s *queryScorer) namespaceBias(description string) int {
+	if s.bias == nil {
+		s.biasTerms = namespaceTerms(s.raw)
+		s.biasPatterns = compileTermPatterns(s.biasTerms)
+		s.bias = make(map[string]int)
+	}
+	if bias, ok := s.bias[description]; ok {
+		return bias
+	}
+	var bias int
+	for _, term := range s.biasTerms {
+		if matchTermInText(term, description, s.biasPatterns) {
+			bias++
+		}
+	}
+	s.bias[description] = bias
+	return bias
 }
 
 // namespaceTerms keeps distinct query tokens, including required terms without
@@ -284,19 +364,6 @@ func splitRequiredTerm(termLower string) []string {
 	return parts
 }
 
-// buildScoringTerms merges required and optional terms into the scoring list.
-// Required terms are split on `_`/`-` so they can match at the parts level.
-func buildScoringTerms(required, optional []string) []string {
-	if len(required) == 0 {
-		return optional
-	}
-	terms := make([]string, 0, len(required)+len(optional))
-	for _, t := range required {
-		terms = append(terms, splitRequiredTerm(strings.ToLower(t))...)
-	}
-	return append(terms, optional...)
-}
-
 // compileTermPatterns pre-compiles `\b` word-boundary regexes for search terms.
 // Non-ASCII terms (e.g. CJK) are mapped to nil → matchTermInText falls back to
 // strings.Contains since Go's `\b` only fires at ASCII word boundaries.
@@ -340,15 +407,11 @@ func matchTermInText(termLower, textLower string, patterns map[string]*regexp.Re
 	return strings.Contains(textLower, termLower)
 }
 
-// matchesAllRequired reports whether a tool satisfies every required term.
-// Terms containing `_`/`-` are split into sub-terms; each must match a name
-// part or appear in the description.
+// matchesAllRequired checks the atomic required terms prepared for the query.
 func matchesAllRequired(meta *Document, requiredTerms []string, patterns map[string]*regexp.Regexp) bool {
 	for _, term := range requiredTerms {
-		for _, sub := range splitRequiredTerm(strings.ToLower(term)) {
-			if !nameOrDescHasTerm(meta, sub, patterns) {
-				return false
-			}
+		if !nameOrDescHasTerm(meta, term, patterns) {
+			return false
 		}
 	}
 	return true
