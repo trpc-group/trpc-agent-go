@@ -25,7 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -730,7 +729,10 @@ func appendUsageAttributes(attrs []attribute.KeyValue, usage *model.Usage, state
 	if cache != (model.PromptTokensDetails{}) || previous != (model.PromptTokensDetails{}) {
 		accounting := ""
 		if cache != (model.PromptTokensDetails{}) {
-			accounting = string(usagemeta.GetPromptCacheAccounting(usage))
+			switch usage.PromptCacheAccounting {
+			case model.PromptCacheAccountingInclusive, model.PromptCacheAccountingExclusive:
+				accounting = string(usage.PromptCacheAccounting)
+			}
 		}
 		// Empty explicitly clears a prior declaration when usage is replaced by
 		// custom code or no longer contains cache tokens.

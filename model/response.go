@@ -9,12 +9,7 @@
 
 package model
 
-import (
-	"encoding/json"
-	"time"
-
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
-)
+import "time"
 
 // Error type constants for ResponseError.Type field.
 const (
@@ -118,6 +113,20 @@ type TimingInfo struct {
 	ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 
+// PromptCacheAccounting describes whether prompt token counts include cache tokens.
+type PromptCacheAccounting string
+
+const (
+	// PromptCacheAccountingUnspecified means the producer has not declared whether
+	// prompt tokens include cache reads and writes. Its value is the empty string;
+	// it does not imply either inclusive or exclusive accounting.
+	PromptCacheAccountingUnspecified PromptCacheAccounting = ""
+	// PromptCacheAccountingInclusive means prompt tokens include cache reads and writes.
+	PromptCacheAccountingInclusive PromptCacheAccounting = "inclusive"
+	// PromptCacheAccountingExclusive means prompt tokens exclude cache reads and writes.
+	PromptCacheAccountingExclusive PromptCacheAccounting = "exclusive"
+)
+
 // Usage represents token usage information.
 type Usage struct {
 	// PromptTokens is the number of tokens in the prompt.
@@ -138,65 +147,16 @@ type Usage struct {
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
 
-	// promptCacheAccounting records whether PromptTokens includes or excludes
-	// the prompt cache counters in PromptTokensDetails. It is framework
-	// metadata set by model adapters through internal/usagemeta, deliberately
-	// unexported and not serialized so that it is not part of the public API
-	// or wire format, while still traveling with the Usage value through
-	// copies, Clone, callbacks, and model wrappers.
-	promptCacheAccounting usagemeta.PromptCacheAccounting
-}
-
-// UnmarshalJSON decodes usage fields with the usual encoding/json semantics:
-// omitted fields retain their values and null leaves the value unchanged.
-// Decoding prompt_tokens or prompt_tokens_details clears internal prompt cache
-// accounting, which is not represented in JSON, even when Usage is reused.
-// Updates that omit both prompt fields preserve the existing accounting.
-func (u *Usage) UnmarshalJSON(data []byte) error {
-	type usageJSON Usage
-	err := json.Unmarshal(data, (*usageJSON)(u))
-	if u == nil || u.promptCacheAccounting == usagemeta.PromptCacheAccountingUnspecified {
-		return err
-	}
-	// Inspect field presence rather than comparing counts: a replacement can
-	// have the same counts but different accounting. A type error can also
-	// leave public fields partially updated, so inspect them even on failure.
-	var prompt struct {
-		Tokens  json.RawMessage `json:"prompt_tokens"`
-		Details json.RawMessage `json:"prompt_tokens_details"`
-	}
-	if json.Unmarshal(data, &prompt) == nil && (len(prompt.Tokens) != 0 || len(prompt.Details) != 0) {
-		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
-	}
-	return err
-}
-
-func init() {
-	usagemeta.Register(getUsagePromptCacheAccounting, setUsagePromptCacheAccounting)
-}
-
-func getUsagePromptCacheAccounting(usage any) usagemeta.PromptCacheAccounting {
-	u, ok := usage.(*Usage)
-	if !ok || u == nil {
-		return usagemeta.PromptCacheAccountingUnspecified
-	}
-	return u.promptCacheAccounting
-}
-
-func setUsagePromptCacheAccounting(usage any, accounting usagemeta.PromptCacheAccounting) {
-	u, ok := usage.(*Usage)
-	if !ok || u == nil {
-		return
-	}
-	if !accounting.Valid() {
-		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
-		return
-	}
-	if u.PromptTokensDetails == (PromptTokensDetails{}) {
-		u.promptCacheAccounting = usagemeta.PromptCacheAccountingUnspecified
-		return
-	}
-	u.promptCacheAccounting = accounting
+	// PromptCacheAccounting declares whether PromptTokens includes the cache
+	// read and creation counts in PromptTokensDetails.
+	// An empty string means the producer has not provided this information;
+	// it does not imply either inclusive or exclusive accounting. Consumers
+	// should retain their existing fallback for empty or unrecognized values.
+	// The declaration is irrelevant when there are no prompt cache counts.
+	// It is excluded from JSON: decoding into an existing Usage preserves it.
+	// For a full replacement, decode into a fresh Usage or explicitly reset it
+	// to PromptCacheAccountingUnspecified before decoding.
+	PromptCacheAccounting PromptCacheAccounting `json:"-"`
 }
 
 // PromptTokensDetails is the details of the prompt tokens.
@@ -293,8 +253,7 @@ func (rsp *Response) Clone() *Response {
 		clone.Choices[i].Delta.ProviderData = choice.Delta.ProviderData.clone()
 	}
 	if rsp.Usage != nil {
-		// Copy the whole value so unexported framework metadata (such as
-		// prompt cache accounting) is preserved, then deep copy pointers.
+		// Copy the whole value, including prompt cache accounting, then deep copy pointers.
 		usage := *rsp.Usage
 		usage.TimingInfo = nil
 		clone.Usage = &usage

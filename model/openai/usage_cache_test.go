@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
@@ -832,13 +831,13 @@ func TestGenerateContentMarksInclusivePromptCacheAccounting(t *testing.T) {
 					attrs := spanAttributes(spans[0].Attributes())
 					accountingAttr, hasAccountingAttr := attrs[semconvtrace.KeyGenAIUsageInputTokensCacheAccounting]
 					if withCache {
-						assert.Equal(t, usagemeta.PromptCacheAccountingInclusive, usagemeta.GetPromptCacheAccounting(final.Usage))
+						assert.Equal(t, model.PromptCacheAccountingInclusive, final.Usage.PromptCacheAccounting)
 						assert.Equal(t, int64(1771), attrs[semconvtrace.KeyGenAIUsageInputTokensCacheCreation].AsInt64())
 						require.True(t, hasAccountingAttr)
 						assert.Equal(t, semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive, accountingAttr.AsString())
 						return
 					}
-					assert.Equal(t, usagemeta.PromptCacheAccountingUnspecified, usagemeta.GetPromptCacheAccounting(final.Usage))
+					assert.Equal(t, model.PromptCacheAccountingUnspecified, final.Usage.PromptCacheAccounting)
 					assert.Equal(t, model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}, model.Usage{
 						PromptTokens:     final.Usage.PromptTokens,
 						CompletionTokens: final.Usage.CompletionTokens,
@@ -922,7 +921,9 @@ func TestGenerateContentStreamingUsageAfterFinishReason(t *testing.T) {
 					assert.Equal(t, reason, *final.Choices[0].FinishReason)
 					require.NotNil(t, final.Usage)
 					want := tt.want
-					usagemeta.SetPromptCacheAccounting(&want, usagemeta.PromptCacheAccountingInclusive)
+					if want.PromptTokensDetails != (model.PromptTokensDetails{}) {
+						want.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+					}
 					assert.Equal(t, want, *final.Usage)
 					require.NoError(t, callbackErr)
 					require.NotNil(t, callbackAcc)

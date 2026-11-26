@@ -27,7 +27,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata/responseshistory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -1012,7 +1011,9 @@ func mapUsage(resp *responses.Response) *model.Usage {
 		},
 	}
 	// Responses API input_tokens include cached and cache-write tokens.
-	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingInclusive)
+	if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+	}
 	return usage
 }
 

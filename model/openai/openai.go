@@ -36,7 +36,6 @@ import (
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -735,7 +734,10 @@ func (m *Model) GenerateContent(
 // prompt_tokens include cached and cache-write tokens on an emitted response.
 func markInclusivePromptCacheAccounting(resp *model.Response) {
 	if resp != nil && resp.Usage != nil {
-		usagemeta.SetPromptCacheAccounting(resp.Usage, usagemeta.PromptCacheAccountingInclusive)
+		resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+		if resp.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+			resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+		}
 	}
 }
 

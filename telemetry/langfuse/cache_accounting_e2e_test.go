@@ -23,7 +23,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/failover"
 	"trpc.group/trpc-go/trpc-agent-go/model/hedge"
@@ -43,7 +42,7 @@ func exclusiveUsage() *model.Usage {
 		TotalTokens:         111,
 		PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
 	}
-	usagemeta.SetPromptCacheAccounting(u, usagemeta.PromptCacheAccountingExclusive)
+	u.PromptCacheAccounting = model.PromptCacheAccountingExclusive
 	return u
 }
 
@@ -77,7 +76,7 @@ func (m *compositeModel) GenerateContent(context.Context, *model.Request) (<-cha
 		Usage:   exclusiveUsage(),
 	}
 	aux := &model.Usage{PromptTokens: 20, PromptTokensDetails: model.PromptTokensDetails{CachedTokens: 10}}
-	usagemeta.SetPromptCacheAccounting(aux, usagemeta.PromptCacheAccountingInclusive)
+	aux.PromptCacheAccounting = model.PromptCacheAccountingInclusive
 	_ = aux
 	ch := make(chan *model.Response, 1)
 	ch <- respA
@@ -247,20 +246,54 @@ func TestRunnerToLangfuse_PromptCacheAccounting(t *testing.T) {
 		})))
 	})
 
-	t.Run("JSON replacement of a reused response clears accounting", func(t *testing.T) {
-		require.Equal(t, exclusive191, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
-			replacement := &model.Response{
-				ID: "json-replacement", Model: "gpt-5", Done: true,
-				Choices: []model.Choice{{Message: model.NewAssistantMessage("replacement")}},
-				Usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111,
-					PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80}},
-			}
-			data, err := json.Marshal(replacement)
-			require.NoError(t, err)
-			require.NoError(t, json.Unmarshal(data, args.Response))
-			return nil
-		})))
-	})
+	for _, tc := range []struct {
+		name   string
+		decode func([]byte, *model.Response) error
+		want   map[string]int64
+	}{
+		{
+			name: "JSON replacement decoded into a fresh response has no declaration",
+			decode: func(data []byte, dst *model.Response) error {
+				var next model.Response
+				if err := json.Unmarshal(data, &next); err != nil {
+					return err
+				}
+				*dst = next
+				return nil
+			},
+			want: exclusive191,
+		},
+		{
+			name: "explicit reset before JSON replacement clears accounting",
+			decode: func(data []byte, dst *model.Response) error {
+				dst.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+				return json.Unmarshal(data, dst)
+			},
+			want: exclusive191,
+		},
+		{
+			name: "in-place JSON decoding preserves the existing declaration",
+			decode: func(data []byte, dst *model.Response) error {
+				return json.Unmarshal(data, dst)
+			},
+			want: inclusive111,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, run(t, afterModel(func(_ context.Context, args *model.AfterModelArgs) *model.Response {
+				replacement := &model.Response{
+					ID: "json-replacement", Model: "gpt-5", Done: true,
+					Choices: []model.Choice{{Message: model.NewAssistantMessage("replacement")}},
+					Usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111,
+						PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80}},
+				}
+				data, err := json.Marshal(replacement)
+				require.NoError(t, err)
+				require.NoError(t, tc.decode(data, args.Response))
+				return nil
+			})))
+		})
+	}
 
 	t.Run("user-built cached and creation usage preserves legacy buckets", func(t *testing.T) {
 		want := map[string]int64{"input": 100, "output": 11, "input_cache_creation": 10}
@@ -317,7 +350,7 @@ func (m *cacheUsageStreamModel) GenerateContent(context.Context, *model.Request)
 		PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110,
 		PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
 	}
-	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingInclusive)
+	usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
 	partial := &model.Response{
 		ID: "stream", Model: m.Info().Name, IsPartial: true, Usage: usage,
 		Choices: []model.Choice{{Delta: model.NewAssistantMessage("hello")}},

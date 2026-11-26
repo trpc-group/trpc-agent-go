@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -89,7 +88,10 @@ func mergeUsageSnapshot(dst, src *model.Usage) {
 // BuildResponse builds up the final a model.Response.
 func (a *Accumulator) BuildResponse() *model.Response {
 	// Gemini promptTokenCount includes cachedContentTokenCount.
-	usagemeta.SetPromptCacheAccounting(&a.Usage, usagemeta.PromptCacheAccountingInclusive)
+	a.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+	if a.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		a.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+	}
 	now := time.Now()
 	return &model.Response{
 		Object:    model.ObjectTypeChatCompletion,

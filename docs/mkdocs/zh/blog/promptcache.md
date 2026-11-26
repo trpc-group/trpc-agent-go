@@ -408,19 +408,48 @@ OpenAI-compatible API（Chat Completions 与 Responses）和 Gemini 的
 只要存在缓存计数就会写入）携带该信息。Langfuse exporter 据此计算未缓存的
 `input` 分桶，因此 `prompt_tokens=1774, cache_write_tokens=1771` 这类仅有缓存
 写入的 OpenAI 请求会导出 `input=3, input_cache_creation=1771`，而不会重复计算
-缓存写入。由自定义代码构造的 usage 不带口径声明（属性值为空），沿用原有的
-启发式归一化。
+缓存写入。未显式声明口径的 usage，其口径属性为空，沿用原有的启发式归一化。
 
-口径元数据不会序列化。解码 JSON 中的 `prompt_tokens` 或
-`prompt_tokens_details` 时，即使复用已有的 `Usage`，也会清除口径声明。
-未提供的公开字段保留原值；仅更新输出字段或解码 JSON `null` 会保留口径。
+自定义模型适配器和 callback 可以通过公开字段
+`model.Usage.PromptCacheAccounting` 声明计数口径：
+
+```go
+usage := &model.Usage{
+    PromptTokens: 100,
+    PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
+    PromptCacheAccounting: model.PromptCacheAccountingInclusive,
+}
+```
+
+如果 `PromptTokens` 不包含缓存读取和写入计数，使用
+`model.PromptCacheAccountingExclusive`。空字符串
+（`model.PromptCacheAccountingUnspecified`）表示生产者未提供这项信息，
+不能据此认定包含或不包含缓存。空字符串和未知值沿用 Langfuse 的旧规则：
+存在非零的缓存读取或创建计数时，保留 `PromptTokens`，忽略重复的
+`CachedTokens` 分桶；否则从 `PromptTokens` 中扣除 `CachedTokens`，结果最低为零。
+没有缓存计数时，口径声明不影响处理结果。
+
+该字段不参与 JSON 序列化和解码（`json:"-"`）。向已有 `Usage` 解码 JSON 时，
+即使输入计数发生变化，也会保留已有口径。完整替换应先解码到新值再赋值，
+或者在解码前显式将 `PromptCacheAccounting` 重置为
+`model.PromptCacheAccountingUnspecified`。仅修改输出计数时可以保留口径。
+例如，通过 JSON 完整替换 usage 对象可以写为：
+
+```go
+var replacement model.Usage
+if err := json.Unmarshal(data, &replacement); err != nil {
+    return err
+}
+*usage = replacement // usage is the existing *model.Usage being replaced.
+```
+
+`Usage` 使用标准 JSON 解码行为，匿名嵌入到具有其他字段的包装结构体时也如此。
+新增字段参与 Go 值比较；比较完整 usage 时，预期值应包含相应口径。
+构造结构体时应使用带字段名的字面量，因为新增字段会改变位置式字面量所需的字段数量。
+
 流式 span 在后续包含 token 计数的 usage 快照移除缓存时，会同步清除
 此前的缓存计数与口径。没有 token 计数的 chunk（包括仅含 timing 的 usage）
 保留前一个快照。
-
-`Usage` 实现了 `json.Unmarshaler`。如果自定义结构体匿名嵌入 `Usage`，提升的
-方法也会接管该结构体的 JSON 解码；包装结构体还有其他字段时，应使用具名字段
-或显式实现解码方法。
 
 #### 流式 Usage 排障
 

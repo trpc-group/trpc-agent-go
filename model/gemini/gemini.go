@@ -24,7 +24,6 @@ import (
 	"google.golang.org/genai"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -605,7 +604,9 @@ func (m *Model) completionUsageToModelUsage(usage *genai.GenerateContentResponse
 		},
 	}
 	// Gemini promptTokenCount includes cachedContentTokenCount.
-	usagemeta.SetPromptCacheAccounting(u, usagemeta.PromptCacheAccountingInclusive)
+	if u.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		u.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+	}
 	return u
 }
 

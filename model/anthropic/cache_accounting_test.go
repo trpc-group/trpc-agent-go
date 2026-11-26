@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestBuildStreamingFinalResponse_MarksExclusivePromptCacheAccounting(t *testing.T) {
@@ -27,12 +27,12 @@ func TestBuildStreamingFinalResponse_MarksExclusivePromptCacheAccounting(t *test
 	require.NotNil(t, final.Usage)
 	assert.Equal(t, 100, final.Usage.PromptTokens)
 	assert.Equal(t, 80, final.Usage.PromptTokensDetails.CacheCreationTokens)
-	assert.Equal(t, usagemeta.PromptCacheAccountingExclusive, usagemeta.GetPromptCacheAccounting(final.Usage))
-	assert.Equal(t, usagemeta.PromptCacheAccountingExclusive, usagemeta.GetPromptCacheAccounting(final.Clone().Usage))
+	assert.Equal(t, model.PromptCacheAccountingExclusive, final.Usage.PromptCacheAccounting)
+	assert.Equal(t, model.PromptCacheAccountingExclusive, final.Clone().Usage.PromptCacheAccounting)
 
 	var noCache anthropic.Message
 	require.NoError(t, json.Unmarshal([]byte(`{"id":"m2","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":2}}`), &noCache))
 	final = buildStreamingFinalResponse(noCache)
 	require.NotNil(t, final.Usage)
-	assert.Equal(t, usagemeta.PromptCacheAccountingUnspecified, usagemeta.GetPromptCacheAccounting(final.Usage))
+	assert.Equal(t, model.PromptCacheAccountingUnspecified, final.Usage.PromptCacheAccounting)
 }

@@ -25,7 +25,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -1028,5 +1027,11 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 // markExclusivePromptCacheAccounting declares that Bedrock Converse
 // inputTokens exclude cache-read and cache-write tokens.
 func markExclusivePromptCacheAccounting(usage *model.Usage) {
-	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingExclusive)
+	if usage == nil {
+		return
+	}
+	usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+	if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		usage.PromptCacheAccounting = model.PromptCacheAccountingExclusive
+	}
 }

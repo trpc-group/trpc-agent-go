@@ -30,7 +30,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -1517,5 +1516,11 @@ func convertSystemMessageContent(message model.Message) ([]anthropic.TextBlockPa
 // markExclusivePromptCacheAccounting declares that Anthropic input_tokens
 // exclude cache-read and cache-creation tokens.
 func markExclusivePromptCacheAccounting(usage *model.Usage) {
-	usagemeta.SetPromptCacheAccounting(usage, usagemeta.PromptCacheAccountingExclusive)
+	if usage == nil {
+		return
+	}
+	usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+	if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		usage.PromptCacheAccounting = model.PromptCacheAccountingExclusive
+	}
 }

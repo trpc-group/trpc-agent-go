@@ -388,20 +388,53 @@ LLM spans carry it as `gen_ai.usage.input_tokens.cache_accounting`
 The Langfuse exporter uses it to derive the uncached `input` bucket, so a
 write-only OpenAI turn such as `prompt_tokens=1774, cache_write_tokens=1771`
 exports `input=3, input_cache_creation=1771` instead of counting the cache
-writes twice. Usage built by custom code carries no declaration (the attribute
-value is empty) and keeps the previous heuristic normalization.
+writes twice. Usage built without an explicit declaration has an empty accounting
+attribute and keeps the previous heuristic normalization.
 
-Accounting metadata is not serialized. Decoding JSON `prompt_tokens` or
-`prompt_tokens_details` clears the declaration even when reusing an existing
-`Usage`. Omitted public fields retain their values; output-only updates and JSON
-`null` preserve the declaration. Streaming spans clear
-previous cache counters and accounting when a later token-bearing usage snapshot
+Custom model adapters and callbacks can declare the counting convention through
+the exported `model.Usage.PromptCacheAccounting` field:
+
+```go
+usage := &model.Usage{
+    PromptTokens: 100,
+    PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
+    PromptCacheAccounting: model.PromptCacheAccountingInclusive,
+}
+```
+
+Use `model.PromptCacheAccountingExclusive` when `PromptTokens` excludes cache
+reads and writes. The empty string (`model.PromptCacheAccountingUnspecified`)
+means the producer has not supplied this information; it implies neither
+convention. Empty and unrecognized values keep Langfuse's legacy behavior:
+if cache-read or cache-creation counts are nonzero, keep `PromptTokens` and
+discard the duplicate `CachedTokens` bucket; otherwise subtract `CachedTokens`
+from `PromptTokens`, with a minimum of zero. A declaration has no effect when
+there are no prompt cache counts.
+
+The field is excluded from JSON (`json:"-"`). Decoding into an existing `Usage`
+preserves its declaration, even when JSON changes the prompt counts. For a full
+replacement, decode into a fresh value and assign it, or explicitly set
+`PromptCacheAccounting` to `model.PromptCacheAccountingUnspecified` before decoding.
+Output-only edits can retain the declaration. For example, replacing a complete
+usage object from JSON can be written as:
+
+```go
+var replacement model.Usage
+if err := json.Unmarshal(data, &replacement); err != nil {
+    return err
+}
+*usage = replacement // usage is the existing *model.Usage being replaced.
+```
+
+`Usage` uses standard JSON decoding, including when anonymously embedded in a
+wrapper with other fields. The new field participates in Go value equality;
+expected values should include the accounting mode when comparing complete
+usage values. Use keyed struct literals, since adding the field changes the
+number of fields required by positional literals.
+
+Streaming spans clear previous cache counters and accounting when a later token-bearing usage snapshot
 removes them. Chunks without token counts, including timing-only usage, preserve
 the preceding snapshot.
-
-`Usage` implements `json.Unmarshaler`. If a custom struct anonymously embeds
-`Usage`, the promoted method also handles that struct's JSON decoding; use a
-named field or an explicit unmarshaler when the wrapper has additional fields.
 
 #### Troubleshooting Streaming Usage
 

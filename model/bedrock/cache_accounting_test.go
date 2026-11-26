@@ -17,8 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestBuildNonStreamingResponse_MarksExclusivePromptCacheAccounting(t *testing.T) {
@@ -39,10 +38,10 @@ func TestBuildNonStreamingResponse_MarksExclusivePromptCacheAccounting(t *testin
 	rsp := m.buildNonStreamingResponse(output)
 	require.NotNil(t, rsp.Usage)
 	assert.Equal(t, 80, rsp.Usage.PromptTokensDetails.CacheCreationTokens)
-	assert.Equal(t, usagemeta.PromptCacheAccountingExclusive, usagemeta.GetPromptCacheAccounting(rsp.Usage))
+	assert.Equal(t, model.PromptCacheAccountingExclusive, rsp.Usage.PromptCacheAccounting)
 
 	output.Usage = &types.TokenUsage{InputTokens: aws.Int32(10), OutputTokens: aws.Int32(2), TotalTokens: aws.Int32(12)}
 	rsp = m.buildNonStreamingResponse(output)
 	require.NotNil(t, rsp.Usage)
-	assert.Equal(t, usagemeta.PromptCacheAccountingUnspecified, usagemeta.GetPromptCacheAccounting(rsp.Usage))
+	assert.Equal(t, model.PromptCacheAccountingUnspecified, rsp.Usage.PromptCacheAccounting)
 }

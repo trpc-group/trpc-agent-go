@@ -15,20 +15,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 func TestBuildResponseAttributes_PromptCacheAccounting(t *testing.T) {
-	withCache := func(accounting usagemeta.PromptCacheAccounting) *model.Usage {
+	withCache := func(accounting model.PromptCacheAccounting) *model.Usage {
 		u := &model.Usage{
 			PromptTokens:        100,
 			CompletionTokens:    10,
 			TotalTokens:         110,
 			PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
 		}
-		usagemeta.SetPromptCacheAccounting(u, accounting)
+		u.PromptCacheAccounting = accounting
 		return u
 	}
 	tests := []struct {
@@ -39,21 +38,32 @@ func TestBuildResponseAttributes_PromptCacheAccounting(t *testing.T) {
 	}{
 		{
 			name:           "inclusive",
-			usage:          withCache(usagemeta.PromptCacheAccountingInclusive),
+			usage:          withCache(model.PromptCacheAccountingInclusive),
 			wantPresent:    true,
 			wantAccounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
 		},
 		{
 			name:           "exclusive",
-			usage:          withCache(usagemeta.PromptCacheAccountingExclusive),
+			usage:          withCache(model.PromptCacheAccountingExclusive),
 			wantPresent:    true,
 			wantAccounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive,
 		},
 		{
 			name:           "undeclared accounting with cache counters is written as empty",
-			usage:          withCache(usagemeta.PromptCacheAccountingUnspecified),
+			usage:          withCache(model.PromptCacheAccountingUnspecified),
 			wantPresent:    true,
 			wantAccounting: "",
+		},
+		{
+			name:           "unknown accounting falls back to unspecified",
+			usage:          withCache(model.PromptCacheAccounting("future-mode")),
+			wantPresent:    true,
+			wantAccounting: "",
+		},
+		{
+			name:        "declaration without cache counters is ignored",
+			usage:       &model.Usage{PromptTokens: 100, PromptCacheAccounting: model.PromptCacheAccountingInclusive},
+			wantPresent: false,
 		},
 		{
 			name:        "no cache counters omits the attribute",
@@ -82,7 +92,7 @@ func TestChatTraceState_ReplacesCacheUsageSnapshot(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		usage          *model.Usage
-		accounting     usagemeta.PromptCacheAccounting
+		accounting     model.PromptCacheAccounting
 		wantCache      model.PromptTokensDetails
 		wantAccounting string
 		preserve       bool
@@ -95,7 +105,7 @@ func TestChatTraceState_ReplacesCacheUsageSnapshot(t *testing.T) {
 			name: "clear read buckets while retaining writes",
 			usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111,
 				PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 5}},
-			accounting:     usagemeta.PromptCacheAccountingInclusive,
+			accounting:     model.PromptCacheAccountingInclusive,
 			wantCache:      model.PromptTokensDetails{CacheCreationTokens: 5},
 			wantAccounting: "inclusive",
 		},
@@ -113,12 +123,14 @@ func TestChatTraceState_ReplacesCacheUsageSnapshot(t *testing.T) {
 			span := newRecordingSpan()
 			state := &ChatTraceState{}
 			initial := &model.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110, PromptTokensDetails: initialCache}
-			usagemeta.SetPromptCacheAccounting(initial, usagemeta.PromptCacheAccountingInclusive)
+			initial.PromptCacheAccounting = model.PromptCacheAccountingInclusive
 			state.TraceChat(span, &TraceChatAttributes{Response: &model.Response{Usage: initial}})
 			// Mutating the prior response must not change which span attributes
 			// the next snapshot needs to clear.
 			initial.PromptTokensDetails = model.PromptTokensDetails{}
-			usagemeta.SetPromptCacheAccounting(tc.usage, tc.accounting)
+			if tc.usage != nil {
+				tc.usage.PromptCacheAccounting = tc.accounting
+			}
 			state.TraceChat(span, &TraceChatAttributes{Response: &model.Response{Usage: tc.usage}})
 			// Timing-only trailing chunks must also preserve a replacement.
 			state.TraceChat(span, &TraceChatAttributes{Response: &model.Response{Usage: &model.Usage{TimingInfo: &model.TimingInfo{}}}})

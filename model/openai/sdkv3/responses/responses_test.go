@@ -21,7 +21,6 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/internal/usagemeta"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -713,11 +712,11 @@ func TestMapUsageCacheWriteTokensAndAliases(t *testing.T) {
 			require.Equal(t, tt.wantCached, usage.PromptTokensDetails.CachedTokens)
 			require.Equal(t, tt.wantCacheRead, usage.PromptTokensDetails.CacheReadTokens)
 			require.Equal(t, tt.wantCacheCreation, usage.PromptTokensDetails.CacheCreationTokens)
-			wantAccounting := usagemeta.PromptCacheAccountingUnspecified
+			wantAccounting := model.PromptCacheAccountingUnspecified
 			if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
-				wantAccounting = usagemeta.PromptCacheAccountingInclusive
+				wantAccounting = model.PromptCacheAccountingInclusive
 			}
-			require.Equal(t, wantAccounting, usagemeta.GetPromptCacheAccounting(usage))
+			require.Equal(t, wantAccounting, usage.PromptCacheAccounting)
 		})
 	}
 }
