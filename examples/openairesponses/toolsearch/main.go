@@ -25,8 +25,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -36,7 +38,7 @@ import (
 
 func main() {
 	modelName := flag.String("model", "gpt-5.4", "OpenAI model name; tool search needs a model that supports it")
-	mode := flag.String("mode", "server", "Tool search mode: server (hosted) or client (client-executed)")
+	mode := flag.String("mode", "server", "Tool search mode: server (hosted), client (keyword), or semantic (embeddings)")
 	streaming := flag.Bool("streaming", true, "Enable streaming responses")
 	flag.Parse()
 
@@ -46,8 +48,14 @@ func main() {
 		search = responses.WithHostedToolSearch()
 	case "client":
 		search = responses.WithClientToolSearch(keywordSearch)
+	case "semantic":
+		handler, err := toolsearch.NewSemantic(openaiembedder.New())
+		if err != nil {
+			log.Fatal(err)
+		}
+		search = responses.WithClientToolSearch(handler)
 	default:
-		log.Fatalf("unsupported -mode %q: use server or client", *mode)
+		log.Fatalf("unsupported -mode %q: use server, client, or semantic", *mode)
 	}
 
 	// The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.

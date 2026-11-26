@@ -10,8 +10,9 @@ This independent module shows how to use the OpenAI Responses adapter with
   user messages.
 - `imagetool` uses `ToolResultMessages` to return a local image directly to
   the main model in a native function output.
-- `toolsearch` defers support tools behind native tool search, in hosted
-  (`-mode server`) or client-executed (`-mode client`) mode. See
+- `toolsearch` defers support tools behind native tool search. It supports hosted
+  search (`-mode server`) and client-executed keyword (`-mode client`) or
+  semantic (`-mode semantic`) search. See
   [Tool search](#tool-search).
 
 Every request sends the full client-managed conversation. The adapter defaults
@@ -42,7 +43,7 @@ The OpenAI SDK reads the API key and base URL from the environment.
 | --- | --- | --- |
 | `-model` | Model name passed to `responses.New`. | `gpt-5`; `gpt-5.4` for `toolsearch` |
 | `-streaming` | Stream assistant text. | `true` |
-| `-mode` | `toolsearch` only: `server` for hosted search, `client` for client-executed search. | `server` |
+| `-mode` | `toolsearch` only. `server` runs hosted search, `client` uses keyword matching, and `semantic` uses embeddings. | `server` |
 
 `go run ./chat -help`, `go run ./tools -help`, and `go run ./toolsearch -help`
 print those flags and do not call the API.
@@ -68,8 +69,11 @@ go run ./tools -model gpt-5 -streaming=false
 # Hosted tool search, streaming.
 go run ./toolsearch -mode server
 
-# Client-executed tool search, non-streaming.
+# Client-executed keyword search, non-streaming.
 go run ./toolsearch -mode client -streaming=false
+
+# Client-executed semantic search using OpenAI embeddings.
+go run ./toolsearch -mode semantic
 ```
 
 Type `/exit` to quit. An empty line is ignored.
@@ -237,6 +241,14 @@ You: /exit
 
 The transcript is illustrative; queries, loaded tools, and wording vary by
 model. The tool data is fixed sample data.
+
+Semantic mode constructs a handler with `toolsearch.NewSemantic(openaiembedder.New())`
+and registers it with `responses.WithClientToolSearch`. The default OpenAI
+embedder uses `text-embedding-3-small`. The handler sends each query and
+uncached candidate metadata to the embedding API, which adds requests and can
+incur charges. Candidate vectors are cached for the life of the example
+process. See the [semantic handler documentation](../../model/openai/sdkv3/responses/README.md#semantic-search-handler)
+for ranking and cache options or use a custom handler with `WithClientToolSearch`.
 
 Support boundaries and fallback semantics:
 

@@ -339,6 +339,47 @@ selection. Later calls in that response and subsequent turns use the current
 registered tool. An empty result or a result for another function preserves
 the previous binding.
 
+#### Semantic search handler
+
+To search the current run's candidates by meaning, pass an
+`embedder.Embedder` to `toolsearch.NewSemantic`:
+
+```go
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+)
+
+// In a function returning an error:
+search, err := toolsearch.NewSemantic(openaiembedder.New(),
+    toolsearch.WithSemanticMaxResults(3),
+)
+if err != nil {
+    return err
+}
+llm := responses.New(modelName, responses.WithClientToolSearch(search))
+```
+
+The handler ranks the candidates by cosine similarity and keeps their order
+on ties. The default result limit is 5 and the default minimum score is
+0.4. Use `WithSemanticMaxResults` and `WithSemanticMinScore` to tune those
+values for your embedder and tool catalog. It returns entries from the
+current request so each match keeps its current execution binding.
+
+Each search with a nonblank query and usable candidates embeds the query once
+and calls the embedder again for each uncached candidate text. A remote
+embedder receives the query and tool metadata, including model-visible names,
+namespaces, descriptions, and top-level parameter details. Cold searches can
+add latency and embedding charges. Concurrent searches can repeat a cache
+miss. Reuse the handler across runs to retain its in-memory candidate vectors.
+The default cache limit is 1024 vectors. Set `WithSemanticCacheSize(0)` to
+disable the cache, or create a new handler to clear it or change embedders.
+
+An empty result loads no tools. Embedding failures follow the client search
+error and resume path described above. Supply your own `ToolSearchHandler`
+to use an external catalog or a different ranking strategy.
+
 ### Tool search boundaries
 
 - Client search needs a flow that completes provider actions. LLMAgent and
