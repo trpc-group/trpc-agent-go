@@ -688,6 +688,12 @@ accumulator 中的 usage。因此，下一个 chunk 看到的 `current` 就是�
 回调返回值会整体替换累计后的 `model.Usage`。返回值中没有填写的字段，
 不会自动从 `current` 或 `delta` 补回。
 
+`PromptCacheAccounting` 也遵循这个规则：adapter 会将返回的口径保留在下一次
+`current` 和最终响应中。如果回调把 `PromptTokens` 转换成未缓存的输入量，
+应在返回值中设置 `PromptCacheAccountingExclusive`。空值或未知口径走旧版
+遥测兼容逻辑，adapter 不会将其覆盖为 `PromptCacheAccountingInclusive`。
+中间响应仍使用服务方原始的计数和口径。
+
 标准 OpenAI-compatible stream 的原始内容 chunk 中，`usage` 为 `null`。
 adapter 在调用回调前，会把这个空值映射为零值 `model.Usage`。最后的
 usage-only chunk 才包含完整总量：

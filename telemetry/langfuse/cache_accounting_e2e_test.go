@@ -12,6 +12,7 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -388,4 +389,75 @@ func TestRunnerToLangfuse_StreamingCacheRemoval(t *testing.T) {
 	}
 	require.Equal(t, map[string]int64{"input": 100, "output": 11},
 		extractChatUsageDetails(t, recorder.Ended(), "cache-usage-stream"))
+}
+
+func TestRunnerToLangfuse_CustomAccumulatorAccounting(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, chunk := range []string{
+			`{"id":"custom-usage","object":"chat.completion.chunk","model":"gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}`,
+			`{"id":"custom-usage","object":"chat.completion.chunk","model":"gpt-5","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110,"prompt_tokens_details":{"cache_write_tokens":80}}}`,
+			`{"id":"custom-usage","object":"chat.completion.chunk","model":"gpt-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`[DONE]`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+		}
+	}))
+	defer server.Close()
+
+	for _, useIter := range []bool{false, true} {
+		t.Run(fmt.Sprintf("iter=%v", useIter), func(t *testing.T) {
+			recorder := useLangfuseTestSpanRecorder(t)
+			var m model.Model = openai.New("gpt-5", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
+				openai.WithAccumulateChunkTokenUsage(func(current, delta model.Usage) model.Usage {
+					if delta == (model.Usage{}) {
+						return current
+					}
+					delta.PromptTokens -= delta.PromptTokensDetails.CacheCreationTokens
+					delta.PromptCacheAccounting = model.PromptCacheAccountingExclusive
+					return delta
+				}),
+			)
+			if !useIter {
+				// Hide IterModel so LLMAgent exercises GenerateContent.
+				m = struct{ model.Model }{m}
+			}
+			r := runner.NewRunner("test-app", llmagent.New("test-agent",
+				llmagent.WithModel(m),
+				llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+			))
+			defer r.Close()
+			events, err := r.Run(context.Background(), "user-1", "session-1", model.NewUserMessage("hi"))
+			require.NoError(t, err)
+			for ev := range events {
+				require.Nil(t, ev.Error)
+			}
+			require.Equal(t, map[string]int64{"input": 20, "input_cache_creation": 80, "output": 10},
+				extractChatUsageDetails(t, recorder.Ended(), "gpt-5"))
+		})
+	}
+}
+
+func TestRunnerToLangfuse_ExclusiveCachedAndCreation(t *testing.T) {
+	recorder := useLangfuseTestSpanRecorder(t)
+	m := &staticModel{name: "exclusive-cached-and-creation", build: func() *model.Response {
+		return &model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}},
+			Usage: &model.Usage{
+				PromptTokens: 20, CompletionTokens: 10, TotalTokens: 110,
+				PromptTokensDetails:   model.PromptTokensDetails{CachedTokens: 70, CacheCreationTokens: 10},
+				PromptCacheAccounting: model.PromptCacheAccountingExclusive,
+			},
+		}
+	}}
+	r := runner.NewRunner("test-app", llmagent.New("test-agent", llmagent.WithModel(m)))
+	defer r.Close()
+	events, err := r.Run(context.Background(), "user-1", "session-1", model.NewUserMessage("hi"))
+	require.NoError(t, err)
+	for ev := range events {
+		require.Nil(t, ev.Error)
+	}
+	require.Equal(t, map[string]int64{"input": 20, "input_cached": 70, "input_cache_creation": 10, "output": 10},
+		extractChatUsageDetails(t, recorder.Ended(), m.Info().Name))
 }

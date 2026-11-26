@@ -711,6 +711,13 @@ increment, a cumulative total, a final total, or an empty value.
 The return value replaces the complete accumulated `model.Usage`. Fields
 omitted from it are not copied from `current` or `delta`.
 
+This includes `PromptCacheAccounting`: the adapter preserves the returned mode
+in the next `current` value and the final response. If the callback converts
+`PromptTokens` to uncached input, set `PromptCacheAccountingExclusive` on its
+return value. An empty or unknown mode uses the legacy telemetry fallback;
+the adapter does not overwrite it with `PromptCacheAccountingInclusive`.
+Partial responses still carry the provider's original counts and accounting.
+
 For a standard OpenAI-compatible stream, the raw content chunks contain
 `usage: null`. The adapter maps that absence to a zero-value `model.Usage`
 before invoking the callback. The final usage-only chunk contains the complete

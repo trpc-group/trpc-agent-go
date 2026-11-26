@@ -83,7 +83,8 @@ func (u *usageDetails) empty() bool {
 //     Input includes cache read and cache write tokens, so both are deducted from
 //     Input (including write-only turns where InputCached == 0).
 //   - "exclusive" (Anthropic, Bedrock): Input already represents uncached input
-//     tokens and is left untouched while dropping the duplicate InputCached alias.
+//     tokens and is left untouched. InputCached is dropped only when
+//     InputCacheRead supplies the same bucket; cache creation is independent.
 //
 // When cache_accounting is absent or unknown, it preserves the legacy cache
 // bucket heuristic for backward compatibility.
@@ -99,7 +100,7 @@ func (u usageDetails) normalized(accounting string) usageDetails {
 		return u
 
 	case semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive:
-		if u.InputCacheRead != 0 || u.InputCacheCreation != 0 {
+		if u.InputCacheRead != 0 {
 			u.InputCached = 0
 		}
 		return u

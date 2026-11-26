@@ -712,7 +712,6 @@ func (m *Model) GenerateContent(
 		defer close(responseChan)
 		defer reporter.End()
 		emit := func(resp *model.Response) bool {
-			markInclusivePromptCacheAccounting(resp)
 			reporter.TrackResponse(resp)
 			select {
 			case responseChan <- resp:
@@ -731,7 +730,7 @@ func (m *Model) GenerateContent(
 }
 
 // markInclusivePromptCacheAccounting declares that Chat Completions
-// prompt_tokens include cached and cache-write tokens on an emitted response.
+// prompt_tokens include cached and cache-write tokens on a provider response.
 func markInclusivePromptCacheAccounting(resp *model.Response) {
 	if resp != nil && resp.Usage != nil {
 		resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
@@ -763,7 +762,6 @@ func (m *Model) GenerateContentIter(
 			if ctx.Err() != nil {
 				return false
 			}
-			markInclusivePromptCacheAccounting(resp)
 			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
@@ -1874,7 +1872,9 @@ func (m *Model) handleStreamingResponseWithEmitter(
 
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 
-		if !emit(m.createPartialResponse(chunk)) {
+		response := m.createPartialResponse(chunk)
+		markInclusivePromptCacheAccounting(response)
+		if !emit(response) {
 			if err := ctx.Err(); err != nil {
 				m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, err)
 			}
@@ -1885,7 +1885,17 @@ func (m *Model) handleStreamingResponseWithEmitter(
 	// Call the stream complete callback before the final response is emitted.
 	m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, stream.Err())
 
-	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
+	finalEmit := func(resp *model.Response) bool {
+		if resp != nil && resp.Usage != nil && m.accumulateChunkUsage != nil {
+			// A custom accumulator owns the final counts and their accounting,
+			// including an empty or unrecognized declaration.
+			resp.Usage.PromptCacheAccounting = acc.promptCacheAccounting
+		} else {
+			markInclusivePromptCacheAccounting(resp)
+		}
+		return emit(resp)
+	}
+	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), finalEmit)
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -2256,7 +2266,9 @@ func (m *Model) accumulateChunk(
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
+			usage.PromptCacheAccounting = acc.promptCacheAccounting
 			usage = m.accumulateChunkUsage(usage, chunkUsage)
+			acc.promptCacheAccounting = usage.PromptCacheAccounting
 			acc.acc.Usage = modelUsageToCompletionUsage(usage)
 		}
 	}
@@ -2920,7 +2932,9 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 	}
 	// Call response callback on successful completion.
 	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
-	emit(m.createResponseFromCompletion(chatCompletion))
+	response := m.createResponseFromCompletion(chatCompletion)
+	markInclusivePromptCacheAccounting(response)
+	emit(response)
 }
 
 // createResponseFromCompletion converts a provider response into a model.Response.

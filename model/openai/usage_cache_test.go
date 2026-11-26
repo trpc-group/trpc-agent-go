@@ -532,52 +532,84 @@ func TestGenerateContentStreamingCustomAccumulatorCacheWriteTokens(t *testing.T)
 	}))
 	defer server.Close()
 
-	var seenCurrents []model.Usage
-	var seenDeltas []model.Usage
-	accumulate := func(current, delta model.Usage) model.Usage {
-		seenCurrents = append(seenCurrents, current)
-		seenDeltas = append(seenDeltas, delta)
-		if delta == (model.Usage{}) {
-			return current
-		}
-		return model.Usage{
-			PromptTokens:     delta.PromptTokens,
-			CompletionTokens: delta.CompletionTokens,
-			TotalTokens:      delta.TotalTokens,
-			PromptTokensDetails: model.PromptTokensDetails{
-				CacheCreationTokens: delta.PromptTokensDetails.CacheCreationTokens,
-			},
+	for _, useIter := range []bool{false, true} {
+		for _, accounting := range []model.PromptCacheAccounting{
+			model.PromptCacheAccountingInclusive,
+			model.PromptCacheAccountingExclusive,
+			model.PromptCacheAccountingUnspecified,
+			"future-mode",
+		} {
+			t.Run(fmt.Sprintf("iter=%v/accounting=%q", useIter, accounting), func(t *testing.T) {
+				promptTokens := 20
+				if accounting == model.PromptCacheAccountingInclusive {
+					promptTokens = 100
+				}
+				var seenCurrents []model.Usage
+				var seenDeltas []model.Usage
+				accumulate := func(current, delta model.Usage) model.Usage {
+					seenCurrents = append(seenCurrents, current)
+					seenDeltas = append(seenDeltas, delta)
+					if delta == (model.Usage{}) {
+						return current
+					}
+					return model.Usage{
+						PromptTokens:     promptTokens,
+						CompletionTokens: delta.CompletionTokens,
+						TotalTokens:      delta.TotalTokens,
+						PromptTokensDetails: model.PromptTokensDetails{
+							CacheCreationTokens: delta.PromptTokensDetails.CacheCreationTokens,
+						},
+						PromptCacheAccounting: accounting,
+					}
+				}
+				m := New("gpt-5", WithBaseURL(server.URL), WithAPIKey("test-key"), WithAccumulateChunkTokenUsage(accumulate))
+				req := &model.Request{
+					Messages:         []model.Message{model.NewUserMessage("hi")},
+					GenerationConfig: model.GenerationConfig{Stream: true},
+				}
+				var final *model.Response
+				collect := func(rsp *model.Response) bool {
+					if rsp.Done {
+						final = rsp
+					} else if rsp.Usage != nil {
+						// Partial usage still describes the provider's original counts.
+						assert.Equal(t, 100, rsp.Usage.PromptTokens)
+						assert.Equal(t, model.PromptCacheAccountingInclusive, rsp.Usage.PromptCacheAccounting)
+					}
+					return true
+				}
+				if useIter {
+					seq, err := m.GenerateContentIter(context.Background(), req)
+					require.NoError(t, err)
+					seq(collect)
+				} else {
+					ch, err := m.GenerateContent(context.Background(), req)
+					require.NoError(t, err)
+					for rsp := range ch {
+						collect(rsp)
+					}
+				}
+				require.NotNil(t, final)
+				require.NotNil(t, final.Usage)
+				assert.Equal(t, promptTokens, final.Usage.PromptTokens)
+				assert.Equal(t, 10, final.Usage.CompletionTokens)
+				assert.Equal(t, 110, final.Usage.TotalTokens)
+				assert.Equal(t, 80, final.Usage.PromptTokensDetails.CacheCreationTokens)
+				assert.Equal(t, accounting, final.Usage.PromptCacheAccounting)
+
+				// Empty chunks arrive as zero model.Usage{}; a tail chunk receives
+				// the previous callback result, including its accounting declaration.
+				require.Len(t, seenDeltas, 3)
+				assert.Equal(t, model.Usage{}, seenCurrents[0])
+				assert.Equal(t, model.Usage{}, seenDeltas[0])
+				assert.Equal(t, model.Usage{}, seenCurrents[1])
+				assert.Equal(t, 80, seenDeltas[1].PromptTokensDetails.CacheCreationTokens)
+				assert.Equal(t, model.Usage{}, seenDeltas[2])
+				assert.Equal(t, promptTokens, seenCurrents[2].PromptTokens)
+				assert.Equal(t, accounting, seenCurrents[2].PromptCacheAccounting)
+			})
 		}
 	}
-
-	m := New("gpt-5", WithBaseURL(server.URL), WithAPIKey("test-key"), WithAccumulateChunkTokenUsage(accumulate))
-	ch, err := m.GenerateContent(context.Background(), &model.Request{
-		Messages:         []model.Message{model.NewUserMessage("hi")},
-		GenerationConfig: model.GenerationConfig{Stream: true},
-	})
-	require.NoError(t, err)
-
-	var final *model.Response
-	for rsp := range ch {
-		if rsp.Done {
-			final = rsp
-		}
-	}
-	require.NotNil(t, final)
-	require.NotNil(t, final.Usage)
-	assert.Equal(t, 100, final.Usage.PromptTokens)
-	assert.Equal(t, 10, final.Usage.CompletionTokens)
-	assert.Equal(t, 110, final.Usage.TotalTokens)
-	assert.Equal(t, 80, final.Usage.PromptTokensDetails.CacheCreationTokens)
-
-	// Empty chunks arrive as zero model.Usage{}.
-	require.Len(t, seenDeltas, 3)
-	assert.Equal(t, model.Usage{}, seenCurrents[0])
-	assert.Equal(t, model.Usage{}, seenDeltas[0])
-	assert.Equal(t, model.Usage{}, seenCurrents[1])
-	assert.Equal(t, 80, seenDeltas[1].PromptTokensDetails.CacheCreationTokens)
-	assert.Equal(t, model.Usage{}, seenDeltas[2])
-	assert.Equal(t, 100, seenCurrents[2].PromptTokens)
 }
 
 func TestShouldSkipEmptyChunkDetailOnlyUsage(t *testing.T) {

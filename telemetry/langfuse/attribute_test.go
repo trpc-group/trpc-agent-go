@@ -198,6 +198,22 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			},
 		},
 		{
+			name: "explicit exclusive cached and creation preserve both buckets",
+			usage: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCached:        70,
+				InputCacheCreation: 10,
+			},
+			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive,
+			want: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCached:        70,
+				InputCacheCreation: 10,
+			},
+		},
+		{
 			name: "explicit exclusive cache details drop cached alias and preserve input",
 			usage: usageDetails{
 				Input:              20,
