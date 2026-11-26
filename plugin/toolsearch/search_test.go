@@ -112,3 +112,20 @@ func TestSearchByQueries_MCPNamespaceDescriptionEnrichment(t *testing.T) {
 	assert.Empty(t, errPayload)
 	assert.Equal(t, []string{"mcp__billing__read", "a_default"}, selected)
 }
+
+func TestSearchByQueries_ExactAndLexicalHitsAfterPermissionFiltering(t *testing.T) {
+	p := New(nil, WithDeferredTools([]tool.Tool{
+		newTestTool("m_target", ""),
+		newTestTool("z_filler", ""),
+		newTestTool("a_denied", "alpha beta"),
+		newTestTool("b_alpha_beta", "alpha beta"),
+	}))
+	allowed := map[string]bool{"b_alpha_beta": true, "m_target": true, "z_filler": true}
+	selected, overflow, errPayload := p.resolveSelection(searchRequest{
+		queries:    []string{"M_TARGET", "alpha beta"},
+		maxResults: 1,
+	}, allowed)
+	assert.Empty(t, errPayload)
+	assert.Equal(t, []string{"m_target"}, selected)
+	assert.Equal(t, []string{"b_alpha_beta"}, overflow)
+}
