@@ -23,10 +23,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// Projector projects one request in order. Call Finish before each non-tool
+// message and after the last message. The zero value is ready to use. Hosted
+// searches are paired by order within one output and may omit call_id.
+type Projector struct {
+	client map[string]string
+}
+
 // ProjectMessage projects a completed Responses record using the current visible
 // message, including callback edits. It leaves the original message unchanged.
 // The boolean is false when the projected message has no transferable content.
-func ProjectMessage(message model.Message) (model.Message, bool, error) {
+func (h *Projector) ProjectMessage(message model.Message) (model.Message, bool, error) {
 	data := message.ProviderData
 	if data == nil {
 		return model.Message{}, false, fmt.Errorf("expected Responses provider data")
@@ -37,19 +44,85 @@ func ProjectMessage(message model.Message) (model.Message, bool, error) {
 	if err := providerdata.ValidateMessage(message, model.Info{Name: data.Model, ProviderDataProtocol: Protocol}); err != nil {
 		return model.Message{}, false, err
 	}
-	if message.Role != model.RoleAssistant {
-		return model.Message{}, false, fmt.Errorf("expected an assistant Responses record")
-	}
-	items, err := ReadCompleted(data.Payload)
+	items, err := ReadCompletedWithToolSearch(data.Payload)
 	if err != nil {
 		return model.Message{}, false, err
 	}
-	return ProjectAssistantItems(message, items)
+	if message.Role == model.RoleTool && (len(items) != 1 || len(message.ToolCalls) != 0) {
+		return model.Message{}, false, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
+	}
+	var hosted int
+	visible := items[:0]
+	for i, item := range items {
+		if item.Type == ToolSearchCall || item.Type == ToolSearchOutput {
+			if err := h.track(item, message, &hosted); err != nil {
+				return model.Message{}, false, fmt.Errorf("item %d: %w", i, err)
+			}
+			continue
+		}
+		if message.Role == model.RoleTool {
+			return model.Message{}, false, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
+		}
+		visible = append(visible, item)
+	}
+	if hosted != 0 {
+		return model.Message{}, false, fmt.Errorf("hosted tool_search_call has no tool_search_output")
+	}
+	if message.Role == model.RoleTool {
+		return model.Message{}, false, nil
+	}
+	return projectAssistantItems(message, visible)
 }
 
-// ProjectAssistantItems projects validated message, reasoning and function call
+func (h *Projector) track(item Item, message model.Message, hosted *int) error {
+	if message.Role == model.RoleTool {
+		if item.Type != ToolSearchOutput || item.Execution != "client" || item.CallID != message.ToolID {
+			return fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
+		}
+		name, ok := h.client[item.CallID]
+		if !ok {
+			return fmt.Errorf("tool_search_output %q has no preceding tool_search_call", item.CallID)
+		}
+		if name != message.ProviderData.Model {
+			return fmt.Errorf("tool_search_output %q belongs to a different model", item.CallID)
+		}
+		delete(h.client, item.CallID)
+		return nil
+	}
+	if item.Execution == "server" {
+		if item.Type == ToolSearchCall {
+			*hosted++
+		} else if *hosted == 0 {
+			return fmt.Errorf("hosted tool_search_output has no preceding tool_search_call")
+		} else {
+			*hosted--
+		}
+		return nil
+	}
+	if item.Type != ToolSearchCall {
+		return fmt.Errorf("client tool_search_output %q must be recorded on a tool message", item.CallID)
+	}
+	if _, exists := h.client[item.CallID]; exists {
+		return fmt.Errorf("duplicate tool_search_call call_id %q", item.CallID)
+	}
+	if h.client == nil {
+		h.client = make(map[string]string)
+	}
+	h.client[item.CallID] = message.ProviderData.Model
+	return nil
+}
+
+// Finish checks that all client search calls in the current round have results.
+func (h *Projector) Finish() error {
+	for callID := range h.client {
+		return fmt.Errorf("client tool_search_call %q has no tool_search_output", callID)
+	}
+	return nil
+}
+
+// projectAssistantItems projects validated message, reasoning and function call
 // items onto the current assistant message, respecting edits to visible content.
-func ProjectAssistantItems(message model.Message, items []Item) (model.Message, bool, error) {
+func projectAssistantItems(message model.Message, items []Item) (model.Message, bool, error) {
 	callIDs, nativeText, sources, err := readProjection(items)
 	if err != nil {
 		return model.Message{}, false, err

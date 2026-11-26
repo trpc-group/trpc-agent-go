@@ -32,10 +32,10 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 		return messages, false, nil
 	}
 	projected := make([]model.Message, 0, len(messages))
-	searches := chatSearchHistory{client: make(map[string]string)}
+	var searches responseshistory.Projector
 	for i, message := range messages {
 		if message.Role != model.RoleTool {
-			if err := searches.finish(); err != nil {
+			if err := searches.Finish(); err != nil {
 				return nil, false, fmt.Errorf("chat history message %d: %w", i, err)
 			}
 		}
@@ -47,7 +47,7 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 			projected = append(projected, converted)
 		}
 	}
-	if err := searches.finish(); err != nil {
+	if err := searches.Finish(); err != nil {
 		return nil, false, err
 	}
 	if len(projected) == 0 {
@@ -62,7 +62,7 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 	return projected, true, nil
 }
 
-func projectChatHistoryMessage(message model.Message, searches *chatSearchHistory) (model.Message, bool, error) {
+func projectChatHistoryMessage(message model.Message, searches *responseshistory.Projector) (model.Message, bool, error) {
 	data := message.ProviderData
 	if slices.ContainsFunc(message.ContentParts, isEmptyChatContentPart) {
 		message.ContentParts = slices.DeleteFunc(slices.Clone(message.ContentParts), isEmptyChatContentPart)
@@ -72,13 +72,7 @@ func projectChatHistoryMessage(message model.Message, searches *chatSearchHistor
 		}
 	}
 	if data != nil {
-		if data.Protocol != responseshistory.Protocol {
-			return model.Message{}, false, fmt.Errorf("unsupported provider data protocol %q", data.Protocol)
-		}
-		if err := providerdata.ValidateMessage(message, model.Info{Name: data.Model, ProviderDataProtocol: data.Protocol}); err != nil {
-			return model.Message{}, false, err
-		}
-		return projectResponsesHistory(message, searches)
+		return searches.ProjectMessage(message)
 	}
 	if message.Role == model.RoleTool && len(message.ContentParts) > 0 {
 		var content strings.Builder
@@ -167,87 +161,6 @@ func (m *Model) supportsUserHistoryPart(part model.ContentPart) bool {
 	default:
 		return false
 	}
-}
-
-// projectResponsesHistory consumes Chat's native search bookkeeping before
-// projecting the remaining visible assistant history.
-func projectResponsesHistory(message model.Message, searches *chatSearchHistory) (model.Message, bool, error) {
-	items, err := responseshistory.ReadCompletedWithToolSearch(message.ProviderData.Payload)
-	if err != nil {
-		return model.Message{}, false, err
-	}
-	if message.Role == model.RoleTool && (len(items) != 1 || len(message.ToolCalls) != 0) {
-		return model.Message{}, false, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
-	}
-	var hosted int
-	visible := items[:0]
-	for i, item := range items {
-		if item.Type == responseshistory.ToolSearchCall || item.Type == responseshistory.ToolSearchOutput {
-			if err := searches.track(item, message, &hosted); err != nil {
-				return model.Message{}, false, fmt.Errorf("item %d: %w", i, err)
-			}
-			continue
-		}
-		if message.Role == model.RoleTool {
-			return model.Message{}, false, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
-		}
-		visible = append(visible, item)
-	}
-	if hosted != 0 {
-		return model.Message{}, false, fmt.Errorf("hosted tool_search_call has no tool_search_output")
-	}
-	if message.Role == model.RoleTool {
-		return model.Message{}, false, nil
-	}
-	return responseshistory.ProjectAssistantItems(message, visible)
-}
-
-// chatSearchHistory tracks unanswered client searches across messages. Hosted
-// searches are paired by order within one output and may omit call_id.
-type chatSearchHistory struct {
-	client map[string]string
-}
-
-func (h *chatSearchHistory) track(item responseshistory.Item, message model.Message, hosted *int) error {
-	if message.Role == model.RoleTool {
-		if item.Type != responseshistory.ToolSearchOutput || item.Execution != "client" || item.CallID != message.ToolID {
-			return fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
-		}
-		name, ok := h.client[item.CallID]
-		if !ok {
-			return fmt.Errorf("tool_search_output %q has no preceding tool_search_call", item.CallID)
-		}
-		if name != message.ProviderData.Model {
-			return fmt.Errorf("tool_search_output %q belongs to a different model", item.CallID)
-		}
-		delete(h.client, item.CallID)
-		return nil
-	}
-	if item.Execution == "server" {
-		if item.Type == responseshistory.ToolSearchCall {
-			*hosted++
-		} else if *hosted == 0 {
-			return fmt.Errorf("hosted tool_search_output has no preceding tool_search_call")
-		} else {
-			*hosted--
-		}
-		return nil
-	}
-	if item.Type != responseshistory.ToolSearchCall {
-		return fmt.Errorf("client tool_search_output %q must be recorded on a tool message", item.CallID)
-	}
-	if _, exists := h.client[item.CallID]; exists {
-		return fmt.Errorf("duplicate tool_search_call call_id %q", item.CallID)
-	}
-	h.client[item.CallID] = message.ProviderData.Model
-	return nil
-}
-
-func (h *chatSearchHistory) finish() error {
-	for callID := range h.client {
-		return fmt.Errorf("client tool_search_call %q has no tool_search_output", callID)
-	}
-	return nil
 }
 
 func validateChatToolRounds(messages []model.Message) error {

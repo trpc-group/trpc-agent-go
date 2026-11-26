@@ -66,7 +66,7 @@ func TestResponsesHistoryWirePreservesParallelCallsAndNumbers(t *testing.T) {
 		model.NewToolMessage("g1", "legacy", "previous"),
 		native,
 		model.NewToolMessage("c2", "lookup", `{"answer":9007199254740994}`),
-		model.NewToolMessage("c1", "lookup", `{"answer":9007199254740992}`),
+		model.NewToolMessage("c1", "lookup", `{"answer":9007199254740993,"rate":0.1234567890123456789}`),
 		model.NewUserMessage("continue"),
 	}
 	messages[0].ContentParts = []model.ContentPart{{
@@ -126,7 +126,7 @@ func TestResponsesHistoryWirePreservesParallelCallsAndNumbers(t *testing.T) {
 	require.Equal(t, "c1", body.Contents[4].Parts[0].FunctionResponse.ID)
 	require.Equal(t, "c2", body.Contents[4].Parts[1].FunctionResponse.ID)
 	require.Equal(t, "lookup", body.Contents[4].Parts[0].FunctionResponse.Name)
-	require.Contains(t, string(body.Contents[4].Parts[0].FunctionResponse.Response), `9007199254740992`)
+	require.JSONEq(t, `{"output":"{\"answer\":9007199254740993,\"rate\":0.1234567890123456789}"}`, string(body.Contents[4].Parts[0].FunctionResponse.Response))
 	require.Equal(t, json.Number("9007199254740992"), callbackRequest[3].Parts[1].FunctionCall.Args["number"])
 	after, err := json.Marshal(request.Messages)
 	require.NoError(t, err)
@@ -154,6 +154,9 @@ func TestResponsesHistoryRejectsIncompleteOrUnrepresentableInput(t *testing.T) {
 		messages []model.Message
 		want     string
 	}{
+		{"hosted search without output", []model.Message{responsesHistoryMessage(`[{"type":"tool_search_call","execution":"server","arguments":{}}]`, "")}, "has no tool_search_output"},
+		{"client search at end", []model.Message{responsesHistoryMessage(`[{"type":"tool_search_call","execution":"client","call_id":"s","arguments":{}}]`, "")}, "has no tool_search_output"},
+		{"client search before next turn", []model.Message{responsesHistoryMessage(`[{"type":"tool_search_call","execution":"client","call_id":"s","arguments":{}}]`, ""), model.NewUserMessage("continue")}, "has no tool_search_output"},
 		{"protocol", []model.Message{wrongProtocol}, "provider data"},
 		{"mismatched call id", []model.Message{wrongID}, "does not match"},
 		{"incomplete native", []model.Message{responsesHistoryMessage(`[{"type":"function_call","status":"in_progress","call_id":"c1","name":"lookup","arguments":"{}"}]`, "")}, "in_progress"},
@@ -230,7 +233,7 @@ func TestResponsesHistoryRetainsEmptyToolOutputAndLegacyPath(t *testing.T) {
 
 func TestResponsesHistoryRejectsLossyNumbersBeforeHTTP(t *testing.T) {
 	for _, number := range []string{"9007199254740993", "0.1234567890123456789", "1e400", "1e-9999"} {
-		for _, source := range []string{"arguments", "result", "callback"} {
+		for _, source := range []string{"arguments", "callback"} {
 			t.Run(number+"/"+source, func(t *testing.T) {
 				call := responsesHistoryMessage(`[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"}]`, "", historyCall("c1", "lookup", `{}`))
 				result := model.NewToolMessage("c1", "lookup", "ok")
@@ -238,8 +241,6 @@ func TestResponsesHistoryRejectsLossyNumbersBeforeHTTP(t *testing.T) {
 				switch source {
 				case "arguments":
 					call.ToolCalls[0].Function.Arguments = []byte(`{"value":` + number + `}`)
-				case "result":
-					result.Content = `{"value":` + number + `}`
 				case "callback":
 					m.chatRequestCallback = func(_ context.Context, contents []*genai.Content) {
 						contents[0].Parts[0].FunctionCall.Args["value"] = json.Number(number)

@@ -36,9 +36,15 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 		return messages, false, nil
 	}
 	prepared := make([]model.Message, 0, len(messages))
+	var projection responseshistory.Projector
 	for i, message := range messages {
+		if message.Role != model.RoleTool {
+			if err := projection.Finish(); err != nil {
+				return nil, false, fmt.Errorf("gemini history message %d: %w", i, err)
+			}
+		}
 		if message.ProviderData != nil {
-			projected, include, err := responseshistory.ProjectMessage(message)
+			projected, include, err := projection.ProjectMessage(message)
 			if err != nil {
 				return nil, false, fmt.Errorf("gemini history message %d: %w", i, err)
 			}
@@ -72,6 +78,9 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 			return nil, false, fmt.Errorf("gemini history message %d: function calls require the assistant role", i)
 		}
 		prepared = append(prepared, message)
+	}
+	if err := projection.Finish(); err != nil {
+		return nil, false, err
 	}
 	if len(prepared) == 0 {
 		return nil, false, fmt.Errorf("gemini history has no transferable messages")
@@ -224,17 +233,9 @@ func (m *Model) convertProviderHistory(messages []model.Message) ([]*genai.Conte
 			}
 			text := value.String()
 			response := map[string]any{"output": text}
-			if responseshistory.ValidArguments([]byte(text)) {
-				var err error
-				response, err = decodeHistoryObject([]byte(text))
-				if err != nil {
-					return nil, fmt.Errorf("gemini history message %d: tool result %q: %w", i, result.ToolID, err)
-				}
-				// go-genai omits empty maps. Wrap the original text so an
-				// empty object remains a present, meaningful result.
-				if len(response) == 0 {
-					response = map[string]any{"output": text}
-				}
+			// Keep the original text when the SDK would round a number or omit an empty object.
+			if object, err := decodeHistoryObject([]byte(text)); err == nil && len(object) > 0 {
+				response = object
 			}
 			results[index] = &genai.Part{FunctionResponse: &genai.FunctionResponse{
 				ID: result.ToolID, Name: message.ToolCalls[index].Function.Name, Response: response,

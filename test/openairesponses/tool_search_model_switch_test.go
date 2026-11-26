@@ -21,10 +21,12 @@ import (
 	openaiopt "github.com/openai/openai-go/option"
 	openaioptv3 "github.com/openai/openai-go/v3/option"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
 	chat "trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -79,9 +81,14 @@ func newSearchSwitchFixture(t *testing.T, handler responses.ToolSearchHandler, t
 		_, _ = fmt.Fprint(w, reply.body)
 	}))
 	t.Cleanup(server.Close)
+	geminiModel, err := gemini.New(t.Context(), "gemini-test", gemini.WithGeminiClientConfig(&genai.ClientConfig{
+		APIKey: "test", Backend: genai.BackendGeminiAPI, HTTPOptions: genai.HTTPOptions{BaseURL: server.URL, APIVersion: "v1beta"},
+	}))
+	require.NoError(t, err)
 	models := map[string]model.Model{
-		switchSource: responses.New(switchSource, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), responses.WithClientToolSearch(handler), responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
-		switchTarget: responses.New(switchTarget, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), targetSearch, responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
+		"gemini-test": geminiModel,
+		switchSource:  responses.New(switchSource, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), responses.WithClientToolSearch(handler), responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
+		switchTarget:  responses.New(switchTarget, responses.WithBaseURL(server.URL), responses.WithAPIKey("test"), targetSearch, responses.WithOpenAIOptions(openaioptv3.WithMaxRetries(0))),
 		switchChat: chat.New(switchChat, chat.WithBaseURL(server.URL), chat.WithAPIKey("test"),
 			chat.WithOpenAIOptions(openaiopt.WithMaxRetries(0))),
 	}
@@ -277,6 +284,88 @@ func TestRunnerClientToolSearchResponsesChatResponses(t *testing.T) {
 	requireSearchEventsUnchanged(t, f, old, count)
 	require.EqualValues(t, 1, searches.Load())
 	require.EqualValues(t, 1, invoiceRuns.Load())
+}
+
+func TestRunnerCompletedToolSearchSwitchesToGemini(t *testing.T) {
+	const hosted = `{"type":"tool_search_call","execution":"server","arguments":{}},{"type":"tool_search_output","execution":"server","tools":[{"type":"namespace","name":"billing","tools":[{"type":"function","name":"lookup"}]}]}`
+	for _, mode := range []string{"hosted", "client"} {
+		t.Run(mode, func(t *testing.T) {
+			var searches, runs atomic.Int32
+			invoice := function.NewFunctionTool(func(context.Context, struct {
+				ID string `json:"id"`
+			}) (string, error) {
+				runs.Add(1)
+				return "120", nil
+			}, function.WithName("lookup"), function.WithDescription("Read invoice amount."))
+			temp := function.NewFunctionTool(func(context.Context, struct{}) (string, error) { return "", nil }, function.WithName("external_lookup"))
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+				searches.Add(1)
+				return append(selectSearchCandidates(req, "billing_lookup"), responses.ToolSearchEntry{Tool: temp}), nil
+			}
+			source := switchTarget
+			replies := []switchReply{switchResponsesReply(hosted + "," + switchInvoiceCall)}
+			var wantSearches int32
+			if mode == "client" {
+				source = switchSource
+				replies = []switchReply{switchResponsesReply(switchSearchCall), switchResponsesReply(switchInvoiceCall)}
+				wantSearches = 1
+			}
+			replies = append(replies, switchResponsesReply(switchInvoiceAnswer),
+				switchReply{status: http.StatusOK, body: `{"candidates":[{"content":{"role":"model","parts":[{"text":"240"}]},"finishReason":"STOP"}]}`},
+				switchTextReply("msg_back", "done"))
+			f := newSearchSwitchFixture(t, handler, responses.WithHostedToolSearch(), nil, []tool.ToolSet{deferred.ToolSet(searchToolSet{name: "billing", tools: []tool.Tool{invoice}})}, replies...)
+			require.Equal(t, "120", f.run(t, source, "Find the invoice amount."))
+			events := f.savedEvents(t)
+			before := snapshotSearchEvents(t, events)
+			sourceRequests := f.snapshot()
+			require.Equal(t, "240", f.run(t, "gemini-test", "Double the amount."))
+			got := f.snapshot()
+			require.Len(t, got, len(sourceRequests)+1)
+			req := got[len(sourceRequests)]
+			require.Equal(t, "/v1beta/models/gemini-test:generateContent", req.path)
+			var contents []struct {
+				Parts []struct {
+					FunctionCall     *genai.FunctionCall
+					FunctionResponse *genai.FunctionResponse
+				}
+			}
+			require.NoError(t, json.Unmarshal(req.body["contents"], &contents))
+			var ids, answers []string
+			for _, content := range contents {
+				for _, part := range content.Parts {
+					if c := part.FunctionCall; c != nil {
+						require.Equal(t, "billing_lookup", c.Name)
+						ids = append(ids, c.ID)
+					}
+					if r := part.FunctionResponse; r != nil {
+						require.Equal(t, "billing_lookup", r.Name)
+						require.Contains(t, fmt.Sprint(r.Response["output"]), "120")
+						answers = append(answers, r.ID)
+					}
+				}
+			}
+			require.Equal(t, []string{"invoice_1"}, ids)
+			require.Equal(t, ids, answers)
+			for _, hidden := range []string{"tool_search_call", "tool_search_output", "external_lookup", "search_1"} {
+				require.NotContains(t, string(req.body["contents"]), hidden)
+			}
+			var declarations []genai.Tool
+			require.NoError(t, json.Unmarshal(req.body["tools"], &declarations))
+			require.Len(t, declarations, 1)
+			require.Len(t, declarations[0].FunctionDeclarations, 1)
+			require.Equal(t, "billing_lookup", declarations[0].FunctionDeclarations[0].Name)
+			require.Equal(t, "done", f.run(t, source, "Continue in Responses."))
+			got = f.snapshot()
+			require.Len(t, got, len(sourceRequests)+2)
+			back := string(got[len(got)-1].body["input"])
+			require.Contains(t, back, "tool_search_call")
+			require.Contains(t, back, "tool_search_output")
+			require.Contains(t, back, "240")
+			requireSearchEventsUnchanged(t, f, before, len(events))
+			require.Equal(t, wantSearches, searches.Load())
+			require.EqualValues(t, 1, runs.Load())
+		})
+	}
 }
 
 func TestRunnerClientToolSearchReplacementAcrossModelSwitch(t *testing.T) {

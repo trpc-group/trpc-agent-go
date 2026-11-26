@@ -57,7 +57,7 @@ func TestProjectMessageProjectsURLCitations(t *testing.T) {
 			message.ContentParts = tt.parts
 			before, err := json.Marshal(message)
 			require.NoError(t, err)
-			projected, include, err := ProjectMessage(message)
+			projected, include, err := new(Projector).ProjectMessage(message)
 			require.NoError(t, err)
 			require.True(t, include)
 			visible := projected.Content
@@ -83,7 +83,7 @@ func TestProjectMessageIgnoresUnusedCitationFields(t *testing.T) {
 	]}]`
 	message := responsesHistory(raw)
 	message.Content = "hello"
-	got, _, err := ProjectMessage(message)
+	got, _, err := new(Projector).ProjectMessage(message)
 	require.NoError(t, err)
 	require.Equal(t, "hello\n\nSources:\nhttps://example.com/a\nhttps://example.com/b\nhttps://example.com/c", got.Content)
 }
@@ -115,7 +115,7 @@ func TestProjectMessageDeduplicatesCitationURLsAgainstBody(t *testing.T) {
 			require.NoError(t, err)
 			message := responsesHistory(string(payload))
 			message.Content = tt.body
-			got, _, err := ProjectMessage(message)
+			got, _, err := new(Projector).ProjectMessage(message)
 			require.NoError(t, err)
 			want := tt.body
 			if tt.wantSource {
@@ -145,7 +145,7 @@ func TestProjectMessageRejectsInvalidCitations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := `[{"type":"message","id":"m1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello","annotations":` + tt.annotation + `}]}]`
 			message := responsesHistory(payload) // Text differs intentionally; malformed metadata must still fail.
-			_, _, err := ProjectMessage(message)
+			_, _, err := new(Projector).ProjectMessage(message)
 			require.ErrorContains(t, err, "annotations")
 		})
 	}
@@ -160,7 +160,7 @@ func TestProjectMessagePreservesVisibleCallsAndNativeRecord(t *testing.T) {
 	}}
 	before, err := json.Marshal(message)
 	require.NoError(t, err)
-	projected, include, err := ProjectMessage(message)
+	projected, include, err := new(Projector).ProjectMessage(message)
 	require.NoError(t, err)
 	require.True(t, include)
 	require.Nil(t, projected.ProviderData)
@@ -174,14 +174,14 @@ func TestProjectMessagePreservesVisibleCallsAndNativeRecord(t *testing.T) {
 	require.JSONEq(t, string(before), string(after))
 
 	message.ToolCalls[0].ID = "c2"
-	_, _, err = ProjectMessage(message)
+	_, _, err = new(Projector).ProjectMessage(message)
 	require.ErrorContains(t, err, "does not match")
 }
 
 func TestProjectMessageSkipsPrivateReasoning(t *testing.T) {
 	message := responsesHistory(`[{"type":"reasoning","id":"r1","encrypted_content":"opaque"}]`)
 	message.Content = ""
-	projected, include, err := ProjectMessage(message)
+	projected, include, err := new(Projector).ProjectMessage(message)
 	require.NoError(t, err)
 	require.False(t, include)
 	require.Nil(t, projected.ProviderData)
@@ -203,7 +203,7 @@ func TestProjectMessageValidatesEditedCalls(t *testing.T) {
 			message.ToolCalls = []model.ToolCall{{ID: "c1", Type: "function", Function: model.FunctionDefinitionParam{
 				Name: tt.visibleName, Arguments: []byte(tt.args),
 			}}}
-			projected, include, err := ProjectMessage(message)
+			projected, include, err := new(Projector).ProjectMessage(message)
 			if tt.wantError != "" {
 				require.ErrorContains(t, err, tt.wantError)
 				return
@@ -216,14 +216,14 @@ func TestProjectMessageValidatesEditedCalls(t *testing.T) {
 }
 
 func TestProjectMessageRejectsMissingOrForeignRecords(t *testing.T) {
-	_, _, err := ProjectMessage(model.NewUserMessage("question"))
+	_, _, err := new(Projector).ProjectMessage(model.NewUserMessage("question"))
 	require.ErrorContains(t, err, "expected Responses provider data")
 	message := responsesHistory("[]")
 	message.ProviderData.Protocol = "other"
-	_, _, err = ProjectMessage(message)
+	_, _, err = new(Projector).ProjectMessage(message)
 	require.ErrorContains(t, err, "unsupported provider data protocol")
 	message = responsesHistory(`[{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"}]`)
-	_, _, err = ProjectMessage(message)
+	_, _, err = new(Projector).ProjectMessage(message)
 	require.ErrorContains(t, err, "do not match")
 }
 
@@ -237,7 +237,7 @@ func TestProjectMessageRejectsIncompleteNativeCallWithValidProjection(t *testing
 		t.Run(tt.name, func(t *testing.T) {
 			message := responsesHistory(tt.raw)
 			message.ToolCalls = []model.ToolCall{{ID: "c1", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte("{}")}}}
-			_, include, err := ProjectMessage(message)
+			_, include, err := new(Projector).ProjectMessage(message)
 			require.ErrorContains(t, err, tt.want)
 			require.False(t, include)
 		})
@@ -249,10 +249,44 @@ func TestProjectMessagePreservesFileEditWithoutRestoringCitation(t *testing.T) {
 		{"type":"output_text","text":"notes","annotations":[{"type":"url_citation","url":"https://example.test/private-source"}]}]}]`)
 	message.Content = "notes"
 	message.AddFileData("visible.txt", []byte("edited file"), "text/plain")
-	projected, include, err := ProjectMessage(message)
+	projected, include, err := new(Projector).ProjectMessage(message)
 	require.NoError(t, err)
 	require.True(t, include)
 	require.Equal(t, "notes", projected.Content)
 	require.Equal(t, message.ContentParts, projected.ContentParts)
 	require.Nil(t, projected.ProviderData)
+}
+
+func TestProjectorTracksClientResultsAcrossNativeRecords(t *testing.T) {
+	first := responsesHistory(`[
+		{"type":"tool_search_call","execution":"server","arguments":{}},
+		{"type":"tool_search_output","execution":"server","tools":[]},
+		{"type":"tool_search_call","execution":"client","call_id":"a","arguments":{}},
+		{"type":"tool_search_call","execution":"client","call_id":"b","arguments":{}}
+	]`)
+	var projection Projector
+	visible, include, err := projection.ProjectMessage(first)
+	require.NoError(t, err)
+	require.True(t, include)
+	require.Equal(t, first.Content, visible.Content)
+	output := func(id string) model.Message {
+		m := responsesHistory(`[{"type":"tool_search_output","execution":"client","call_id":"` + id + `","tools":[]}]`)
+		m.Role, m.ToolID = model.RoleTool, id
+		return m
+	}
+	b := output("b")
+	wrong := output("b")
+	wrong.ProviderData.Model = "other"
+	_, _, err = projection.ProjectMessage(wrong)
+	require.ErrorContains(t, err, "different model")
+	_, include, err = projection.ProjectMessage(b)
+	require.NoError(t, err)
+	require.False(t, include)
+	require.ErrorContains(t, projection.Finish(), `"a" has no tool_search_output`)
+	_, _, err = projection.ProjectMessage(b)
+	require.ErrorContains(t, err, "no preceding tool_search_call")
+	_, include, err = projection.ProjectMessage(output("a"))
+	require.NoError(t, err)
+	require.False(t, include)
+	require.NoError(t, projection.Finish())
 }

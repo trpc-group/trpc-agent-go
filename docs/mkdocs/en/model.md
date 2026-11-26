@@ -2451,10 +2451,12 @@ saved search items. A later call to an expired run-scoped tool requires a new se
 
 The native Gemini adapter can also continue completed Responses history. It sends
 visible text, function calls, and results as Gemini content parts. It matches
-parallel results by call ID and sends them in call order. If encoding would
-discard a tool result or change a JSON number, the request returns a local
-error. The root and Gemini modules must both include support for Responses
-history projection.
+parallel results by call ID and sends them in call order. Like Chat, Gemini omits
+completed tool searches and exposes the current request's allowed tools.
+If the SDK would change a number in a tool result object, Gemini
+wraps the original JSON text in an `output` string. A call argument that would
+lose numeric precision still fails before dispatch. The root and Gemini modules
+must both include support for Responses history projection.
 
 - **Runner with an LLMAgent.** With `agent.WithResume(true)`, the agent checks
   the producing protocol and model name before executing a pending native tool
