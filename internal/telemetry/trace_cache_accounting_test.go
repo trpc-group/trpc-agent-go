@@ -102,6 +102,10 @@ func TestChatTraceState_ReplacesCacheUsageSnapshot(t *testing.T) {
 			usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111},
 		},
 		{
+			name:  "clear total and all cache buckets together",
+			usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11},
+		},
+		{
 			name: "clear read buckets while retaining writes",
 			usage: &model.Usage{PromptTokens: 100, CompletionTokens: 11, TotalTokens: 111,
 				PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 5}},
@@ -139,10 +143,11 @@ func TestChatTraceState_ReplacesCacheUsageSnapshot(t *testing.T) {
 				attrs[string(kv.Key)] = kv.Value
 			}
 			wantCache, wantAccounting := tc.wantCache, tc.wantAccounting
-			wantOutput, wantTotal := int64(11), int64(111)
+			wantOutput, wantTotal := int64(10), int64(110)
 			if tc.preserve {
 				wantCache, wantAccounting = initialCache, "inclusive"
-				wantOutput, wantTotal = 10, 110
+			} else {
+				wantOutput, wantTotal = int64(tc.usage.CompletionTokens), int64(tc.usage.TotalTokens)
 			}
 			require.Equal(t, int64(100), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
 			require.Equal(t, wantOutput, attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
