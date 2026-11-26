@@ -644,6 +644,15 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+For non-streaming `WithChatResponseCallback`, changing prompt or cache token
+counts leaves `Usage.PromptCacheAccounting` unspecified, so telemetry uses its
+legacy normalization instead of assuming the original provider convention.
+Read-only callbacks and changes only to completion tokens, total tokens, or
+response content preserve the provider's accounting. This applies to both
+`GenerateContent` and `GenerateContentIter`. To declare a specific convention
+after rewriting usage, set `PromptCacheAccounting` in a model `AfterModel`
+callback, which receives the framework's `model.Response`.
+
 ##### Streaming Tool-Call Index Compatibility
 
 The OpenAI-compatible adapter normalizes negative `tool_calls[].index` values

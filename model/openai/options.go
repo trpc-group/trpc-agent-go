@@ -225,6 +225,9 @@ func WithChatRequestJSONCallback(fn ChatRequestJSONCallbackFunc) Option {
 
 // WithChatResponseCallback sets the function to be called after receiving a chat response.
 // Used for non-streaming responses.
+// If the callback changes prompt or cache token counts, the resulting model.Usage
+// leaves PromptCacheAccounting unspecified so consumers use their legacy fallback.
+// Changes only to output counts or other response fields preserve provider accounting.
 func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatResponseCallback = fn

@@ -2931,9 +2931,17 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		return
 	}
 	// Call response callback on successful completion.
+	// Snapshot effective counts by value: SDK extra-field maps can be mutated
+	// in place, and a callback that changes prompt/cache counts may also change
+	// their accounting convention.
+	usageBeforeCallback := completionUsageToModelUsage(chatCompletion.Usage)
 	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
 	response := m.createResponseFromCompletion(chatCompletion)
-	markInclusivePromptCacheAccounting(response)
+	if response.Usage != nil &&
+		response.Usage.PromptTokens == usageBeforeCallback.PromptTokens &&
+		response.Usage.PromptTokensDetails == usageBeforeCallback.PromptTokensDetails {
+		markInclusivePromptCacheAccounting(response)
+	}
 	emit(response)
 }
 

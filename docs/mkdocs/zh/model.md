@@ -631,6 +631,14 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+非流式 `WithChatResponseCallback` 如果修改 prompt 或缓存 token 计数，
+`Usage.PromptCacheAccounting` 会保持未声明状态，遥测按旧版兼容逻辑处理，
+不再假定修改后的计数仍采用服务方原始口径。只读回调，以及仅修改输出 token、
+总 token 或响应内容的回调，仍保留服务方口径。此行为同时适用于
+`GenerateContent` 和 `GenerateContentIter`。如果需要在重写 usage 后明确声明
+口径，可以在接收框架 `model.Response` 的模型 `AfterModel` 回调中设置
+`PromptCacheAccounting`。
+
 ##### 流式工具调用索引兼容
 
 OpenAI-compatible adapter 会在累积前修正负数 `tool_calls[].index`，无需

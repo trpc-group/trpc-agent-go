@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	openaigo "github.com/openai/openai-go"
 	"github.com/stretchr/testify/require"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -460,4 +461,60 @@ func TestRunnerToLangfuse_ExclusiveCachedAndCreation(t *testing.T) {
 	}
 	require.Equal(t, map[string]int64{"input": 20, "input_cached": 70, "input_cache_creation": 10, "output": 10},
 		extractChatUsageDetails(t, recorder.Ended(), m.Info().Name))
+}
+
+func TestRunnerToLangfuse_ResponseCallbackAccounting(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"callback-review","object":"chat.completion","model":"gpt-5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110,"prompt_tokens_details":{"cache_write_tokens":80}}}`))
+	}))
+	defer server.Close()
+	tests := []struct {
+		name   string
+		mutate func(*openaigo.ChatCompletion)
+		want   map[string]int64
+	}{
+		{
+			name:   "prompt normalization uses legacy fallback",
+			mutate: func(resp *openaigo.ChatCompletion) { resp.Usage.PromptTokens = 20 },
+			want:   map[string]int64{"input": 20, "input_cache_creation": 80, "output": 10},
+		},
+		{
+			name:   "read-only callback retains inclusive accounting",
+			mutate: func(*openaigo.ChatCompletion) {},
+			want:   map[string]int64{"input": 20, "input_cache_creation": 80, "output": 10},
+		},
+		{
+			name: "output-only change retains inclusive accounting",
+			mutate: func(resp *openaigo.ChatCompletion) {
+				resp.Usage.CompletionTokens = 11
+				resp.Usage.TotalTokens = 111
+			},
+			want: map[string]int64{"input": 20, "input_cache_creation": 80, "output": 11},
+		},
+	}
+	for _, useIter := range []bool{false, true} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("iter=%v/%s", useIter, tt.name), func(t *testing.T) {
+				recorder := useLangfuseTestSpanRecorder(t)
+				var m model.Model = openai.New("gpt-5", openai.WithBaseURL(server.URL), openai.WithAPIKey("test-key"),
+					openai.WithChatResponseCallback(func(_ context.Context, _ *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
+						tt.mutate(resp)
+					}),
+				)
+				if !useIter {
+					// Hide IterModel so LLMAgent exercises GenerateContent.
+					m = struct{ model.Model }{m}
+				}
+				r := runner.NewRunner("test-app", llmagent.New("test-agent", llmagent.WithModel(m)))
+				defer r.Close()
+				events, err := r.Run(context.Background(), "user-1", "session-1", model.NewUserMessage("hi"))
+				require.NoError(t, err)
+				for ev := range events {
+					require.Nil(t, ev.Error)
+				}
+				require.Equal(t, tt.want, extractChatUsageDetails(t, recorder.Ended(), "gpt-5"))
+			})
+		}
+	}
 }
