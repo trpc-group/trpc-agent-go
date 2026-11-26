@@ -330,22 +330,21 @@ func TestRunnerCompletedToolSearchSwitchesToGemini(t *testing.T) {
 				}
 			}
 			require.NoError(t, json.Unmarshal(req.body["contents"], &contents))
-			var ids, answers []string
+			var sequence []string
 			for _, content := range contents {
 				for _, part := range content.Parts {
 					if c := part.FunctionCall; c != nil {
 						require.Equal(t, "billing_lookup", c.Name)
-						ids = append(ids, c.ID)
+						sequence = append(sequence, "call:"+c.ID)
 					}
 					if r := part.FunctionResponse; r != nil {
 						require.Equal(t, "billing_lookup", r.Name)
 						require.Contains(t, fmt.Sprint(r.Response["output"]), "120")
-						answers = append(answers, r.ID)
+						sequence = append(sequence, "result:"+r.ID)
 					}
 				}
 			}
-			require.Equal(t, []string{"invoice_1"}, ids)
-			require.Equal(t, ids, answers)
+			require.Equal(t, []string{"call:invoice_1", "result:invoice_1"}, sequence)
 			for _, hidden := range []string{"tool_search_call", "tool_search_output", "external_lookup", "search_1"} {
 				require.NotContains(t, string(req.body["contents"]), hidden)
 			}

@@ -52,7 +52,6 @@ func (h *Projector) ProjectMessage(message model.Message) (model.Message, bool, 
 		return model.Message{}, false, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
 	}
 	var hosted int
-	visible := items[:0]
 	for i, item := range items {
 		if item.Type == ToolSearchCall || item.Type == ToolSearchOutput {
 			if err := h.track(item, message, &hosted); err != nil {
@@ -63,7 +62,6 @@ func (h *Projector) ProjectMessage(message model.Message) (model.Message, bool, 
 		if message.Role == model.RoleTool {
 			return model.Message{}, false, fmt.Errorf("tool message may only record the client tool_search_output for call_id %q", message.ToolID)
 		}
-		visible = append(visible, item)
 	}
 	if hosted != 0 {
 		return model.Message{}, false, fmt.Errorf("hosted tool_search_call has no tool_search_output")
@@ -71,7 +69,7 @@ func (h *Projector) ProjectMessage(message model.Message) (model.Message, bool, 
 	if message.Role == model.RoleTool {
 		return model.Message{}, false, nil
 	}
-	return projectAssistantItems(message, visible)
+	return projectAssistantItems(message, items)
 }
 
 func (h *Projector) track(item Item, message model.Message, hosted *int) error {

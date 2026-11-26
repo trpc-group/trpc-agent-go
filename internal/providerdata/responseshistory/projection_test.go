@@ -257,6 +257,17 @@ func TestProjectMessagePreservesFileEditWithoutRestoringCitation(t *testing.T) {
 	require.Nil(t, projected.ProviderData)
 }
 
+func TestProjectMessageReportsOriginalItemIndexAfterSearch(t *testing.T) {
+	message := responsesHistory(`[
+  {"type":"tool_search_call","execution":"server","arguments":{}},
+  {"type":"tool_search_output","execution":"server","tools":[]},
+  {"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"},
+  {"type":"message","id":"m1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"late"}]}
+ ]`)
+	_, _, err := new(Projector).ProjectMessage(message)
+	require.ErrorContains(t, err, "message item 3 follows a function call")
+}
+
 func TestProjectorTracksClientResultsAcrossNativeRecords(t *testing.T) {
 	first := responsesHistory(`[
 		{"type":"tool_search_call","execution":"server","arguments":{}},

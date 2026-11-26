@@ -1041,11 +1041,12 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.Image == nil {
 			return nil
 		}
+		mimeType := mediaMIMEType(part.Image.Format, "image")
 		if part.Image.URL != "" {
-			return genai.NewPartFromURI(part.Image.URL, part.Image.Format)
+			return genai.NewPartFromURI(part.Image.URL, mimeType)
 		}
 		if len(part.Image.Data) != 0 {
-			return genai.NewPartFromBytes(part.Image.Data, part.Image.Format)
+			return genai.NewPartFromBytes(part.Image.Data, mimeType)
 		}
 	case model.ContentTypeAudio:
 		if part.Audio == nil {
@@ -1092,6 +1093,9 @@ func mediaMIMEType(format, mediaType string) string {
 	format = strings.TrimSpace(format)
 	if format == "" || strings.Contains(format, "/") {
 		return format
+	}
+	if mediaType == "image" && strings.EqualFold(format, "jpg") {
+		return "image/jpeg"
 	}
 	return mediaType + "/" + format
 }

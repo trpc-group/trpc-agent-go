@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 
 	"google.golang.org/genai"
@@ -43,6 +44,9 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 				return nil, false, fmt.Errorf("gemini history message %d: %w", i, err)
 			}
 		}
+		if slices.ContainsFunc(message.ContentParts, emptyHistoryPart) {
+			message.ContentParts = slices.DeleteFunc(slices.Clone(message.ContentParts), emptyHistoryPart)
+		}
 		if message.ProviderData != nil {
 			projected, include, err := projection.ProjectMessage(message)
 			if err != nil {
@@ -55,18 +59,12 @@ func (m *Model) prepareProviderHistory(messages []model.Message) ([]model.Messag
 		} else {
 			message = statecopy.Message(message)
 		}
-		parts := make([]model.ContentPart, 0, len(message.ContentParts))
 		for _, part := range message.ContentParts {
-			if emptyHistoryPart(part) {
-				continue
-			}
 			if err := validateHistoryPart(message.Role, part); err != nil {
 				return nil, false, fmt.Errorf("gemini history message %d: %w", i, err)
 			}
-			parts = append(parts, part)
 		}
-		message.ContentParts = parts
-		if message.Role != model.RoleTool && message.Content == "" && len(parts) == 0 && len(message.ToolCalls) == 0 {
+		if message.Role != model.RoleTool && message.Content == "" && len(message.ContentParts) == 0 && len(message.ToolCalls) == 0 {
 			continue
 		}
 		switch message.Role {

@@ -16,7 +16,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -43,16 +46,36 @@ func TestSupportsResponsesProviderHistory(t *testing.T) {
 	require.False(t, m.SupportsProviderHistory("other"))
 }
 
-func TestResponsesHistoryWirePreservesParallelCallsAndNumbers(t *testing.T) {
-	var wire []byte
+type capturedHistoryRequest struct {
+	body []byte
+	err  error
+}
+
+func newHistoryServer(t *testing.T) (*httptest.Server, <-chan capturedHistoryRequest) {
+	t.Helper()
+	requests := make(chan capturedHistoryRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var err error
-		wire, err = io.ReadAll(r.Body)
-		require.NoError(t, err)
+		body, err := io.ReadAll(r.Body)
+		select {
+		case requests <- capturedHistoryRequest{body: body, err: err}:
+		default:
+			t.Error("unexpected extra Gemini request")
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			http.Error(w, "could not read request", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)
 	}))
 	t.Cleanup(server.Close)
+	return server, requests
+}
+
+func TestResponsesHistoryWirePreservesParallelCallsAndNumbers(t *testing.T) {
+	server, requests := newHistoryServer(t)
 
 	args := `{"number":9007199254740992,"nested":[100000000000000000000]}`
 	payload := fmt.Sprintf(`[{"type":"reasoning","id":"rs_1","encrypted_content":"private-encrypted"},{"type":"message","id":"m1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"private-original"}]},{"type":"function_call","call_id":"c1","name":"old","arguments":%q},{"type":"function_call","call_id":"c2","name":"old","arguments":"{}"}]`, args)
@@ -90,7 +113,10 @@ func TestResponsesHistoryWirePreservesParallelCallsAndNumbers(t *testing.T) {
 	for response := range stream {
 		require.Nil(t, response.Error)
 	}
-	require.NotEmpty(t, wire)
+	require.Len(t, requests, 1)
+	captured := <-requests
+	require.NoError(t, captured.err)
+	wire := captured.body
 	require.Contains(t, string(wire), `"number":9007199254740992`)
 	require.Contains(t, string(wire), `"answer":9007199254740994`)
 	require.Contains(t, string(wire), `"nested":[100000000000000000000]`)
@@ -131,6 +157,26 @@ func TestResponsesHistoryWirePreservesParallelCallsAndNumbers(t *testing.T) {
 	after, err := json.Marshal(request.Messages)
 	require.NoError(t, err)
 	require.JSONEq(t, string(before), string(after))
+}
+
+func TestResponsesHistoryEmptyPartPreservesVisibleCitations(t *testing.T) {
+	const payload = `[{"type":"message","id":"m1","status":"completed","role":"assistant","content":[
+  {"type":"output_text","text":"Original.","annotations":[{"type":"url_citation","url":"https://example.test/source"}]}]}]`
+	for _, tc := range []struct{ text, want string }{
+		{"Original.", "Original.\n\nSources:\nhttps://example.test/source"},
+		{"Redacted.", "Redacted."},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			message := responsesHistoryMessage(payload, tc.text)
+			message.ContentParts = []model.ContentPart{{}}
+			prepared, _, err := (&Model{}).prepareProviderHistory([]model.Message{message})
+			require.NoError(t, err)
+			require.Len(t, prepared, 1)
+			require.Equal(t, tc.want, prepared[0].Content)
+			require.Empty(t, prepared[0].ContentParts)
+			require.Len(t, message.ContentParts, 1)
+		})
+	}
 }
 
 func TestResponsesHistoryRejectsIncompleteOrUnrepresentableInput(t *testing.T) {
@@ -272,6 +318,10 @@ func TestResponsesHistorySendsMediaInOrder(t *testing.T) {
 	const videoURL = "https://example.test/clip.mp4"
 	const fileURL = "https://example.test/notes.pdf"
 	media := model.NewUserMessage("review these attachments")
+	imagePath := filepath.Join(t.TempDir(), "receipt.jpg")
+	require.NoError(t, os.WriteFile(imagePath, []byte("image"), 0600))
+	require.NoError(t, media.AddImageFilePath(imagePath, ""))
+	media.AddImageData([]byte("png"), "", "png")
 	media.AddAudioURL(audioURL, "wav")
 	media.AddAudioData([]byte("audio"), "audio/wav")
 	media.AddVideoURL(videoURL, "mp4")
@@ -283,33 +333,28 @@ func TestResponsesHistorySendsMediaInOrder(t *testing.T) {
 		responsesHistoryMessage(`[{"type":"reasoning","id":"r1","encrypted_content":"private"}]`, ""),
 		model.NewUserMessage("continue"),
 	}}
-	wire := make(chan []byte, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		wire <- body
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`)
-	}))
-	t.Cleanup(server.Close)
+	server, requests := newHistoryServer(t)
 	m, err := New(context.Background(), "gemini-test", WithGeminiClientConfig(&genai.ClientConfig{
 		APIKey: "test", Backend: genai.BackendGeminiAPI, HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
 	}))
 	require.NoError(t, err)
-	responses, err := m.GenerateContent(context.Background(), request)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	responses, err := m.GenerateContent(ctx, request)
 	require.NoError(t, err)
 	for response := range responses {
 		require.Nil(t, response.Error)
 	}
-	require.Len(t, wire, 1)
+	require.Len(t, requests, 1)
+	captured := <-requests
+	require.NoError(t, captured.err)
 	var body struct{ Contents json.RawMessage }
-	require.NoError(t, json.Unmarshal(<-wire, &body))
+	require.NoError(t, json.Unmarshal(captured.body, &body))
 	require.JSONEq(t, `[
 		{"role":"user","parts":[
 			{"text":"review these attachments"},
+            {"inlineData":{"data":"aW1hZ2U=","mimeType":"image/jpeg"}},
+            {"inlineData":{"data":"cG5n","mimeType":"image/png"}},
 			{"fileData":{"fileUri":"https://example.test/clip.wav","mimeType":"audio/wav"}},
 			{"inlineData":{"data":"YXVkaW8=","mimeType":"audio/wav"}},
 			{"fileData":{"fileUri":"https://example.test/clip.mp4","mimeType":"video/mp4"}},
