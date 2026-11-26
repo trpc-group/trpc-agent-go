@@ -4984,3 +4984,56 @@ func TestWaitEventTimeout_NoDeadline(t *testing.T) {
 	timeout := WaitEventTimeout(ctx)
 	require.Equal(t, 5*time.Second, timeout)
 }
+
+func TestProcessStreamingResponses_CallbackClearsTotalTokens(t *testing.T) {
+	f := New(nil, nil, Options{
+		ModelCallbacks: model.NewCallbacks().RegisterAfterModel(
+			func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+				if args.Response.IsPartial {
+					return nil, nil
+				}
+				replacement := *args.Response
+				replacement.Usage = &model.Usage{PromptTokens: 100, CompletionTokens: 11}
+				return &model.AfterModelResult{CustomResponse: &replacement}, nil
+			},
+		),
+	})
+	invocation := agent.NewInvocation(agent.WithInvocationID("clear-total"))
+	responseSeq := func(yield func(*model.Response) bool) {
+		if !yield(&model.Response{
+			IsPartial: true,
+			Usage:     &model.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110},
+		}) {
+			return
+		}
+		yield(&model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+			Usage:   &model.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110},
+		})
+	}
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer provider.Shutdown(context.Background())
+	ctx, span := provider.Tracer("test").Start(
+		agent.NewInvocationContext(context.Background(), invocation), "chat",
+	)
+	lastEvent, err := f.processStreamingResponses(
+		ctx, invocation, nil,
+		&model.Request{GenerationConfig: model.GenerationConfig{Stream: true}},
+		responseSeq, make(chan *event.Event, 10), span, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Zero(t, lastEvent.Usage.TotalTokens)
+	span.End()
+	attrs := map[string]attribute.Value{}
+	for _, kv := range recorder.Ended()[0].Attributes() {
+		attrs[string(kv.Key)] = kv.Value
+	}
+	total, present := attrs[semconvtrace.KeyGenAIUsageTotalTokens]
+	require.True(t, present)
+	require.Zero(t, total.AsInt64())
+	require.Equal(t, int64(100), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
+	require.Equal(t, int64(11), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+}
