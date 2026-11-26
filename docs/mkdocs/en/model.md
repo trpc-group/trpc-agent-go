@@ -2453,7 +2453,7 @@ The native Gemini adapter can also continue completed Responses history. It send
 visible text, function calls, and results as Gemini content parts. It matches
 parallel results by call ID and sends them in call order. Like Chat, Gemini omits
 completed tool searches and exposes the current request's allowed tools.
-If the SDK would change a number in a tool result object, Gemini
+On both fresh Gemini sessions and model switches, if the SDK would change a number in a tool result object, Gemini
 wraps the original JSON text in an `output` string. A call argument that would
 lose numeric precision still fails before dispatch. The root and Gemini modules
 must both include support for Responses history projection.

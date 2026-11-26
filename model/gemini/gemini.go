@@ -825,16 +825,10 @@ func (m *Model) convertMessageContent(
 	// by name and position in the contents array; no explicit ID is required.
 	// See: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling
 	if msg.Role == model.RoleTool {
-		var result map[string]any
-		if err := json.Unmarshal([]byte(msg.Content), &result); err != nil {
-			// Non-JSON content (e.g. error strings) — wrap in a plain map so
-			// the FunctionResponse.Response field is always a valid JSON object.
-			result = map[string]any{"output": msg.Content}
-		}
 		part := &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{
 				Name:     msg.ToolName,
-				Response: result,
+				Response: encodeToolResult(msg.Content),
 			},
 		}
 		return []*genai.Content{genai.NewContentFromParts([]*genai.Part{part}, genai.RoleUser)}

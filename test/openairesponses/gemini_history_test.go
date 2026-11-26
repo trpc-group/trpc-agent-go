@@ -24,6 +24,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/gemini"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestModelSwitchGeminiToolCallWithoutArguments(t *testing.T) {
@@ -233,4 +236,31 @@ func assertGeminiReplaysReorderedResults(t *testing.T, f *switchFixture, sid str
 	}
 	require.Equal(t, []string{"call_first", "call_second"}, calls)
 	require.Equal(t, calls, results)
+}
+
+func TestGeminiFirstTurnPreservesOrderID(t *testing.T) {
+	var runs atomic.Int32
+	lookup := function.NewFunctionTool(func(context.Context, struct{}) (map[string]int64, error) {
+		runs.Add(1)
+		return map[string]int64{"order_id": 9007199254740993}, nil
+	}, function.WithName("lookup"))
+	f := newSearchSwitchFixture(t, nil, responses.WithHostedToolSearch(), []tool.Tool{lookup}, nil,
+		switchReply{http.StatusOK, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{}}}]},"finishReason":"STOP"}]}`},
+		switchReply{http.StatusOK, `{"candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}]}`})
+	require.Equal(t, "done", f.run(t, "gemini-test", "Look up the order."))
+	requests := f.snapshot()
+	require.Len(t, requests, 2)
+	require.Equal(t, "/v1beta/models/gemini-test:generateContent", requests[1].path)
+	var contents []struct {
+		Parts []struct{ FunctionResponse *genai.FunctionResponse }
+	}
+	require.NoError(t, json.Unmarshal(requests[1].body["contents"], &contents))
+	require.NotEmpty(t, contents)
+	last := contents[len(contents)-1]
+	require.Len(t, last.Parts, 1)
+	result := last.Parts[0].FunctionResponse
+	require.NotNil(t, result)
+	require.Equal(t, "lookup", result.Name)
+	require.Equal(t, map[string]any{"output": `{"order_id":9007199254740993}`}, result.Response)
+	require.EqualValues(t, 1, runs.Load())
 }

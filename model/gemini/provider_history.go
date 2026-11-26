@@ -231,14 +231,8 @@ func (m *Model) convertProviderHistory(messages []model.Message) ([]*genai.Conte
 				}
 				value.WriteString(*part.Text)
 			}
-			text := value.String()
-			response := map[string]any{"output": text}
-			// Keep the original text when the SDK would round a number or omit an empty object.
-			if object, err := decodeHistoryObject([]byte(text)); err == nil && len(object) > 0 {
-				response = object
-			}
 			results[index] = &genai.Part{FunctionResponse: &genai.FunctionResponse{
-				ID: result.ToolID, Name: message.ToolCalls[index].Function.Name, Response: response,
+				ID: result.ToolID, Name: message.ToolCalls[index].Function.Name, Response: encodeToolResult(value.String()),
 			}}
 		}
 		for _, part := range results {
@@ -249,6 +243,20 @@ func (m *Model) convertProviderHistory(messages []model.Message) ([]*genai.Conte
 		contents = append(contents, converted[0], genai.NewContentFromParts(results, genai.RoleUser))
 	}
 	return contents, nil
+}
+
+// encodeToolResult preserves ordinary JSON objects and the float64 values
+// exposed to Gemini callbacks. Keep the original text when the SDK would
+// round a number, omit an empty object, or cannot represent it as an object.
+func encodeToolResult(text string) map[string]any {
+	raw := []byte(text)
+	if object, err := decodeHistoryObject(raw); err == nil && len(object) > 0 {
+		var result map[string]any
+		if err := json.Unmarshal(raw, &result); err == nil {
+			return result
+		}
+	}
+	return map[string]any{"output": text}
 }
 
 func decodeHistoryObject(raw []byte) (map[string]any, error) {
