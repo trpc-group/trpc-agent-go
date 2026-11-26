@@ -72,11 +72,13 @@ func (s *NamedToolSet) Tools(ctx context.Context) []tool.Tool {
 	}
 	// Create tools with model-facing names while retaining the source ToolSet
 	// name for runtime policy and tracing checks.
+	description := s.Description()
 	namedTools := make([]tool.Tool, 0, len(tools))
 	for _, t := range tools {
 		namedTool := &NamedTool{
-			original:    t,
-			toolSetName: toolSetName,
+			original:           t,
+			toolSetName:        toolSetName,
+			toolSetDescription: description,
 		}
 		if s.nameMode == tool.ToolSetToolNameModeQualified {
 			namedTool.name = toolSetName
@@ -97,12 +99,21 @@ func (s *NamedToolSet) Name() string {
 	return s.toolSet.Name()
 }
 
+// Description implements tool.ToolSetDescriber for the wrapped ToolSet.
+func (s *NamedToolSet) Description() string {
+	if describer, ok := s.toolSet.(tool.ToolSetDescriber); ok {
+		return describer.Description()
+	}
+	return ""
+}
+
 // NamedTool wraps an original tool with a model-facing name and retains the
 // source ToolSet identity for runtime policy checks.
 type NamedTool struct {
-	original    tool.Tool
-	name        string
-	toolSetName string
+	original           tool.Tool
+	name               string
+	toolSetName        string
+	toolSetDescription string
 }
 
 // NewUnprefixedNamedTool wraps a tool as a NamedTool without adding any name
@@ -180,6 +191,11 @@ type declarationTool struct {
 
 func (t *declarationTool) Declaration() *tool.Declaration {
 	return &t.decl
+}
+
+// ShouldDefer preserves the loading decision while changing the declaration.
+func (t *declarationTool) ShouldDefer(ctx context.Context) bool {
+	return tool.ShouldDefer(ctx, t.base)
 }
 
 func (t *declarationTool) originalTool() tool.Tool {

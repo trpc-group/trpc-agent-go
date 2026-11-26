@@ -390,7 +390,7 @@ tRPC-Agent-Go 的 provider-agnostic usage 结构定义在 `model` 包中，其�
 - `model.Usage.PromptTokensDetails.CacheReadTokens`
 - `model.Usage.PromptTokensDetails.CacheCreationTokens`
 
-对 OpenAI-compatible API，`CachedTokens` 是主要字段；`CacheReadTokens` / `CacheCreationTokens` 主要服务于 Anthropic 等显式缓存形态。
+对 OpenAI-compatible API，`CachedTokens` 反映缓存读取命中；当上游模型或网关在 `prompt_tokens_details`（或顶层 `usage` 回退）中上报缓存写入字段（`cache_write_tokens`、`cache_creation_tokens`、`cache_creation_input_tokens`）时，会按优先级统一映射到 `CacheCreationTokens`（与 Anthropic / Bedrock 的缓存写入共用同一字段）；`CacheReadTokens` 主要服务于 Anthropic / Bedrock 及在 `prompt_tokens_details` 中显式上报 `cache_read_tokens` 的网关。
 
 Telemetry 层也会拆分 token 类型。`internal/telemetry` 包会记录：
 

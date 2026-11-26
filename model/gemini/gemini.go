@@ -599,6 +599,9 @@ func (m *Model) completionUsageToModelUsage(usage *genai.GenerateContentResponse
 		PromptTokensDetails: model.PromptTokensDetails{
 			CachedTokens: int(usage.CachedContentTokenCount),
 		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: int(usage.ThoughtsTokenCount),
+		},
 	}
 }
 

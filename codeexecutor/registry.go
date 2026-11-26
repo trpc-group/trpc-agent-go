@@ -23,9 +23,10 @@ var errWorkspaceRegistryTokenExhausted = errors.New(
 	"codeexecutor: workspace registry entry token exhausted",
 )
 
-// WorkspaceRegistry keeps a process-level mapping of logical IDs to
-// created workspaces for reuse within a session.
+// WorkspaceRegistry caches created workspaces by logical ID.
 type WorkspaceRegistry struct {
+	// parent grants invalidation authority without retaining child scopes.
+	parent    *WorkspaceRegistry
 	mu        sync.Mutex
 	byID      map[string]workspaceRegistryEntry
 	inflight  map[string]*workspaceCreateCall
@@ -50,6 +51,18 @@ func NewWorkspaceRegistry() *WorkspaceRegistry {
 		byID:     map[string]workspaceRegistryEntry{},
 		inflight: map[string]*workspaceCreateCall{},
 	}
+}
+
+// NewScope creates an empty cache whose entries are independent of r's entries.
+// Invalidate on r may also invalidate exact handles acquired through this scope
+// or its descendants. Sibling scopes cannot invalidate each other's handles.
+// The parent does not retain the scope; callers own its lifetime. Discarding a
+// scope releases its cache but does not call WorkspaceManager.Cleanup.
+// A nil receiver creates an independent registry.
+func (r *WorkspaceRegistry) NewScope() *WorkspaceRegistry {
+	scope := NewWorkspaceRegistry()
+	scope.parent = r
+	return scope
 }
 
 // Acquire creates or returns an existing workspace with the given id.
@@ -236,21 +249,33 @@ func waitWorkspaceCreate(
 // already belong to a newer physical instance by the time stale work is
 // reported.
 //
+// Handles from descendant scopes of r are also accepted.
+//
 // The registry-owned token prevents a late stale report from evicting a
 // workspace that another caller has already refreshed, including for legacy
 // managers whose backend instance ID is empty.
 func (r *WorkspaceRegistry) Invalidate(handle WorkspaceHandle) bool {
-	if r == nil || handle.registry != r || handle.entryToken == 0 {
+	if r == nil || handle.entryToken == 0 || !r.ownsScope(handle.registry) {
 		return false
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	entry, ok := r.byID[handle.registryID]
+	owner := handle.registry
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	entry, ok := owner.byID[handle.registryID]
 	if !ok || entry.entryToken != handle.entryToken {
 		return false
 	}
-	delete(r.byID, handle.registryID)
+	delete(owner.byID, handle.registryID)
 	return true
+}
+
+func (r *WorkspaceRegistry) ownsScope(scope *WorkspaceRegistry) bool {
+	for ; scope != nil; scope = scope.parent {
+		if scope == r {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *WorkspaceRegistry) handle(

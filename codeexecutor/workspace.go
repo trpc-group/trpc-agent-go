@@ -200,6 +200,12 @@ type StageOptions struct {
 }
 
 // WorkspaceManager handles workspace lifecycle.
+//
+// A manager may additionally implement WorkspacePerInvocation() bool. When it
+// returns true, agent tools limit registry reuse to one invocation; otherwise
+// the existing session-level reuse applies. Direct CreateWorkspace calls and
+// Cleanup ownership are unchanged. Wrappers must forward this capability when
+// the wrapped manager implements it.
 type WorkspaceManager interface {
 	CreateWorkspace(ctx context.Context, execID string,
 		pol WorkspacePolicy) (Workspace, error)

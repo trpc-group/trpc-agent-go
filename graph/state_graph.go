@@ -613,10 +613,11 @@ func executeNodeWithWorkflowTrace(
 	}
 	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
 	workflow := &itelemetry.Workflow{
-		Name:    fmt.Sprintf("execute_function_node %s", id),
-		ID:      id,
-		Type:    workflowTypeFromNodeType(nodeType),
-		Request: state.safeClone(),
+		Name:           fmt.Sprintf("execute_function_node %s", id),
+		ID:             id,
+		Type:           workflowTypeFromNodeType(nodeType),
+		Request:        state.safeClone(),
+		FilterResponse: filterNodeResponse,
 	}
 	defer func() {
 		itelemetry.TraceWorkflow(span, workflow)
@@ -714,10 +715,11 @@ func (sg *StateGraph) AddLLMNode(
 		var workflow *itelemetry.Workflow
 		if recordWorkflow {
 			workflow = &itelemetry.Workflow{
-				Name:    workflowName,
-				ID:      id,
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           workflowName,
+				ID:             id,
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 		}
 		defer func() {
@@ -1670,10 +1672,7 @@ func (r *llmRunner) executeModel(
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
 	if callModel != nil && providerdata.MessagesHaveData(request.Messages) {
-		if err := providerdata.ValidateMessages(
-			request.Messages,
-			callModel.Info(),
-		); err != nil {
+		if err := providerdata.ValidateHistory(request.Messages, callModel); err != nil {
 			return nil, err
 		}
 	}
@@ -2182,7 +2181,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	}
 	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
 	if hasAfterCallbacks {
-		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel); err != nil {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel, config.Request); err != nil {
 			return ctx, nil, err
 		}
 	}
@@ -2299,7 +2298,7 @@ func generateModelStream(
 		return modelResponseStream{}, err
 	}
 	if request != nil && providerdata.MessagesHaveData(request.Messages) {
-		if err := providerdata.ValidateMessages(request.Messages, llmModel.Info()); err != nil {
+		if err := providerdata.ValidateHistory(request.Messages, llmModel); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			return modelResponseStream{}, err
@@ -2490,10 +2489,11 @@ func newToolsNodeRuntime(
 		var workflow *itelemetry.Workflow
 		if startedSpan {
 			workflow = &itelemetry.Workflow{
-				Name:    "execute_tools_node",
-				ID:      "execute_tools_node",
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           "execute_tools_node",
+				ID:             "execute_tools_node",
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 			defer func() {
 				itelemetry.TraceWorkflow(span, workflow)
@@ -2521,7 +2521,7 @@ func newToolsNodeRuntime(
 		}
 
 		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
-		resultContents := make([][]byte, len(toolCalls))
+		resultContents := make([]toolResultOutput, len(toolCalls))
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:          toolCalls,
@@ -2550,8 +2550,8 @@ func newToolsNodeRuntime(
 		if len(newMessages) > 0 {
 			lastIndex := len(newMessages) - 1
 			lastResponse := newMessages[lastIndex].Content
-			if lastIndex < len(resultContents) && resultContents[lastIndex] != nil {
-				lastResponse = string(resultContents[lastIndex])
+			if content := toolResultContentAt(resultContents, lastIndex).structuredJSON(); content != nil {
+				lastResponse = string(content)
 			}
 			upd[StateKeyLastToolResponse] = lastResponse
 		}
@@ -2565,7 +2565,7 @@ func newToolsNodeRuntime(
 
 			responses := make([]toolNodeResponse, 0, len(newMessages))
 			for i, msg := range newMessages {
-				output := toolResultContentAt(resultContents, i)
+				output := toolResultContentAt(resultContents, i).raw
 				if output == nil {
 					output = toolNodeResponseOutput(msg)
 				}
@@ -4623,7 +4623,7 @@ func callToolWithRetry(
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
+	runtimeTool, ok := itool.ResolveSemantic(callableTool).(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {
 		var err error
@@ -4934,6 +4934,10 @@ type modelExecutionConfig struct {
 const (
 	errMsgNoModelResponse = "no response received from model"
 	errMsgNoModelChoices  = "model returned no choices"
+	// errMsgProviderActions reports a response that delegates provider-native
+	// actions, such as a client-executed tool search, which LLM nodes do not
+	// complete. Treating it as the node result would lose the pending action.
+	errMsgProviderActions = "model response requests provider actions, which graph LLM nodes do not complete"
 )
 
 type modelDeltaStreamTap struct {
@@ -5005,6 +5009,13 @@ func validateFinalModelResponse(
 			errMsgNoModelChoices,
 		))
 		return nil, errors.New(errMsgNoModelChoices)
+	}
+	if providerdata.ResponseRequestsActions(resp) {
+		span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgProviderActions,
+		))
+		return nil, errors.New(errMsgProviderActions)
 	}
 	return resp, nil
 }
@@ -5681,8 +5692,8 @@ type toolCallsConfig struct {
 	// SkipArgumentRepair is true when these calls came from a ProviderData
 	// message whose editable arguments must not be rewritten automatically.
 	SkipArgumentRepair bool
-	// resultContents records raw marker result JSON by call index for node outputs.
-	resultContents [][]byte
+	// resultContents records serialized tool results by call index for node outputs.
+	resultContents []toolResultOutput
 }
 
 type parallelToolCallCancelCause struct {
@@ -5718,7 +5729,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedKey := completedToolMessageKey(i, toolCall)
 			if msg, ok := completedMessages[completedKey]; ok {
 				newMessages = append(newMessages, msg)
-				setToolResultContent(config.resultContents, i, completedResultContents[completedKey])
+				setToolResultContent(config.resultContents, i, toolResultOutput{
+					raw: completedResultContents[completedKey], structured: true,
+				})
 				continue
 			}
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
@@ -5751,7 +5764,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			}
 			newMessages = append(newMessages, toolMessage)
 			completedThisRun[completedKey] = toolMessage
-			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, i)
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, i).structuredJSON()
 		}
 		clearCompletedToolMessages(config.State, config.NodeID)
 		return newMessages, nil
@@ -5779,7 +5792,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		completedKey := completedToolMessageKey(i, tc)
 		if msg, ok := completedMessages[completedKey]; ok {
 			out[i] = msg
-			setToolResultContent(config.resultContents, i, completedResultContents[completedKey])
+			setToolResultContent(config.resultContents, i, toolResultOutput{
+				raw: completedResultContents[completedKey], structured: true,
+			})
 			continue
 		}
 		pendingCalls = append(pendingCalls, pendingCall{idx: i, tc: tc})
@@ -5844,7 +5859,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			out[r.idx] = r.msg
 			completedKey := completedToolMessageKey(r.idx, config.ToolCalls[r.idx])
 			completedThisRun[completedKey] = r.msg
-			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, r.idx)
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, r.idx).structuredJSON()
 		}
 	}
 	traceRecorder.flush(ctx)
@@ -6076,7 +6091,7 @@ type singleToolCallConfig struct {
 	RetryPolicy        *tool.RetryPolicy
 	Concurrency        *toolcall.Limiter
 	TraceRecorder      *graphToolTraceRecorder
-	resultContents     [][]byte
+	resultContents     []toolResultOutput
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -6301,8 +6316,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		content,
 		nil,
 	)
+	setToolResultContent(config.resultContents, config.ToolCallIndex, toolResultOutput{
+		raw: content, structured: resultMessage != nil,
+	})
 	if resultMessage != nil {
-		setToolResultContent(config.resultContents, config.ToolCallIndex, content)
 		return *resultMessage, nil
 	}
 	return model.NewToolMessage(id, name, string(content)), nil
@@ -6325,17 +6342,30 @@ func successfulToolResultMessage(result any, callErr error, call model.ToolCall)
 	return resultMessage
 }
 
-func setToolResultContent(contents [][]byte, index int, content []byte) {
-	if index >= 0 && index < len(contents) && len(content) > 0 {
+type toolResultOutput struct {
+	raw        json.RawMessage
+	structured bool
+}
+
+func (output toolResultOutput) structuredJSON() json.RawMessage {
+	// Ordinary results already carry their original JSON in Message.Content.
+	if output.structured {
+		return output.raw
+	}
+	return nil
+}
+
+func setToolResultContent(contents []toolResultOutput, index int, content toolResultOutput) {
+	if index >= 0 && index < len(contents) && len(content.raw) > 0 {
 		contents[index] = content
 	}
 }
 
-func toolResultContentAt(contents [][]byte, index int) json.RawMessage {
+func toolResultContentAt(contents []toolResultOutput, index int) toolResultOutput {
 	if index < 0 || index >= len(contents) {
-		return nil
+		return toolResultOutput{}
 	}
-	return json.RawMessage(contents[index])
+	return contents[index]
 }
 
 func toolNodeResponseOutput(message model.Message) json.RawMessage {

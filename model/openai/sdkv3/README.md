@@ -17,8 +17,9 @@ Use the tag format `model/openai/sdkv3/v1.x.x`. For example, a module release
 at `v1.12.0` uses `model/openai/sdkv3/v1.12.0`.
 
 Before publishing this module, release a root framework version containing
-the required ProviderData fields and APIs. Then update this module's root
-framework dependency and verify it from an external consumer without repository
+the ProviderData APIs and the shared Responses history reader
+(`internal/providerdata/responseshistory`). Set that release as this module's
+minimum root dependency and verify an external consumer without repository
 `replace` directives.
 
 Adapters for a future SDK v4 generation can use a separate `sdkv4` module.

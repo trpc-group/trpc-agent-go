@@ -148,6 +148,12 @@ func (ts *ToolSet) Name() string {
 	return ts.name
 }
 
+// Description implements tool.ToolSetDescriber with
+// ConnectionConfig.Description.
+func (ts *ToolSet) Description() string {
+	return ts.config.connectionConfig.Description
+}
+
 // listTools connects to the MCP server and refreshes the tool list.
 func (ts *ToolSet) listTools(ctx context.Context) error {
 	log.DebugContext(ctx, "Refreshing MCP tools")

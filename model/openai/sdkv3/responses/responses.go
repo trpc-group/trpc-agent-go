@@ -19,18 +19,24 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+type builtinTools = modelrequest.BuiltinTools
+
 // Model implements model.Model using the official OpenAI Responses API.
 // It supports concurrent requests.
 type Model struct {
-	client            openai.Client
-	name              string
-	store             bool
-	channelBufferSize int
-	extraFields       map[string]any
+	builtinTools
+	client                    openai.Client
+	name                      string
+	store                     bool
+	crossModelReasoningPolicy CrossModelReasoningPolicy
+	channelBufferSize         int
+	extraFields               map[string]any
+	toolSearch                toolSearchConfig
 }
 
 // New creates a Responses API adapter with client-managed history and
@@ -52,11 +58,14 @@ func New(name string, opts ...Option) *Model {
 	))
 	clientOpts = append(clientOpts, o.openaiOptions...)
 	return &Model{
-		client:            openai.NewClient(clientOpts...),
-		name:              name,
-		store:             o.store,
-		channelBufferSize: o.channelBufferSize,
-		extraFields:       o.extraFields,
+		builtinTools:              builtinTools(o.toolSearch.mode == toolSearchClient),
+		client:                    openai.NewClient(clientOpts...),
+		name:                      name,
+		store:                     o.store,
+		crossModelReasoningPolicy: o.crossModelReasoningPolicy,
+		channelBufferSize:         o.channelBufferSize,
+		extraFields:               o.extraFields,
+		toolSearch:                o.toolSearch,
 	}
 }
 
@@ -65,10 +74,28 @@ func (m *Model) Info() model.Info {
 	return model.Info{Name: m.name, ProviderDataProtocol: responseProvider}
 }
 
+// SupportsProviderHistory reports whether the adapter can replay native
+// history produced using protocol. The target service determines whether it
+// can use the replayed data.
+func (m *Model) SupportsProviderHistory(protocol string) bool {
+	return protocol == responseProvider
+}
+
 // ProjectProviderData rebuilds display fields and tool calls from a completed
 // native output array. It implements model.ProviderDataProjector without
-// modifying the payload or making an API request.
+// modifying the payload or making an API request. A function call inside a
+// tool namespace returns an error because mapping it to a request tool needs
+// the request that produced it.
 func (m *Model) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
+	return m.ProjectProviderDataWithRequest(nil, data)
+}
+
+// ProjectProviderDataWithRequest rebuilds fields after a native payload edit,
+// resolving namespaced function calls against request's registered tools. It
+// implements model.ProviderDataRequestProjector. Neither argument is modified,
+// and no API request or tool execution is performed. With a nil request,
+// namespaced calls cannot be resolved and return an error.
+func (m *Model) ProjectProviderDataWithRequest(request *model.Request, data *model.ProviderData) (model.Message, error) {
 	message := model.Message{Role: model.RoleAssistant, ProviderData: data}
 	if data == nil {
 		return message, errors.New("openai/responses: provider data is nil")
@@ -83,7 +110,7 @@ func (m *Model) ProjectProviderData(data *model.ProviderData) (model.Message, er
 	if items == nil {
 		return model.Message{}, errors.New("openai/responses: provider data payload must be an item array")
 	}
-	projected, _, err := projectOutput(items)
+	projected, _, err := projectOutput(items, projectionToolPlan(request))
 	if err != nil {
 		return model.Message{}, err
 	}
@@ -100,10 +127,15 @@ func (m *Model) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
+	switch m.crossModelReasoningPolicy {
+	case CrossModelReasoningPolicyReplay, CrossModelReasoningPolicyOmitEncryptedContent:
+	default:
+		return nil, fmt.Errorf("openai/responses: invalid cross-model reasoning policy %d", m.crossModelReasoningPolicy)
+	}
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}
-	params, err := m.buildParams(request)
+	params, tools, err := m.buildParams(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -130,10 +162,10 @@ func (m *Model) GenerateContent(
 			}
 		}
 		if request.Stream {
-			m.handleStreaming(ctx, params, reqOpts, emit)
+			m.handleStreaming(ctx, params, tools, reqOpts, emit)
 			return
 		}
-		m.handleNonStreaming(ctx, params, reqOpts, emit)
+		m.handleNonStreaming(ctx, params, tools, reqOpts, emit)
 	}()
 	return responseChan, nil
 }
@@ -141,6 +173,7 @@ func (m *Model) GenerateContent(
 func (m *Model) handleNonStreaming(
 	ctx context.Context,
 	params responses.ResponseNewParams,
+	tools *toolPlan,
 	opts []option.RequestOption,
 	emit func(*model.Response) bool,
 ) {
@@ -164,7 +197,7 @@ func (m *Model) handleNonStreaming(
 		emit(responseStatusError(resp))
 		return
 	}
-	projected, err := projectResponse(resp, m.name)
+	projected, err := projectRequestResponse(resp, m.name, tools)
 	if err != nil {
 		emit(apiErrorResponse(err))
 		return

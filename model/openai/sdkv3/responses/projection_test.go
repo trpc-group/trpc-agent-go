@@ -36,9 +36,20 @@ func TestProjectProviderDataPreservesNativeRecord(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, message.ToolCalls)
 	require.Empty(t, message.Content)
+	data.Model = "another-model"
+	_, err = adapter.ProjectProviderData(data)
+	require.ErrorContains(t, err, "belongs to protocol")
+	data.Model = "model"
 	_, err = adapter.ProjectProviderData(nil)
 	require.Error(t, err)
 	data.Payload = json.RawMessage(`[{"type":"function_call","call_id":"bad","name":"f","arguments":"{"}]`)
 	_, err = adapter.ProjectProviderData(data)
 	require.Error(t, err)
+}
+
+func TestSupportsProviderHistory(t *testing.T) {
+	adapter := New("target", WithAPIKey("test"))
+	require.True(t, adapter.SupportsProviderHistory(responseProvider))
+	require.False(t, adapter.SupportsProviderHistory("another.protocol"))
+	require.False(t, adapter.SupportsProviderHistory(""))
 }

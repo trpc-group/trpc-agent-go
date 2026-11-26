@@ -26,6 +26,12 @@ type Resolver struct {
 	reg  *codeexecutor.WorkspaceRegistry
 }
 
+// invocationWorkspaceManager limits cache reuse without adding a tool option.
+// Managers without this capability keep the existing session-level reuse.
+type invocationWorkspaceManager interface {
+	WorkspacePerInvocation() bool
+}
+
 // NewResolver creates a workspace-session resolver backed by a single
 // registry so multiple tools can share the same session workspace.
 func NewResolver(
@@ -81,11 +87,19 @@ func (r *Resolver) CreateWorkspaceHandle(
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	sid := workspaceKey(ctx, name)
+	mgr := eng.Manager()
+	sid := name
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if key := KeyFromInvocation(inv); key != "" {
+			sid = key
+		}
+		if scoped, ok := mgr.(invocationWorkspaceManager); ok &&
+			scoped.WorkspacePerInvocation() {
+			reg = inv.GetOrCreateWorkspaceRegistry(reg)
+		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
-	return reg.AcquireHandle(ctx, eng.Manager(), sid)
+	return reg.AcquireHandle(ctx, mgr, sid)
 }
 
 // InvalidateWorkspaceHandle conditionally removes the exact registry entry
@@ -97,15 +111,6 @@ func (r *Resolver) InvalidateWorkspaceHandle(
 		return false
 	}
 	return r.reg.Invalidate(handle)
-}
-
-func workspaceKey(ctx context.Context, fallback string) string {
-	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if key := KeyFromInvocation(inv); key != "" {
-			return key
-		}
-	}
-	return fallback
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.

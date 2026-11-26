@@ -66,28 +66,85 @@ func ResponseHasData(response *model.Response) bool {
 	return false
 }
 
-// ValidateMessage checks a native record before the selected model consumes it.
-// Ordinary messages carry no record and pass through unchanged.
-func ValidateMessage(message model.Message, info model.Info) error {
+// ResponseRequestsActions reports whether response is a completed native
+// response that asks the caller to complete provider actions before the next
+// model step, as described by model.ProviderActionCompleter.
+func ResponseRequestsActions(response *model.Response) bool {
+	return response != nil && !response.IsPartial && !response.Done &&
+		response.Error == nil && ResponseHasData(response)
+}
+
+func validateRecord(message model.Message) error {
 	data := message.ProviderData
 	if data == nil {
 		return nil
 	}
-	if message.Role != model.RoleAssistant {
-		return fmt.Errorf("provider data is only valid on assistant messages")
+	switch message.Role {
+	case model.RoleAssistant:
+	case model.RoleTool:
+		if strings.TrimSpace(message.ToolID) == "" {
+			return fmt.Errorf("provider data on a tool message requires a tool id")
+		}
+	default:
+		return fmt.Errorf("provider data is only valid on assistant messages and tool messages")
 	}
 	if strings.TrimSpace(data.Protocol) == "" || strings.TrimSpace(data.Model) == "" {
 		return fmt.Errorf("provider data requires a protocol and model identity")
-	}
-	if data.Protocol != info.ProviderDataProtocol || data.Model != info.Name {
-		return fmt.Errorf("provider data belongs to protocol %q and model %q, not %q and %q",
-			data.Protocol, data.Model, info.ProviderDataProtocol, info.Name)
 	}
 	payload := bytes.TrimSpace(data.Payload)
 	if len(payload) == 0 || (payload[0] != '{' && payload[0] != '[') || !json.Valid(payload) {
 		return fmt.Errorf("provider payload must be a valid JSON object or array")
 	}
 	return nil
+}
+
+// ValidateMessage checks a record against its exact producer identity.
+func ValidateMessage(message model.Message, info model.Info) error {
+	if err := validateRecord(message); err != nil || message.ProviderData == nil {
+		return err
+	}
+	data := message.ProviderData
+	if data.Protocol != info.ProviderDataProtocol || data.Model != info.Name {
+		return fmt.Errorf("provider data belongs to protocol %q and model %q, not %q and %q",
+			data.Protocol, data.Model, info.ProviderDataProtocol, info.Name)
+	}
+	return nil
+}
+
+// ValidateHistory checks incoming history against the selected adapter's
+// replay capability. Producer validation and tool recovery use ValidateResponse.
+func ValidateHistory(messages []model.Message, target model.Model) error {
+	consumer, ok := target.(model.ProviderHistoryConsumer)
+	if !ok {
+		return ValidateMessages(messages, target.Info())
+	}
+	info := target.Info()
+	for i, msg := range messages {
+		if msg.ProviderData == nil {
+			continue
+		}
+		var err error
+		if consumer.SupportsProviderHistory(msg.ProviderData.Protocol) {
+			err = validateRecord(msg)
+		} else {
+			err = ValidateMessage(msg, info)
+		}
+		if err != nil {
+			return fmt.Errorf("provider data message %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// CandidatesSupportHistory reports whether every route can replay the protocol.
+func CandidatesSupportHistory(candidates []model.Model, protocol string) bool {
+	for _, candidate := range candidates {
+		consumer, ok := candidate.(model.ProviderHistoryConsumer)
+		if !ok || !consumer.SupportsProviderHistory(protocol) {
+			return false
+		}
+	}
+	return len(candidates) > 0
 }
 
 // ValidateMessages checks every native record in messages against the

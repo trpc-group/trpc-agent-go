@@ -66,6 +66,49 @@ func main() {
 
 Example code is located at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
+### Preserving tools during call-limit finalization
+
+Suppose an agent is limited to five tool rounds and has finalization enabled.
+When the agent reaches the limit and enters finalization, it asks the model for
+an answer based on the results so far. If the model still returns a tool call,
+the framework rejects it.
+
+- By default, the final request omits tool definitions (`tools`).
+- With this option enabled, the final request builds `tools` as usual and sends
+  `tool_choice: "none"`. Keeping the definitions can help reuse the prompt cache
+  from earlier requests.
+
+Verify that your model and endpoint honor `tool_choice: "none"` before enabling
+the option.
+
+```go
+m := openai.New(modelName,
+    openai.WithBaseURL(baseURL),
+    openai.WithAPIKey(apiKey),
+    openai.WithPreserveToolsWhenDisabled(true),
+)
+a := llmagent.New("assistant",
+    llmagent.WithModel(m),
+    llmagent.WithTools(tools),
+    llmagent.WithMaxToolIterations(5),
+    llmagent.WithToolIterationLimitFinalization("Answer using the available results."),
+)
+```
+
+The option also applies to finalization at the LLM call limit. The final request
+counts toward `MaxLLMCalls`. If the endpoint returns an error, the framework
+returns it to the caller.
+
+<details>
+<summary>Using a model wrapper</summary>
+<p>A wrapper must forward <code>PreservesToolsWhenDisabled() bool</code> for the
+framework to retain the tool definitions it passes to the model. Without
+forwarding, the framework removes tool definitions and tool control fields from
+its request. If the option is enabled on the inner OpenAI model, that model still
+sends <code>tool_choice: "none"</code> and can send tool definitions from its own
+configuration or callbacks.</p>
+</details>
+
 ### Usage Methods and Platform Integration Guide
 
 The Model module supports multiple usage methods and platform integration. The following are common usage scenarios based on Runner examples:
@@ -285,6 +328,8 @@ type CompletionTokensDetails struct {
 ```
 
 For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is mapped to `Usage.CompletionTokensDetails.ReasoningTokens`. The value may be `0` when the provider does not spend or report reasoning tokens; for reasoning models, set `ReasoningEffort` and/or `ThinkingEnabled` when you want to request reasoning behavior.
+
+For Gemini, `usageMetadata.thoughtsTokenCount` maps to `Usage.CompletionTokensDetails.ReasoningTokens` in both streaming and non-streaming responses. Final streaming usage keeps the latest non-zero token counts across chunks, including cached and reasoning tokens, and preserves them when trailing chunks omit usage.
 
 ## OpenAI Model
 
@@ -690,8 +735,8 @@ The accumulator state is a complete `model.Usage` value:
 | `CompletionTokens` | Total generated output tokens reported by the provider |
 | `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
 | `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
-| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache. Populated from `prompt_tokens_details.cache_creation_tokens` when a gateway reports it |
-| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. Populated from `prompt_tokens_details.cache_read_tokens` when a gateway reports it |
+| `PromptTokensDetails.CacheCreationTokens` | Prompt tokens written to cache. OpenAI-compatible adapters resolve `cache_write_tokens` → `cache_creation_tokens` → `cache_creation_input_tokens` (first positive value wins), first in `prompt_tokens_details` (`input_tokens_details` for the Responses API, whose native `cache_write_tokens` field is used first) and then in top-level `usage`; Anthropic and Bedrock map their native cache-write fields |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache. OpenAI-compatible adapters read `cache_read_tokens` only from `prompt_tokens_details` (or `input_tokens_details` in Responses API), with no top-level `usage` fallback; Anthropic and Bedrock map their native cache-read fields |
 | `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
 | `TimingInfo` | Optional framework timing metadata, not billable token usage |
 | `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
@@ -702,17 +747,33 @@ These fields form a provider-agnostic structure.
 its callback only receives fields that the upstream OpenAI-compatible response
 and adapter mapping support. Other provider-specific fields remain zero.
 
-The OpenAI-compatible adapter also surfaces prompt cache counts that gateways
-report in `prompt_tokens_details`: `cache_read_tokens` maps to
-`PromptTokensDetails.CacheReadTokens`, and `cache_creation_tokens` maps to
-`PromptTokensDetails.CacheCreationTokens`. Providers that follow the OpenAI
-schema strictly leave both counts at `0`.
+The OpenAI-compatible Chat Completions adapter reads extended prompt cache
+counts with distinct locations and precedence (providers that do not report
+these fields leave them at `0`):
+
+- **Cache reads**: read only from `prompt_tokens_details.cache_read_tokens`
+  into `PromptTokensDetails.CacheReadTokens` (top-level `usage.cache_read_tokens`
+  is not supported); standard `prompt_tokens_details.cached_tokens` continues
+  to map to `PromptTokensDetails.CachedTokens`.
+- **Cache writes**: resolved in the order `cache_write_tokens` →
+  `cache_creation_tokens` → `cache_creation_input_tokens`, taking the first
+  positive integer into `PromptTokensDetails.CacheCreationTokens`. Aliases
+  reported together are never summed (for example, `cache_write_tokens=256`
+  with `cache_creation_tokens=128` yields `256`), and a zero-valued placeholder
+  does not hide a later alias. `prompt_tokens_details` is checked first; the
+  same order is then applied to top-level `usage` only when no detail field is
+  positive. The Responses API adapter uses the same order after its native
+  `input_tokens_details.cache_write_tokens` field.
 
 In streaming responses both counts accumulate across chunks, matching the
 default accumulation of prompt, completion, and total tokens. When a
 `WithAccumulateChunkTokenUsage` callback is configured, its return value
 determines the final cache counts, so providers that report cumulative
 snapshots can keep the latest one.
+
+Usage-only chunks after a finish marker still contribute token counts while
+preserving the latest non-empty `finish_reason` for each choice in the
+accumulated response.
 
 `TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
 framework attaches this timing metadata outside the OpenAI chunk-usage
@@ -2368,12 +2429,182 @@ alone leaves the original text in ProviderData. Keep the record when resuming an
 unfinished tool round. See the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)
 for a complete SDK-based callback and model wrapper requirements.
 
+### Switching models and resuming tools
+
+Switching between Responses models replays completed native items, including
+encrypted reasoning. The receiving service decides whether it can reuse them.
+Set `responses.WithCrossModelReasoningPolicy(responses.CrossModelReasoningPolicyOmitEncryptedContent)` on the target to omit
+only the encrypted reasoning field from other configured models on each request.
+The session retains the original records. The target still receives the reasoning
+item with its ID and summary. If it looks up that ID, it may return HTTP 400
+when the original response used `store=false` (the adapter default).
+Switching to the built-in Chat Completions adapter sends the visible history,
+matching tool results to calls by `call_id`. Conversion happens on the outgoing
+request, so switching back can replay the native items kept in the session.
+When the visible text still matches its native version, missing URL citations
+are appended as plain links. Clearing a text-only reply in a callback also removes its citations from Chat.
+Chat omits completed tool search calls and their outputs, while keeping ordinary
+function calls and results. Chat exposes the current request's allowed tools,
+including deferred registrations. A tool returned only by a previous search
+does not enter the Chat directory. Switching back to Responses replays the
+saved search items. A later call to an expired run-scoped tool requires a new search.
+
+- **Runner with an LLMAgent.** With `agent.WithResume(true)`, the agent checks
+  the producing protocol and model name before executing a pending native tool
+  call. Selecting a different model at this point fails before tool execution.
+- **Graph.** Resuming a checkpoint from before a tools node runs that node
+  before the next LLM node selects its model. Once the results are checkpointed,
+  resuming the latest checkpoint after a model error reuses those results.
+  Explicitly replaying an earlier checkpoint can run the same tool again.
+
+### Tool search
+
+Tool search lets the model load tool definitions when it needs them. It is
+opt-in on the Responses model and requires a model that supports
+`tool_search`; the OpenAI guide lists `gpt-5.4` and later. The agent decides
+which tools are deferred. Deferred tools stay registered, filtered, and
+executed by the agent; only what the model sees up front changes.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
+// Hosted search: the API searches the deferred definitions in the request.
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billing),
+    }),
+)
+```
+
+For client-executed search, configure a handler that returns
+`[]responses.ToolSearchEntry`. The following handler loads billing candidates
+for invoice queries:
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+)
+
+search := responses.WithClientToolSearch(
+    func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        var entries []responses.ToolSearchEntry
+        if strings.Contains(strings.ToLower(req.Query), "invoice") {
+            for _, entry := range req.Candidates {
+                if entry.Namespace == "billing" {
+                    entries = append(entries, entry)
+                }
+            }
+        }
+        return entries, nil
+    },
+)
+llm := responses.New("gpt-5.4", search)
+// Register llm with llmagent.WithModel as above.
+```
+
+- `deferred.Tool` and `deferred.ToolSet` wrap tools for registration with
+  `WithTools`, `WithToolSets`, or `WithActivatableToolSets`. Without options,
+  every wrapped tool is deferred. Use `deferred.WithFilter` to select members:
+  the filter receives the original tool at request time, returning true to
+  defer it and false to keep it eager. It can select members by their original
+  names and applies to refreshed members, including MCP tools. `WithFilter(nil)`
+  restores the default of deferring all tools; the last filter option wins.
+- The wrapper overrides the wrapped tool's own `tool.DeferredTool` preference;
+  unwrapped tools keep theirs. Agent and run tool filters still apply. Closing
+  a wrapped ToolSet closes the original; wrapping opens no new connection.
+- Agent and run filters see the registered wrapper. `Declaration()` and
+  `tool.MetadataOf` work as usual; filters that need a concrete type can follow
+  `Original() tool.Tool` to unwrap the original, more than once if needed.
+- A ToolSet with deferred members is sent as a namespace named after the
+  ToolSet. Its description comes from `tool.ToolSetDescriber`; MCP ToolSets
+  use `ConnectionConfig.Description`. Calls are mapped back using the stored
+  namespace and member name, without parsing registered names. Registered
+  names must remain unique in the request; namespaces do not resolve naming
+  collisions in the tool registry.
+- Direct `GenerateContent` callers can check `IsFinalResponse()` for completion.
+  A pending client search has `Done == false`. Its choice has a nil `FinishReason`
+  unless it also contains ordinary function calls. `LLMAgent` runs the handler
+  and stores the `tool_search_output` as a tool message before the next model
+  step. `req.Candidates` is also `[]responses.ToolSearchEntry`. Each entry has
+  `Namespace`, `NamespaceDescription`, `Name`, and `Tool`. Read the declaration
+  through `entry.Tool.Declaration()`. A candidate's `Name` is already the wire
+  name, which can differ from the tool's declaration name.
+- Return a candidate unchanged to select it, copy it and set
+  `entry.Tool = sandboxTool` to substitute an implementation, or return a new
+  entry containing an external `tool.Tool`. A new entry may omit `Name` to use
+  the tool's declaration name. Client search remains available without any
+  registered deferred tools. `Run.ToolFilter` also checks returned replacement
+  and external objects. Execution uses the usual tool permissions and callbacks.
+- Returned objects are borrowed for the current Run, and the application
+  owns their cleanup. Session history retains the loaded definitions. Later
+  Runs can execute original candidates through the registered tools. A call
+  to an expired replacement or external tool returns a tool error asking the
+  model to search again. The handler can then return a fresh object.
+- A handler error ends the run before ordinary functions in the same response
+  execute. Before sending another user message, resume the same session with
+  `model.Message{}` and `agent.WithResume(true)` to retry the search and run
+  the pending functions. An empty search result lets the model continue.
+- Graph LLM nodes and the current failover and hedge wrappers report an error
+  for a pending client search. Hosted requests without
+  deferred tools or tool search history are unchanged, and Chat Completions
+  ignores deferral.
+- `plugin/toolsearch` has its own deferred-tool registration and does not use
+  `tool.DeferredTool`; do not combine it with native tool search.
+
+For a custom non-MCP ToolSet, store the description in the instance and
+implement the optional `Description()` method. The following type belongs to
+the application. `lookupInvoice` and `listInvoices` are existing `tool.Tool`
+values, and `billing` can be used in the registration above:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// In the agent setup, before registering the ToolSet:
+billing := staticToolSet{
+    name:        "billing",
+    description: "Look up invoices, payments, and refunds.",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+`deferred.ToolSet` forwards this description to the adapter, which uses it as
+`namespace.description` and the client search candidate's `NamespaceDescription`.
+
+`go run ./toolsearch -mode server` and `go run ./toolsearch -mode client` in
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
+demonstrate both modes. The full contract and its unverified boundaries are in
+the [adapter README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#tool-search).
+
 ### Notes
 
 - Every request sends the full client-managed conversation. `store=false` is the default. `WithStore(true)` changes provider-side storage only. In ordinary `LLMAgent` and `Runner` use, application code does not read or edit `Message.ProviderData`. Treat that record as sensitive conversation state. Registering a Responses model that is never selected does not change a legacy session.
-- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
-- Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The adapter rejects protocol or configured-model mismatches and invalid ProviderData records. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
-- Server-managed continuation through `previous_response_id` or `conversation`, hosted tools, tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
+- Downstream modules need a root release that contains `Message.ProviderData` and `Info.ProviderDataProtocol`; tool search also needs `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`, and `tool.ToolSetDescriber`, and the examples use `tool/deferred`. Publish the required root release before the adapter release. Repository-relative `replace` directives are for local development and are not inherited. `model.Message` and `model.Info` gained fields, so positional composite literals for those structs must use keyed fields even in applications that never select Responses.
+- Message JSON stores `Message.ProviderData` under `provider_data`, with `provider`, `model`, and `payload` keys. The payload is opaque to the framework. The `Info` JSON key is `ProviderDataProtocol` and is omitted when empty. The framework validates the record and the receiving adapter’s support for its protocol. Pending native actions require the original producer. Older framework versions may drop the unknown `provider_data` field when they rewrite a session, so do not route native sessions through older writers.
+- Server-managed continuation through `previous_response_id` or `conversation`, hosted tools other than tool search, background execution, approval interactions, and provider compaction are outside this adapter. Unknown output types, including hosted-tool calls, fail. This is not a complete Responses API client. `openai.WithShowToolCallDelta` is not a Responses option. `Stop`, presence penalty, frequency penalty, and logprobs are rejected. `MaxTokens`, `Temperature`, and `TopP` are sent when set. The examples set only `GenerationConfig.Stream`.
 - Function calls run through the framework's tool executor rather than OpenAI-hosted tools. `Runner` only executes calls from a completed assistant message. A stream without a valid completed response is an error, and its partial function calls are not executed. Streaming examples display assistant text deltas. They display tool calls only from the completed `Message.ToolCalls`, and tool results only from the committed tool message.
 - History, callbacks, summaries, compatibility, recovery, module versioning, and release requirements are specified in the [Responses adapter README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md).
 

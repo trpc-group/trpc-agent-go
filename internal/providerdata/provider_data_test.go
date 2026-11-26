@@ -95,9 +95,75 @@ func TestValidateMessages(t *testing.T) {
 	require.NoError(t, ValidateMessages(native, nativeInfo))
 	native[2].Role = model.RoleUser
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "assistant message")
+	native[2].Role = model.RoleTool
+	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "requires a tool id",
+		"a native tool record must name the action it answers")
+	native[2].ToolID = "call-1"
+	require.NoError(t, ValidateMessages(native, nativeInfo))
+	native[2].ToolID = ""
 	native[2].Role = model.RoleAssistant
 	native[2].ProviderData.Payload = json.RawMessage(`{`)
 	require.ErrorContains(t, ValidateMessages(native, nativeInfo), "valid JSON object or array")
+}
+
+type historyConsumer struct{ infoModel }
+
+func (historyConsumer) SupportsProviderHistory(protocol string) bool {
+	return protocol == nativeInfo.ProviderDataProtocol
+}
+
+func TestHistoryCompatibilityIsIndependentOfProducerValidation(t *testing.T) {
+	message := nativeMessage(t)
+	target := historyConsumer{infoModel{info: model.Info{Name: "another-model"}}}
+	require.NoError(t, ValidateHistory([]model.Message{message}, target))
+	require.ErrorContains(t, ValidateMessage(message, target.Info()), "belongs to protocol")
+	require.True(t, CandidatesSupportHistory([]model.Model{target, target}, nativeInfo.ProviderDataProtocol))
+	require.False(t, CandidatesSupportHistory([]model.Model{target, target.infoModel}, nativeInfo.ProviderDataProtocol))
+	require.False(t, CandidatesSupportHistory([]model.Model{target}, "another-protocol"))
+
+	message.ProviderData.Payload = json.RawMessage("null")
+	require.ErrorContains(t, ValidateHistory([]model.Message{message}, target), "valid JSON object or array")
+}
+
+func TestValidateHistoryAcceptsCompletedToolActionFromAnotherProducer(t *testing.T) {
+	target := historyConsumer{infoModel{info: model.Info{Name: "model-b", ProviderDataProtocol: nativeInfo.ProviderDataProtocol}}}
+	result := model.NewToolMessage("search-1", "", "")
+	result.ProviderData = &model.ProviderData{Protocol: nativeInfo.ProviderDataProtocol, Model: nativeInfo.Name,
+		Payload: json.RawMessage(`[{"type":"tool_search_output","call_id":"search-1","tools":[]}]`)}
+	require.NoError(t, ValidateHistory([]model.Message{result}, target))
+	require.ErrorContains(t, ValidateMessage(result, target.Info()), "belongs to protocol")
+	result.ToolID = ""
+	require.ErrorContains(t, ValidateHistory([]model.Message{result}, target), "requires a tool id")
+	result.Role = model.RoleUser
+	require.ErrorContains(t, ValidateHistory([]model.Message{result}, target), "only valid on assistant")
+}
+
+func TestValidateHistoryRequiresProducerForUndeclaredProtocols(t *testing.T) {
+	message := nativeMessage(t)
+	legacy := model.NewUserMessage("ordinary message")
+	consumer := historyConsumer{infoModel{info: nativeInfo}}
+	require.NoError(t, ValidateHistory([]model.Message{legacy, message}, consumer))
+
+	// An adapter that does not declare this protocol can still use history
+	// from its own producer identity. A different producer remains rejected.
+	message.ProviderData.Protocol = "other"
+	otherInfo := model.Info{Name: message.ProviderData.Model, ProviderDataProtocol: "other"}
+	otherConsumer := historyConsumer{infoModel{info: otherInfo}}
+	require.NoError(t, ValidateHistory([]model.Message{legacy, message}, otherConsumer))
+	message.ProviderData.Model = "different-model"
+	require.ErrorContains(t, ValidateHistory([]model.Message{legacy, message}, otherConsumer),
+		"provider data message 1: provider data belongs to protocol")
+
+	// Models without the optional interface keep the exact producer check.
+	plain := infoModel{info: otherInfo}
+	require.ErrorContains(t, ValidateHistory([]model.Message{legacy, message}, plain),
+		"provider data message 1: provider data belongs to protocol")
+	message.ProviderData.Model = otherInfo.Name
+	require.NoError(t, ValidateHistory([]model.Message{legacy, message}, plain))
+	message.Role = model.RoleUser
+	require.ErrorContains(t, ValidateHistory([]model.Message{legacy, message}, plain),
+		"provider data is only valid on assistant messages")
+	require.False(t, CandidatesSupportHistory(nil, "other"))
 }
 
 func TestValidateResponse(t *testing.T) {

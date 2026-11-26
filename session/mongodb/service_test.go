@@ -409,8 +409,8 @@ func TestGetSession_LoadsEventsAndSummaries(t *testing.T) {
 				f := filter.(bson.M)
 				assert.NotContains(t, f, "$or", "session_events reads must not filter by per-row expires_at")
 				return docsCursor([]any{
-					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e1Bytes, CreatedAt: e1.Timestamp},
 					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e2Bytes, CreatedAt: e2.Timestamp},
+					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e1Bytes, CreatedAt: e1.Timestamp},
 				})
 			case 4: // session_summaries.
 				return docsCursor([]any{
@@ -2448,6 +2448,7 @@ func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
 			require.Len(t, stages, 3)
 			match := stages[0].(bson.M)["$match"].(bson.M)
 			assert.Equal(t, nil, match["deleted_at"])
+			assert.Equal(t, bson.M{"$gte": ""}, match["app_name"])
 			group := stages[1].(bson.M)["$group"].(bson.M)
 			assert.Contains(t, group, "max_updated_at")
 			return docsCursor([]any{

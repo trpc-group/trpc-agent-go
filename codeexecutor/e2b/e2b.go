@@ -217,6 +217,8 @@ const (
 // WorkspacePersistencePerTurn (a fresh workspace per CreateWorkspace call). Use
 // WorkspacePersistencePerSession when multi-turn agents should keep files and
 // intermediate state across turns.
+// During a session, agent tools share a per-turn workspace within one
+// invocation and acquire a fresh one on the next invocation.
 func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
 	return func(c *CodeExecutor) { c.workspacePersistence = mode }
 }

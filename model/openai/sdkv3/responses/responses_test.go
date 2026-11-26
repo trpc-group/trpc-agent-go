@@ -69,6 +69,7 @@ func TestGenerateContent_NonStreamProviderDataProjectionAndUsage(t *testing.T) {
 func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	var calls int
 	var secondInput json.RawMessage
+	var secondModel string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
@@ -78,14 +79,16 @@ func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 		}
 		var request struct {
 			Input json.RawMessage `json:"input"`
+			Model string          `json:"model"`
 		}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		secondInput = request.Input
+		secondModel = request.Model
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"resp_2","status":"completed","output":[]}`)
 	}))
 	defer srv.Close()
-	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	m := New("gpt-6-astra", WithAPIKey("test"), WithBaseURL(srv.URL))
 	first, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.NoError(t, err)
 	firstResponses := collect(t, first)
@@ -96,7 +99,8 @@ func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	require.NoError(t, err)
 	var restored model.Message
 	require.NoError(t, json.Unmarshal(encoded, &restored))
-	request, err := m.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{
+	switched := New("gpt-6.2-astra", WithAPIKey("test"), WithBaseURL(srv.URL))
+	request, err := switched.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{
 		model.NewUserMessage("hi"),
 		restored,
 		model.NewToolMessage("call_1", "calculator", "2"),
@@ -104,6 +108,8 @@ func TestProviderDataItemsAreSubmittedUnchangedAndInNativeOrder(t *testing.T) {
 	require.NoError(t, err)
 	_ = collect(t, request)
 	require.Equal(t, 2, calls)
+	require.Equal(t, "gpt-6.2-astra", secondModel)
+	require.Equal(t, "gpt-6-astra", restored.ProviderData.Model)
 	var got []json.RawMessage
 	require.NoError(t, json.Unmarshal(secondInput, &got))
 	require.Len(t, got, 7)
@@ -124,7 +130,7 @@ func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.
 	message := projected.Choices[0].Message
 	message.ToolCalls[0].Function.Arguments = []byte(`{"edited":true}`)
 	message.Content = "edited"
-	items, err := convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")}, "gpt-5")
+	items, err := (&Model{}).convertMessages([]model.Message{message, model.NewToolMessage("call_1", "f", "ok")})
 	require.NoError(t, err)
 	encoded, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -133,7 +139,7 @@ func TestProviderDataPayloadRemainsAuthoritativeAfterProjectionEdits(t *testing.
 		`{"type":"message","id":"msg_1","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]},`+
 		`{"type":"function_call_output","call_id":"call_1","output":"ok"}]`, string(encoded))
 
-	unsupported := decodeResponse(t, `{"id":"r","status":"completed","output":[{"type":"tool_search_call","id":"ts_1","status":"completed"}]}`)
+	unsupported := decodeResponse(t, `{"id":"r","status":"completed","output":[{"type":"web_search_call","id":"ws_1","status":"completed"}]}`)
 	_, err = projectResponse(unsupported, "gpt-5")
 	require.ErrorContains(t, err, "unsupported native item type")
 }
@@ -145,19 +151,17 @@ func TestConvertMessagesValidatesProviderData(t *testing.T) {
 		Model:    "gpt-5",
 		Payload:  json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"state"}]`),
 	}
-	_, err := convertMessages([]model.Message{msg}, "gpt-5")
+	_, err := (&Model{}).convertMessages([]model.Message{msg})
 	require.NoError(t, err)
-	_, err = convertMessages([]model.Message{msg}, "another-model")
-	require.ErrorContains(t, err, "belongs to protocol")
 	msg.ProviderData.Protocol = "another.protocol"
-	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "belongs to protocol")
 	msg.ProviderData.Protocol = responseProvider
-	msg.ProviderData.Payload = json.RawMessage(`[{"type":"tool_search_call"}]`)
-	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	msg.ProviderData.Payload = json.RawMessage(`[{"type":"web_search_call"}]`)
+	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "unsupported native item type")
 	msg.ProviderData.Payload = json.RawMessage(`[{`)
-	_, err = convertMessages([]model.Message{msg}, "gpt-5")
+	_, err = (&Model{}).convertMessages([]model.Message{msg})
 	require.ErrorContains(t, err, "provider payload must be a valid JSON object or array")
 }
 
@@ -275,14 +279,14 @@ func TestExtraFieldsCannotOverrideManagedState(t *testing.T) {
 }
 
 func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
-	items, err := convertMessages([]model.Message{
+	items, err := (&Model{}).convertMessages([]model.Message{
 		model.NewUserMessage("calc"),
 		{Role: model.RoleAssistant, Content: "calculating", ToolCalls: []model.ToolCall{{
 			ID: "call_1", Type: "function", Function: model.FunctionDefinitionParam{Name: "calculator", Arguments: []byte(`{"a":1}`)},
 		}}},
 		model.NewToolMessage("call_1", "calculator", "2"),
 		model.NewAssistantMessage("2"),
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -291,14 +295,15 @@ func TestLegacyTextAndLocalFunctionToolHistory(t *testing.T) {
 	require.Equal(t, []any{"user", "assistant", "function_call", "function_call_output", "assistant"}, []any{got[0]["role"], got[1]["role"], got[2]["type"], got[3]["type"], got[4]["role"]})
 	require.Equal(t, "call_1", got[3]["call_id"])
 
-	_, err = convertMessages([]model.Message{model.NewToolMessage("missing", "f", "x")}, "gpt-5")
+	_, err = (&Model{}).convertMessages([]model.Message{model.NewToolMessage("missing", "f", "x")})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}}, "gpt-5")
+	_, err = (&Model{}).convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
 	require.ErrorContains(t, err, "empty call_id")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}}, "gpt-5")
+	_, err = (&Model{}).convertMessages([]model.Message{{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c", Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)}}}}})
 	require.ErrorContains(t, err, "no tool result")
-	_, err = convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}}, "gpt-5")
-	require.ErrorContains(t, err, "requires provider data")
+	items, err = (&Model{}).convertMessages([]model.Message{{Role: model.RoleAssistant, ReasoningContent: "loose reasoning"}})
+	require.NoError(t, err)
+	require.Empty(t, items)
 }
 
 func TestProviderDataPayloadValidatesDependencyIDs(t *testing.T) {
@@ -319,7 +324,7 @@ func TestProviderDataPayloadValidatesDependencyIDs(t *testing.T) {
 		}, want: "duplicate tool result"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := convertMessages(tc.msgs, "gpt-5")
+			_, err := (&Model{}).convertMessages(tc.msgs)
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
@@ -332,10 +337,10 @@ func TestLegacyCallIDsRemainOpaque(t *testing.T) {
 			Function: model.FunctionDefinitionParam{Name: "f", Arguments: []byte(`{}`)},
 		}}}
 	}
-	items, err := convertMessages([]model.Message{
+	items, err := (&Model{}).convertMessages([]model.Message{
 		call(" call_1 "),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -344,15 +349,15 @@ func TestLegacyCallIDsRemainOpaque(t *testing.T) {
 		{"type":"function_call_output","call_id":" call_1 ","output":"ok"}
 	]`, string(raw))
 
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		call("call_1"),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		call(" \t "),
 		model.NewToolMessage(" \t ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "empty call_id")
 }
 
@@ -368,10 +373,10 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 		return msg
 	}
 	item := `{"type":"function_call","call_id":" call_1 ","name":"f","arguments":"{}","future":true}`
-	items, err := convertMessages([]model.Message{
+	items, err := (&Model{}).convertMessages([]model.Message{
 		nativeMessage(t, `[`+item+`]`),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(items)
 	require.NoError(t, err)
@@ -380,14 +385,14 @@ func TestNativeCallIDsRemainOpaqueAndItemsAreNotRewritten(t *testing.T) {
 	require.JSONEq(t, item, string(got[0]), "native function call fields and call_id must be retained")
 	require.JSONEq(t, `{"type":"function_call_output","call_id":" call_1 ","output":"ok"}`, string(got[1]))
 
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		nativeMessage(t, `[{"type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}]`),
 		model.NewToolMessage(" call_1 ", "f", "ok"),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "no preceding function call")
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		nativeMessage(t, `[{"type":"function_call","call_id":"  ","name":"f","arguments":"{}"}]`),
-	}, "gpt-5")
+	})
 	require.ErrorContains(t, err, "empty call_id")
 }
 
@@ -532,10 +537,10 @@ func TestCompletedResponseAcceptsOptionalItemFields(t *testing.T) {
 	var native []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(payload, &native))
 	require.NotContains(t, native[1], "id", "replay must not fabricate an optional function-call item ID")
-	_, err = convertMessages([]model.Message{
+	_, err = (&Model{}).convertMessages([]model.Message{
 		projected.Choices[0].Message,
 		{Role: model.RoleTool, ToolID: "call_optional", Content: "42"},
-	}, "gpt-5")
+	})
 	require.NoError(t, err)
 }
 
@@ -635,8 +640,107 @@ func TestProviderDataModelBindingUsesConfiguredName(t *testing.T) {
 	message := projected.Choices[0].Message
 	require.NotNil(t, message.ProviderData)
 	require.Equal(t, "configured-name", message.ProviderData.Model)
-	_, err = convertMessages([]model.Message{message}, "configured-name")
+	_, err = (&Model{}).convertMessages([]model.Message{message})
 	require.NoError(t, err)
-	_, err = convertMessages([]model.Message{message}, "resolved-name")
-	require.ErrorContains(t, err, "belongs to protocol")
+}
+
+func TestMapUsageCacheWriteTokensAndAliases(t *testing.T) {
+	require.Nil(t, mapUsage(nil))
+	require.Nil(t, mapUsage(decodeResponse(t, `{"id":"r0","status":"completed","output":[]}`)))
+
+	tests := []struct {
+		name              string
+		raw               string
+		wantCached        int
+		wantCacheRead     int
+		wantCacheCreation int
+	}{
+		{
+			name:              "native input_tokens_details cache_write_tokens",
+			raw:               `{"id":"r1","status":"completed","output":[],"usage":{"input_tokens":309,"output_tokens":82,"total_tokens":391,"input_tokens_details":{"cached_tokens":32,"cache_write_tokens":256},"output_tokens_details":{"reasoning_tokens":60}}}`,
+			wantCached:        32,
+			wantCacheCreation: 256,
+		},
+		{
+			name:              "native cache_write_tokens takes priority over extra aliases",
+			raw:               `{"id":"r2","status":"completed","output":[],"usage":{"input_tokens":309,"output_tokens":82,"total_tokens":391,"input_tokens_details":{"cache_write_tokens":256,"cache_creation_tokens":128}}}`,
+			wantCacheCreation: 256,
+		},
+		{
+			name:              "gateway extra fields cache_creation_tokens and cache_read_tokens",
+			raw:               `{"id":"r3","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cache_read_tokens":200,"cache_creation_tokens":100}}}`,
+			wantCacheRead:     200,
+			wantCacheCreation: 100,
+		},
+		{
+			name:              "input_tokens_details cache_creation_input_tokens alias",
+			raw:               `{"id":"r4","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cached_tokens":200,"cache_creation_input_tokens":150}}}`,
+			wantCached:        200,
+			wantCacheCreation: 150,
+		},
+		{
+			name:              "top-level usage cache_creation_input_tokens fallback",
+			raw:               `{"id":"r5","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cached_tokens":200},"cache_creation_input_tokens":150}}`,
+			wantCached:        200,
+			wantCacheCreation: 150,
+		},
+		{
+			name:              "top-level usage cache_write_tokens fallback when details empty",
+			raw:               `{"id":"r5b","status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"cache_write_tokens":64}}`,
+			wantCacheCreation: 64,
+		},
+		{
+			name:              "extra cache_write_tokens takes priority over other detail aliases",
+			raw:               `{"id":"r5c","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"input_tokens_details":{"cache_creation_input_tokens":64,"cache_creation_tokens":128}}}`,
+			wantCacheCreation: 128,
+		},
+		{
+			name:              "top-level usage uses the same precedence as Chat Completions",
+			raw:               `{"id":"r5d","status":"completed","output":[],"usage":{"input_tokens":500,"output_tokens":50,"total_tokens":550,"cache_creation_input_tokens":64,"cache_creation_tokens":128,"cache_write_tokens":256}}`,
+			wantCacheCreation: 256,
+		},
+		{
+			name: "invalid extra values ignored",
+			raw:  `{"id":"r6","status":"completed","output":[],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110,"input_tokens_details":{"cache_read_tokens":"bad","cache_creation_tokens":-5}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := mapUsage(decodeResponse(t, tt.raw))
+			require.NotNil(t, usage)
+			require.Equal(t, tt.wantCached, usage.PromptTokensDetails.CachedTokens)
+			require.Equal(t, tt.wantCacheRead, usage.PromptTokensDetails.CacheReadTokens)
+			require.Equal(t, tt.wantCacheCreation, usage.PromptTokensDetails.CacheCreationTokens)
+		})
+	}
+}
+
+func TestGenerateContent_StreamingCacheWriteTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(w,
+			`{"type":"response.output_text.delta","delta":"hello"}`,
+			`{"type":"response.completed","response":{"id":"resp_stream_cache","object":"response","created_at":1700000000,"status":"completed","model":"gpt-5","output":[{"type":"message","id":"m1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":309,"output_tokens":82,"total_tokens":391,"input_tokens_details":{"cached_tokens":32,"cache_write_tokens":256},"output_tokens_details":{"reasoning_tokens":60}}}}`,
+		)
+	}))
+	defer srv.Close()
+
+	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+	results := collect(t, ch)
+	require.NotEmpty(t, results)
+	final := results[len(results)-1]
+	require.True(t, final.Done)
+	require.NotNil(t, final.Usage)
+	require.Equal(t, 309, final.Usage.PromptTokens)
+	require.Equal(t, 82, final.Usage.CompletionTokens)
+	require.Equal(t, 391, final.Usage.TotalTokens)
+	require.Equal(t, 32, final.Usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, final.Usage.PromptTokensDetails.CacheReadTokens)
+	require.Equal(t, 256, final.Usage.PromptTokensDetails.CacheCreationTokens)
+	require.Equal(t, 60, final.Usage.CompletionTokensDetails.ReasoningTokens)
 }

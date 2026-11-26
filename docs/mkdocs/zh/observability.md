@@ -13,6 +13,8 @@ tRPC-Agent-Go 框架内置了全面的可观测（Observability）功能，基�
 - **多平台支持**：支持 Jaeger、Prometheus、Galileo、智研监控宝 等主流监控平台
 - **灵活配置**：支持多种配置方式和自定义扩展
 
+Chat span 将包含 token 计数的 `Usage` 视为快照。若后续快照（包括 after-model callback 替换的快照）的 `TotalTokens == 0`，已记录的 `gen_ai.usage.total_tokens` 会被更新为 `0`。nil、空 Usage 和仅包含耗时信息的 Usage 保留之前的 total；尚未记录过非零 total 时，不输出值为零的 total 属性。
+
 ## 与不同的监控平台集成
 
 ### Langfuse 集成
@@ -294,6 +296,8 @@ chat span 会标记为错误；父级 `workflow` span 也可能记录向上传�
 ### 覆盖范围
 
 已接入 `chat`、`invoke_agent`、`workflow`、`execute_tool` 的大 payload attribute（messages、llm request/response、workflow request/response、tool arguments/result 等）。
+
+记录 Graph 节点的 `gen_ai.workflow.response` 时，框架会从节点返回的状态更新（包括 `Command.Update`）中过滤 `graph.StateKeySession` 等执行器内部键。业务字段按其原有的 JSON 格式编码。
 
 ### 配置入口
 

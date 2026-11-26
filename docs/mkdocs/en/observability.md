@@ -12,6 +12,8 @@ tRPC-Agent-Go provides comprehensive observability features built on the OpenTel
 - **Multi-platform Support**: Supports mainstream monitoring platforms such as Jaeger, Prometheus, Galileo, and ZhiYan Monitoring Bao.
 - **Flexible Configuration**: Supports multiple configuration methods and custom extensions.
 
+Chat spans treat token-bearing `Usage` values as snapshots. If a later snapshot (including one replaced by an after-model callback) has `TotalTokens == 0`, it clears a previously recorded `gen_ai.usage.total_tokens` to `0`. Nil, empty, and timing-only usage leave the previous total unchanged. A zero total is omitted until a nonzero total has been recorded.
+
 ## Integration with Different Monitoring Platforms
 
 ### Langfuse Integration
@@ -294,6 +296,8 @@ To reduce memory, prefer `Drop()` on attributes **this backend will not read**. 
 ### Coverage
 
 Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `execute_tool` (messages, llm request/response, workflow request/response, tool arguments/result, and related keys).
+
+For graph nodes, `gen_ai.workflow.response` omits executor-owned keys such as `graph.StateKeySession` from returned state updates, including `Command.Update`. Application fields keep their usual JSON encoding.
 
 ### Configuration
 

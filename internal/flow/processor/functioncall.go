@@ -321,46 +321,29 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
+	if invocation == nil || !rsp.IsToolCallResponse() || rsp.IsPartial {
 		return
 	}
-	if calllimit.Active(invocation) {
-		invocation.EndInvocation = true
-		emitToolIterationLimitError(
-			ctx,
-			invocation,
-			ch,
-			"tool calls are disabled during call limit finalization",
-		)
+	if invocation.EndInvocation && providerdata.ResponseRequestsActions(rsp) {
+		// Leave these functions pending until resume completes the provider action.
 		return
 	}
-
-	// Enforce optional per-invocation tool iteration limit. A "tool iteration"
-	// is defined as an assistant response that contains tool calls and reaches
-	// this processor. When the limit is not configured (<= 0), this check is a
-	// no-op and preserves existing behavior.
-	if invocation.IncToolIteration() {
-		// Mark the invocation as ended so the flow will not issue another LLM call.
-		invocation.EndInvocation = true
-
-		// Emit an error response event describing the limit breach instead of
-		// executing any tools. This makes the termination visible to callers
-		// while avoiding additional model or tool invocations.
-		emitToolIterationLimitError(
-			ctx,
-			invocation,
-			ch,
-			fmt.Sprintf(
-				"max tool iterations (%d) exceeded",
-				invocation.MaxToolIterations,
-			),
-		)
+	if toolIterationLimitExceeded(ctx, invocation, ch) {
 		return
 	}
 	toolLimitReached := calllimit.RecordToolIteration(
 		invocation,
 		invocation.MaxToolIterations,
 	)
+
+	ctx, err := withActionExecutionBindings(ctx, invocation, req, rsp)
+	if err != nil {
+		invocation.EndInvocation = true
+		_ = agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
+			invocation.InvocationID, invocation.AgentName, model.ErrorTypeFlowError, err.Error(),
+		))
+		return
+	}
 
 	deferred, executable, unknown := p.toolExecutionDecision(
 		ctx,
@@ -410,6 +393,23 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	}
 }
 
+// toolIterationLimitExceeded ends the invocation and reports the limit before
+// any tools execute. IncToolIteration also accounts for this tool-call round.
+func toolIterationLimitExceeded(ctx context.Context, invocation *agent.Invocation, ch chan<- *event.Event) bool {
+	var message string
+	switch {
+	case calllimit.Active(invocation):
+		message = "tool calls are disabled during call limit finalization"
+	case invocation.IncToolIteration():
+		message = fmt.Sprintf("max tool iterations (%d) exceeded", invocation.MaxToolIterations)
+	default:
+		return false
+	}
+	invocation.EndInvocation = true
+	emitToolIterationLimitError(ctx, invocation, ch, message)
+	return true
+}
+
 func emitToolIterationLimitError(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -447,7 +447,7 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 		return false, true, false
 	}
 	for _, tc := range rsp.Choices[0].Message.ToolCalls {
-		tl, ok := req.Tools[tc.Function.Name]
+		tl, ok := executionToolForCall(ctx, tc, req.Tools)
 		if !ok {
 			unknown = true
 			continue
@@ -620,7 +620,7 @@ func (p *FunctionCallResponseProcessor) shouldEmitToolResultEventPerToolCall(
 		return false
 	}
 	for _, toolCall := range toolCalls {
-		tl, ok := tools[toolCall.Function.Name]
+		tl, ok := executionToolForCall(ctx, toolCall, tools)
 		if !ok {
 			tl = findCompatibleTool(
 				toolCall.Function.Name,
@@ -913,7 +913,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
-			tl, ok := tools[tc.Function.Name]
+			tl, ok := executionToolForCall(ctx, tc, tools)
 			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
@@ -1659,6 +1659,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	index int,
 	toolCall model.ToolCall,
 ) (toolResult, error) {
+	tools = executionToolsForCall(ctx, toolCall, tools)
 	ctx, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	if startedSpan {
 		defer span.End()
@@ -1879,7 +1880,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	)
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
-			tl, ok := tools[tc.Function.Name]
+			tl, ok := executionToolForCall(ctx, tc, tools)
 			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, toolResults, nil
 			}
@@ -1977,6 +1978,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	index int,
 	tc model.ToolCall,
 ) (rerr error) {
+	tools = executionToolsForCall(ctx, tc, tools)
 	toolArgs := tc.Function.Arguments
 	if ctx == nil {
 		ctx = context.Background()
@@ -2777,7 +2779,7 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimal)
 		for _, tc := range toolCalls {
-			if tl, ok := tools[tc.Function.Name]; ok &&
+			if tl, ok := executionToolForCall(ctx, tc, tools); ok &&
 				toolPrefersSkipSummarization(tl) {
 				markSkipSummarization(mergedEvent)
 				break

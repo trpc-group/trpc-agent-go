@@ -203,3 +203,190 @@ func TestSummaryCutoffInsideNativeMultiCallRoundRestoresTheRound(t *testing.T) {
 	require.Greater(t, doneIndex, outputIndexes[1])
 	require.Greater(t, questionIndex, doneIndex)
 }
+
+func TestSummaryCutoffInsideMixedNativeRoundRestoresCompleteResults(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, cutoffAt := range []string{"call", "search", "weather"} {
+			t.Run(fmt.Sprintf("stream=%v/cutoff=%s", stream, cutoffAt), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				output := "[" + weatherCallItem + "," + clientSearchItem + "]"
+				server, srv := newSearchServer(t, messageOutput("msg_first", "old answer"), output,
+					messageOutput("msg_done", "done"), messageOutput("msg_next", "next"))
+				executions := &searchExecutions{}
+				var searches int
+				handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+					searches++
+					return selectSearchCandidates(req, "billing_lookup"), nil
+				}
+				m := newSearchModel(srv, responses.WithClientToolSearch(handler))
+				path := filepath.Join(t.TempDir(), "mixed-summary.db")
+				svc := openNativeRoutingSQLite(t, path)
+				r := runner.NewRunner("search", newSearchAgent(m, executions, stream), runner.WithSessionService(svc))
+				for _, text := range []string{"old question", "weather and invoice"} {
+					_, failures := runSearch(t, r, model.NewUserMessage(text))
+					require.Empty(t, failures)
+				}
+				require.Equal(t, 1, searches)
+				require.Equal(t, []string{"weather"}, executions.executed())
+				require.Len(t, server.requests(), 3)
+				require.NoError(t, r.Close())
+				require.NoError(t, svc.Close())
+
+				svc = openNativeRoutingSQLite(t, path)
+				t.Cleanup(func() { _ = svc.Close() })
+				sess, err := svc.GetSession(ctx, session.Key{AppName: "search", UserID: "user", SessionID: "session"})
+				require.NoError(t, err)
+				var call, searchResult, weatherResult *event.Event
+				for i := range sess.Events {
+					evt := &sess.Events[i]
+					if evt.Response == nil || len(evt.Choices) == 0 || evt.IsPartial {
+						continue
+					}
+					msg := evt.Choices[0].Message
+					switch {
+					case len(msg.ToolCalls) > 0 && msg.ProviderData != nil:
+						call = evt
+					case msg.ToolID == "search_1":
+						searchResult = evt
+					case msg.ToolID == "weather_1":
+						weatherResult = evt
+					}
+				}
+				require.NotNil(t, call)
+				require.NotNil(t, searchResult)
+				require.NotNil(t, weatherResult)
+				cutoffs := map[string]*event.Event{"call": call, "search": searchResult, "weather": weatherResult}
+				boundary := cutoffs[cutoffAt]
+				const summary = "Earlier turns were summarized."
+				sess.Summaries = map[string]*session.Summary{boundary.FilterKey: {
+					Summary: summary, UpdatedAt: boundary.Timestamp,
+					Boundary: session.NewSummaryBoundaryWithEventID(boundary.FilterKey, boundary.Timestamp, boundary.ID),
+				}}
+				inv := agent.NewInvocation(
+					agent.WithInvocationSession(sess), agent.WithInvocationModel(m),
+					agent.WithInvocationMessage(model.NewUserMessage("next question")),
+					agent.WithInvocationEventFilterKey(boundary.FilterKey),
+				)
+				publicAgent := newSearchAgent(m, executions, stream, llmagent.WithAddSessionSummary(true))
+				ch, err := publicAgent.Run(ctx, inv)
+				require.NoError(t, err)
+				for evt := range ch {
+					if evt.RequiresCompletion {
+						require.NoError(t, inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)))
+					}
+					require.Nil(t, evt.Error)
+				}
+				require.Equal(t, 1, searches, "history replay must not rerun the search")
+				require.Equal(t, []string{"weather"}, executions.executed(), "history replay must not rerun the function")
+				requests := server.requests()
+				require.Len(t, requests, 4)
+				require.NotContains(t, string(requests[3]["input"]), "old question")
+				require.NotContains(t, string(requests[3]["input"]), "old answer")
+				items := conversationItems(t, requests[3]["input"])
+				if cutoffAt == "weather" {
+					require.Equal(t, []string{"message:user", "message:assistant", "message:user"}, inputTypes(items),
+						"a completely summarized historical round must stay omitted")
+					return
+				}
+				require.Equal(t, []string{"message:user", "function_call", "tool_search_call", "tool_search_output", "function_call_output", "message:assistant", "message:user"}, inputTypes(items))
+				require.Equal(t, "search_1", items[3].CallID)
+				require.Contains(t, string(items[3].Tools), "lookup", "the complete native search result is restored")
+				require.Equal(t, "weather_1", items[4].CallID)
+				findRaw := func(raw json.RawMessage, kind string) string {
+					t.Helper()
+					var all []json.RawMessage
+					require.NoError(t, json.Unmarshal(raw, &all))
+					for _, item := range all {
+						var header struct {
+							Type string `json:"type"`
+						}
+						require.NoError(t, json.Unmarshal(item, &header))
+						if header.Type == kind {
+							return string(item)
+						}
+					}
+					t.Fatalf("missing %s in %s", kind, raw)
+					return ""
+				}
+				for _, kind := range []string{"function_call", "tool_search_call", "tool_search_output", "function_call_output"} {
+					require.JSONEq(t, findRaw(requests[2]["input"], kind), findRaw(requests[3]["input"], kind),
+						"the restored %s retains its complete payload", kind)
+				}
+			})
+		}
+	}
+}
+
+func TestSummaryCutoffBeforeNativeSearchResultRestoresActionOnlyRecord(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			server, srv := newSearchServer(t, messageOutput("msg_first", "old answer"),
+				"["+clientSearchItem+"]", messageOutput("msg_done", "done"), messageOutput("msg_next", "next"))
+			executions := &searchExecutions{}
+			var searches int
+			handler := func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+				searches++
+				return selectSearchCandidates(req, "billing_lookup"), nil
+			}
+			m := newSearchModel(srv, responses.WithClientToolSearch(handler))
+			path := filepath.Join(t.TempDir(), "action-only-summary.db")
+			svc := openNativeRoutingSQLite(t, path)
+			r := runner.NewRunner("search", newSearchAgent(m, executions, stream), runner.WithSessionService(svc))
+			for _, text := range []string{"old question", "find invoice"} {
+				_, failures := runSearch(t, r, model.NewUserMessage(text))
+				require.Empty(t, failures)
+			}
+			require.Equal(t, 1, searches)
+			require.Empty(t, executions.executed())
+			require.NoError(t, r.Close())
+			require.NoError(t, svc.Close())
+
+			svc = openNativeRoutingSQLite(t, path)
+			t.Cleanup(func() { _ = svc.Close() })
+			sess, err := svc.GetSession(ctx, session.Key{AppName: "search", UserID: "user", SessionID: "session"})
+			require.NoError(t, err)
+			var source *event.Event
+			for i := range sess.Events {
+				evt := &sess.Events[i]
+				if evt.Response == nil || evt.IsPartial || evt.Done || len(evt.Choices) == 0 {
+					continue
+				}
+				msg := evt.Choices[0].Message
+				if msg.Role == model.RoleAssistant && msg.ProviderData != nil && len(msg.ToolCalls) == 0 {
+					source = evt
+				}
+			}
+			require.NotNil(t, source)
+			const summary = "Earlier turns were summarized."
+			sess.Summaries = map[string]*session.Summary{source.FilterKey: {
+				Summary: summary, UpdatedAt: source.Timestamp,
+				Boundary: session.NewSummaryBoundaryWithEventID(source.FilterKey, source.Timestamp, source.ID),
+			}}
+			inv := agent.NewInvocation(agent.WithInvocationSession(sess), agent.WithInvocationModel(m),
+				agent.WithInvocationMessage(model.NewUserMessage("next question")),
+				agent.WithInvocationEventFilterKey(source.FilterKey))
+			ch, err := newSearchAgent(m, executions, stream, llmagent.WithAddSessionSummary(true)).Run(ctx, inv)
+			require.NoError(t, err)
+			for evt := range ch {
+				if evt.RequiresCompletion {
+					require.NoError(t, inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)))
+				}
+				require.Nil(t, evt.Error)
+			}
+			require.Equal(t, 1, searches, "history replay must not rerun the search")
+			require.Empty(t, executions.executed())
+			requests := server.requests()
+			require.Len(t, requests, 4)
+			require.NotContains(t, string(requests[3]["input"]), "old question")
+			require.NotContains(t, string(requests[3]["input"]), "old answer")
+			items := conversationItems(t, requests[3]["input"])
+			require.Equal(t, []string{"message:user", "tool_search_call", "tool_search_output", "message:assistant", "message:user"}, inputTypes(items))
+			require.Equal(t, "search_1", items[1].CallID)
+			require.Equal(t, "search_1", items[2].CallID)
+			require.Contains(t, string(items[2].Tools), "lookup")
+		})
+	}
+}

@@ -90,6 +90,8 @@ type Workflow struct {
 	Request  any
 	Response any
 	Error    error
+	// FilterResponse prepares the response only when the span attribute policy requires its contents.
+	FilterResponse func(any) any
 }
 
 // NewWorkflowSpanName creates a new workflow span name.
@@ -153,11 +155,14 @@ func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
 // installed span attribute policy pointer remains unchanged. Invocation and
 // response attributes remain chunk-scoped because they are cheap and may be
 // completed as streaming processing advances.
+// Once a total token count is written, a later token-bearing usage snapshot can
+// clear it to zero. Nil, empty, and timing-only usage preserve the previous total.
 //
 // ChatTraceState is not goroutine-safe and must not be shared across chat spans.
 type ChatTraceState struct {
-	requestCommitted bool
-	cachedPolicy     *SpanAttributePolicy
+	requestCommitted   bool
+	cachedPolicy       *SpanAttributePolicy
+	totalTokensWritten bool
 }
 
 // traceChunkAttributes contains per-response chunk trace inputs.
@@ -217,6 +222,7 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
 	}
 	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
+	attrs = s.appendTotalTokenReset(attrs, attributes.Response)
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
 	}
@@ -224,6 +230,26 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 	if attributes.Response != nil && attributes.Response.Error != nil {
 		span.SetStatus(codes.Error, attributes.Response.Error.Message)
 	}
+}
+
+// appendTotalTokenReset tracks totals emitted by buildResponseAttributes and
+// clears a stale total when a newer token-bearing snapshot supplies zero.
+func (s *ChatTraceState) appendTotalTokenReset(attrs []attribute.KeyValue, rsp *model.Response) []attribute.KeyValue {
+	if s == nil || rsp == nil || rsp.Usage == nil {
+		return attrs
+	}
+	usage := rsp.Usage
+	if usage.TotalTokens != 0 {
+		s.totalTokensWritten = true
+		return attrs
+	}
+	hasTokens := usage.PromptTokens != 0 || usage.CompletionTokens != 0 ||
+		usage.PromptTokensDetails != (model.PromptTokensDetails{}) ||
+		usage.CompletionTokensDetails != (model.CompletionTokensDetails{})
+	if s.totalTokensWritten && hasTokens {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, 0))
+	}
+	return attrs
 }
 
 // TraceChat is the single entry point for stateful streaming chat traces.
@@ -258,7 +284,11 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	}
 	if workflow.Response != nil {
 		setStringAttribute(span, OperationWorkflow, semconvtrace.KeyGenAIWorkflowResponse, "<not json serializable>", func() ([]byte, error) {
-			return json.Marshal(workflow.Response)
+			response := workflow.Response
+			if workflow.FilterResponse != nil {
+				response = workflow.FilterResponse(response)
+			}
+			return json.Marshal(response)
 		})
 	}
 	if workflow.Error != nil {

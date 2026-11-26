@@ -16,8 +16,10 @@ import (
 )
 
 type choiceSnapshot struct {
-	message *model.ProviderData
-	delta   *model.ProviderData
+	message      *model.ProviderData
+	delta        *model.ProviderData
+	messageCalls []model.ToolCall
+	deltaCalls   []model.ToolCall
 }
 
 // ResponseSnapshot retains native records before AfterModel callbacks run.
@@ -35,8 +37,10 @@ func SnapshotResponse(response *model.Response) ResponseSnapshot {
 	snapshot := ResponseSnapshot{choices: make([]choiceSnapshot, len(response.Choices))}
 	for i, choice := range response.Choices {
 		snapshot.choices[i] = choiceSnapshot{
-			message: snapshotRecord(choice.Message.ProviderData),
-			delta:   snapshotRecord(choice.Delta.ProviderData),
+			message:      snapshotRecord(choice.Message.ProviderData),
+			delta:        snapshotRecord(choice.Delta.ProviderData),
+			messageCalls: append([]model.ToolCall(nil), choice.Message.ToolCalls...),
+			deltaCalls:   append([]model.ToolCall(nil), choice.Delta.ToolCalls...),
 		}
 	}
 	return snapshot
@@ -59,7 +63,7 @@ func sameRecord(before, after *model.ProviderData) bool {
 // ReprojectResponse updates fields derived from native records edited by the
 // completed AfterModel callback chain. Unchanged records retain callback edits
 // to their display fields and ToolCalls. The update is atomic on failure.
-func ReprojectResponse(before ResponseSnapshot, response *model.Response, producer model.Model) error {
+func ReprojectResponse(before ResponseSnapshot, response *model.Response, producer model.Model, request *model.Request) error {
 	if response == nil || response.IsPartial || response.Error != nil {
 		return nil
 	}
@@ -78,10 +82,11 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 		for _, field := range []struct {
 			message  *model.Message
 			previous *model.ProviderData
+			calls    []model.ToolCall
 			choice   *model.Choice
 		}{
-			{&choice.Message, previous.message, choice},
-			{&choice.Delta, previous.delta, nil},
+			{&choice.Message, previous.message, previous.messageCalls, choice},
+			{&choice.Delta, previous.delta, previous.deltaCalls, nil},
 		} {
 			data := field.message.ProviderData
 			if data == nil || sameRecord(field.previous, data) {
@@ -96,8 +101,17 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 			if !ok {
 				return fmt.Errorf("edited provider data requires the selected model or its wrapper to implement model.ProviderDataProjector")
 			}
-			projected, err := projector.ProjectProviderData(data)
+			var projected model.Message
+			var err error
+			if contextual, ok := producer.(model.ProviderDataRequestProjector); ok && request != nil {
+				projected, err = contextual.ProjectProviderDataWithRequest(request, data)
+			} else {
+				projected, err = projector.ProjectProviderData(data)
+			}
 			if err != nil {
+				return fmt.Errorf("reproject provider data message %d: %w", i, err)
+			}
+			if err := reconcileProjectedTools(request, field.previous, data, field.calls, projected.ToolCalls); err != nil {
 				return fmt.Errorf("reproject provider data message %d: %w", i, err)
 			}
 			updates = append(updates, update{field.message, projected, field.choice})
@@ -110,20 +124,44 @@ func ReprojectResponse(before ResponseSnapshot, response *model.Response, produc
 		edit.target.ReasoningSignature = edit.projection.ReasoningSignature
 		edit.target.ToolCalls = edit.projection.ToolCalls
 		if edit.choice != nil {
-			reason := "stop"
-			if len(edit.target.ToolCalls) > 0 {
-				reason = "tool_calls"
-			}
-			edit.choice.FinishReason = &reason
+			edit.choice.FinishReason = ProjectedFinishReason(response.Done, edit.target.ToolCalls)
 		}
 	}
 	return nil
+}
+
+// ProjectedFinishReason returns the finish reason for a completed native
+// response. A response waiting only on provider actions has no finish reason.
+func ProjectedFinishReason(done bool, calls []model.ToolCall) *string {
+	var reason string
+	switch {
+	case len(calls) > 0:
+		reason = "tool_calls"
+	case done:
+		reason = "stop"
+	default:
+		return nil
+	}
+	return &reason
 }
 
 // ProjectFromCandidates forwards projection through routing wrappers. Native
 // candidates already share a protocol and configured name; projection is local
 // and independent of which candidate handled the network request.
 func ProjectFromCandidates(candidates []model.Model, data *model.ProviderData) (model.Message, error) {
+	return ProjectFromCandidatesWithRequest(candidates, nil, data)
+}
+
+// ProjectFromCandidatesWithRequest prefers a candidate that can use the
+// request's tool bindings, falling back to request-free projection.
+func ProjectFromCandidatesWithRequest(candidates []model.Model, request *model.Request, data *model.ProviderData) (model.Message, error) {
+	if request != nil {
+		for _, candidate := range candidates {
+			if projector, ok := candidate.(model.ProviderDataRequestProjector); ok {
+				return projector.ProjectProviderDataWithRequest(request, data)
+			}
+		}
+	}
 	for _, candidate := range candidates {
 		if projector, ok := candidate.(model.ProviderDataProjector); ok {
 			return projector.ProjectProviderData(data)

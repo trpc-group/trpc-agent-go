@@ -65,11 +65,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 		{
 			coll: s.collSessionEvents,
 			models: []mongo.IndexModel{
-				// Lookup index used by AppendEvent reads / GetSession event
-				// loading. Mirrors postgres' (app_name, user_id, session_id,
-				// created_at) lookup index. _id (ObjectId) is the implicit
-				// tie-breaker for events with identical created_at — see
-				// D3 in the plan.
+				// Retain the original lookup index for existing deployments and rollback.
 				{
 					Keys: bson.D{
 						{Key: "app_name", Value: 1},
@@ -104,6 +100,21 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 					Options: options.Index().
 						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
 							sqldb.TableNameSessionEvents, "cleanup")).
+						SetPartialFilterExpression(notDeleted),
+				},
+				// Include the tie-breaker so both forward and reverse event
+				// reads can stream in order without a blocking sort.
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "created_at", Value: 1},
+						{Key: "_id", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							sqldb.TableNameSessionEvents, "ordered_lookup")).
 						SetPartialFilterExpression(notDeleted),
 				},
 			},

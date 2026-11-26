@@ -27,9 +27,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
@@ -128,6 +132,97 @@ func sendWorkspaceResult(stream *connect.ServerStream[process.StartResponse], st
 	return stream.Send(&process.StartResponse{Event: &process.ProcessEvent{
 		Event: &process.ProcessEvent_End{End: &process.ProcessEvent_EndEvent{Exited: true, ExitCode: exit}},
 	}})
+}
+
+func TestWorkspaceExecE2BPersistenceAcrossTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		persistence WorkspacePersistenceMode
+		recreate    bool
+		init        bool
+		creates     int
+	}{
+		{name: "default per turn", creates: 2},
+		{name: "per turn with sandbox recreation and init", recreate: true, init: true, creates: 2},
+		{name: "per session with sandbox recreation and init", persistence: WorkspacePersistencePerSession, recreate: true, init: true, creates: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			t.Cleanup(srv.close)
+			opts := []Option{WithAutoRecreate(tc.recreate)}
+			if tc.persistence == WorkspacePersistencePerSession {
+				opts = append(opts, WithWorkspacePersistence(tc.persistence))
+			}
+			var executor codeexecutor.CodeExecutor = newMockedExecutor(t, srv, opts...)
+			var initialized []string
+			if tc.init {
+				wrapped, err := codeexecutor.NewWorkspaceInitExecutor(executor, func(_ context.Context, env codeexecutor.WorkspaceInitEnv) error {
+					initialized = append(initialized, env.Workspace.Path)
+					return nil
+				})
+				require.NoError(t, err)
+				executor = wrapped
+			}
+			a := llmagent.New("e2b",
+				llmagent.WithCodeExecutor(executor),
+				llmagent.WithWorkspacePreparersDisabled(true),
+				llmagent.WithWorkspaceExecAllowedCommands("true"),
+			)
+			sess := &session.Session{AppName: "app", UserID: "user", ID: "same-session"}
+			for i := 0; i < 2; i++ {
+				inv := agent.NewInvocation()
+				inv.Session = sess
+				// A view created before the first tool call must share its workspace.
+				for _, current := range []*agent.Invocation{inv, inv.View()} {
+					ctx := agent.NewInvocationContext(context.Background(), current)
+					tools, _ := a.InvocationToolSurface(ctx, current)
+					var execTool tool.CallableTool
+					for _, candidate := range tools {
+						if candidate.Declaration().Name == "workspace_exec" {
+							execTool = candidate.(tool.CallableTool)
+							break
+						}
+					}
+					require.NotNil(t, execTool)
+					_, err := execTool.Call(ctx, []byte("{\"command\":\"true\"}"))
+					require.NoError(t, err)
+				}
+			}
+
+			srv.mu.Lock()
+			creates := srv.execCalls
+			srv.mu.Unlock()
+			require.Equal(t, tc.creates, creates, "the only interpreter calls create workspaces")
+			srv.process.mu.Lock()
+			requests := append([]*process.StartRequest(nil), srv.process.requests...)
+			srv.process.mu.Unlock()
+			require.Len(t, requests, 4)
+			// RunProgram passes WORKSPACE_DIR to each native process.
+			workspace := func(req *process.StartRequest) string {
+				t.Helper()
+				prefix := codeexecutor.WorkspaceEnvDirKey + "="
+				for _, arg := range req.GetProcess().GetArgs() {
+					if strings.HasPrefix(arg, prefix) {
+						return strings.TrimPrefix(arg, prefix)
+					}
+				}
+				t.Fatal("native process has no workspace directory")
+				return ""
+			}
+			first, second := workspace(requests[0]), workspace(requests[2])
+			require.Equal(t, first, workspace(requests[1]))
+			require.Equal(t, second, workspace(requests[3]))
+			if tc.persistence == WorkspacePersistencePerSession {
+				require.Equal(t, first, second)
+				require.Equal(t, []string{first}, initialized)
+			} else {
+				require.NotEqual(t, first, second)
+				if tc.init {
+					require.Equal(t, []string{first, second}, initialized)
+				}
+			}
+		})
+	}
 }
 
 func TestRunProgramNativeOutputAndStdin(t *testing.T) {

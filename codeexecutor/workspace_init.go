@@ -267,6 +267,11 @@ type workspaceInitManager struct {
 	hooks []WorkspaceInitHook
 }
 
+func (m *workspaceInitManager) WorkspacePerInvocation() bool {
+	scoped, ok := m.inner.(interface{ WorkspacePerInvocation() bool })
+	return ok && scoped.WorkspacePerInvocation()
+}
+
 // workspaceInstanceInitManager is deliberately a separate wrapper type.
 // Keeping WorkspaceInstanceID off workspaceInitManager means legacy managers
 // do not accidentally advertise the optional capability with a fabricated ID.
