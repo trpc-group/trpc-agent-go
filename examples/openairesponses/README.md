@@ -249,6 +249,8 @@ uncached candidate metadata to the embedding API, which adds requests and can
 incur charges. Candidate vectors are cached for the life of the example
 process. See the [semantic handler documentation](../../model/openai/sdkv3/responses/README.md#semantic-search-handler)
 for ranking options or use a custom handler with `WithClientToolSearch`.
+If a client search fails, type `/resume` to retry the pending turn in the
+same session before entering another message.
 
 Support boundaries and fallback semantics:
 

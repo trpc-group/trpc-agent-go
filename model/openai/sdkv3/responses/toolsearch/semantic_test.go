@@ -140,6 +140,22 @@ func TestSemanticToolSearchMinScoreIncludesOppositeVector(t *testing.T) {
 	require.Equal(t, candidates, got)
 }
 
+func TestSemanticToolSearchMaxSimilarityIncludesIdenticalVector(t *testing.T) {
+	const query = "find tools"
+	embeddings := &semanticTestEmbedder{embed: func(_ context.Context, text string) ([]float64, error) {
+		if strings.Contains(text, "different") {
+			return []float64{1, -1}, nil
+		}
+		return []float64{1, 1}, nil
+	}}
+	handler, err := toolsearch.NewSemantic(embeddings, toolsearch.WithSemanticMinScore(1))
+	require.NoError(t, err)
+	candidates := []responses.ToolSearchEntry{semanticEntry("identical", ""), semanticEntry("different", "")}
+	got, err := handler(context.Background(), &responses.ToolSearchRequest{Query: query, Candidates: candidates})
+	require.NoError(t, err)
+	require.Equal(t, candidates[:1], got)
+}
+
 func TestSemanticToolSearchOptions(t *testing.T) {
 	const query = "find a related tool"
 	embeddings := &semanticTestEmbedder{embed: func(_ context.Context, text string) ([]float64, error) {

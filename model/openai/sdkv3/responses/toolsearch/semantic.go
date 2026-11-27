@@ -140,12 +140,7 @@ func (s *semanticSearch) search(ctx context.Context, req *responses.ToolSearchRe
 		if err != nil {
 			return nil, err
 		}
-		var score float64
-		for i, x := range query {
-			score += x * v[i]
-		}
-		// Rounding can push a normalized dot product outside the cosine range.
-		score = max(-1, min(1, score))
+		score := cosineScore(query, v)
 		if score >= s.options.minScore {
 			hits = append(hits, hit{index: i, score: score})
 		}
@@ -162,6 +157,20 @@ func (s *semanticSearch) search(ctx context.Context, req *responses.ToolSearchRe
 		return nil, err
 	}
 	return result, nil
+}
+
+func cosineScore(query, candidate []float64) float64 {
+	// A vector's similarity to itself is 1 even if its normalized dot
+	// product rounds slightly below 1.
+	if slices.Equal(query, candidate) {
+		return 1
+	}
+	var score float64
+	for i, x := range query {
+		score += x * candidate[i]
+	}
+	// Rounding can push a normalized dot product outside the cosine range.
+	return max(-1, min(1, score))
 }
 
 func semanticText(entry responses.ToolSearchEntry, decl *tool.Declaration) string {

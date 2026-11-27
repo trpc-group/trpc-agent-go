@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
@@ -88,7 +89,7 @@ func main() {
 
 	sessionID := fmt.Sprintf("toolsearch-%d", time.Now().UnixNano())
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Printf("OpenAI Responses tool search (%s mode). Type /exit to quit.\n", *mode)
+	fmt.Printf("OpenAI Responses tool search (%s mode). Type /resume to retry a pending turn or /exit to quit.\n", *mode)
 	for {
 		fmt.Print("You: ")
 		if !scanner.Scan() {
@@ -101,7 +102,13 @@ func main() {
 		if text == "" {
 			continue
 		}
-		ch, err := r.Run(context.Background(), "demo-user", sessionID, model.NewUserMessage(text))
+		message := model.NewUserMessage(text)
+		var opts []agent.RunOption
+		if text == "/resume" {
+			message = model.Message{}
+			opts = append(opts, agent.WithResume(true))
+		}
+		ch, err := r.Run(context.Background(), "demo-user", sessionID, message, opts...)
 		if err != nil {
 			log.Printf("run: %v", err)
 			continue
