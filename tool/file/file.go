@@ -37,6 +37,14 @@ const (
 	defaultCreateFileMode = os.FileMode(0644)
 	// defaultMaxFileSize is the default maximum file size to read, which is 1MB.
 	defaultMaxFileSize = 1024 * 1024
+	// defaultSearchMaxFiles is the most entries one search_file or
+	// search_content call may match before it is refused. It sits well above
+	// a large repository's tracked file count, so it only trips on a pattern
+	// that reaches into a vendored or generated tree.
+	defaultSearchMaxFiles = 50000
+	// defaultSearchMaxMatches is the most matching lines one search_content
+	// call returns across all files; the rest are counted, not listed.
+	defaultSearchMaxMatches = 1000
 	// missingFileHintMaxEntries limits how many top-level entries are
 	// suggested when a requested file is missing.
 	missingFileHintMaxEntries = 6
@@ -171,6 +179,48 @@ func WithName(name string) Option {
 	}
 }
 
+// WithSearchMaxFiles sets how many entries search_file or search_content may
+// match before the call is refused with an error asking for a narrower path or
+// pattern, default is 50000. A value of zero or less keeps the default.
+func WithSearchMaxFiles(n int) Option {
+	return func(f *fileToolSet) {
+		if n > 0 {
+			f.searchMaxFiles = n
+		}
+	}
+}
+
+// WithSearchMaxMatches sets how many matching lines search_content returns
+// across all files, default is 1000. Files beyond the cap are counted in the
+// response rather than listed. A value of zero or less keeps the default.
+func WithSearchMaxMatches(n int) Option {
+	return func(f *fileToolSet) {
+		if n > 0 {
+			f.searchMaxMatches = n
+		}
+	}
+}
+
+// WithSearchConcurrency sets how many files search_content scans at once,
+// default is twice GOMAXPROCS and at least four. A value of zero or less keeps
+// the default.
+func WithSearchConcurrency(n int) Option {
+	return func(f *fileToolSet) {
+		if n > 0 {
+			f.searchConcurrency = n
+		}
+	}
+}
+
+// WithSearchGitignore controls whether search_file and search_content honour
+// .gitignore files under base_directory, default is true. A .git directory is
+// never searched either way.
+func WithSearchGitignore(e bool) Option {
+	return func(f *fileToolSet) {
+		f.searchIgnoreOff = !e
+	}
+}
+
 // fileToolSet implements the ToolSet interface for file operations.
 type fileToolSet struct {
 	baseDir                  string
@@ -186,8 +236,39 @@ type fileToolSet struct {
 	createDirMode            os.FileMode
 	createFileMode           os.FileMode
 	maxFileSize              int64
-	tools                    []tool.Tool
-	name                     string
+	// searchMaxFiles, searchMaxMatches and searchConcurrency fall back to
+	// their defaults when zero, and searchIgnoreOff is false by default, so a
+	// zero fileToolSet searches the way NewToolSet configures one.
+	searchMaxFiles    int
+	searchMaxMatches  int
+	searchConcurrency int
+	searchIgnoreOff   bool
+	tools             []tool.Tool
+	name              string
+}
+
+// searchFileLimit is the most entries a search may match.
+func (f *fileToolSet) searchFileLimit() int {
+	if f.searchMaxFiles > 0 {
+		return f.searchMaxFiles
+	}
+	return defaultSearchMaxFiles
+}
+
+// searchMatchLimit is the most matching lines a content search returns.
+func (f *fileToolSet) searchMatchLimit() int {
+	if f.searchMaxMatches > 0 {
+		return f.searchMaxMatches
+	}
+	return defaultSearchMaxMatches
+}
+
+// searchWorkers is how many files a content search scans at once.
+func (f *fileToolSet) searchWorkers() int {
+	if f.searchConcurrency > 0 {
+		return f.searchConcurrency
+	}
+	return defaultSearchConcurrency()
 }
 
 // Tools implements the ToolSet interface.
