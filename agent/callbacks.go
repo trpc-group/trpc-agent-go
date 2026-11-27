@@ -289,7 +289,7 @@ func (c *Callbacks) runBeforeAgentCallback(
 
 // finalizeBeforeAgentResult determines the final return value for before agent callbacks.
 func (c *Callbacks) finalizeBeforeAgentResult(
-	acc *BeforeAgentResult,
+	acc BeforeAgentResult,
 	hasResult bool,
 	firstErr error,
 ) (*BeforeAgentResult, error) {
@@ -297,12 +297,14 @@ func (c *Callbacks) finalizeBeforeAgentResult(
 		if !hasResult {
 			return nil, firstErr
 		}
-		return acc, firstErr
+		out := acc
+		return &out, firstErr
 	}
 	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return acc, nil
+	out := acc
+	return &out, nil
 }
 
 // RunBeforeAgent runs all before agent callbacks in order.
@@ -329,14 +331,15 @@ func (c *Callbacks) RunBeforeAgent(
 		}
 
 		if c.processCallbackResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return &acc, firstErr
+				return &out, firstErr
 			}
-			return &acc, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeBeforeAgentResult(&acc, hasResult, firstErr)
+	return c.finalizeBeforeAgentResult(acc, hasResult, firstErr)
 }
 
 // processAfterCallbackResult merges an after agent callback result into acc and updates ctx.
@@ -367,7 +370,7 @@ func (c *Callbacks) processAfterCallbackResult(
 
 // finalizeAfterAgentResult determines the final return value for after agent callbacks.
 func (c *Callbacks) finalizeAfterAgentResult(
-	acc *AfterAgentResult,
+	acc AfterAgentResult,
 	hasResult bool,
 	firstErr error,
 ) (*AfterAgentResult, error) {
@@ -375,12 +378,14 @@ func (c *Callbacks) finalizeAfterAgentResult(
 		if !hasResult {
 			return nil, firstErr
 		}
-		return acc, firstErr
+		out := acc
+		return &out, firstErr
 	}
 	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return acc, nil
+	out := acc
+	return &out, nil
 }
 
 func (c *Callbacks) runAfterAgentCallback(
@@ -420,12 +425,13 @@ func (c *Callbacks) RunAfterAgent(
 		}
 
 		if c.processAfterCallbackResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return &acc, firstErr
+				return &out, firstErr
 			}
-			return &acc, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeAfterAgentResult(&acc, hasResult, firstErr)
+	return c.finalizeAfterAgentResult(acc, hasResult, firstErr)
 }

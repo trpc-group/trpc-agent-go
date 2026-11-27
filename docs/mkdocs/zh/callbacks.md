@@ -1,603 +1,390 @@
-## 回调（Callbacks）
+# 回调（Callbacks）
 
-本文介绍项目中的回调系统，用于拦截、观测与定制模型推理、工具调用、Agent 执行以及 AG-UI 事件翻译。
+一次 Agent 运行会依次经过几个固定边界：Agent 启动与结束、LLM 推理、工具调用，以及（使用 AG-UI 时的）事件翻译。实际业务里经常需要在这些边界上加入日志、追踪、鉴权、配额限制、缓存短路、参数规范化或内容风控——但既不希望修改框架内核，也不想把每个模型和工具都手动包一层装饰器。
+
+回调（Callbacks）正是在这些边界上提供的声明式 `Before` / `After` 钩子：框架继续掌控流式通道、并发工具调度、panic 恢复与可观测性，回调只需查看输入并返回想要做的调整、替换或终止信号即可。
 
 回调替换上下文、保留取消传播的写法及 AfterTool 生命周期，见[取消机制与上下文传播](cancellation.md)。
 
-回调分为四类：
-
-- ModelCallbacks（模型回调）
-- ToolCallbacks（工具回调）
-- AgentCallbacks（Agent 回调）
-- TranslateCallbacks（AGUI 事件翻译回调）
-
-每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果提前返回，跳过默认执行。
-
-所有回调将按照注册顺序依次执行，且一旦有回调返回非 `nil` 值，回调链路将立即停止。如果需要叠加多个回调效果，请在单一回调中实现相应的逻辑。
-
-### 多回调结果累积规则
-
-在全部 6 条结构化回调链（`BeforeModel`、`AfterModel`、`BeforeTool`、`AfterTool`、`BeforeAgent`、`AfterAgent`）中，除非执行因回调错误而默认提前停止，否则每次回调返回的非 `nil` 结果都会作为只读稀疏补丁累积到最终返回结果中：
-
-- **独立覆盖字段（最近非空胜出）**：`Context`（全部 6 条链）与 `ModifiedArguments`（`BeforeTool`）在后续回调返回 `nil`、空结构体、旧签名回调或仅设置其他字段时，会保留最近一次非空值；后续显式提供的新值则覆盖它。推荐从回调输入的 `ctx` 派生新上下文以保留取消传播、截止时间和上下文值；`context.Background()` 或 `context.WithoutCancel(ctx)` 会主动解除取消传播。
-- **成组覆盖字段**：`CustomResponse`（`Model`/`Agent`）、`CustomResult` + `SkipStateDelta`（`BeforeTool`）以及 `CustomResult` + `SkipResultFormatter` + `SkipStateDelta`（`AfterTool`）仅在后续回调返回非空的 `CustomResponse` 或 `CustomResult` 时整组替换；在启用 `WithContinueOnResponse(true)` 后，后续回调返回空结构体或旧签名透传不会清空先前的自定义响应/结果。
-- **单调布尔标志**：`AfterTool` 中的 `SkipSummarization` 按逻辑或（OR）跨回调累积，遇到 `CustomResult` 提前停止时同样生效。
-- **所有权与错误早停边界**：框架在调用下一个回调前将已接受结果的顶层字段复制到独立累积器中，绝不就地修改回调方持有的结果结构体（因此复用或清空结构体不会抹掉已累积的字段；其中引用的响应对象和参数缓冲区不会被深拷贝）。默认遇到错误停止（`continueOnError == false`）时，`Model` 与 `Agent` 回调链返回 `(nil, err)`，`Tool` 回调链返回出错回调的原始 `(result, err)` 而不合并先前字段；启用 `WithContinueOnError(true)` 后，回调链会同时返回已累积的结果与第一个错误。
-- **并行工具结果发布**：并行工具在默认合并结果模式下使用替换后的上下文执行工具，结果发布则遵循 worker 的生命周期——仅取消回调替换的上下文不会丢弃缓存结果，解除该上下文的取消传播也不会让结果发布在 worker 取消后继续等待。
+!!! note "Callbacks 与 Plugins 的区别"
+    - **Callbacks（回调）** 绑定到单个 Agent（例如通过 `llmagent.WithAgentCallbacks`、`WithModelCallbacks`、`WithToolCallbacks`）。
+    - **Plugins（插件）** 把一组回调打包后通过 `runner.WithPlugins(...)` 在 Runner 上一次注册、全局生效。在每个 Hook 点上，**插件的全局回调先于 Agent 的局部回调执行**。详见 [插件（Plugins）](./plugin.md)。
 
 ---
 
-## ModelCallbacks
+## 工作原理
 
-### 结构化模型回调
+### 执行生命周期
 
-- BeforeModelCallbackStructured：模型推理前触发，使用结构化参数
-- AfterModelCallbackStructured：模型完成后触发，使用结构化参数
-
-参数：
-
-```go
-type BeforeModelArgs struct {
-    Request *model.Request  // 即将发送的请求（可修改）
-}
-
-type BeforeModelResult struct {
-    Context        context.Context  // 可选，用于后续操作的上下文
-    CustomResponse *model.Response  // 非空时跳过模型调用并返回此响应
-}
-
-type AfterModelArgs struct {
-    Request  *model.Request   // 发送给模型的原始请求
-    Response *model.Response  // 模型返回的响应（可能为 nil）
-    Error    error            // 模型调用过程中发生的错误
-}
-
-type AfterModelResult struct {
-    Context        context.Context  // 可选，用于后续操作的上下文
-    CustomResponse *model.Response  // 非空时替换原始响应
-}
+```mermaid
+flowchart TD
+    Req["用户请求进入 Runner"] --> BA["BeforeAgent (Plugin -> Agent)"]
+    BA -. "CustomResponse" .-> Done["直接返回响应并结束"]
+    BA --> BM["BeforeModel (Plugin -> Agent)"]
+    BM -. "CustomResponse" .-> AM["AfterModel (Plugin -> Agent)"]
+    BM --> LLM["LLM 推理"]
+    LLM --> AM
+    AM -- "调用工具" --> BT["BeforeTool (Plugin -> Agent)"]
+    BT -. "CustomResult" .-> TRM["ToolResultMessages (可选)"]
+    BT --> Tool["Tool 执行"]
+    Tool --> AT["AfterTool (Plugin -> Agent)"]
+    AT --> TRM
+    TRM -- "继续下一轮" --> BM
+    AM -- "最终回复" --> AA["AfterAgent (Plugin -> Agent)"]
+    AA --> TR["AG-UI: BeforeTranslate -> 翻译 -> AfterTranslate"]
 ```
 
-签名：
+虚线表示 `Before*` 返回非空 `CustomResponse`/`CustomResult` 时的短路路径；若 `AfterTool` 设置了 `SkipSummarization: true`，则在工具响应后结束本轮，不再回到 `BeforeModel`。
 
-```go
-type BeforeModelCallbackStructured func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error)
-type AfterModelCallbackStructured  func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error)
-```
+### 回调返回值语义
 
-要点：
+所有结构化回调（`Before/After` × `Agent/Model/Tool`）都通过 `(result, error)` 表达以下 4 种行为之一：
 
-- 结构化参数提供更好的类型安全性和更清晰的意图
-- `BeforeModelResult.Context` 可用于向后续操作传递上下文
-- `AfterModelResult.Context` 允许在回调之间传递上下文
-- Before 可返回非空响应以跳过模型调用
-- After 可获取原始请求 `req`，便于内容还原与后处理
-
-### 回调执行控制
-
-默认情况下，回调执行会在以下情况立即停止：
-
-- 回调返回错误
-- 回调返回非空的 `CustomResponse`（对于 Before 回调）或 `CustomResult`（对于 Tool 回调）
-
-你可以在创建回调时使用选项来控制此行为：
-
-```go
-// 即使发生错误也继续执行剩余的回调
-modelCallbacks := model.NewCallbacks(
-    model.WithContinueOnError(true),
-)
-
-// 即使返回了 CustomResponse 也继续执行剩余的回调
-modelCallbacks := model.NewCallbacks(
-    model.WithContinueOnResponse(true),
-)
-
-// 启用两个选项：在错误和 CustomResponse 时都继续执行
-modelCallbacks := model.NewCallbacks(
-    model.WithContinueOnError(true),
-    model.WithContinueOnResponse(true),
-)
-```
-
-**执行模式：**
-
-1. **默认（两者均为 false）**：遇到第一个错误或 CustomResponse 时停止
-2. **继续执行（错误）**：即使某个回调返回错误，也继续执行剩余的回调
-3. **继续执行（响应）**：即使某个回调返回了 CustomResponse，也继续执行剩余的回调
-4. **继续执行（两者）**：无论发生错误或返回 CustomResponse，都继续执行所有回调
-
-**优先级规则：**
-
-- 如果同时发生错误和 CustomResponse，错误优先，将被返回（除非 `continueOnError` 为 true）
-- 当 `continueOnError` 为 true 且发生错误时，执行会继续，但第一个错误会被保留并在最后返回
-- 当 `continueOnResponse` 为 true 且返回了 CustomResponse 时，执行会继续，但最后一个 CustomResponse 会被使用
-
-示例：
-
-```go
-modelCallbacks := model.NewCallbacks().
-  // Before：对特定提示直接返回固定响应，跳过真实模型调用
-  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-    if len(args.Request.Messages) > 0 && strings.Contains(args.Request.Messages[len(args.Request.Messages)-1].Content, "/ping") {
-      return &model.BeforeModelResult{
-        CustomResponse: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}}},
-      }, nil
-    }
-    return nil, nil
-  }).
-  // After：在成功时追加提示信息，或在出错时包装错误信息
-  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
-    if args.Error != nil {
-      return nil, args.Error
-    }
-    if args.Response != nil && len(args.Response.Choices) > 0 {
-      args.Response.Choices[0].Message.Content += "\n\n-- answered by callback"
-      return &model.AfterModelResult{CustomResponse: args.Response}, nil
-    }
-    return nil, nil
-  })
-```
-
-**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithModelCallbacks()` 选项传入：
-
-```go
-// 创建模型回调
-modelCallbacks := model.NewCallbacks().
-  RegisterBeforeModel(...).
-  RegisterAfterModel(...)
-
-// 创建 LLM Agent 并传入模型回调
-llmAgent := llmagent.New(
-  "chat-assistant",
-  llmagent.WithModel(modelInstance),
-  llmagent.WithModelCallbacks(modelCallbacks),  // 传入模型回调
-)
-```
-
-完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
+| 行为 | 返回值写法 | 默认链路表现 |
+| --- | --- | --- |
+| **仅观测 / 透传** | `nil, nil`（或空结构体 `&Result{}`） | 继续执行下一个回调 |
+| **更新上下文或输入** | 设置 `Context`、`ModifiedArguments`，或原地修改 `args.Request` | 继续执行，并将修改向后传递 |
+| **短路或替换输出** | 设置非空 `CustomResponse` 或 `CustomResult` | 立即停止链路（除非开启 `WithContinueOnResponse(true)`） |
+| **报错或终止 Agent** | 返回普通 `err` 或 `agent.NewStopError(...)` | 立即停止链路（除非开启 `WithContinueOnError(true)`） |
 
 ---
 
-## ToolCallbacks
+## 多回调执行与结果合并
 
-### 结构化工具回调
+全部 **6 条结构化回调链**（`BeforeAgent`、`AfterAgent`、`BeforeModel`、`AfterModel`、`BeforeTool`、`AfterTool`）共用同一套执行控制选项与结果合并规则。
 
-- BeforeToolCallbackStructured：工具调用前触发，使用结构化参数
-- AfterToolCallbackStructured：工具调用后触发，使用结构化参数
+!!! note "TranslateCallbacks 属于独立链路"
+    AG-UI 事件翻译使用的 `TranslateCallbacks` 不做跨回调结果合并，也不提供 `WithContinueOn*` 选项——遇到第一个错误或非空自定义事件即立即停止。详见 [TranslateCallbacks](#translatecallbacks)。
 
-参数：
+### 执行控制
 
-```go
-type BeforeToolArgs struct {
-    ToolCallID   string               // 模型发出的工具调用 ID
-    ToolName     string               // 工具名称
-    Declaration  *tool.Declaration    // 工具声明元数据
-    Arguments    []byte               // 当前 JSON 参数
-}
+回调按注册顺序依次执行。默认情况下，一旦回调返回**错误**或非空的 **`CustomResponse`/`CustomResult`**，链路立即停止；仅设置 `Context`、`ModifiedArguments` 或 `SkipSummarization` 不会停止链路。
 
-type BeforeToolResult struct {
-    Context           context.Context  // 可选，用于后续操作的上下文
-    CustomResult      any              // 非空时跳过工具执行并返回此结果
-    SkipStateDelta    bool             // 跳过 CustomResult 的 state-delta provider
-    ModifiedArguments []byte           // 可选，修改后的参数用于工具执行
-}
-
-type AfterToolArgs struct {
-    ToolCallID   string               // 模型发出的工具调用 ID
-    ToolName     string               // 工具名称
-    Declaration  *tool.Declaration    // 工具声明元数据
-    Arguments    []byte               // before-tool 回调后的最终 JSON 参数
-    Result       any                  // 工具执行结果（可能为 nil）
-    Error        error                // 工具执行过程中发生的错误
-}
-
-type AfterToolResult struct {
-    Context             context.Context  // 可选，用于后续操作的上下文
-    CustomResult        any              // 非空时替换原始结果
-    SkipResultFormatter bool             // 对 CustomResult 使用默认结果转换
-    SkipStateDelta      bool             // 跳过 CustomResult 的 state-delta provider
-    SkipSummarization   bool             // 为 true 时在 tool.response 后结束本轮
-}
-```
-
-签名：
+`agent.NewCallbacks`、`model.NewCallbacks` 和 `tool.NewCallbacks` 支持相同的两个控制选项：
 
 ```go
-type BeforeToolCallbackStructured func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error)
-type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error)
-```
-
-要点：
-
-- 结构化参数提供更好的类型安全性和更清晰的意图
-- `BeforeToolResult.ModifiedArguments` 允许修改工具参数
-- `BeforeToolResult.Context` 和 `AfterToolResult.Context` 可在操作之间传递上下文
-- 为了让工具执行使用修改后的参数，需要返回 `BeforeToolResult.ModifiedArguments`；
-  只给 `args.Arguments` 重新赋值，只会影响当前回调链中后续读取该字段的逻辑
-- BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
-- `BeforeToolArgs` 和 `AfterToolArgs` 中提供了 `ToolCallID`
-- `AfterToolResult.SkipResultFormatter` 会让非空 `CustomResult` 跳过工具配置的 result
-  formatter，并使用默认结果转换：`model.ToolResultContent` 保留为结构化内容，其他值使用
-  JSON。适用于替换结果是协议或错误 envelope、而不是工具
-  声明输出类型的正常值时
-- `BeforeToolResult.SkipStateDelta` 和 `AfterToolResult.SkipStateDelta` 会阻止非空
-  `CustomResult` 触发工具的 state-delta provider，适用于替换结果并非工具成功输出的场景
-- `AfterToolResult.SkipSummarization` 允许回调在判断工具结果后，让本轮在
-  `tool.response` 后直接结束
-- `SkipSummarization` 只会跳过额外的总结型 LLM 调用；真正的结束信号仍然是
-  `runner.completion` / `event.IsRunnerCompletion()`
-
-
-### 回调执行控制
-
-默认情况下，回调执行会在以下情况立即停止：
-
-- 回调返回错误
-- 回调返回非空的 `CustomResult`
-
-你可以在创建回调时使用选项来控制此行为：
-
-```go
-// 即使发生错误也继续执行剩余的回调
-toolCallbacks := tool.NewCallbacks(
-    tool.WithContinueOnError(true),
-)
-
-// 即使返回了 CustomResult 也继续执行剩余的回调
-toolCallbacks := tool.NewCallbacks(
-    tool.WithContinueOnResponse(true),
-)
-
-// 启用两个选项：在错误和 CustomResult 时都继续执行
-toolCallbacks := tool.NewCallbacks(
-    tool.WithContinueOnError(true),
-    tool.WithContinueOnResponse(true),
+callbacks := model.NewCallbacks(
+    model.WithContinueOnError(true),    // 出错后继续执行，最终返回第一个错误
+    model.WithContinueOnResponse(true), // 返回 CustomResponse/CustomResult 后继续执行，最后一个非空结果胜出
 )
 ```
 
-**执行模式：**
+| 模式 | `ContinueOnError` | `ContinueOnResponse` | 行为 |
+| --- | --- | --- | --- |
+| **默认** | `false` | `false` | 遇到第一个错误或第一个 `CustomResponse`/`CustomResult` 时立即停止。 |
+| **错误后继续** | `true` | `false` | 出错后继续执行（保留**第一个**错误）；遇到 `CustomResponse`/`CustomResult` 仍立即停止。 |
+| **响应后继续** | `false` | `true` | 返回覆盖结果后继续执行（采用**最后一个**非空覆盖）；遇到错误仍立即停止。 |
+| **两者皆继续** | `true` | `true` | 执行全部回调，最终同时返回合并后的结果与第一个错误（如有）。 |
 
-1. **默认（两者均为 false）**：遇到第一个错误或 CustomResult 时停止
-2. **继续执行（错误）**：即使某个回调返回错误，也继续执行剩余的回调
-3. **继续执行（响应）**：即使某个回调返回了 CustomResult，也继续执行剩余的回调
-4. **继续执行（两者）**：无论发生错误或返回 CustomResult，都继续执行所有回调
+如果单个回调同时返回了错误和自定义响应/结果，错误判断优先（在默认 `continueOnError == false` 时直接按错误停止）。
 
-**优先级规则：**
+### 多回调结果如何合并
 
-- 如果同时发生错误和 CustomResult，错误优先，将被返回（除非 `continueOnError` 为 true）
-- 当 `continueOnError` 为 true 且发生错误时，执行会继续，但第一个错误会被保留并在最后返回
-- 当 `continueOnResponse` 为 true 且返回了 CustomResult 时，执行会继续，但最后一个 CustomResult 会被使用
+实际项目中，一条回调链往往串联着多个互不感知的独立职责——比如一个回调注入追踪或超时 `Context`，另一个回调改写工具参数，第三个只做日志记录。正因为回调之间彼此独立，后一个回调里未填写的字段表达的是**“我不动这个字段”**，而不是**“把前面的值清空”**。
 
-示例：
+因此，除非链路因回调错误而默认早停，框架会把每次回调返回的非 `nil` 结果作为只读增量合并进累积器中。后续回调返回 `nil`、空结构体 `&Result{}` 或旧签名 `(nil, nil)` 透传时，都不会覆盖前面已设置的字段：
 
-```go
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    if args.Arguments != nil && args.ToolName == "calculator" {
-      // 规范化 operation，同时保留 calculator 的参数结构。
-      var payload map[string]any
-      if err := json.Unmarshal(args.Arguments, &payload); err != nil {
-        return nil, err
-      }
-      if op, ok := payload["operation"].(string); ok {
-        payload["operation"] = strings.ToLower(op)
-      }
-      modifiedJSON, err := json.Marshal(payload)
-      if err != nil {
-        return nil, err
-      }
-      args.Arguments = modifiedJSON
-      return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
-    }
-    return nil, nil
-  }).
-  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-    if args.Error != nil {
-      return nil, args.Error
-    }
-    if s, ok := args.Result.(string); ok {
-      return &tool.AfterToolResult{
-        CustomResult: s + "\n-- post processed by tool callback",
-      }, nil
-    }
-    return nil, nil
-  })
+```mermaid
+flowchart LR
+    CB1["CB1: {ModifiedArguments: Berlin}"] --> A1["acc = {ModifiedArgs: Berlin}"]
+    A1 --> CB2["CB2: {Context: ctxWithTrace}"]
+    CB2 --> A2["acc = {ModifiedArgs: Berlin, Context: ctxWithTrace}"]
+    A2 --> CB3["CB3: 日志观测 / 旧签名 &{}"]
+    CB3 --> A3["最终结果同时保留 ModifiedArgs 与 Context"]
 ```
 
-动态 skip summarization 示例：
+不同字段的语义不同，合并时遵循 3 条规则：
 
-```go
-toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-  if args.Error != nil {
-    return nil, nil
-  }
-  out, ok := args.Result.(map[string]any)
-  if ok && out["action"] != nil {
-    return &tool.AfterToolResult{
-      SkipSummarization: true,
-    }, nil
-  }
-  return nil, nil
-})
-```
+| 字段类别 | 涉及字段 | 合并规则与原因 |
+| --- | --- | --- |
+| **独立演进的管道状态** | `Context`（全 6 条链）<br>`ModifiedArguments`（`BeforeTool`） | **最近非空胜出**，并同步传给后续回调（更新 `ctx` / `args.Arguments`），让不同回调可以在前序结果上各自演进。建议从回调输入的 `ctx` 派生新上下文以保留取消传播、截止时间和上下文值；`context.Background()` 或 `context.WithoutCancel(ctx)` 会主动解除取消传播。 |
+| **替换结果及其配套标志** | `CustomResponse`（`Agent`/`Model`）<br>`CustomResult` + `SkipStateDelta`（`BeforeTool`）<br>`CustomResult` + `SkipResultFormatter` + `SkipStateDelta`（`AfterTool`） | **成组整体替换**，仅当后续回调返回非空 `CustomResponse` 或 `CustomResult` 时才替换。`SkipStateDelta` 和 `SkipResultFormatter` 描述的是眼前这份 `CustomResult` 的处理方式，必须与对应结果绑定在一起——在 `WithContinueOnResponse(true)` 下，空结构体透传会保留前序结果和标志，而新的 `CustomResult` 会连同标志一起替换。 |
+| **提前结束轮次信号** | `SkipSummarization`（`AfterTool`） | **逻辑或（OR）**跨回调累积（遇到 `CustomResult` 早停时同样生效）。只要链上任一回调判定无需再做总结型 LLM 调用，后续未设置该字段的观测回调不应将其翻回 `false`。 |
 
-这会让本轮在工具响应后结束，但不会把 `tool.response` 变成最终
-assistant 响应。若消费侧需要真正的终止标记，仍应持续读取直到
-`runner.completion`。
-
-**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithToolCallbacks()` 选项传入：
-
-```go
-// 创建工具回调
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(...).
-  RegisterAfterTool(...)
-
-// 创建 LLM Agent 并传入工具回调
-llmAgent := llmagent.New(
-  "chat-assistant",
-  llmagent.WithModel(modelInstance),
-  llmagent.WithTools(tools),
-  llmagent.WithToolCallbacks(toolCallbacks),  // 传入工具回调
-)
-```
-
-完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
-
-可观测与事件：
-
-- 修改后的参数会同步到：
-  - `TraceToolCall` 可观测属性
-  - 图事件 `emitToolStartEvent` 与 `emitToolCompleteEvent`
-
-### ToolResultMessages 回调
-
-`ToolResultMessagesFunc` 回调允许你自定义工具执行结果如何转换为发送回模型的消息。
-
-**参数：**
-
-```go
-type ToolResultMessagesInput struct {
-    ToolName           string    // 工具名称
-    Declaration        *tool.Declaration  // 工具声明
-    Arguments          []byte    // 最终的工具参数（JSON 格式，在 before-tool 回调之后）
-    Result             any       // 最终的工具执行结果（在 after-tool 回调之后）
-    ToolCallID         string    // 工具调用 ID
-    DefaultToolMessage any       // 框架默认会发送的工具响应消息
-}
-```
-
-**回调签名：**
-
-```go
-type ToolResultMessagesFunc = func(
-    ctx context.Context,
-    in *tool.ToolResultMessagesInput,
-) (any, error)
-```
-
-**行为：**
-
-- 如果回调返回 `(nil, nil)` 或空切片，框架将回退到 `DefaultToolMessage`。
-- 如果回调返回非空消息，它们将替换默认工具消息。
-- 当使用带有内置 OpenAI/Anthropic 适配器的 llmagent 时，推荐的返回类型是 `[]model.Message`。
-
-**使用示例：**
-
-```go
-toolCallbacks := tool.NewCallbacks().
-  RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
-    // 自定义工具结果消息格式
-    if messages, ok := in.Result.([]string); ok {
-      return []model.Message{
-        {
-          Role:    model.RoleTool,
-          Content: "工具结果：" + strings.Join(messages, ", "),
-          ToolID:  in.ToolCallID,
-        },
-      }, nil
-    }
-    // 返回 nil 以使用默认消息
-    return nil, nil
-  })
-```
+关于结构体所有权隔离、错误早停返回边界与并行工具结果发布等底层细节，参见 [行为细节与边界](#behavior-details)。
 
 ---
 
-## AgentCallbacks
+## 回调类型参考
 
-### 结构化 Agent 回调
+以下各节均遵循上述统一的控制与合并规则，仅列出各阶段独有的类型定义、字段说明与接入方式。
 
-- BeforeAgentCallbackStructured：Agent 执行前触发，使用结构化参数
-- AfterAgentCallbackStructured：Agent 执行后触发，使用结构化参数
+### AgentCallbacks
 
-参数：
+在整次 Agent 执行开始前与产出最终响应事件后触发。
 
 ```go
 type BeforeAgentArgs struct {
-    Invocation *agent.Invocation  // 调用上下文
+    Invocation *agent.Invocation // 调用上下文
 }
 
 type BeforeAgentResult struct {
-    Context        context.Context  // 可选，用于后续操作的上下文
-    CustomResponse *model.Response  // 非空时跳过 Agent 执行并返回此响应
+    Context        context.Context // 可选，替换后续操作使用的上下文
+    CustomResponse *model.Response // 非空时跳过 Agent 执行并直接返回此响应
 }
 
 type AfterAgentArgs struct {
-    Invocation        *agent.Invocation  // 调用上下文
-    FullResponseEvent *event.Event       // Agent 执行后的最终响应事件（可能为 nil）
-    Error             error              // Agent 执行过程中发生的错误（可能为 nil）
+    Invocation        *agent.Invocation // 调用上下文
+    FullResponseEvent *event.Event      // Agent 执行产出的最终响应事件（可能为 nil）
+    Error             error             // Agent 执行过程中发生的错误（可能为 nil）
 }
 
 type AfterAgentResult struct {
-    Context        context.Context  // 可选，用于后续操作的上下文
-    CustomResponse *model.Response  // 非空时替换原始响应
+    Context        context.Context // 可选，替换后续操作使用的上下文
+    CustomResponse *model.Response // 非空时替换原始响应
 }
-```
 
-签名：
-
-```go
 type BeforeAgentCallbackStructured func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error)
 type AfterAgentCallbackStructured  func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error)
 ```
 
-要点：
-
-- 结构化参数提供更好的类型安全性和更清晰的意图
-- `BeforeAgentResult.Context` 和 `AfterAgentResult.Context` 可在操作之间传递上下文
-- 可访问完整的调用上下文，便于实现丰富的按次逻辑
-- Before 可返回自定义 `*model.Response` 以中止后续模型调用
-- After 可返回替换响应
-- `AfterAgentArgs.FullResponseEvent` 提供对 agent 最终输出结果的访问，可用于日志记录、监控、后处理等场景
-
-### 回调执行控制
-
-默认情况下，回调执行会在以下情况立即停止：
-
-- 回调返回错误
-- 回调返回非空的 `CustomResponse`
-
-你可以在创建回调时使用选项来控制此行为：
-
-```go
-// 即使发生错误也继续执行剩余的回调
-agentCallbacks := agent.NewCallbacks(
-    agent.WithContinueOnError(true),
-)
-
-// 即使返回了 CustomResponse 也继续执行剩余的回调
-agentCallbacks := agent.NewCallbacks(
-    agent.WithContinueOnResponse(true),
-)
-
-// 启用两个选项：在错误和 CustomResponse 时都继续执行
-agentCallbacks := agent.NewCallbacks(
-    agent.WithContinueOnError(true),
-    agent.WithContinueOnResponse(true),
-)
-```
-
-**执行模式：**
-
-1. **默认（两者均为 false）**：遇到第一个错误或 CustomResponse 时停止
-2. **继续执行（错误）**：即使某个回调返回错误，也继续执行剩余的回调
-3. **继续执行（响应）**：即使某个回调返回了 CustomResponse，也继续执行剩余的回调
-4. **继续执行（两者）**：无论发生错误或返回 CustomResponse，都继续执行所有回调
-
-**优先级规则：**
-
-- 如果同时发生错误和 CustomResponse，错误优先，将被返回（除非 `continueOnError` 为 true）
-- 当 `continueOnError` 为 true 且发生错误时，执行会继续，但第一个错误会被保留并在最后返回
-- 当 `continueOnResponse` 为 true 且返回了 CustomResponse 时，执行会继续，但最后一个 CustomResponse 会被使用
-
-示例：
+- `BeforeAgent` 可直接访问 `args.Invocation`，适合入口鉴权、配额校验或短路返回固定响应。
+- `AfterAgent` 通过 `args.FullResponseEvent` 获取最终响应事件，适合审计、后处理或替换输出。
 
 ```go
 agentCallbacks := agent.NewCallbacks().
-  // Before：当用户消息包含 /abort 时，直接返回固定响应，跳过后续流程
-  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
-    if args.Invocation != nil && strings.Contains(args.Invocation.GetUserMessageContent(), "/abort") {
-      return &agent.BeforeAgentResult{
-        CustomResponse: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}}},
-      }, nil
-    }
-    return nil, nil
-  }).
-  // After：在成功响应末尾追加标注，可以访问 FullResponseEvent 获取最终响应事件
-  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
-    if args.Error != nil {
-      return nil, args.Error
-    }
-    // 可以通过 FullResponseEvent 访问 agent 的最终输出结果
-    if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil {
-      if len(args.FullResponseEvent.Response.Choices) > 0 {
-        c := args.FullResponseEvent.Response.Choices[0]
-        c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
-        args.FullResponseEvent.Response.Choices[0] = c
-        return &agent.AfterAgentResult{CustomResponse: args.FullResponseEvent.Response}, nil
-      }
-    }
-    return nil, nil
-  })
-```
+    RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+        if args.Invocation != nil && strings.Contains(args.Invocation.GetUserMessageContent(), "/abort") {
+            return &agent.BeforeAgentResult{
+                CustomResponse: &model.Response{
+                    Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}},
+                },
+            }, nil
+        }
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+        if args.Error != nil {
+            return nil, args.Error
+        }
+        if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil && len(args.FullResponseEvent.Response.Choices) > 0 {
+            c := args.FullResponseEvent.Response.Choices[0]
+            c.Message.Content += "\n\n-- handled by agent callback"
+            args.FullResponseEvent.Response.Choices[0] = c
+            return &agent.AfterAgentResult{CustomResponse: args.FullResponseEvent.Response}, nil
+        }
+        return nil, nil
+    })
 
-**使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithAgentCallbacks()` 选项传入：
-
-```go
-// 创建 Agent 回调
-agentCallbacks := agent.NewCallbacks().
-  RegisterBeforeAgent(...).
-  RegisterAfterAgent(...)
-
-// 创建 LLM Agent 并传入 Agent 回调
 llmAgent := llmagent.New(
-  "chat-assistant",
-  llmagent.WithModel(modelInstance),
-  llmagent.WithAgentCallbacks(agentCallbacks),  // 传入 Agent 回调
+    "chat-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAgentCallbacks(agentCallbacks),
 )
 ```
-
-### 在回调中停止 agent {#stop-agent-via-callbacks}
-
-当需要终止执行并向 runner 事件流发出 `stop_agent_error` 时，在回调中返回 `agent.NewStopError`。适用于配额校验、风控、人工中断等场景。
-
-```go
-agentCallbacks := agent.NewCallbacks().
-  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
-    if args.Invocation != nil && args.Invocation.TokenUsage.Total >= maxTokens {
-      return nil, agent.NewStopError("token limit reached")
-    }
-    return nil, nil
-  }).
-  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
-    if args.Error != nil {
-      return nil, args.Error
-    }
-    if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil &&
-      args.FullResponseEvent.Response.Usage.TotalTokens >= maxTokens {
-      return nil, agent.NewStopError("token limit reached after response")
-    }
-    return nil, nil
-  })
-```
-
-说明：
-
-- Flow 会把 `StopError` 转换成 `stop_agent_error` 事件并停止循环。下游可以通过 `event.Error.Type == agent.ErrorTypeStopAgentError` 识别。
-- 若需要对正在进行的模型或工具调用做硬截止，请同时使用 context 取消；关于上下文取消的模式见 runner 文档的中断说明。
-
-完整示例请参考 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go)。
 
 ---
 
-## TranslateCallbacks
+### ModelCallbacks
 
-TranslateCallbacks 作为 AG-UI 事件 translate 的回调，分为两类：
-
-- BeforeTranslateCallback：内部事件翻译为 AG-UI 事件之前触发
-- AfterTranslateCallback：AG-UI 事件翻译完成，发往客户端前触发
-
-签名：
+在每次 LLM 请求发送前与收到响应后触发。
 
 ```go
-import (
-    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-    "trpc.group/trpc-go/trpc-agent-go/event"
-)
+type BeforeModelArgs struct {
+    Request *model.Request // 即将发送给模型的请求（可原地修改）
+}
 
-type BeforeTranslateCallback func(ctx context.Context, evt *event.Event) (*event.Event, error)
-type AfterTranslateCallback  func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error)
+type BeforeModelResult struct {
+    Context        context.Context // 可选，替换后续操作使用的上下文
+    CustomResponse *model.Response // 非空时跳过真实模型调用并返回此响应
+}
+
+type AfterModelArgs struct {
+    Request  *model.Request  // 发送给模型的原始请求
+    Response *model.Response // 模型返回的响应（可能为 nil）
+    Error    error           // 模型调用过程中发生的错误（可能为 nil）
+}
+
+type AfterModelResult struct {
+    Context        context.Context // 可选，替换后续操作使用的上下文
+    CustomResponse *model.Response // 非空时替换原始模型响应
+}
+
+type BeforeModelCallbackStructured func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error)
+type AfterModelCallbackStructured  func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error)
 ```
 
-要点：
+- `BeforeModel` 可原地修改 `args.Request`（如注入消息、调整推理参数），也可返回 `CustomResponse` 跳过真实模型调用。
+- `AfterModel` 同时提供原始 `args.Request` 与 `args.Response`，便于内容还原、风控或响应重写。
 
-- Before 回调返回非空自定义事件时，事件翻译的输入被替换为该自定义事件
-- After 回调返回非空自定义事件时，事件翻译的输出被替换为该自定义事件，最终发送给客户端
-- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
+```go
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+        if len(args.Request.Messages) > 0 && strings.Contains(args.Request.Messages[len(args.Request.Messages)-1].Content, "/ping") {
+            return &model.BeforeModelResult{
+                CustomResponse: &model.Response{
+                    Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}},
+                },
+            }, nil
+        }
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+        if args.Error != nil {
+            return nil, args.Error
+        }
+        if args.Response != nil && len(args.Response.Choices) > 0 {
+            args.Response.Choices[0].Message.Content += "\n\n-- answered by callback"
+            return &model.AfterModelResult{CustomResponse: args.Response}, nil
+        }
+        return nil, nil
+    })
 
-示例：
+llmAgent := llmagent.New(
+    "chat-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithModelCallbacks(modelCallbacks),
+)
+```
+
+---
+
+### ToolCallbacks
+
+在每次工具调用前、调用后触发，并可选提供将最终工具结果转为模型消息的钩子。
+
+```go
+type BeforeToolArgs struct {
+    ToolCallID  string            // 模型发出的工具调用 ID
+    ToolName    string            // 工具名称
+    Declaration *tool.Declaration // 工具声明元数据
+    Arguments   []byte            // 当前 JSON 参数
+    ResumeValue any               // 恢复值（中断恢复场景）
+    ResumeMap   map[string]any    // 恢复值映射
+}
+
+type BeforeToolResult struct {
+    Context           context.Context // 可选，替换后续操作使用的上下文
+    CustomResult      any             // 非空时跳过工具执行并直接返回此结果
+    SkipStateDelta    bool            // 跳过 CustomResult 的 state-delta provider（CustomResult 为 nil 时忽略）
+    ModifiedArguments []byte          // 非空时使用修改后的参数执行工具
+}
+
+type AfterToolArgs struct {
+    ToolCallID  string            // 模型发出的工具调用 ID
+    ToolName    string            // 工具名称
+    Declaration *tool.Declaration // 工具声明元数据
+    Arguments   []byte            // before-tool 回调后的最终 JSON 参数
+    Result      any               // 工具执行结果（可能为 nil）
+    Error       error             // 工具执行错误（可能为 nil）
+    Meta        map[string]any    // 可选元数据（例如 MCP CallToolResult 的 _meta）
+}
+
+type AfterToolResult struct {
+    Context             context.Context // 可选，替换后续操作使用的上下文
+    CustomResult        any             // 非空时替换原始结果
+    SkipResultFormatter bool            // 对 CustomResult 跳过工具 result formatter（CustomResult 为 nil 时忽略）
+    SkipStateDelta      bool            // 跳过 CustomResult 的 state-delta provider（CustomResult 为 nil 时忽略）
+    SkipSummarization   bool            // 为 true 时在 tool.response 后结束本轮
+}
+
+type BeforeToolCallbackStructured func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error)
+type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error)
+```
+
+- **修改参数**：要让工具真正使用修改后的参数，需要返回 `BeforeToolResult.ModifiedArguments`（框架会同步到工具执行、`TraceToolCall` 可观测属性以及图事件 `emitToolStartEvent`/`emitToolCompleteEvent`）。仅给 `args.Arguments` 重新赋值只影响同一回调链中的后续回调。
+- **结果处理标志（`SkipResultFormatter`、`SkipStateDelta`）**：仅在 `CustomResult != nil` 时生效，否则忽略：
+  - `SkipResultFormatter`：绕过工具配置的 result formatter，改用默认转换（`model.ToolResultContent` 保留结构化内容，其余值按 JSON 序列化），适用于返回协议或错误信封而非工具声明输出类型的场景。
+  - `SkipStateDelta`：阻止非空 `CustomResult` 触发工具的 state-delta provider，适用于替换结果并非工具正常输出的场景。
+- **跳过总结（`SkipSummarization`）**：在 `tool.response` 后直接结束本轮，跳过额外的总结型 LLM 调用；它**不会**把 `tool.response` 变成最终 assistant 消息，消费侧仍应以 `runner.completion`（`event.IsRunnerCompletion()`）作为终止信号。
+
+!!! warning "工具鉴权与 Session 历史"
+    `BeforeTool` 仅在模型**实际发起工具调用**时触发。如果工具结果写入了 Session 历史且同一会话内权限可能变化，模型可能直接复用历史答案而跳过工具调用。此类场景需要在 Prompt 构建阶段同步做好历史隔离或过滤（参考 Session 文档「权限变更与历史隔离」）。
+
+```go
+toolCallbacks := tool.NewCallbacks().
+    RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+        if args.Arguments != nil && args.ToolName == "calculator" {
+            var payload map[string]any
+            if err := json.Unmarshal(args.Arguments, &payload); err != nil {
+                return nil, err
+            }
+            if op, ok := payload["operation"].(string); ok {
+                payload["operation"] = strings.ToLower(op)
+            }
+            modifiedJSON, err := json.Marshal(payload)
+            if err != nil {
+                return nil, err
+            }
+            return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
+        }
+        return nil, nil
+    }).
+    RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+        if args.Error != nil {
+            return nil, args.Error
+        }
+        if s, ok := args.Result.(string); ok {
+            return &tool.AfterToolResult{
+                CustomResult: s + "\n-- post processed by tool callback",
+            }, nil
+        }
+        return nil, nil
+    })
+
+llmAgent := llmagent.New(
+    "chat-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(tools),
+    llmagent.WithToolCallbacks(toolCallbacks),
+)
+```
+
+动态跳过总结示例：
+
+```go
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+    if args.Error != nil {
+        return nil, nil
+    }
+    if out, ok := args.Result.(map[string]any); ok && out["action"] != nil {
+        return &tool.AfterToolResult{SkipSummarization: true}, nil
+    }
+    return nil, nil
+})
+```
+
+#### ToolResultMessages 回调
+
+`ToolResultMessagesFunc` 在工具执行与 `AfterTool` 之后触发一次，用于自定义工具结果如何转为发回模型的消息：
+
+```go
+type ToolResultMessagesInput struct {
+    ToolName           string            // 工具名称
+    Declaration        *tool.Declaration // 工具声明
+    Arguments          []byte            // 最终 JSON 参数（经过 before-tool 回调）
+    Result             any               // 最终工具结果（经过 after-tool 回调）
+    ToolCallID         string            // 工具调用 ID
+    DefaultToolMessage any               // 框架默认会发送的工具响应消息
+}
+
+type ToolResultMessagesFunc = func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error)
+```
+
+- 返回 `(nil, nil)` 或空切片时，回退使用 `DefaultToolMessage`。
+- 返回非空消息时替换默认消息；配合 `llmagent` 内置 OpenAI/Anthropic 适配器使用时，推荐返回 `[]model.Message`，且至少包含一条 `Role: model.RoleTool`、`ToolID: in.ToolCallID` 的消息。
+
+```go
+toolCallbacks := tool.NewCallbacks().
+    RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+        if messages, ok := in.Result.([]string); ok {
+            return []model.Message{
+                {
+                    Role:    model.RoleTool,
+                    Content: "工具结果：" + strings.Join(messages, ", "),
+                    ToolID:  in.ToolCallID,
+                },
+            }, nil
+        }
+        return nil, nil
+    })
+```
+
+---
+
+### TranslateCallbacks
+
+`TranslateCallbacks` 用于 AG-UI 事件翻译边界：在内部事件翻译为 AG-UI 事件前（`BeforeTranslate`）以及发往客户端前（`AfterTranslate`）触发。
 
 ```go
 import (
@@ -606,301 +393,160 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
+type BeforeTranslateCallback func(ctx context.Context, evt *event.Event) (*event.Event, error)
+type AfterTranslateCallback  func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error)
+```
+
+- 返回非空自定义事件时，替换翻译输入（`Before`）或翻译输出（`After`）。
+- 遇到错误或第一个非空自定义事件即立即停止，不提供 `WithContinueOn*` 选项；如需叠加多项修改，请在单个回调中完成。
+
+```go
 translateCallbacks := translator.NewCallbacks().
-  // 观测内部事件
-  RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
-    fmt.Println(event)
-    return nil, nil
-  }).
-  // 观测 AG-UI 事件
-  RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
-    fmt.Println(event)
-    return nil, nil
-  })
+    RegisterBeforeTranslate(func(ctx context.Context, evt *event.Event) (*event.Event, error) {
+        fmt.Println(evt)
+        return nil, nil
+    }).
+    RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+        fmt.Println(evt)
+        return nil, nil
+    })
 ```
 
-TranslateCallbacks 的详细介绍参见 [agui](./agui/index.md)
+更多细节参见 [AG-UI](./agui/index.md)。
 
 ---
 
-## 在回调中访问 Invocation
+## 常见用法
 
-回调可通过 context 获取当前的 Invocation 以便做关联日志、追踪或按次逻辑。
+### 在回调中停止 Agent
 
-```go
-if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-  fmt.Printf("invocation id=%s, agent=%s\n", inv.InvocationID, inv.AgentName)
-}
-```
-
-示例工程在 Before/After 回调中打印了 Invocation 的存在性。
-
-### 访问 Tool Call ID
-
-对于工具回调，你可以直接从回调参数中访问工具调用 ID：
-
-```go
-RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    // ToolCallID 在 args 中可用
-    fmt.Printf("Tool call ID: %s\n", args.ToolCallID)
-    // ...
-})
-
-RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-    // ToolCallID 在 args 中可用
-    fmt.Printf("Tool call ID: %s\n", args.ToolCallID)
-    // ...
-})
-```
-
-另外，你也可以使用 `tool.ToolCallIDFromContext(ctx)` 从 context 中获取工具调用 ID：
-
-```go
-if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
-    fmt.Printf("Tool call ID: %s\n", toolCallID)
-}
-```
-
----
-
-## Invocation State：在回调间共享状态
-
-`Invocation` 提供了通用的 `State` 机制，用于存储 invocation 级别的状态数据。它不仅可以在 Before 和 After 回调之间共享数据，也可以用于中间件、自定义逻辑等场景。
-
-### 核心方法
-
-```go
-// 设置状态值
-func (inv *Invocation) SetState(key string, value any)
-
-// 获取状态值，返回值和是否存在
-func (inv *Invocation) GetState(key string) (any, bool)
-
-// 删除状态值
-func (inv *Invocation) DeleteState(key string)
-```
-
-### 特点
-
-- **Invocation 级作用域**：状态自动限定在单次 Invocation 内
-- **线程安全**：内置 RWMutex 保护，支持并发访问
-- **懒初始化**：首次使用时才分配内存，节省资源
-- **清晰生命周期**：使用完毕后可显式删除，避免内存泄漏
-- **通用性强**：不限于 callbacks，可用于任何 invocation 级别的状态存储
-
-### 命名约定
-
-为避免不同使用场景之间的键冲突，建议使用前缀：
-
-- Agent 回调：`"agent:xxx"`（如 `"agent:start_time"`）
-- Model 回调：`"model:xxx"`（如 `"model:start_time"`）
-- Tool 回调：`"tool:<toolName>:<toolCallID>:xxx"`（如 `"tool:calculator:call_abc123:start_time"`）
-  - 注意：Tool 回调需要包含 tool call ID
-- 中间件：`"middleware:xxx"`（如 `"middleware:request_id"`）
-- 自定义逻辑：`"custom:xxx"`（如 `"custom:user_context"`）
-
-### 示例：Agent 回调计时
+需要因配额校验、风控拦截或人工中断而终止执行时，在回调中返回 `agent.NewStopError`。Flow 会将其转为 `stop_agent_error` 事件（消费侧可通过 `event.Error.Type == agent.ErrorTypeStopAgentError` 识别）并停止循环：
 
 ```go
 agentCallbacks := agent.NewCallbacks().
-  // BeforeAgentCallback：记录开始时间
-  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
-    args.Invocation.SetState("agent:start_time", time.Now())
-    return nil, nil
-  }).
-  // AfterAgentCallback：计算执行时长
-  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
-    if startTimeVal, ok := args.Invocation.GetState("agent:start_time"); ok {
-      startTime := startTimeVal.(time.Time)
-      duration := time.Since(startTime)
-      fmt.Printf("Agent execution took: %v\n", duration)
-      args.Invocation.DeleteState("agent:start_time") // 清理状态
-    }
-    return nil, nil
-  })
+    RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+        if args.Invocation != nil && args.Invocation.TokenUsage.Total >= maxTokens {
+            return nil, agent.NewStopError("token limit reached")
+        }
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+        if args.Error != nil {
+            return nil, args.Error
+        }
+        if args.FullResponseEvent != nil && args.FullResponseEvent.Response != nil &&
+            args.FullResponseEvent.Response.Usage.TotalTokens >= maxTokens {
+            return nil, agent.NewStopError("token limit reached after response")
+        }
+        return nil, nil
+    })
 ```
 
-### 示例：Model 回调计时
+若还需要对正在进行的模型或工具调用做硬截止，请配合 `context` 取消使用（见 Runner 文档的中断说明）。
 
-Model 和 Tool 回调需要先从 context 中获取 Invocation：
+### 访问 Invocation 与 Tool Call ID
+
+任意回调均可通过 `ctx` 获取当前 `Invocation`：
 
 ```go
-modelCallbacks := model.NewCallbacks().
-  // BeforeModelCallback：记录开始时间
-  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      inv.SetState("model:start_time", time.Now())
-    }
-    return nil, nil
-  }).
-  // AfterModelCallback：计算执行时长
-  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      if startTimeVal, ok := inv.GetState("model:start_time"); ok {
-        startTime := startTimeVal.(time.Time)
-        duration := time.Since(startTime)
-        fmt.Printf("Model inference took: %v\n", duration)
-        inv.DeleteState("model:start_time") // 清理状态
-      }
-    }
-    return nil, nil
-  })
+if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+    fmt.Printf("invocation id=%s, agent=%s\n", inv.InvocationID, inv.AgentName)
+}
 ```
 
-### 示例：Tool 回调计时（支持并发）
+在工具回调中，可直接读取 `args.ToolCallID`，也可通过 `tool.ToolCallIDFromContext(ctx)` 从 `ctx` 获取。
 
-当 LLM 在一次响应中返回多个工具调用时，框架会并发执行这些工具。为了正确追踪每个工具调用的状态，需要使用 **ToolCallID** 来区分：
+### Invocation State：在回调间共享状态
+
+`Invocation` 提供线程安全、懒初始化、按单次调用隔离的键值存储，用于在 `Before`/`After` 回调或中间件间共享状态：
+
+```go
+func (inv *Invocation) SetState(key string, value any)
+func (inv *Invocation) GetState(key string) (any, bool)
+func (inv *Invocation) DeleteState(key string)
+```
+
+建议使用带前缀的键名避免冲突，尤其是在并发工具调用场景下：
+
+| 作用域 | 键名格式 | 示例 |
+| --- | --- | --- |
+| Agent 回调 | `"agent:<key>"` | `"agent:start_time"` |
+| Model 回调 | `"model:<key>"` | `"model:start_time"` |
+| Tool 回调（并发安全） | `"tool:<toolName>:<toolCallID>:<key>"` | `"tool:calculator:call_abc123:start_time"` |
+| 中间件 / 自定义逻辑 | `"middleware:<key>"` / `"custom:<key>"` | `"middleware:request_id"` |
+
+并发安全的 Tool 回调计时示例（Agent 与 Model 计时写法相同，只需改用 `"agent:..."` 或 `"model:..."` 键名）：
 
 ```go
 toolCallbacks := tool.NewCallbacks().
-  // BeforeToolCallback：记录工具开始时间
-  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    // 使用 args 中的 ToolCallID
-    toolCallID := args.ToolCallID
-    if toolCallID == "" {
-      toolCallID = "default" // 降级方案
-    }
-
-    // 使用 tool call ID 构建唯一键
-    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
-
-    // 从 context 获取 Invocation
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      inv.SetState(key, time.Now())
-    }
-    return nil, nil
-  }).
-  // AfterToolCallback：计算工具执行时长
-  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-    // 使用 args 中的 ToolCallID
-    toolCallID := args.ToolCallID
-    if toolCallID == "" {
-      toolCallID = "default"
-    }
-
-    key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
-
-    // 从 context 获取 Invocation
-    if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-      if startTimeVal, ok := inv.GetState(key); ok {
-        startTime := startTimeVal.(time.Time)
-        duration := time.Since(startTime)
-        fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, duration)
-        inv.DeleteState(key) // 清理状态
-      }
-    }
-    return nil, nil
-  })
+    RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+        toolCallID := args.ToolCallID
+        if toolCallID == "" {
+            toolCallID = "default"
+        }
+        key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+        if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+            inv.SetState(key, time.Now())
+        }
+        return nil, nil
+    }).
+    RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+        toolCallID := args.ToolCallID
+        if toolCallID == "" {
+            toolCallID = "default"
+        }
+        key := fmt.Sprintf("tool:%s:%s:start_time", args.ToolName, toolCallID)
+        if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+            if startVal, ok := inv.GetState(key); ok {
+                fmt.Printf("Tool %s (call %s) took: %v\n", args.ToolName, toolCallID, time.Since(startVal.(time.Time)))
+                inv.DeleteState(key) // 用完清理，避免内存泄漏
+            }
+        }
+        return nil, nil
+    })
 ```
 
-**关键点**：
+完整可运行示例：
 
-1. **使用 args 中的 ToolCallID**：`BeforeToolArgs` 和 `AfterToolArgs` 现在直接包含 `ToolCallID` 字段
-2. **键名格式**：`"tool:<toolName>:<toolCallID>:<key>"` 确保并发调用的状态隔离
-3. **降级处理**：如果 ToolCallID 为空（旧版本或特殊场景），使用 `"default"` 作为降级
-4. **一致性**：Before 和 After 回调使用相同的 `ToolCallID`（来自回调参数）
+- 计时与 OpenTelemetry 集成：[examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
+- 基于 Invocation State 的鉴权与审计日志：[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
 
-这样可以确保当 LLM 同时调用 `calculator` 多次（如 `calculator(1,2)` 和 `calculator(3,4)`）时，每个调用都有独立的计时数据。
+### Mock 与可复用回调链
 
-### 完整示例
+在测试或降级场景中，通过 `BeforeTool` 直接返回 Mock 结果并跳过真实工具执行：
 
-完整的计时示例（包含 OpenTelemetry 集成）请参考：
-[examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
+```go
+toolCallbacks := tool.NewCallbacks().
+    RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+        if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
+            return &tool.BeforeToolResult{
+                CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
+            }, nil
+        }
+        return nil, nil
+    })
+```
 
-用户认证与授权示例（使用 Invocation State 进行权限检查和审计日志）请参考：
-[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
-
-注意：`BeforeToolCallback` 只会在“模型实际发起工具调用”时触发。
-如果你把工具结果写入 session 历史，而权限会在同一 session 中发生变化，
-模型可能复用历史答案而不再调用工具，从而绕过工具前回调的鉴权。
-这类场景需要在 Prompt 构建阶段做历史隔离/过滤，参考 Session 文档中的
-「权限变更与历史隔离」章节。
+所有 `Register*` 方法均返回接收者本身，支持链式构造可复用的回调集合（`NewCallbacks().RegisterBefore*(...).RegisterAfter*(...)`）；如果希望跨所有 Agent 统一生效，建议打包为 [插件（Plugin）](./plugin.md)。
 
 ---
 
-## 全局回调与链式注册
+## 行为细节与边界（Behavior Details）
 
-可通过链式注册构建可复用的全局回调配置。
+以下边界约定适用于全部 6 条结构化回调链（`Before/After` × `Agent/Model/Tool`）：
 
-```go
-_ = model.NewCallbacks().
-  RegisterBeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
-    fmt.Printf("Global BeforeModel: %d messages.\n", len(args.Request.Messages))
-    return nil, nil
-  }).
-  RegisterAfterModel(func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
-    fmt.Println("Global AfterModel: completed.")
-    return nil, nil
-  })
-
-_ = tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    fmt.Printf("Global BeforeTool: %s.\n", args.ToolName)
-    return nil, nil
-  }).
-  RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
-    fmt.Printf("Global AfterTool: %s done.\n", args.ToolName)
-    return nil, nil
-  })
-
-_ = agent.NewCallbacks().
-  RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
-    fmt.Printf("Global BeforeAgent: %s.\n", args.Invocation.AgentName)
-    return nil, nil
-  }).
-  RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
-    fmt.Println("Global AfterAgent: completed.")
-    return nil, nil
-  })
-```
-
----
-
-## Mock 与参数修改示例
-
-Mock 工具结果并中止后续工具调用：
-
-```go
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    if args.ToolName == "calculator" && args.Arguments != nil && strings.Contains(string(args.Arguments), "42") {
-      return &tool.BeforeToolResult{
-        CustomResult: calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242},
-      }, nil
-    }
-    return nil, nil
-  })
-```
-
-执行前修改参数（并在可观测/事件中体现）：
-
-```go
-toolCallbacks := tool.NewCallbacks().
-  RegisterBeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
-    if args.Arguments != nil && args.ToolName == "calculator" {
-      var payload map[string]any
-      if err := json.Unmarshal(args.Arguments, &payload); err != nil {
-        return nil, err
-      }
-      if op, ok := payload["operation"].(string); ok {
-        payload["operation"] = strings.ToLower(op)
-      }
-      modifiedJSON, err := json.Marshal(payload)
-      if err != nil {
-        return nil, err
-      }
-      args.Arguments = modifiedJSON
-      return &tool.BeforeToolResult{ModifiedArguments: modifiedJSON}, nil
-    }
-    return nil, nil
-  })
-```
-
-以上示例与 [`examples/callbacks`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks) 可运行示例保持一致。
+- **所有权与隔离**：由于 Go 回调返回的是结构体指针，直接在链上修改或复用指针容易造成框架与调用方互相污染。框架在调用下一个回调前会将已采纳结果的顶层字段复制到独立累积器中，**绝不就地修改**回调方持有的结果结构体（包括 `agent` 保留 graph completion capture 标记的场景）；回调方复用或清空已返回的结构体也不会抹掉先前已累积的字段。注意其中引用的响应对象（`*model.Response`）与参数缓冲区（`[]byte`）仍共享引用，不做深拷贝。
+- **错误早停返回边界**：
+  - 默认遇到错误停止（`continueOnError == false`）时：`Agent` 与 `Model` 回调链返回 `(nil, err)`；`Tool` 回调链返回出错回调的原始 `(result, err)`，不合并先前字段。
+  - 启用 `WithContinueOnError(true)` 后：6 条链均返回已累积结果与第一个错误。
+- **并行工具结果发布**：并行工具在默认合并结果模式下，回调替换后的 `Context` 用于控制工具执行，而结果发布遵循 worker 生命周期——仅取消回调替换的上下文不会丢弃缓存结果，主动解除取消传播（`context.Background()` / `context.WithoutCancel(ctx)`）也不会让结果发布在 worker 取消后继续阻塞等待。
+- **旧签名回调兼容**：已废弃的旧签名回调仍可通过自动包装器注册。当旧回调返回 `(nil, nil)` 时，包装器返回空结构体，按透传处理，不会清空前序已累积的字段（包括 `WithContinueOnResponse(true)` 下的前序覆盖）。
 
 ---
 
 ## 运行示例
+
+以上用法均可在 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go) 中直接运行观察：
 
 ```bash
 cd examples/callbacks
@@ -916,4 +562,4 @@ go run . -model gpt-4o-mini
 go run . -streaming=false
 ```
 
-可在日志中观察 Before/After 回调、参数修改与工具返回信息。
+运行后可在日志中观察 Before/After 回调执行、参数修改与工具返回结果。
