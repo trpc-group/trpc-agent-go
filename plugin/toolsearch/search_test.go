@@ -9,259 +9,13 @@
 package toolsearch
 
 import (
-	"regexp"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-func TestTokenizeQuery(t *testing.T) {
-	tests := []struct {
-		name  string
-		query string
-		want  []string
-	}{
-		{"empty", "", []string{}},
-		{"single word", "hello", []string{"hello"}},
-		{"space separated", "hello world", []string{"hello", "world"}},
-		{"comma separated", "a,b,c", []string{"a", "b", "c"}},
-		{"Chinese comma", "获取时间，查看天气", []string{"获取时间", "查看天气"}},
-		{"mixed separators", "a, b; c|d", []string{"a", "b", "c", "d"}},
-		{"Chinese and English", "时间 time", []string{"时间", "time"}},
-		{"underscore preserved", "create_invoice", []string{"create_invoice"}},
-		{"hyphen preserved", "my-tool", []string{"my-tool"}},
-		{"plus prefix", "+invoice +export", []string{"+invoice", "+export"}},
-		{"just separators", ", ; |", []string{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, tokenizeQuery(tt.query))
-		})
-	}
-}
-
-func TestParseQueryTerms(t *testing.T) {
-	tests := []struct {
-		name    string
-		terms   []string
-		wantReq []string
-		wantOpt []string
-	}{
-		{"all optional", []string{"a", "b", "c"}, nil, []string{"a", "b", "c"}},
-		{"all required", []string{"+a", "+b"}, []string{"a", "b"}, nil},
-		{"mixed", []string{"+a", "b", "+c"}, []string{"a", "c"}, []string{"b"}},
-		{"plus only", []string{"+"}, nil, []string{"+"}},
-		{"empty", nil, nil, nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req, opt := parseQueryTerms(tt.terms)
-			assert.Equal(t, tt.wantReq, req)
-			assert.Equal(t, tt.wantOpt, opt)
-		})
-	}
-}
-
-func TestSplitRequiredTerm(t *testing.T) {
-	assert.Equal(t, []string{"abc"}, splitRequiredTerm("abc"))
-	assert.Equal(t, []string{"a", "b"}, splitRequiredTerm("a_b"))
-	assert.Equal(t, []string{"a", "b"}, splitRequiredTerm("a-b"))
-	assert.Equal(t, []string{"create", "invoice"}, splitRequiredTerm("create_invoice"))
-	assert.Equal(t, []string{"create", "invoice"}, splitRequiredTerm("create-invoice"))
-	// Just underscores → returns the term itself via the fallback in fieldsFunc.
-	assert.Equal(t, []string{"_"}, splitRequiredTerm("_"))
-}
-
-func TestBuildScoringTerms(t *testing.T) {
-	// No required terms → returns optional as-is.
-	assert.Equal(t, []string{"a", "b"}, buildScoringTerms(nil, []string{"a", "b"}))
-
-	// Required terms are split on _/-.
-	assert.Equal(t, []string{"create", "invoice", "extra"}, buildScoringTerms([]string{"create_invoice"}, []string{"extra"}))
-
-	// Multiple required terms.
-	assert.Equal(t, []string{"a", "b", "c", "d"}, buildScoringTerms([]string{"a_b", "c-d"}, nil))
-}
-
-func TestCompileTermPatterns(t *testing.T) {
-	// ASCII terms get compiled regex.
-	patterns := compileTermPatterns([]string{"hello", "world"})
-	assert.NotNil(t, patterns["hello"])
-	assert.NotNil(t, patterns["world"])
-
-	// Non-ASCII (CJK) terms get nil.
-	patterns = compileTermPatterns([]string{"你好"})
-	assert.Nil(t, patterns["你好"])
-
-	// Duplicates are skipped.
-	patterns = compileTermPatterns([]string{"hello", "hello"})
-	assert.Len(t, patterns, 1)
-}
-
-func TestIsASCII(t *testing.T) {
-	assert.True(t, isASCII("hello"))
-	assert.True(t, isASCII("hello_world"))
-	assert.False(t, isASCII("你好"))
-	assert.False(t, isASCII("hello世界"))
-	assert.False(t, isASCII(""))
-}
-
-func TestMatchTermInText(t *testing.T) {
-	patterns := compileTermPatterns([]string{"hello", "world", "hell"})
-
-	// ASCII word-boundary match.
-	assert.True(t, matchTermInText("hello", "hello world", patterns))
-	assert.True(t, matchTermInText("world", "hello world", patterns))
-	// Partial match fails when pattern exists with word boundary regex.
-	assert.False(t, matchTermInText("hell", "hello world", patterns))
-
-	// Non-ASCII (CJK) falls back to substring.
-	assert.True(t, matchTermInText("你好", "你好世界", nil))
-	assert.True(t, matchTermInText("世界", "你好世界", nil))
-
-	// Term not in patterns: substring fallback.
-	assert.True(t, matchTermInText("abc", "xabcy", make(map[string]*regexp.Regexp)))
-	assert.False(t, matchTermInText("abc", "xyz", make(map[string]*regexp.Regexp)))
-}
-
-func TestMatchesAllRequired(t *testing.T) {
-	meta := &toolMetadata{
-		Parts:       []string{"create", "invoice"},
-		Full:        "create invoice",
-		Description: "create a billing invoice",
-		descLower:   "create a billing invoice",
-		nameLower:   "create_invoice",
-	}
-	patterns := compileTermPatterns([]string{"create", "invoice", "missing"})
-
-	// All required match.
-	assert.True(t, matchesAllRequired(meta, []string{"create", "invoice"}, patterns))
-	// One misses (name part doesn't match, description doesn't contain "missing").
-	assert.False(t, matchesAllRequired(meta, []string{"create", "missing"}, patterns))
-	// Compound term split: "create_invoice" → "create" and "invoice" both match.
-	assert.True(t, matchesAllRequired(meta, []string{"create_invoice"}, patterns))
-}
-
-func TestNameOrDescHasTerm(t *testing.T) {
-	meta := &toolMetadata{
-		Parts:       []string{"get", "weather"},
-		Full:        "get weather",
-		Description: "get the weather forecast",
-		descLower:   "get the weather forecast",
-		nameLower:   "get_weather",
-	}
-	patterns := compileTermPatterns([]string{"weather", "forecast", "missing"})
-
-	// Match in name parts.
-	assert.True(t, nameOrDescHasTerm(meta, "weather", patterns))
-	// Match in description.
-	assert.True(t, nameOrDescHasTerm(meta, "forecast", patterns))
-	// No match.
-	assert.False(t, nameOrDescHasTerm(meta, "missing", patterns))
-}
-
-func TestScoreToolForQuery(t *testing.T) {
-	meta := &toolMetadata{
-		Parts:       []string{"create", "invoice"},
-		Full:        "create invoice",
-		Description: "create a billing invoice",
-		descLower:   "create a billing invoice",
-		nameLower:   "create_invoice",
-	}
-	patterns := compileTermPatterns([]string{"create", "invoice", "billing"})
-
-	// Name part exact match: 10 per term + description match: 3 per term = 26.
-	assert.Equal(t, 26, scoreToolForQuery(meta, []string{"create", "invoice"}, patterns))
-	// Description word-boundary match: 3 for billing.
-	assert.Equal(t, 3, scoreToolForQuery(meta, []string{"billing"}, make(map[string]*regexp.Regexp)))
-	// Compound term with _ or - in name: +10 for the compound substring match.
-	assert.Equal(t, 10, scoreToolForQuery(meta, []string{"create_invoice"}, patterns))
-	// No match at all → fallback to full-name match: 3.
-	assert.Equal(t, 3, scoreToolForQuery(meta, []string{"create invoice"}, patterns))
-}
-
-func TestCandidateSetWithBias(t *testing.T) {
-	p := New(nil,
-		WithDeferredTools([]tool.Tool{newTestTool("default_tool", "desc")}),
-		WithToolboxes([]Toolbox{
-			{Name: "billing", Description: "invoice and payment tools", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
-			{Name: "media", Description: "image assets", Tools: []tool.Tool{newTestTool("create_image", "y")}},
-		}),
-	)
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	// Specific namespace → return that toolbox's tools.
-	set, bias := p.candidateSetWithBias("billing", []string{"invoice"})
-	_, inSet := set["create_invoice"]
-	assert.True(t, inSet)
-	assert.Nil(t, bias, "no bias when namespace is specified")
-
-	// Empty namespace → return all deferred tools + namespace bias.
-	set, bias = p.candidateSetWithBias("", []string{"invoice"})
-	assert.Contains(t, set, "default_tool")
-	assert.Contains(t, set, "create_invoice")
-	assert.Contains(t, set, "create_image")
-	// billing should get bias > 0 since "invoice" matches its description.
-	assert.Greater(t, bias["billing"], 0)
-	assert.Empty(t, bias["media"], "media should not match 'invoice'")
-}
-
-func TestScoreNamespacesByQueries(t *testing.T) {
-	p := New(nil, WithToolboxes([]Toolbox{
-		{Name: "billing", Description: "invoice and payment tools"},
-		{Name: "media", Description: "image assets"},
-		{Name: "ops", Description: ""}, // no description → skipped
-	}))
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	scores := p.scoreNamespacesByQueries([]string{"invoice"})
-	assert.Greater(t, scores["billing"], 0, "billing matches 'invoice'")
-	assert.Empty(t, scores["media"], "media should not match")
-	assert.Empty(t, scores["ops"], "empty description should be skipped")
-
-	// No queries → nil.
-	assert.Nil(t, p.scoreNamespacesByQueries(nil))
-}
-
-func TestScoreQueryInto(t *testing.T) {
-	p := New(nil, WithDeferredTools([]tool.Tool{
-		newTestTool("get_weather", "weather forecast"),
-		newTestTool("get_time", "current time"),
-	}))
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	candidatesSet := p.deferredNames
-	best := make(map[string]int)
-
-	// Exact name match: exactNameScore (1000).
-	p.scoreQueryInto(candidatesSet, "get_weather", best)
-	assert.Equal(t, exactNameScore, best["get_weather"])
-
-	// Empty query → no-op.
-	p.scoreQueryInto(candidatesSet, "", best)
-
-	// Keyword match.
-	best = make(map[string]int)
-	p.scoreQueryInto(candidatesSet, "weather", best)
-	assert.Positive(t, best["get_weather"])
-	assert.Empty(t, best["get_time"], "time should not match weather query")
-
-	// tool not in candidatesSet should not appear.
-	best = make(map[string]int)
-	limited := map[string]struct{}{"get_weather": {}}
-	p.scoreQueryInto(limited, "time", best)
-	assert.Empty(t, best)
-
-	// Exact name match for tool not in scope.
-	best = make(map[string]int)
-	p.scoreQueryInto(limited, "get_time", best)
-	assert.Empty(t, best, "exact match outside candidate set is ignored")
-}
 
 func TestFormatNamespaceError(t *testing.T) {
 	p := New(nil, WithToolboxes([]Toolbox{
@@ -276,4 +30,163 @@ func TestFormatNamespaceError(t *testing.T) {
 	assert.Contains(t, raw, "ghost")
 	assert.Contains(t, raw, "billing")
 	assert.Contains(t, raw, "media")
+}
+
+func TestSearchByQueries_PreservesCanonicalNameScope(t *testing.T) {
+	p := New(nil, WithToolboxes([]Toolbox{
+		{Name: "first", Tools: []tool.Tool{
+			newTestTool("CREATE_INVOICE", ""),
+			newTestTool("create_invoice_extra", "create_invoice"),
+		}},
+		{Name: "second", Tools: []tool.Tool{newTestTool("create_invoice", "")}},
+	}))
+	ctx, _ := ctxWithInvocation()
+	global := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"CREATE_INVOICE"}})
+	assert.Equal(t, []string{"create_invoice"}, toolNames(global.Tools))
+
+	scoped := callSearch(t, ctx, p, toolSearchInput{
+		Namespace: "first", Queries: []string{"create_invoice"}, MaxResults: 1,
+	})
+	assert.Equal(t, []string{"create_invoice_extra"}, toolNames(scoped.Tools))
+	assert.Equal(t, []string{"CREATE_INVOICE"}, scoped.AdditionalCandidates)
+}
+
+func TestSearchByQueries_NamespaceBiasAndDescriptionEnrichment(t *testing.T) {
+	p := New(nil, WithToolboxes([]Toolbox{
+		{Name: "billing", Tools: []tool.Tool{newTestTool("z_tool", "lookup")}},
+		{Name: "other", Tools: []tool.Tool{newTestTool("a_tool", "lookup")}},
+		{Name: "billing", Description: "invoice tools"},
+		{Name: "empty", Description: "invoice tools", Tools: []tool.Tool{newTestTool("unrelated", "")}},
+	}))
+	ctx, _ := ctxWithInvocation()
+	global := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"lookup invoice"}, MaxResults: 1})
+	assert.Equal(t, []string{"z_tool"}, toolNames(global.Tools))
+	assert.Equal(t, []string{"a_tool"}, global.AdditionalCandidates)
+
+	// Namespace text biases existing hits but does not make unrelated tools
+	// match merely because their namespace matches the query.
+	namespaceOnly := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"billing invoice"}})
+	assert.Empty(t, namespaceOnly.Tools)
+}
+
+func TestSearchByQueries_PreservesNameOrderingAndOverflow(t *testing.T) {
+	p := New(nil, WithDeferredTools([]tool.Tool{
+		newTestTool("z_two", "record"),
+		newTestTool("bbb", "record"),
+		newTestTool("aaa", "record"),
+		newTestTool("a_two", "record"),
+	}))
+	ctx, _ := ctxWithInvocation()
+	res := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"record"}, MaxResults: 2})
+	assert.Equal(t, []string{"aaa", "bbb"}, toolNames(res.Tools))
+	assert.Equal(t, []string{"a_two", "z_two"}, res.AdditionalCandidates)
+}
+
+func TestSearchByQueries_ExactNameStillChecksPermissions(t *testing.T) {
+	p := New(nil, WithDeferredTools([]tool.Tool{
+		newTestTool("get_invoice", ""),
+		newTestTool("get_invoice_extra", "get_invoice"),
+	}))
+	selected, overflow, errPayload := p.resolveSelection(searchRequest{
+		queries: []string{"get_invoice"}, maxResults: 1,
+	}, map[string]bool{"get_invoice_extra": true})
+	assert.Empty(t, errPayload)
+	assert.Equal(t, []string{"get_invoice_extra"}, selected)
+	assert.Empty(t, overflow)
+}
+
+func TestSearchByQueries_MCPNamespaceDescriptionEnrichment(t *testing.T) {
+	ts := &fakeToolSet{name: "billing", tools: []tool.Tool{newTestTool("read", "lookup")}}
+	p := New(nil,
+		WithDeferredTools([]tool.Tool{newTestTool("a_default", "lookup")}),
+		WithMCPToolboxes([]MCPToolbox{{ServerName: "billing", ToolSet: ts}}),
+	)
+	ctx, _ := ctxWithInvocation()
+	p.materializeAllMCP(ctx)
+	p.mu.Lock()
+	p.registerToolbox("billing", "invoice tools", nil)
+	p.mu.Unlock()
+	// Resolve directly so a new MCP listing cannot mask a stale cached document.
+	selected, _, errPayload := p.resolveSelection(searchRequest{
+		queries: []string{"lookup invoice"}, maxResults: 5,
+	}, nil)
+	assert.Empty(t, errPayload)
+	assert.Equal(t, []string{"mcp__billing__read", "a_default"}, selected)
+}
+
+func TestSearchByQueries_ExactAndLexicalHitsAfterPermissionFiltering(t *testing.T) {
+	p := New(nil, WithDeferredTools([]tool.Tool{
+		newTestTool("m_target", ""),
+		newTestTool("z_filler", ""),
+		newTestTool("a_denied", "alpha beta"),
+		newTestTool("b_alpha_beta", "alpha beta"),
+	}))
+	allowed := map[string]bool{"b_alpha_beta": true, "m_target": true, "z_filler": true}
+	selected, overflow, errPayload := p.resolveSelection(searchRequest{
+		queries:    []string{"M_TARGET", "alpha beta"},
+		maxResults: 1,
+	}, allowed)
+	assert.Empty(t, errPayload)
+	assert.Equal(t, []string{"m_target"}, selected)
+	assert.Equal(t, []string{"b_alpha_beta"}, overflow)
+}
+
+func TestSearchByQueries_MultipleExactNames(t *testing.T) {
+	p := New(nil, WithToolboxes([]Toolbox{
+		{Name: "other", Tools: []tool.Tool{newTestTool("a_report", "")}},
+		{Name: "billing", Description: "z_report", Tools: []tool.Tool{
+			newTestTool("z_report", ""),
+			newTestTool("z_report_details", "z_report"),
+		}},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	result := callSearch(t, ctx, p, toolSearchInput{
+		Queries: []string{" A_REPORT ", "Z_REPORT", "a_report"}, MaxResults: 1,
+	})
+	assert.Equal(t, []string{"z_report"}, toolNames(result.Tools))
+	assert.Equal(t, []string{"a_report"}, result.AdditionalCandidates)
+}
+
+func TestSearchByQueries_NamespaceBiasCountsDistinctWholeTokens(t *testing.T) {
+	p := New(nil, WithToolboxes([]Toolbox{
+		{Name: "other", Description: "lookup invoice id", Tools: []tool.Tool{
+			newTestTool("a_record", "lookup invoice id"),
+		}},
+		{Name: "billing", Description: "invoice-id region", Tools: []tool.Tool{
+			newTestTool("z_record", "lookup invoice id"),
+		}},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	result := callSearch(t, ctx, p, toolSearchInput{
+		Queries:    []string{"+invoice-id lookup", "+lookup", "lookup lookup lookup", "region"},
+		MaxResults: 1,
+	})
+	assert.Equal(t, []string{"z_record"}, toolNames(result.Tools))
+	assert.Equal(t, []string{"a_record"}, result.AdditionalCandidates)
+}
+
+func BenchmarkKeywordSearch(b *testing.B) {
+	for _, size := range []int{100, 1000, 5000} {
+		tools := make([]tool.Tool, size)
+		for i := range tools {
+			description := "regular operation"
+			if i%100 == 0 {
+				description = "rare record"
+			}
+			tools[i] = newTestTool(fmt.Sprintf("tool_%04d", i), description)
+		}
+		p := New(nil, WithDeferredTools(tools))
+		for _, query := range []string{"absent", "rare", "regular", "tool_0000"} {
+			b.Run(fmt.Sprintf("%d/%s", size, query), func(b *testing.B) {
+				req := searchRequest{queries: []string{query}, maxResults: 5}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					p.resolveSelection(req, nil)
+				}
+			})
+		}
+	}
 }

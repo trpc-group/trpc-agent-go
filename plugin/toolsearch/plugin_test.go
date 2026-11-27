@@ -341,8 +341,7 @@ func TestBeforeTool_IgnoresPresetTool(t *testing.T) {
 
 // TestPreset_NotSurfacedByKeywordQuery asserts a preset tool is never
 // returned by a keyword query, even when its description matches the query
-// tokens verbatim. Guards the deferred-only candidate set in
-// candidateSetWithBias.
+// tokens verbatim. Guards the deferred-only search candidate set.
 func TestPreset_NotSurfacedByKeywordQuery(t *testing.T) {
 	preset := newTestTool("send_invoice_email", "send an invoice email to a customer")
 	deferred := newTestTool("create_invoice", "create an invoice for a customer")
@@ -501,17 +500,6 @@ func TestDuplicateNamespaceRegistrationKeepsFirstOwner(t *testing.T) {
 	second := callSearch(t, ctx, p, toolSearchInput{Namespace: "second"})
 	assert.NotContains(t, toolNames(second.Tools), "shared_tool",
 		"shared_tool should not be discoverable under the second namespace")
-}
-
-func TestParseToolName(t *testing.T) {
-	cases := map[string][]string{
-		"create_invoice":      {"create", "invoice"},
-		"createInvoice":       {"create", "invoice"},
-		"mcp__server__action": {"mcp", "server", "action"},
-	}
-	for name, want := range cases {
-		assert.Equal(t, want, parseToolName(name).Parts, name)
-	}
 }
 
 func TestRegister_NilCases(t *testing.T) {
