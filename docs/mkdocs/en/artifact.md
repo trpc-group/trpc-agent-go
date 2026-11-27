@@ -308,6 +308,9 @@ type Service interface {
     // Load an artifact (latest version if version is nil)
     LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error)
     
+    // Get artifact metadata without downloading content (latest if req.Version is nil)
+    Head(ctx context.Context, req *HeadRequest, opts ...HeadOption) (*HeadResponse, error)
+    
     // List all artifact filenames in a session
     ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)
     
