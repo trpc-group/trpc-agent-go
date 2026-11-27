@@ -148,6 +148,51 @@ if err != nil {
 }
 ```
 
+### Case Concurrency
+
+The Langfuse handler submits all requested case IDs in one `Evaluate` call.
+Configure concurrency on the evaluator using the existing options; no handler
+parallelism option is required:
+
+```go
+evaluation.WithEvalCaseParallelism(8),
+evaluation.WithEvalCaseParallelInferenceEnabled(true),
+evaluation.WithEvalCaseParallelEvaluationEnabled(true),
+```
+
+The inference and evaluation switches remain independent. Enabling only parallel
+inference leaves evaluation serial, and enabling only parallel evaluation leaves
+inference serial. Default evaluator settings keep both stages serial.
+
+The handler appends case lifecycle callbacks without replacing application or
+service callbacks. Case run options apply only to the actual runner; expected
+runners retain the configured shared options. Each inference session retains
+the first valid actual-run trace, so expected runners and later conversation
+turns cannot replace the trace used for publication. Scoring restores the same
+session's trace context, including when multiple runs execute concurrently.
+When no actual trace is emitted (including trace mode), scoring and publication
+use the injected case trace. Custom evaluation services must honor the lifecycle
+callbacks and case run options to preserve these associations.
+
+Callback options are applied in the order supplied, with evaluator constructor
+options before per-call options. `evaluation.WithCallbacks(A)` replaces the
+selected callbacks and discards earlier additions;
+`evaluation.WithAdditionalCallbacks(B)` appends to them. Thus, setting `A` then
+appending `B` runs `A` followed by `B` at each lifecycle point, while appending `B`
+then setting `A` runs only `A`. Appending alone preserves service defaults.
+`WithCallbacks(nil)` discards earlier additions and falls back to service
+defaults; an empty, non-nil `service.Callbacks` disables callbacks.
+`WithAdditionalCallbacks(nil)` does nothing. The handler adds its callbacks last.
+Callback merging is internal to `evaluation`; the service layer uses its existing
+`service.WithCallbacks` option.
+
+After the evaluator completes and saves the batch, the handler writes traces,
+run items, and scores in dataset order. Evaluation errors and cancellation are
+returned before publishing the batch. Case-level failures retain the evaluator's
+normal result semantics. A later Langfuse write failure can leave earlier writes
+in place; completed writes are not rolled back. Runners, callbacks, and managers
+must support the concurrency enabled on the evaluator.
+
 ### Data Format
 
 Langfuse allows users to define the structure of dataset items on the platform side, so `input`, `expectedOutput`, and `metadata` do not need to follow a fixed schema. On the tRPC-Agent-Go side, evaluation still needs to run against an explicit `EvalCase`. `CaseBuilder` is the layer that bridges those two models.

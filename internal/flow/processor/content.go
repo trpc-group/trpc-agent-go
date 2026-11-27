@@ -26,9 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
@@ -228,7 +231,9 @@ type ContentRequestProcessor struct {
 	SummaryFormatter func(summary string) string
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector           EventMessageProjector
+	syntheticErrorUserMergeObserver func(*agent.Invocation, event.Event, model.Message)
+	includeSyntheticErrorMessages   bool
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -483,6 +488,28 @@ func WithEventMessageProjector(
 	}
 }
 
+// WithSyntheticErrorUserMergeObserver sets an internal observer called when
+// omission of synthetic error content merges a user message into the preceding
+// user message.
+func WithSyntheticErrorUserMergeObserver(
+	observer func(*agent.Invocation, event.Event, model.Message),
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.syntheticErrorUserMergeObserver = observer
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether presentation content
+// synthesized for error events is included in model requests. False is the
+// default: synthesized error content is omitted, and adjacent user messages
+// exposed by the omission may be merged. True includes the synthesized content
+// and preserves the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.includeSyntheticErrorMessages = include
+	}
+}
+
 // WithEnableContextCompaction toggles prompt-side context compaction during
 // history projection. Historical oversized tool results can be compacted
 // regardless of whether AddSessionSummary is enabled.
@@ -542,6 +569,7 @@ func WithContextCompactionSkipRecentFunc(
 
 // WithContextCompactionForceCleanToolNames sets tool names whose results should
 // always be compacted to a placeholder while context compaction is enabled.
+// Opaque provider-native results retain their complete replay records.
 func WithContextCompactionForceCleanToolNames(names ...string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ContextCompactionConfig.toolResultCompactionRules.forceCleanToolNames =
@@ -669,6 +697,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 	summaryview.Clear(invocation)
+	summaryinject.Clear(invocation)
 
 	cfg := p.runtimeConfigFromInvocation(invocation)
 	skipHistory := cfg.includeMode == "none"
@@ -758,14 +787,16 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	}
 
 	var userContextBlocks []string
-	summaryText, summaryCutoff := p.sessionSummaryForRequest(invocation, skipHistory)
+	summarySelection := p.sessionSummaryForRequest(invocation, skipHistory)
+	summaryText := summarySelection.text
+	summaryCutoff := summarySelection.cutoff
 	userContextBlocks = p.appendPreloadMemoryContext(
 		ctx,
 		invocation,
 		req,
 		userContextBlocks,
 	)
-	userContextBlocks = p.appendSummaryContext(
+	userContextBlocks, summarySelection.block = p.appendSummaryContext(
 		invocation,
 		req,
 		summaryText,
@@ -794,6 +825,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	// turn. If no such message exists, fall back to a trailing user message in
 	// req.Messages (for example, injected context) to avoid creating an extra
 	// adjacent user block.
+	summarySelection.historyMessages = len(messages)
 	if len(userContextBlocks) > 0 {
 		messages = prependUserContextMessage(
 			strings.Join(userContextBlocks, mergedUserSeparator),
@@ -804,6 +836,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	messageStart := len(req.Messages)
 	req.Messages = append(req.Messages, messages...)
+	summarySelection.record(invocation)
 	view := modelVisibleHistoryView(
 		invocation,
 		history,
@@ -858,18 +891,69 @@ func modelVisibleHistoryView(
 	}
 }
 
+// requestSummarySelection is the per-request session summary selection and the
+// diagnostics needed to explain it at the final request boundary.
+type requestSummarySelection struct {
+	enabled         bool
+	text            string
+	cutoff          summaryHistoryCutoff
+	diagnostics     summarySelectionDiagnostics
+	block           string
+	historyMessages int
+	sessionEvents   int
+}
+
+// record publishes the selection so the final request boundary can report
+// whether the selected summary reached the model. Requests that do not use
+// session summaries publish nothing and stay silent.
+func (s requestSummarySelection) record(invocation *agent.Invocation) {
+	if !s.enabled {
+		return
+	}
+	summaryinject.Record(invocation, summaryinject.Selection{
+		LookupStrategy:     s.diagnostics.strategy,
+		LookupResult:       s.diagnostics.result,
+		Selected:           s.text != "",
+		BoundaryPresent:    !s.cutoff.IsZero(),
+		StoredSummaries:    s.diagnostics.storedSummaries,
+		MatchingCandidates: s.diagnostics.matchingCandidates,
+		FullSessionPresent: s.diagnostics.fullSessionPresent,
+		ScopedRequest:      s.diagnostics.scopedRequest,
+		SessionEvents:      s.sessionEvents,
+		HistoryMessages:    s.historyMessages,
+		Block:              s.block,
+	})
+}
+
 func (p *ContentRequestProcessor) sessionSummaryForRequest(
 	invocation *agent.Invocation,
 	skipHistory bool,
-) (string, summaryHistoryCutoff) {
+) requestSummarySelection {
 	// Skip session summary when include_contents=none, but still get current
 	// invocation's events (tool calls/results) to maintain ReAct loop context.
 	if skipHistory || !p.AddSessionSummary || p.TimelineFilterMode != TimelineFilterAll {
-		return "", summaryHistoryCutoff{}
+		return requestSummarySelection{}
 	}
 	// Fetch session summary early so we can insert it after other semi-stable
 	// system blocks (for example, preloaded memories).
-	return p.getSessionSummaryText(invocation)
+	text, cutoff, diagnostics := p.lookUpSessionSummary(invocation)
+	return requestSummarySelection{
+		enabled:       true,
+		text:          text,
+		cutoff:        cutoff,
+		diagnostics:   diagnostics,
+		sessionEvents: sessionEventCount(invocation),
+	}
+}
+
+// sessionEventCount reports how many events the session currently stores.
+func sessionEventCount(invocation *agent.Invocation) int {
+	if invocation == nil || invocation.Session == nil {
+		return 0
+	}
+	invocation.Session.EventMu.RLock()
+	defer invocation.Session.EventMu.RUnlock()
+	return len(invocation.Session.Events)
 }
 
 func (p *ContentRequestProcessor) appendPreloadMemoryContext(
@@ -893,28 +977,28 @@ func (p *ContentRequestProcessor) appendPreloadMemoryContext(
 	return userContextBlocks
 }
 
+// appendSummaryContext injects the selected summary and returns the formatted
+// block that was written into the request.
 func (p *ContentRequestProcessor) appendSummaryContext(
 	invocation *agent.Invocation,
 	req *model.Request,
 	summaryText string,
 	userContextBlocks []string,
-) []string {
+) ([]string, string) {
 	if summaryText == "" {
-		return userContextBlocks
+		return userContextBlocks, ""
 	}
 	invocation.SetState(contentHasSessionSummaryStateKey, true)
 	if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-		return appendUserContextBlock(
-			userContextBlocks,
-			p.formatSummaryForUser(summaryText),
-		)
+		block := p.formatSummaryForUser(summaryText)
+		return appendUserContextBlock(userContextBlocks, block), block
 	}
 	summaryMsg := model.Message{
 		Role:    model.RoleSystem,
 		Content: p.formatSummary(summaryText),
 	}
 	p.injectSystemContextMessage(req, summaryMsg)
-	return userContextBlocks
+	return userContextBlocks, summaryMsg.Content
 }
 
 func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
@@ -964,6 +1048,22 @@ func (p *ContentRequestProcessor) sessionHistoryAfterCutoff(
 		invocation.SetState(contentHasCompactedToolResultsStateKey, true)
 	}
 	return history
+}
+
+// ProviderActionResumeHistory applies the normal session history policy without
+// injecting context or publishing preprocessing events or a summary selection.
+// The caller supplies a private snapshot ending before the pending response.
+func (p *ContentRequestProcessor) ProviderActionResumeHistory(
+	invocation *agent.Invocation,
+	req *model.Request,
+) []model.Message {
+	if p == nil || invocation == nil || invocation.Session == nil {
+		return nil
+	}
+	cfg := p.runtimeConfigFromInvocation(invocation)
+	skipHistory := cfg.includeMode == "none"
+	selection := p.sessionSummaryForRequest(invocation, skipHistory)
+	return p.sessionHistoryAfterCutoff(invocation, req, skipHistory, true, selection.cutoff).messages
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
@@ -1113,8 +1213,33 @@ func (c eventHistoryCutoff) excludesEvent(index int, evt event.Event) bool {
 // cutoff for the current branch. It does not format or assign
 // a role — callers decide how to inject the text into the request.
 func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (string, summaryHistoryCutoff) {
+	text, cutoff, _ := p.lookUpSessionSummary(inv)
+	return text, cutoff
+}
+
+// summarySelectionDiagnostics reports how a stored summary lookup resolved. It
+// separates the configured scope from what that scope found, and carries only
+// counts and stable enum values, never summary text or filter keys.
+type summarySelectionDiagnostics struct {
+	strategy           string
+	result             string
+	storedSummaries    int
+	matchingCandidates int
+	fullSessionPresent bool
+	scopedRequest      bool
+}
+
+// lookUpSessionSummary selects the stored summary for the current request and
+// reports how the lookup resolved.
+func (p *ContentRequestProcessor) lookUpSessionSummary(
+	inv *agent.Invocation,
+) (string, summaryHistoryCutoff, summarySelectionDiagnostics) {
+	diagnostics := summarySelectionDiagnostics{
+		strategy: p.summaryLookupStrategy(),
+		result:   summaryinject.LookupResultNone,
+	}
 	if inv.Session == nil {
-		return "", summaryHistoryCutoff{}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 
 	// Acquire read lock to protect Summaries access.
@@ -1122,25 +1247,99 @@ func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (
 	defer inv.Session.SummariesMu.RUnlock()
 
 	if inv.Session.Summaries == nil {
-		return "", summaryHistoryCutoff{}
+		return "", summaryHistoryCutoff{}, diagnostics
 	}
 	filter := inv.GetEventFilterKey()
 	// For BranchFilterModeAll, prefer the full-session summary under empty filter key.
 	if p.BranchFilterMode == BranchFilterModeAll {
 		filter = ""
 	}
+	diagnostics.scopedRequest = filter != ""
+	diagnostics.storedSummaries = countStoredSummaries(inv.Session.Summaries)
+	diagnostics.matchingCandidates = p.countMatchingSummaries(
+		inv.Session.Summaries, filter,
+	)
+	diagnostics.fullSessionPresent = hasStoredSummary(
+		inv.Session.Summaries, session.SummaryFilterKeyAllContents,
+	)
 
 	// Try exact match first.
 	sum := inv.Session.Summaries[filter]
 	if sum != nil && sum.Summary != "" {
-		return sum.Summary, summaryHistoryCutoffFromBoundary(sum.CutoffBoundary())
+		diagnostics.result = summaryinject.LookupResultExact
+		return sum.Summary,
+			summaryHistoryCutoffFromBoundary(sum.CutoffBoundary()),
+			diagnostics
 	}
 
 	// For BranchFilterModePrefix, aggregate summaries with matching prefix.
 	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
-		return p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		text, cutoff := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
+		if text != "" {
+			diagnostics.result = summaryinject.LookupResultPrefix
+		}
+		return text, cutoff, diagnostics
 	}
-	return "", summaryHistoryCutoff{}
+	return "", summaryHistoryCutoff{}, diagnostics
+}
+
+// summaryLookupStrategy reports the summary scope this processor searches.
+// Subtree and exact branch modes both look up only the request's own key.
+func (p *ContentRequestProcessor) summaryLookupStrategy() string {
+	switch p.BranchFilterMode {
+	case BranchFilterModeAll:
+		return summaryinject.LookupStrategyAll
+	case BranchFilterModePrefix:
+		return summaryinject.LookupStrategyPrefix
+	default:
+		return summaryinject.LookupStrategyExact
+	}
+}
+
+// countMatchingSummaries counts the non-empty summaries inside the configured
+// lookup scope. Callers must hold the session summaries read lock.
+func (p *ContentRequestProcessor) countMatchingSummaries(
+	summaries map[string]*session.Summary,
+	filter string,
+) int {
+	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
+		count := 0
+		for key, sum := range summaries {
+			if sum == nil || sum.Summary == "" {
+				continue
+			}
+			if session.SummaryFilterKeyMatchesPrefix(key, filter) {
+				count++
+			}
+		}
+		return count
+	}
+	if hasStoredSummary(summaries, filter) {
+		return 1
+	}
+	return 0
+}
+
+// hasStoredSummary reports whether a non-empty summary is stored under key.
+// Callers must hold the session summaries read lock.
+func hasStoredSummary(
+	summaries map[string]*session.Summary,
+	key string,
+) bool {
+	sum := summaries[key]
+	return sum != nil && sum.Summary != ""
+}
+
+// countStoredSummaries counts non-empty summaries across all filter keys.
+// Callers must hold the session summaries read lock.
+func countStoredSummaries(summaries map[string]*session.Summary) int {
+	count := 0
+	for _, sum := range summaries {
+		if sum != nil && sum.Summary != "" {
+			count++
+		}
+	}
+	return count
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -1318,12 +1517,21 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	var events []event.Event
 	sessionEvents := sessionEventsSnapshot(inv.Session)
+	projector := responsesHistoryProjector(inv.Model, req)
+	rounds := p.bindNativeToolRounds(inv, filter, sessionEvents, projector)
 	eventCutoff := newEventHistoryCutoff(sessionEvents, cutoff)
 	toolCallIDsToRestoreByEvent := p.toolCallIDsToRestoreByEvent(
 		sessionEvents,
 		inv,
 		filter,
 		eventCutoff,
+	)
+	nativeToolResults := p.nativeToolResultsToRestore(
+		sessionEvents,
+		inv,
+		filter,
+		eventCutoff,
+		toolCallIDsToRestoreByEvent,
 	)
 	resumeTail := p.latestCompleteToolRoundBeforeCutoff(
 		sessionEvents,
@@ -1333,6 +1541,10 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		eventCutoff,
 	)
 	for i, evt := range sessionEvents {
+		if restored, ok := nativeToolResults[i]; ok {
+			events = append(events, restored)
+			continue
+		}
 		if resumed, ok := resumeTail[i]; ok {
 			events = append(events, resumed)
 			continue
@@ -1375,6 +1587,7 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.applyToolTranscriptMode(events, inv)
 	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
@@ -1399,15 +1612,19 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			inv.AgentName,
 		)
 	}
+	rounds.restoreDisplayCalls(resultEvents)
 	history := p.projectHistoryAcrossSummaryCutoff(
 		resultEvents,
 		sessionEvents,
 		inv,
 		filter,
 		eventCutoff,
+		assistantToolCallPairs,
 	)
 
 	history = p.mergeProjectedUserMessages(history)
+	rounds.useNativeCalls(history, projector)
+	history = history.withLateToolResults(rounds)
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
@@ -1415,13 +1632,18 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 			history.messages,
 			p.MaxHistoryRuns,
 		)
+		startIdx = pendingNativeToolRoundStart(history.messages, startIdx)
 		if len(history.items) == len(history.messages) {
 			history.items = history.items[startIdx:]
 		}
 		history.messages = history.messages[startIdx:]
 	}
+	history = history.withInterruptedToolResults(rounds)
 	history.messages = annotateUserMessagesWithAttachedFiles(history.messages)
 	for i := range history.items {
+		if _, ok := rounds[history.items[i].EffectiveEvent.ID]; ok {
+			history.messages[i].ToolCalls = history.items[i].Message.ToolCalls
+		}
 		history.items[i].Message = annotateUserMessageWithAttachedFiles(
 			history.items[i].Message,
 		)
@@ -1450,6 +1672,11 @@ func cloneEventForContentSnapshot(evt event.Event) event.Event {
 	cloned := evt
 	if evt.Response != nil {
 		cloned.Response = evt.Response.Clone()
+		for i := range cloned.Response.Choices {
+			choice := &cloned.Response.Choices[i]
+			choice.Message = providerdata.CloneMessageProjections(choice.Message)
+			choice.Delta = providerdata.CloneMessageProjections(choice.Delta)
+		}
 	}
 	if evt.LongRunningToolIDs != nil {
 		cloned.LongRunningToolIDs = make(map[string]struct{}, len(evt.LongRunningToolIDs))
@@ -1515,6 +1742,13 @@ func (p *ContentRequestProcessor) toolCallIDsToRestoreByEvent(
 					continue
 				}
 				resultID := toolResponseIDFromChoice(choices[choiceIndex])
+				if choices[choiceIndex].Message.ProviderData != nil || choices[choiceIndex].Delta.ProviderData != nil {
+					// A native action has no projected ToolCall. Restore the
+					// whole native record when its result crosses the cutoff.
+					for _, id := range events[callEventIndex].GetToolCallIDs() {
+						addToolCallIDToRestore(idsByEvent, callEventIndex, id)
+					}
+				}
 				addToolCallIDToRestore(
 					idsByEvent,
 					callEventIndex,
@@ -1527,6 +1761,77 @@ func (p *ContentRequestProcessor) toolCallIDsToRestoreByEvent(
 		return nil
 	}
 	return idsByEvent
+}
+
+// nativeToolResultsToRestore returns the covered tool results of native call
+// records restored across a summary cutoff. A native record is replayed as one
+// output unit, so every result that answers one of its calls must accompany it
+// instead of only the results that happen to follow the cutoff.
+func (p *ContentRequestProcessor) nativeToolResultsToRestore(
+	events []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+	restoredCallEvents map[int]map[string]struct{},
+) map[int]event.Event {
+	nativeCallRestored := false
+	for callEventIndex := range restoredCallEvents {
+		if eventHasProviderData(events[callEventIndex]) {
+			nativeCallRestored = true
+			break
+		}
+	}
+	if !nativeCallRestored {
+		return nil
+	}
+	responseMatchesByCallEvent := toolResponseMatchesByCallEventFiltered(
+		events,
+		func(_ int, evt event.Event) bool {
+			return p.canMatchToolRound(evt, inv, filter)
+		},
+	)
+	choicesByResultEvent := make(map[int]map[int]struct{})
+	for callEventIndex := range restoredCallEvents {
+		if !eventHasProviderData(events[callEventIndex]) {
+			continue
+		}
+		for _, match := range responseMatchesByCallEvent[callEventIndex] {
+			included, _ := p.shouldIncludeEvent(
+				events[match.eventIndex],
+				match.eventIndex,
+				inv,
+				filter,
+				cutoff,
+			)
+			if included {
+				continue
+			}
+			choices := choicesByResultEvent[match.eventIndex]
+			if choices == nil {
+				choices = make(map[int]struct{})
+				choicesByResultEvent[match.eventIndex] = choices
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				choices[choiceIndex] = struct{}{}
+			}
+		}
+	}
+	restored := make(map[int]event.Event, len(choicesByResultEvent))
+	for eventIndex, choices := range choicesByResultEvent {
+		choiceIndices := make([]int, 0, len(choices))
+		for choiceIndex := range choices {
+			choiceIndices = append(choiceIndices, choiceIndex)
+		}
+		sort.Ints(choiceIndices)
+		filtered := filterToolResponseEvent(events, matchedToolResponseEvent{
+			eventIndex:    eventIndex,
+			choiceIndices: choiceIndices,
+		})
+		if filtered.Response != nil && len(filtered.Response.Choices) > 0 {
+			restored[eventIndex] = filtered
+		}
+	}
+	return restored
 }
 
 func (p *ContentRequestProcessor) canMatchToolRound(
@@ -1545,6 +1850,7 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	inv *agent.Invocation,
 	filter string,
 	cutoff eventHistoryCutoff,
+	assistantToolCallPairs map[string]string,
 ) projectedHistory {
 	// Decide whether a turn needs its covered user anchor only after projection.
 	// A projector may remove or rewrite the retained assistant or tool message.
@@ -1569,31 +1875,57 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 	}
 
 	var history projectedHistory
-	appendEvent := func(evt event.Event, boundary summaryview.Boundary) {
-		for _, msg := range p.projectMessagesForEvent(
-			inv,
-			evt,
-			currentRequestID,
-			toolCallRequestIDs,
-		) {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
-	}
-	seenTurns := make(map[historyTurnKey]struct{})
-	for _, evt := range retained {
+	appendEvent := func(
+		evt event.Event,
+		boundary summaryview.Boundary,
+		mergeFirstUser bool,
+	) {
 		projected := p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
 		)
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeFirstUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+	}
+	projectedByEvent := make([][]model.Message, len(retained))
+	for i, evt := range retained {
+		projectedByEvent[i] = p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		)
+	}
+
+	seenTurns := make(map[historyTurnKey]struct{})
+	mergeNextUser := false
+	for i := 0; i < len(retained); i++ {
+		evt := retained[i]
+		projected := projectedByEvent[i]
+		pairedEventID, paired := assistantToolCallPairs[evt.ID]
+		if i+1 < len(retained) && paired &&
+			pairedEventID == retained[i+1].ID {
+			if merged, ok := mergeProjectedAssistantToolCallMessages(
+				projected,
+				projectedByEvent[i+1],
+			); ok {
+				evt = retained[i+1]
+				projected = []model.Message{merged}
+				i++
+			}
+		}
 		if len(projected) == 0 {
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
 			continue
 		}
 		key, hasKey := historyTurnKeyForEvent(evt)
@@ -1605,27 +1937,112 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 			}
 			if userEvt, ok := coveredUsers[key]; ok &&
 				(role == model.RoleAssistant || role == model.RoleTool) {
-				appendEvent(userEvt, summaryview.Boundary{})
+				appendEvent(
+					userEvt,
+					summaryview.Boundary{},
+					mergeNextUser,
+				)
+				mergeNextUser = false
 			}
 		}
 		boundary := eligibleBoundaries[evt.ID]
-		for _, msg := range projected {
-			effective := effectiveEventForMessage(evt, msg)
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effective,
-				Boundary:       boundary,
-			})
-		}
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			boundary,
+			projected,
+			mergeNextUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+		mergeNextUser = false
 	}
 	return history
+}
+
+func appendProjectedHistory(
+	history *projectedHistory,
+	evt event.Event,
+	boundary summaryview.Boundary,
+	messages []model.Message,
+	mergeFirstUser bool,
+) (model.Message, bool) {
+	var mergedCurrentUser model.Message
+	var merged bool
+	for i, msg := range messages {
+		if i == 0 && mergeFirstUser &&
+			mergeLastProjectedUser(history, msg, boundary) {
+			mergedCurrentUser = msg
+			merged = true
+			continue
+		}
+		history.messages = append(history.messages, msg)
+		history.items = append(history.items, summaryview.Item{
+			Message:        msg,
+			EffectiveEvent: effectiveEventForMessage(evt, msg),
+			Boundary:       boundary,
+		})
+	}
+	return mergedCurrentUser, merged
+}
+
+func (p *ContentRequestProcessor) observeSyntheticErrorUserMerge(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+	merged bool,
+) {
+	if !merged || p == nil || p.syntheticErrorUserMergeObserver == nil {
+		return
+	}
+	p.syntheticErrorUserMergeObserver(inv, evt, msg)
+}
+
+func mergeLastProjectedUser(
+	history *projectedHistory,
+	next model.Message,
+	boundary summaryview.Boundary,
+) bool {
+	if history == nil || len(history.messages) == 0 ||
+		len(history.messages) != len(history.items) ||
+		next.Role != model.RoleUser {
+		return false
+	}
+	lastIndex := len(history.messages) - 1
+	if history.messages[lastIndex].Role != model.RoleUser {
+		return false
+	}
+	last := &history.messages[lastIndex]
+	if next.Content != "" {
+		if last.Content == "" {
+			last.Content = next.Content
+		} else {
+			last.Content += mergedUserSeparator + next.Content
+		}
+	}
+	last.ContentParts = append(last.ContentParts, next.ContentParts...)
+	item := &history.items[lastIndex]
+	item.Message = *last
+	item.EffectiveEvent = effectiveEventForMessage(
+		item.EffectiveEvent,
+		*last,
+	)
+	if !boundary.IsZero() {
+		item.Boundary = boundary
+	}
+	return true
 }
 
 func effectiveEventForMessage(
 	evt event.Event,
 	msg model.Message,
 ) event.Event {
+	if evt.Response != nil {
+		// Choices are replaced below. Copy only the response metadata so a
+		// merged batch is not cloned in full for every projected message.
+		response := *evt.Response
+		response.Choices = nil
+		evt.Response = &response
+	}
 	effective := cloneEventForContentSnapshot(evt)
 	if effective.Response == nil {
 		effective.Response = &model.Response{}
@@ -1857,8 +2274,8 @@ func latestCompleteToolRoundMatch(
 		if callIndex < 0 || callIndex >= len(events) || len(matches) == 0 {
 			continue
 		}
-		if !allToolCallIDsMatched(
-			events[callIndex].GetToolCallIDs(),
+		if !allToolCallResultsMatched(
+			events[callIndex],
 			events,
 			matches,
 		) {
@@ -1908,7 +2325,8 @@ func toolCallEventForResumeTail(evt event.Event) (event.Event, bool) {
 	response := evt.Response.Clone()
 	response.Choices = response.Choices[:0]
 	for _, choice := range evt.Response.Choices {
-		if len(choice.Message.ToolCalls) == 0 && len(choice.Delta.ToolCalls) == 0 {
+		if len(choice.Message.ToolCalls) == 0 && len(choice.Delta.ToolCalls) == 0 &&
+			!choiceHasNativeAssistantRecord(choice) {
 			continue
 		}
 		choice.Message.ToolCalls = cloneToolCallsForResumeTail(
@@ -1963,6 +2381,8 @@ func compactResumeToolRound(
 		changed := false
 		for choiceIndex := range response.Choices {
 			choice := &response.Choices[choiceIndex]
+			// Native call arguments and results are complete replay records.
+			// Ordinary tool results can still be compacted independently.
 			if compactOversizedResumeToolCallArguments(
 				ctx,
 				&choice.Message,
@@ -1978,7 +2398,7 @@ func compactResumeToolRound(
 				changed = true
 			}
 			message := choice.Message
-			if message.Role != model.RoleTool || message.ToolID == "" ||
+			if message.Role != model.RoleTool || message.ToolID == "" || message.ProviderData != nil ||
 				cfg.keepToolResult(message) {
 				continue
 			}
@@ -2022,7 +2442,7 @@ func compactOversizedResumeToolCallArguments(
 	message *model.Message,
 	cfg ContextCompactionConfig,
 ) bool {
-	if message == nil {
+	if message == nil || message.ProviderData != nil {
 		return false
 	}
 	changed := false
@@ -2297,17 +2717,43 @@ func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 		}
 	}
 
-	// Skip orphaned tool results whose corresponding call was truncated.
+	// Skip orphaned tool results whose corresponding call was truncated. A
+	// native tool result answers an action inside an earlier native record,
+	// so at the boundary its call is always truncated.
 	for startIdx < len(messages) &&
 		messages[startIdx].Role == model.RoleTool &&
 		messages[startIdx].ToolID != "" {
-		if _, orphaned := truncatedToolIDs[messages[startIdx].ToolID]; orphaned {
+		_, orphaned := truncatedToolIDs[messages[startIdx].ToolID]
+		if orphaned || messages[startIdx].ProviderData != nil {
 			startIdx++
 			continue
 		}
 		break
 	}
 
+	return startIdx
+}
+
+// pendingNativeToolRoundStart moves a history limit back to the latest native
+// tool-call record when every later message is a tool result. That record is
+// the active continuation: dropping it would discard opaque reasoning while
+// the model is answering its calls. A native record followed by tool results
+// is such a record even when its calls are provider actions rather than
+// projected tool calls. Completed native rounds stay subject to the ordinary
+// limit, which removes a call together with its orphaned results.
+func pendingNativeToolRoundStart(messages []model.Message, startIdx int) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role == model.RoleTool {
+			continue
+		}
+		if i < startIdx && msg.Role == model.RoleAssistant &&
+			msg.ProviderData != nil &&
+			(len(msg.ToolCalls) > 0 || i < len(messages)-1) {
+			return i
+		}
+		return startIdx
+	}
 	return startIdx
 }
 
@@ -2319,6 +2765,8 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	currentRequestID string,
 	requestHasToolCalls bool,
 ) model.Message {
+	// Reasoning content is a display projection. Changing it does not rewrite a
+	// native provider data payload.
 	// Only process assistant messages with reasoning content.
 	if msg.Role != model.RoleAssistant || msg.ReasoningContent == "" {
 		return msg
@@ -2352,7 +2800,13 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	if p == nil || p.EventMessageProjector == nil {
 		return msg
 	}
-	return p.EventMessageProjector(inv, evt, msg)
+	projectorInput := msg
+	if msg.ProviderData != nil {
+		// A projector may intentionally replace or clear the record. Give it an
+		// isolated copy so in-place decoding cannot mutate the source event.
+		projectorInput = providerdata.CloneMessage(msg)
+	}
+	return p.EventMessageProjector(inv, evt, projectorInput)
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -2385,25 +2839,52 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	assistantToolCallPairs := nonTerminalAssistantToolCallPairs(inv, events)
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	currentRequestID := inv.RunOptions.RequestID
 	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
-	var history projectedHistory
-	for _, evt := range resultEvents {
-		for _, msg := range p.projectMessagesForEvent(
+	projectedByEvent := make([][]model.Message, len(resultEvents))
+	for i, evt := range resultEvents {
+		projectedByEvent[i] = p.projectMessagesForEvent(
 			inv,
 			evt,
 			currentRequestID,
 			toolCallRequestIDs,
-		) {
-			history.messages = append(history.messages, msg)
-			history.items = append(history.items, summaryview.Item{
-				Message:        msg,
-				EffectiveEvent: effectiveEventForMessage(evt, msg),
-				Boundary:       persistedBoundaries[evt.ID],
-			})
+		)
+	}
+	var history projectedHistory
+	mergeNextUser := false
+	for i := 0; i < len(resultEvents); i++ {
+		evt := resultEvents[i]
+		projected := projectedByEvent[i]
+		pairedEventID, paired := assistantToolCallPairs[evt.ID]
+		if i+1 < len(resultEvents) && paired &&
+			pairedEventID == resultEvents[i+1].ID {
+			if merged, ok := mergeProjectedAssistantToolCallMessages(
+				projected,
+				projectedByEvent[i+1],
+			); ok {
+				evt = resultEvents[i+1]
+				projected = []model.Message{merged}
+				i++
+			}
 		}
+		if len(projected) == 0 {
+			if p.omitsSyntheticErrorEvent(&evt) {
+				mergeNextUser = true
+			}
+			continue
+		}
+		mergedUser, merged := appendProjectedHistory(
+			&history,
+			evt,
+			persistedBoundaries[evt.ID],
+			projected,
+			mergeNextUser,
+		)
+		p.observeSyntheticErrorUserMerge(inv, evt, mergedUser, merged)
+		mergeNextUser = false
 	}
 	history = p.mergeProjectedUserMessages(history)
 	if len(history.items) != len(history.messages) {
@@ -2483,12 +2964,141 @@ func containsInvocationMessage(
 	return false
 }
 
+// nonTerminalAssistantToolCallPairs records adjacent raw events that may form
+// one assistant model turn. Session events remain unchanged; the pair is only
+// normalized after both events have passed through message projection.
+func nonTerminalAssistantToolCallPairs(
+	inv *agent.Invocation,
+	events []event.Event,
+) map[string]string {
+	pairs := make(map[string]string)
+	for i := 0; i+1 < len(events); i++ {
+		textEvent := events[i]
+		toolCallEvent := events[i+1]
+		if !sameAssistantTurnIdentity(textEvent, toolCallEvent) ||
+			!sameAssistantTurnContext(textEvent, toolCallEvent) ||
+			!mergeableAssistantEventShape(textEvent, toolCallEvent) ||
+			!sameAssistantEventOrigin(inv, textEvent, toolCallEvent) {
+			continue
+		}
+		if _, ok := mergeProjectedAssistantToolCallMessages(
+			[]model.Message{textEvent.Choices[0].Message},
+			[]model.Message{toolCallEvent.Choices[0].Message},
+		); !ok {
+			continue
+		}
+		pairs[textEvent.ID] = toolCallEvent.ID
+	}
+	return pairs
+}
+
+func sameAssistantTurnIdentity(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.ID != "" && toolCallEvent.ID != "" &&
+		textEvent.Response != nil && toolCallEvent.Response != nil &&
+		textEvent.Response.ID != "" && toolCallEvent.Response.ID != "" &&
+		textEvent.RequestID != "" &&
+		textEvent.RequestID == toolCallEvent.RequestID &&
+		textEvent.InvocationID != "" &&
+		textEvent.InvocationID == toolCallEvent.InvocationID
+}
+
+func sameAssistantTurnContext(textEvent, toolCallEvent event.Event) bool {
+	if textEvent.ParentInvocationID != toolCallEvent.ParentInvocationID ||
+		textEvent.Author != toolCallEvent.Author ||
+		textEvent.Branch != toolCallEvent.Branch ||
+		textEvent.FilterKey != toolCallEvent.FilterKey {
+		return false
+	}
+	if (textEvent.ParentMetadata == nil) !=
+		(toolCallEvent.ParentMetadata == nil) {
+		return false
+	}
+	return textEvent.ParentMetadata == nil ||
+		*textEvent.ParentMetadata == *toolCallEvent.ParentMetadata
+}
+
+func mergeableAssistantEventShape(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.Error == nil && toolCallEvent.Error == nil &&
+		!textEvent.IsPartial && !toolCallEvent.IsPartial &&
+		!textEvent.Done && !toolCallEvent.Done &&
+		len(textEvent.Choices) == 1 && len(toolCallEvent.Choices) == 1 &&
+		mergeableAssistantObject(textEvent.Object) &&
+		mergeableAssistantObject(toolCallEvent.Object)
+}
+
+func mergeableAssistantObject(object string) bool {
+	return object == "" || object == model.ObjectTypeChatCompletion
+}
+
+func sameAssistantEventOrigin(
+	inv *agent.Invocation,
+	textEvent event.Event,
+	toolCallEvent event.Event,
+) bool {
+	return messageorigin.IsSeedHistory(inv, textEvent.ID) ==
+		messageorigin.IsSeedHistory(inv, toolCallEvent.ID) &&
+		messageorigin.IsCurrentTurn(inv, textEvent.ID) ==
+			messageorigin.IsCurrentTurn(inv, toolCallEvent.ID)
+}
+
+// mergeProjectedAssistantToolCallMessages combines one assistant text event
+// with its following assistant tool-call event for model-facing history. Any
+// text on the tool-call event is appended verbatim because event content owns
+// its whitespace; the processor must not invent a separator. Rich fields that
+// cannot be combined without changing provider semantics cause rejection.
+func mergeProjectedAssistantToolCallMessages(
+	textMessages []model.Message,
+	toolCallMessages []model.Message,
+) (model.Message, bool) {
+	if len(textMessages) != 1 || len(toolCallMessages) != 1 {
+		return model.Message{}, false
+	}
+	text := textMessages[0]
+	toolCall := toolCallMessages[0]
+	if !mergeableAssistantTextMessage(text) ||
+		!mergeableAssistantToolCallMessage(toolCall) ||
+		!mergeableAssistantToolCalls(toolCall.ToolCalls) {
+		return model.Message{}, false
+	}
+	combined := toolCall
+	combined.Content = text.Content + toolCall.Content
+	return combined, true
+}
+
+func mergeableAssistantTextMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && message.Content != "" &&
+		message.ProviderData == nil &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" && message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCallMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 &&
+		message.ProviderData == nil &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCalls(toolCalls []model.ToolCall) bool {
+	for _, call := range toolCalls {
+		if call.Index != nil || len(call.ExtraFields) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *ContentRequestProcessor) projectMessagesForEvent(
 	inv *agent.Invocation,
 	evt event.Event,
 	currentRequestID string,
 	toolCallRequestIDs map[string]struct{},
 ) []model.Message {
+	if p.omitsSyntheticErrorEvent(&evt) {
+		return nil
+	}
 	ev := evt
 	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
 		ev = p.convertForeignEvent(&ev)
@@ -2513,6 +3123,13 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 		messages = append(messages, msg)
 	}
 	return messages
+}
+
+func (p *ContentRequestProcessor) omitsSyntheticErrorEvent(
+	evt *event.Event,
+) bool {
+	return p != nil && !p.includeSyntheticErrorMessages &&
+		errorcontent.IsSynthetic(evt)
 }
 
 func requestIDsWithToolCalls(events []event.Event) map[string]struct{} {
@@ -2714,13 +3331,24 @@ func (p *ContentRequestProcessor) restorePreCutoffToolCallEvent(
 	if cutoff.IsZero() || len(neededToolCallIDs) == 0 {
 		return event.Event{}, false
 	}
-	if !isEventEligibleForInclusion(evt) || !evt.IsToolCallResponse() {
+	if !isEventEligibleForInclusion(evt) {
 		return event.Event{}, false
 	}
 	if !cutoff.excludesEvent(eventIndex, evt) {
 		return event.Event{}, false
 	}
 	if !p.passTimelineFilter(evt, inv) || !p.passBranchFilter(evt, filter) {
+		return event.Event{}, false
+	}
+	if !evt.IsToolCallResponse() {
+		// An action-only native response has no projected ToolCalls. Its
+		// restored result is tied to this event by the persisted source marker.
+		for _, choice := range evt.Response.Choices {
+			if (choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil) ||
+				(choice.Delta.Role == model.RoleAssistant && choice.Delta.ProviderData != nil) {
+				return evt, true
+			}
+		}
 		return event.Event{}, false
 	}
 
@@ -2759,6 +3387,11 @@ func filterToolCallChoice(
 	)
 	if len(messageToolCalls) == 0 && len(deltaToolCalls) == 0 {
 		return model.Choice{}, false
+	}
+	if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
+		// A native record cannot be reduced to a subset of its calls; the
+		// caller restores the remaining results with the original record.
+		return choice, true
 	}
 	filtered := model.Choice{Index: choice.Index}
 	if len(messageToolCalls) > 0 {
@@ -2812,6 +3445,18 @@ func isEventEligibleForInclusion(evt event.Event) bool {
 		!evt.IsPartial &&
 		evt.IsValidContent() &&
 		!graph.CompletionSnapshotOnlyFromStateDelta(evt.StateDelta)
+}
+
+func eventHasProviderData(evt event.Event) bool {
+	if evt.Response == nil {
+		return false
+	}
+	for _, choice := range evt.Response.Choices {
+		if choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // isStrictInvocationMessage checks whether the event exactly matches the
@@ -3083,6 +3728,8 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 	// Set the converted message.
 	if len(contents) > 0 || len(contentParts) > 0 {
+		// The quotation is newly authored user context. It never inherits the
+		// quoted agent's ProviderData.
 		msg := model.Message{
 			Role: model.RoleUser,
 		}
@@ -3127,8 +3774,8 @@ func (p *ContentRequestProcessor) applyToolTranscriptMode(
 		if !allMatchedToolResultsArePrevious(events, responseMatches, inv) {
 			continue
 		}
-		if !allToolCallIDsMatched(
-			events[callEventIndex].GetToolCallIDs(),
+		if !allToolCallResultsMatched(
+			events[callEventIndex],
 			events,
 			responseMatches,
 		) {
@@ -3204,6 +3851,34 @@ func allMatchedToolResultsArePrevious(
 	return true
 }
 
+// allToolCallResultsMatched also recognizes native action-only rounds, whose
+// results are matched by their persisted source rather than projected call IDs.
+func allToolCallResultsMatched(
+	callEvent event.Event,
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+) bool {
+	callIDs := callEvent.GetToolCallIDs()
+	if callEvent.Response != nil {
+		for _, choice := range callEvent.Choices {
+			for _, msg := range []model.Message{choice.Message, choice.Delta} {
+				if msg.Role != model.RoleAssistant || msg.ProviderData == nil {
+					continue
+				}
+				ids, err := providerdata.RequestedActionIDs(msg.ProviderData)
+				if err != nil {
+					return false
+				}
+				callIDs = append(callIDs, ids...)
+			}
+		}
+	}
+	if len(callIDs) == 0 {
+		return providerActionCallSource(callEvent) != "" && len(matches) > 0
+	}
+	return allToolCallIDsMatched(callIDs, events, matches)
+}
+
 func allToolCallIDsMatched(
 	callIDs []string,
 	events []event.Event,
@@ -3244,8 +3919,8 @@ func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
 	response := *evt.Response
 	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
 	for _, choice := range evt.Response.Choices {
-		choice.Message.ToolCalls = nil
-		choice.Delta.ToolCalls = nil
+		choice.Message = withoutToolCalls(choice.Message)
+		choice.Delta = withoutToolCalls(choice.Delta)
 		if hasNonToolPayload(choice.Message) || hasNonToolPayload(choice.Delta) {
 			response.Choices = append(response.Choices, choice)
 		}
@@ -3255,6 +3930,19 @@ func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
 	}
 	evt.Response = &response
 	return evt, true
+}
+
+// withoutToolCalls removes the calls of a completed tool round. A native record
+// cannot keep its opaque state without those calls, so the remaining visible
+// text becomes ordinary history and its native reasoning is not replayed.
+func withoutToolCalls(msg model.Message) model.Message {
+	msg.ToolCalls = nil
+	if msg.ProviderData != nil {
+		msg.ProviderData = nil
+		msg.ReasoningContent = ""
+		msg.ReasoningSignature = ""
+	}
+	return msg
 }
 
 func omitToolResultChoices(
@@ -3326,6 +4014,11 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	if functionCallEventIdx == -1 {
 		return events
 	}
+	// A native response can contain other actions alongside function calls.
+	// Preserve their results and order rather than rebuilding a function-only round.
+	if eventHasProviderData(events[functionCallEventIdx]) {
+		return events
+	}
 
 	// Collect function response events between call and latest response.
 	var functionResponseEvents []event.Event
@@ -3359,6 +4052,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
 	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
+	nativeResults := nativeToolResponseEvents(events, responseMatchesByCallEvent)
 
 	var resultEvents []event.Event
 	for i, evt := range events {
@@ -3368,9 +4062,18 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		evt := evt
 
 		if evt.IsToolResultResponse() {
-			// Function response should be handled with function call below.
+			if native, ok := nativeResults[i]; ok {
+				resultEvents = append(resultEvents, native)
+			}
+			// Ordinary function responses are moved next to their call below.
 			continue
 		} else if evt.IsToolCallResponse() {
+			if eventHasProviderData(evt) {
+				// Native rounds keep their original order, including results
+				// of provider actions that are not projected as ToolCalls.
+				resultEvents = append(resultEvents, evt)
+				continue
+			}
 			responseMatches := responseMatchesByCallEvent[i]
 			callIDs := evt.GetToolCallIDs()
 			perToolCallResultRound := hasPerToolCallResultRound(
@@ -3422,6 +4125,43 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	}
 
 	return resultEvents
+}
+
+// nativeToolResponseEvents selects result choices that must retain their
+// original position. Results for ordinary calls still use the existing
+// rearrangement, even when the same event also answers a native call.
+func nativeToolResponseEvents(
+	events []event.Event,
+	matchesByCall map[int][]matchedToolResponseEvent,
+) map[int]event.Event {
+	nativeChoices := make(map[int]map[int]bool)
+	for callIndex, matches := range matchesByCall {
+		for _, match := range matches {
+			if nativeChoices[match.eventIndex] == nil {
+				nativeChoices[match.eventIndex] = make(map[int]bool)
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				nativeChoices[match.eventIndex][choiceIndex] = eventHasProviderData(events[callIndex])
+			}
+		}
+	}
+	results := make(map[int]event.Event)
+	for i, evt := range events {
+		if !evt.IsToolResultResponse() {
+			continue
+		}
+		var keep []int
+		for j, choice := range evt.Response.Choices {
+			native, matched := nativeChoices[i][j]
+			if native || (!matched && (choice.Message.ProviderData != nil || choice.Delta.ProviderData != nil)) {
+				keep = append(keep, j)
+			}
+		}
+		if len(keep) > 0 {
+			results[i] = filterToolResponseEvent(events, matchedToolResponseEvent{eventIndex: i, choiceIndices: keep})
+		}
+	}
+	return results
 }
 
 func hasPerToolCallResultRound(
@@ -3527,10 +4267,14 @@ func toolResponseMatchesByCallEventFiltered(
 ) map[int][]matchedToolResponseEvent {
 	responseMatchesByCallEvent := make(map[int][]matchedToolResponseEvent)
 	var pendingCallRounds []pendingToolCallRound
+	nativeSources := make(map[string]int)
 	for i, evt := range events {
 		evt := evt
 		if includeEvent != nil && !includeEvent(i, evt) {
 			continue
+		}
+		if source := providerActionCallSource(evt); source != "" {
+			nativeSources[source] = i
 		}
 		if evt.IsToolCallResponse() {
 			ids := evt.GetToolCallIDs()
@@ -3551,21 +4295,67 @@ func toolResponseMatchesByCallEventFiltered(
 			if responseID == "" {
 				continue
 			}
-			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
-				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
-					continue
-				}
-				delete(pendingCallRounds[j].pendingIDs, responseID)
-				responseMatchesByCallEvent[pendingCallRounds[j].eventIndex] = appendToolResponseChoice(
-					responseMatchesByCallEvent[pendingCallRounds[j].eventIndex],
-					i,
-					choiceIndex,
+			callIndex, marked := providerActionCallIndex(evt, choice, nativeSources)
+			if !marked {
+				callIndex = takePendingToolCallRound(pendingCallRounds, responseID)
+			}
+			if callIndex >= 0 {
+				responseMatchesByCallEvent[callIndex] = appendToolResponseChoice(
+					responseMatchesByCallEvent[callIndex], i, choiceIndex,
 				)
-				break
 			}
 		}
 	}
 	return responseMatchesByCallEvent
+}
+
+func choiceHasNativeAssistantRecord(choice model.Choice) bool {
+	return (choice.Message.Role == model.RoleAssistant && choice.Message.ProviderData != nil) ||
+		(choice.Delta.Role == model.RoleAssistant && choice.Delta.ProviderData != nil)
+}
+
+func providerActionCallSource(evt event.Event) string {
+	if evt.Response == nil || evt.IsToolResultResponse() {
+		return ""
+	}
+	for _, choice := range evt.Response.Choices {
+		if choiceHasNativeAssistantRecord(choice) {
+			return ProviderActionSource(&evt)
+		}
+	}
+	return ""
+}
+
+func providerActionCallIndex(
+	evt event.Event,
+	choice model.Choice,
+	nativeSources map[string]int,
+) (int, bool) {
+	if choice.Message.ProviderData == nil && choice.Delta.ProviderData == nil {
+		return -1, false
+	}
+	source, ok, err := event.GetExtension[string](&evt, providerActionSourceExtension)
+	if err != nil {
+		return -1, true
+	}
+	if !ok {
+		return -1, false
+	}
+	if callIndex, found := nativeSources[source]; found {
+		return callIndex, true
+	}
+	// A marked result never falls back to an unrelated projected call.
+	return -1, true
+}
+
+func takePendingToolCallRound(rounds []pendingToolCallRound, responseID string) int {
+	for i := len(rounds) - 1; i >= 0; i-- {
+		if _, ok := rounds[i].pendingIDs[responseID]; ok {
+			delete(rounds[i].pendingIDs, responseID)
+			return rounds[i].eventIndex
+		}
+	}
+	return -1
 }
 
 func toolResponseIDFromChoice(choice model.Choice) string {

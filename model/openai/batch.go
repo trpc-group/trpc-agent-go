@@ -10,7 +10,6 @@
 package openai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -197,7 +196,10 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 		if r.Body.Model == "" {
 			r.Body.Model = m.name
 		}
-		payload := m.batchRequestPayload(r)
+		payload, err := m.batchRequestPayload(r)
+		if err != nil {
+			return nil, fmt.Errorf("batch request %q: %w", r.CustomID, err)
+		}
 		if err := enc.Encode(payload); err != nil {
 			return nil, fmt.Errorf("failed to encode jsonl line: %w", err)
 		}
@@ -207,10 +209,22 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 
 func (m *Model) batchRequestPayload(
 	r *BatchRequestInput,
-) batchRequestPayload {
-	messages := make([]batchMessagePayload, len(r.Body.Messages))
-	for i, msg := range r.Body.Messages {
-		messages[i] = m.newBatchMessagePayload(msg)
+) (batchRequestPayload, error) {
+	messages, projected, err := m.prepareProviderHistory(r.Body.Messages)
+	if err != nil {
+		return batchRequestPayload{}, err
+	}
+	var wireMessages any
+	if projected {
+		// Use the Chat wire format for migrated history, including file hints
+		// and tool_call_id on results. Ordinary batches keep their encoding.
+		wireMessages = m.convertMessages(messages)
+	} else {
+		legacy := make([]batchMessagePayload, len(messages))
+		for i, msg := range messages {
+			legacy[i] = m.newBatchMessagePayload(msg)
+		}
+		wireMessages = legacy
 	}
 
 	return batchRequestPayload{
@@ -218,12 +232,12 @@ func (m *Model) batchRequestPayload(
 		Method:   r.Method,
 		URL:      r.URL,
 		Body: batchRequestBodyPayload{
-			Messages:         messages,
+			Messages:         wireMessages,
 			GenerationConfig: r.Body.GenerationConfig,
 			StructuredOutput: r.Body.StructuredOutput,
 			Model:            r.Body.Model,
 		},
-	}
+	}, nil
 }
 
 func (m *Model) newBatchMessagePayload(
@@ -253,7 +267,7 @@ type batchRequestPayload struct {
 }
 
 type batchRequestBodyPayload struct {
-	Messages         []batchMessagePayload   `json:"messages"`
+	Messages         any                     `json:"messages"`
 	GenerationConfig model.GenerationConfig  `json:"generation_config,omitempty"`
 	StructuredOutput *model.StructuredOutput `json:"structured_output,omitempty"`
 	Model            string                  `json:"model"`
@@ -360,26 +374,28 @@ type BatchResponse struct {
 
 // ParseBatchOutput parses output JSONL into OpenAI-aligned structures.
 func (m *Model) ParseBatchOutput(text string) ([]BatchRequestOutput, error) {
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	// Pre-allocate with reasonable default capacity to avoid frequent reallocations.
+	// Split on newlines directly. bufio.Scanner rejects tokens larger than
+	// 64KiB by default, and a batch output line contains a full ChatCompletion
+	// JSON object that routinely exceeds that limit.
 	var entries []BatchRequestOutput
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for remaining := text; remaining != ""; {
+		line, rest, found := strings.Cut(remaining, "\n")
+		if found {
+			remaining = rest
+		} else {
+			remaining = ""
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// Unmarshal the line into a BatchRequestOutput.
 		var out BatchRequestOutput
 		if err := json.Unmarshal([]byte(line), &out); err != nil {
 			return nil, fmt.Errorf("failed to parse jsonl line: %w", err)
 		}
-		// Store the original line for debugging purposes.
-		out.RawLine = line
-		// Append the entry to the slice.
+		// Clone so a retained entry does not pin the entire JSONL input.
+		out.RawLine = strings.Clone(line)
 		entries = append(entries, out)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to scan jsonl: %w", err)
 	}
 	return entries, nil
 }

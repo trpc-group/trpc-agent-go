@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v1.7.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v1.7.0
 )
 

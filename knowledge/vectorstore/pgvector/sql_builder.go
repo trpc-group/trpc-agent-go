@@ -670,13 +670,14 @@ func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string,
 	offsetPlaceholder := fmt.Sprintf("$%d", mqb.argIndex)
 	mqb.args = append(mqb.args, offset)
 
+	// Break timestamp ties so successive metadata pages do not overlap or skip documents.
 	sql := fmt.Sprintf(`
 		SELECT *, 0.0 as vector_score, 0.0 as text_score, 0.0 as score
 		FROM %s
 		WHERE %s
-		ORDER BY %s
+		ORDER BY %s, %s
 		LIMIT %s OFFSET %s`,
-		mqb.o.table, whereClause, mqb.o.createdAtFieldName, limitPlaceholder, offsetPlaceholder)
+		mqb.o.table, whereClause, mqb.o.createdAtFieldName, mqb.o.idFieldName, limitPlaceholder, offsetPlaceholder)
 
 	return sql, mqb.args
 }

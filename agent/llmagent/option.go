@@ -12,6 +12,7 @@ package llmagent
 
 import (
 	"reflect"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
@@ -295,6 +296,9 @@ type Options struct {
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
 	ToolSets []tool.ToolSet
+	// toolSetToolNameModes configures model-facing tool names by ToolSet name.
+	// ToolSet.Name remains the stable identity used by activation and policy.
+	toolSetToolNameModes map[string]tool.ToolSetToolNameMode
 	// activatableToolSets is the list of tool sets available for runtime activation.
 	activatableToolSets []tool.ToolSet
 	// toolActivationRules stores runtime tool activation rules.
@@ -404,9 +408,11 @@ type Options struct {
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
 	// ContextCompactionTokenCounter estimates request and tool-result size for
-	// context compaction. Compaction thresholds are compared against this
-	// estimate, not provider-reported usage tokens. When nil,
-	// SimpleTokenCounter is used.
+	// context compaction and model-visible request size for automatic summary
+	// checks. Thresholds use these estimates, not provider-reported usage tokens.
+	// When nil, request estimates use the current process default configured by
+	// summary.SetTokenCounter (SimpleTokenCounter unless overridden), while
+	// tool-result compaction uses its independent SimpleTokenCounter default.
 	ContextCompactionTokenCounter model.TokenCounter
 	// ToolResultCompactionConfig declares tool-name based compaction rules.
 	ToolResultCompactionConfig *ToolResultCompactionConfig
@@ -449,7 +455,8 @@ type Options struct {
 	PreserveForeignMessages bool
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector         EventMessageProjector
+	includeSyntheticErrorMessages bool
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
@@ -828,12 +835,14 @@ func WithMaxToolIterations(limit int) Option {
 }
 
 // WithLLMCallLimitFinalization uses the last call allowed by WithMaxLLMCalls
-// to request one tool-free final model response. The finalization call counts
-// toward the configured limit. An empty instruction uses the framework
+// to request a final model response with tool calls disabled. The finalization
+// call counts toward the configured limit. An empty instruction uses the framework
 // default. This option has no effect when the LLM call limit is not positive.
 // The instruction is appended as a transient tail user message for the final
-// model request; it is not emitted or persisted as a user event. Before-model
-// callbacks observe the tool-free finalization request.
+// model request; it is not emitted or persisted as a user event. By default,
+// BeforeModel callbacks see a final request without tool definitions. Configure
+// openai.WithPreserveToolsWhenDisabled to keep the definitions for a compatible
+// OpenAI model.
 //
 // When this option is not set, exceeding MaxLLMCalls preserves the default
 // terminal StopError behavior.
@@ -843,8 +852,8 @@ func WithLLMCallLimitFinalization(instruction string) Option {
 	}
 }
 
-// WithToolIterationLimitFinalization requests one tool-free final model
-// response after the last fully framework-executed iteration allowed by
+// WithToolIterationLimitFinalization requests a final model response with tool
+// calls disabled after the last fully framework-executed iteration allowed by
 // WithMaxToolIterations, when normal flow can continue to another LLM call.
 // The finalization call counts toward MaxLLMCalls when that limit is configured,
 // and is not attempted if that budget is exhausted.
@@ -855,8 +864,10 @@ func WithLLMCallLimitFinalization(instruction string) Option {
 // instruction uses the framework default. This option has no effect when the
 // tool iteration limit is not positive.
 // The instruction is appended as a transient tail user message for the final
-// model request; it is not emitted or persisted as a user event. Before-model
-// callbacks observe the tool-free finalization request.
+// model request; it is not emitted or persisted as a user event. By default,
+// BeforeModel callbacks see a final request without tool definitions. Configure
+// openai.WithPreserveToolsWhenDisabled to keep the definitions for a compatible
+// OpenAI model.
 //
 // When this option is not set, exceeding MaxToolIterations preserves the
 // default terminal flow_error behavior.
@@ -931,6 +942,23 @@ func WithTools(tools []tool.Tool) Option {
 func WithToolSets(toolSets []tool.ToolSet) Option {
 	return func(opts *Options) {
 		opts.ToolSets = toolSets
+	}
+}
+
+// WithToolSetToolNameMode sets how tools from the named ToolSet are exposed to
+// the model. ToolSetToolNameModeQualified is the default and exposes names as
+// {toolSetName}_{toolName}; ToolSetToolNameModeOriginal keeps the tool declarations'
+// original names. The ToolSet name itself is unchanged and this option applies
+// to both ToolSets and activatable ToolSets. Callers selecting original names
+// must ensure that those names are unique across the model request.
+// New panics during agent construction if the ToolSet name is blank, the mode
+// is unsupported, or no registered ToolSet has the given name.
+func WithToolSetToolNameMode(toolSetName string, mode tool.ToolSetToolNameMode) Option {
+	return func(opts *Options) {
+		if opts.toolSetToolNameModes == nil {
+			opts.toolSetToolNameModes = make(map[string]tool.ToolSetToolNameMode)
+		}
+		opts.toolSetToolNameModes[strings.TrimSpace(toolSetName)] = mode
 	}
 }
 
@@ -1853,6 +1881,8 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 // budgets use the counter's estimated token count, not provider-reported usage
 // tokens. For SimpleTokenCounter, WithApproxRunesPerToken is runes per token
 // (estimated tokens = counted runes / value).
+// The counter also takes precedence over summary.SetTokenCounter for
+// model-visible request estimates used by automatic summary checks.
 func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *Options) {
 		if counter != nil {
@@ -1904,11 +1934,27 @@ func WithPreserveForeignMessages(preserve bool) Option {
 
 // WithEventMessageProjector rewrites one event-derived message before
 // it is appended to the model request.
+// For messages carrying ProviderData, editing display fields does not change
+// the native input sent to the model. The projector may explicitly replace or
+// clear ProviderData; its payload and producer identity are checked before use.
+// Clearing it from an unfinished native tool round may prevent continuation.
 func WithEventMessageProjector(
 	projector EventMessageProjector,
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether assistant content
+// synthesized by Runner or the error-message plugin is included in model
+// requests. By default, synthesized content remains emitted and persisted but
+// is omitted from subsequent model context. When omission leaves adjacent user
+// messages, the messages are merged to preserve a provider-valid sequence.
+// Set include to true to restore the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) Option {
+	return func(opts *Options) {
+		opts.includeSyntheticErrorMessages = include
 	}
 }
 
@@ -1973,6 +2019,9 @@ func WithMessageBranchFilterMode(mode string) Option {
 // multi-turn conversations. This is particularly important for DeepSeek models
 // where ordinary previous-turn reasoning_content may be omitted, but tool-call
 // reasoning_content must be replayed in later turns.
+//
+// This option changes message reasoning fields, not a native ProviderData payload.
+// A native adapter may therefore still send reasoning retained in ProviderData.
 //
 // Available modes:
 //   - ReasoningContentModeDiscardPreviousTurns: Discard reasoning_content from

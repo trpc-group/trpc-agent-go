@@ -180,7 +180,11 @@ func (c *skillChat) setup(_ context.Context) error {
 	execUsed := "local"
 	switch strings.ToLower(strings.TrimSpace(*flagExec)) {
 	case "e2b":
-		we, err = e2bexec.New()
+		var opts []e2bexec.Option
+		if template := os.Getenv("E2B_TEMPLATE"); template != "" {
+			opts = append(opts, e2bexec.WithTemplate(template))
+		}
+		we, err = e2bexec.New(opts...)
 		if err != nil {
 			return fmt.Errorf("e2b executor: %w", err)
 		}

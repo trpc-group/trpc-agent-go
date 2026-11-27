@@ -156,7 +156,8 @@ knowledge/
 │   ├── tcvector/        # 腾讯云向量数据库实现
 │   ├── elasticsearch/   # Elasticsearch 实现
 │   ├── milvus/          # Milvus 向量数据库实现
-│   └── qdrant/          # Qdrant 向量数据库实现
+│   ├── qdrant/          # Qdrant 向量数据库实现
+│   └── chroma/          # ChromaDB 向量数据库实现
 ├── embedder/             # 文本 embedding 模型
 │   ├── embedder.go      # Embedder 接口定义
 │   ├── openai/          # OpenAI embedding 模型

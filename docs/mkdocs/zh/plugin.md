@@ -341,7 +341,9 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - **AfterAgent**：可以返回自定义响应，作为一条额外的“终态”响应事件**追加**到
   Agent 事件流末尾（不替换之前的事件）。
 - **AfterModel**：可以返回自定义响应，替换模型响应。
-- **AfterTool**：可以返回自定义结果，替换工具结果。
+- **AfterTool**：可以返回自定义结果，替换工具结果。`CustomResult` 非 `nil`
+  时会跳过后续 Agent AfterTool 回调；空 map、空 slice、空字符串等非 `nil` 值
+  也属于替换结果。未实现 AfterTool，或未提供 `CustomResult`，都是透传。
 
 > **多 Agent 场景下的注意事项（ChainAgent、ParallelAgent、CycleAgent、Graph Agent 节点）**
 >
@@ -394,12 +396,35 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 - `BeforeTool`：工具调用前，可以修改工具参数（JSON（JavaScript Object Notation）
   字节）
-- `AfterTool`：工具调用后，可以替换结果
+- `AfterTool`：工具调用后，可以替换结果。非 `nil` 的 `CustomResult` 会跳过
+  后续 Agent AfterTool 回调。
 
 ### Event Hook 点
 
 - `OnEvent`：Runner 发出每一个事件时都会调用（包括 runner completion 事件）。你可以
   原地修改事件，或者返回一个新的事件作为替代。
+
+### Runner 完成 Hook
+
+- `Registry.AfterRun`：在 ExecutionTrace 的输入、输出完成填充后观测最终 Runner
+  completion event。它只对根 Runner run 调用一次，不会对每个子 Agent invocation
+  调用。Hook 收到独立快照，修改不会影响 Runner 输出；错误只记录日志，不会让运行失败。
+- `runner.RegisterGlobalAfterRunHook`：为进程内所有 Runner 注册相同的完成 Hook，适合
+  无法向每个 Runner 注入 `runner.WithPlugins(...)` 的基础设施集成。注册在进程生命周期
+  内永久有效且名称唯一；Hook 必须并发安全，并将阻塞式导出交给自身的有界队列。
+
+全局 AfterRun Hook 在 Runner 级和单次 Run 插件的 AfterRun 之后同步执行。它收到的
+context 已脱离运行取消；框架 tracing 捕获到 recording 的根 `invoke_agent` span 时，
+context 携带该 SpanContext，否则显式携带无效 SpanContext，不会错误继承调用方的 span。
+
+```go
+err := runner.RegisterGlobalAfterRunHook(
+	"audit-exporter",
+	func(ctx context.Context, args *plugin.AfterRunArgs) error {
+		return enqueue(ctx, args.CompletionEvent)
+	},
+)
+```
 
 ### Graph 节点 Hook（StateGraph / GraphAgent）
 
@@ -648,6 +673,61 @@ events, err := runnerInstance.Run(
 
 `plugin.NewGlobalInstruction(text)` 会在每一次模型请求前，统一追加一条 system
 message。适合用来实现全局策略或统一行为（例如安全约束、风格要求）。
+
+### ToolLoopWarning（工具循环提醒）
+
+`toolloopwarning.New()` 会在每次模型调用前，检查请求末尾两个相邻的完整工具轮次。当工具
+名称、规范化后的 JSON 参数以及模型可见结果都相同时，插件会在当前请求末尾临时追加一条
+`user` 角色提醒。同一个 request 被重复处理时不会追加多份提醒；但只要循环继续，每个新的
+匹配 request 都会收到提醒。轮次内容变化或中间出现非工具消息时不会匹配。每个 invocation
+的第一次模型请求会被明确跳过，避免仅因恢复了上一次 Run 的重复历史尾部就触发新的提醒。
+
+工具调用 ID 用于将结果与调用配对，但不参与轮次指纹比较。一个完整轮次要求每个工具
+调用恰好对应一条末尾工具结果消息；不完整或格式异常的轮次不会匹配。该插件默认关闭，
+不会额外发起模型调用或工具调用，也不会停止 invocation 或触发重试。插件必须注册到
+`Runner`；直接调用 `Agent.Run` 不会安装 Runner plugin。
+
+提醒的 `user` 角色只是模型协议形态，不表示文本由人类输入。提醒只存在于当前模型请求：
+它不会作为 session event 追加，也不会在后续 Run 中作为 history 恢复。普通 standalone
+summary 只读取已持久化 event，因此不会把提醒作为 source content；但显式启用 cache-safe
+summary forking 时，summarizer 会复用最终模型请求，提醒会进入 summarizer 输入，并可能间接
+影响最终持久化的派生 summary。Execution Trace 同样会在 completion artifact 上记录最终请求，
+但不会把它写成 session history。模型基于提醒生成的响应继续遵循正常的 session 行为。
+
+检测基于 `BeforeModel` 时可见的请求，因此 history projection、工具结果转换、summary
+cutoff 和 context compaction 已经反映在待比较内容中。如果后续 callback 移除了提醒，且同
+一个 request 再次进入 callback 链，只有在末尾工具轮次仍然匹配时插件才会重新追加；同一
+request 末尾已有提醒时不会重复追加。
+
+可使用 `WithExcludedToolNames(...)` 排除轮询等预期会重复的工具；可使用
+`WithWarningMessage(...)` 自定义或本地化提醒内容。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolloopwarning"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+agentInstance := llmagent.New(
+	"my-agent",
+	llmagent.WithModel(openai.New("gpt-4o-mini")),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolloopwarning.New(
+		toolloopwarning.WithExcludedToolNames("poll_status"),
+	)),
+)
+defer runnerInstance.Close()
+```
+
+无需 API Key 且可稳定复现的完整示例见
+[examples/plugin/toolloopwarning](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/toolloopwarning)。
+该示例使用确定性的脚本模型（scripted model）生成两个相同工具轮次，同时仍然经过正常的
+Runner、LLMAgent、工具、插件和 session 路径。
 
 ### ToolCallID
 
@@ -1052,6 +1132,17 @@ defer runnerInstance.Close()
 
 当一个 event 带有 `Response.Error` 但还没有 `Choices[].Message.Content` 时（例如 `llmflow` 把 `agent.StopError` 转成的 `stop_agent_error` 事件、或者任何直接 `event.NewErrorEvent(...)` 产出的事件），Runner 会用一句固定的英文兜底文案 `"An error occurred during execution. Please contact the service provider."` 补齐。这个插件在 `OnEvent` 中先一步把 content 填好，方便业务侧展示更友好、本地化或按租户定制的提示信息。结构化的 `Response.Error` 不会被修改，调试和下游消费方仍能看到原始原因。
 
+Runner 和本插件会把这类 content 标记为框架合成文案。默认情况下，
+`LLMAgent` 仍会对外发送并持久化这条事件，但后续请求模型时不会把这段展示文案
+带入上下文，避免模型把它当成自己生成过的内容再次复述。如果过滤后出现相邻的
+两条 user 消息，请求投影层会在本地合并它们，以维持模型服务可接受的消息序列。
+升级前已经持久化、尚未带标记的 Session，会按一组尽力而为的旧版特征识别：
+结构化错误、Runner 完全一致的兜底文案及 `"error"` finish reason，并且没有其他
+消息载荷。与这组无标记特征完全一致的真实响应无法区分。如需恢复原先继续携带给
+模型的行为，可在创建 LLMAgent 时
+传入 `llmagent.WithIncludeSyntheticErrorMessages(true)`，或在创建 GraphAgent 时
+传入 `graphagent.WithIncludeSyntheticErrorMessages(true)`。
+
 插件只会改写尚未带有有效 content 的错误事件，所以失败前已经产出的流式助手消息不会被覆盖。
 
 静态文案：
@@ -1100,7 +1191,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、MessageMerger、ErrorMessage、Guardrail 八类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、ToolLoopWarning、MessageMerger、ErrorMessage、Guardrail 九类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 

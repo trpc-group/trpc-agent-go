@@ -43,6 +43,19 @@ func TestNewMCPToolSet(t *testing.T) {
 	}
 }
 
+func TestToolSetDescription(t *testing.T) {
+	toolset := NewMCPToolSet(ConnectionConfig{
+		Transport:   "stdio",
+		Command:     "echo",
+		Description: "Issue tracker tools.",
+	})
+	defer toolset.Close()
+	var describer tool.ToolSetDescriber = toolset
+	if got := describer.Description(); got != "Issue tracker tools." {
+		t.Errorf("Expected the connection description, got %q", got)
+	}
+}
+
 func TestNewMCPToolSet_WithOptions(t *testing.T) {
 	config := ConnectionConfig{
 		Transport: "stdio",

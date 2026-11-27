@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 )
 
 type reportModel struct {
@@ -140,7 +141,9 @@ func TestSessionSummarizer_ReportHookStandaloneCall(t *testing.T) {
 	)
 
 	report := &Report{}
+	var call isummarycontext.ModelCall
 	ctx := ContextWithReport(context.Background(), report)
+	ctx = isummarycontext.WithModelCallRecorder(ctx, &call)
 	contextual := s.(ContextAwareSummarizer)
 	require.True(t, contextual.ShouldSummarizeWithContext(ctx, newReportSession()))
 
@@ -151,6 +154,7 @@ func TestSessionSummarizer_ReportHookStandaloneCall(t *testing.T) {
 	require.Equal(t, 7, got.Trigger.Value)
 	require.Equal(t, 5, got.Trigger.Threshold)
 	require.Equal(t, callModeStandalone, got.Call.Mode)
+	require.Equal(t, callModeStandalone, call.Mode)
 	require.Equal(t, 7, got.Call.EstimatedPromptTokens)
 	require.Equal(t, 123, got.Call.PromptTokens)
 	require.Equal(t, 45, got.Call.CachedTokens)
@@ -255,7 +259,13 @@ type reportContextTestKey struct{}
 
 func TestInheritReportContext(t *testing.T) {
 	report := &Report{Trigger: Trigger{Name: checkNameTokenThreshold}}
+	var call isummarycontext.ModelCall
+	var trigger isummarycontext.TriggerObservation
+	var selection isummarycontext.EventSelection
 	current := ContextWithReport(context.Background(), report)
+	current = isummarycontext.WithModelCallRecorder(current, &call)
+	current = isummarycontext.WithTriggerRecorder(current, &trigger)
+	current = isummarycontext.WithEventSelectionRecorder(current, &selection)
 	next := context.WithValue(context.Background(), reportContextTestKey{}, "next")
 
 	got := inheritReportContext(next, current)
@@ -263,12 +273,35 @@ func TestInheritReportContext(t *testing.T) {
 	require.True(t, ok)
 	require.Same(t, report, inherited)
 	require.Equal(t, "next", got.Value(reportContextTestKey{}))
+	require.Same(t, &call, isummarycontext.ModelCallFromContext(got))
+	require.Same(t, &trigger, isummarycontext.TriggerFromContext(got))
+	require.Same(t, &selection, isummarycontext.EventSelectionFromContext(got))
 
 	existing := &Report{Trigger: Trigger{Name: checkNameContextThreshold}}
 	got = inheritReportContext(ContextWithReport(next, existing), current)
 	inherited, ok = ReportFromContext(got)
 	require.True(t, ok)
 	require.Same(t, existing, inherited)
+	require.Same(t, &call, isummarycontext.ModelCallFromContext(got))
+	require.Same(t, &trigger, isummarycontext.TriggerFromContext(got))
+	require.Same(t, &selection, isummarycontext.EventSelectionFromContext(got))
+
+	var staleCall isummarycontext.ModelCall
+	var staleTrigger isummarycontext.TriggerObservation
+	var staleSelection isummarycontext.EventSelection
+	staleNext := isummarycontext.WithModelCallRecorder(next, &staleCall)
+	staleNext = isummarycontext.WithTriggerRecorder(staleNext, &staleTrigger)
+	staleNext = isummarycontext.WithEventSelectionRecorder(staleNext, &staleSelection)
+	got = inheritReportContext(staleNext, current)
+	require.Same(t, &call, isummarycontext.ModelCallFromContext(got))
+	isummarycontext.RecordModelCall(got, callModeStandalone)
+	require.Equal(t, callModeStandalone, call.Mode)
+	require.Empty(t, staleCall.Mode)
+
+	got = inheritReportContext(staleNext, context.Background())
+	require.Nil(t, isummarycontext.ModelCallFromContext(got))
+	isummarycontext.RecordModelCall(got, callModeStandalone)
+	require.Empty(t, staleCall.Mode)
 
 	got = inheritReportContext(nil, current)
 	inherited, ok = ReportFromContext(got)
@@ -375,4 +408,125 @@ func TestSessionSummarizer_ReportHookKeepsUsageFromEarlierResponse(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, "summary", text)
 	require.Equal(t, 21, got.Call.PromptTokens)
+}
+
+func TestSessionSummarizer_BeforeModelCachedContextWritesCurrentRecorder(t *testing.T) {
+	var currentCall, staleCall isummarycontext.ModelCall
+	staleReport := &Report{Trigger: Trigger{Name: "stale"}}
+	staleCtx := ContextWithReport(context.Background(), staleReport)
+	staleCtx = isummarycontext.WithModelCallRecorder(staleCtx, &staleCall)
+
+	currentReport := &Report{}
+	current := ContextWithReport(context.Background(), currentReport)
+	current = isummarycontext.WithModelCallRecorder(current, &currentCall)
+
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		context.Context,
+		*model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return &model.BeforeModelResult{Context: staleCtx}, nil
+	})
+	s := NewSummarizer(&reportModel{}, WithModelCallbacks(callbacks))
+
+	text, err := s.Summarize(current, newReportSession())
+	require.NoError(t, err)
+	require.Equal(t, "summary", text)
+	require.Equal(t, callModeStandalone, currentCall.Mode)
+	require.Empty(t, staleCall.Mode)
+	require.Equal(t, callModeStandalone, staleReport.Call.Mode)
+	require.Empty(t, currentReport.Call.Mode)
+}
+
+type sequentialReportModel struct {
+	calls     int
+	responses []*model.Response
+}
+
+func (m *sequentialReportModel) Info() model.Info {
+	return model.Info{Name: "sequential-report"}
+}
+
+func (m *sequentialReportModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.calls++
+	ch := make(chan *model.Response, 1)
+	if m.calls > len(m.responses) {
+		close(ch)
+		return ch, nil
+	}
+	ch <- m.responses[m.calls-1]
+	close(ch)
+	return ch, nil
+}
+
+func TestSessionSummarizer_RetryCustomResponseKeepsCalledObservation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		firstResponse *model.Response
+	}{
+		{
+			name:          "empty summary",
+			firstResponse: &model.Response{Done: true},
+		},
+		{
+			name: "context overflow",
+			firstResponse: func() *model.Response {
+				code := "context_length_exceeded"
+				return &model.Response{
+					Done: true,
+					Error: &model.ResponseError{
+						Message: "maximum context length exceeded",
+						Code:    &code,
+					},
+				}
+			}(),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &sequentialReportModel{responses: []*model.Response{tc.firstResponse}}
+			var beforeCalls int
+			callbacks := model.NewCallbacks()
+			callbacks.RegisterBeforeModel(func(
+				context.Context,
+				*model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				beforeCalls++
+				if beforeCalls == 1 {
+					return nil, nil
+				}
+				return &model.BeforeModelResult{
+					CustomResponse: &model.Response{
+						Done: true,
+						Choices: []model.Choice{{
+							Message: model.Message{Content: "callback summary"},
+						}},
+					},
+				}, nil
+			})
+			var got Report
+			var call isummarycontext.ModelCall
+			s := NewSummarizer(
+				m,
+				WithModelCallbacks(callbacks),
+				WithReportHook(func(_ context.Context, report Report) {
+					got = report
+				}),
+			)
+			report := &Report{}
+			ctx := ContextWithReport(context.Background(), report)
+			ctx = isummarycontext.WithModelCallRecorder(ctx, &call)
+
+			text, err := s.Summarize(ctx, newReportSession())
+			require.NoError(t, err)
+			require.Equal(t, "callback summary", text)
+			require.Equal(t, 1, m.calls)
+			require.Equal(t, 2, beforeCalls)
+			require.Equal(t, callModeCustomResponse, got.Call.Mode)
+			require.Equal(t, callModeCustomResponse, report.Call.Mode)
+			require.Equal(t, callModeStandalone, call.Mode)
+		})
+	}
 }

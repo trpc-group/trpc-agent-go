@@ -567,7 +567,7 @@ After Gateway, `openclaw` directly reuses the existing execution system in tRPC-
 - Session backend: `inmemory`, `redis`, `sqlite`, `mysql`, `postgres`, `clickhouse`
 - Memory backend: `inmemory`, `redis`, `mysql`, `postgres`, `pgvector`
 - Tool providers: `duckduckgo`, `webfetch_http`
-- ToolSet providers: `mcp`, `file`, `openapi`, `google`, `wikipedia`, `arxivsearch`, `email`
+- ToolSet providers: `mcp`, `file`, `openapi`, `google`, `wikipedia`, `arxivsearch`, `email`, `youcom`
 - Skills: skill directories based on `SKILL.md`
 
 In addition, `openclaw` adds several kinds of tools that are closer to long-running scenarios:

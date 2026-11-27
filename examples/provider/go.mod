@@ -14,7 +14,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.6.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0
 )
 

@@ -26,9 +26,9 @@ var _ session.Ingestor = (*Service)(nil)
 
 // Service is a TencentDB Agent Memory gateway adapter.
 //
-// The current TencentDB SDK gateway is best treated as a trusted sidecar. The
-// adapter forwards app/user/session identifiers, but hard multi-tenant isolation
-// depends on the gateway and SDK honoring those fields end-to-end.
+// Legacy gateway routes are best treated as a trusted sidecar. Callers can use
+// NewServiceWithIdentity to select the identity-scoped data plane, which sends
+// service/team/agent/user identity to gateways that implement the current API.
 type Service struct {
 	opts          Options
 	client        *gatewayClient
@@ -48,8 +48,50 @@ type Service struct {
 	tools []tool.Tool
 }
 
-// NewService creates a TencentDB Agent Memory service.
+// ServiceIdentity identifies the service, team, and agent used by TencentDB
+// Agent Memory's identity-scoped API. Its contents are intentionally opaque so
+// the identity contract can grow without changing Options or existing call
+// sites. ServiceIdentity values are immutable after construction and may be
+// copied or reused concurrently. The zero value is invalid; create values with
+// NewServiceIdentity.
+type ServiceIdentity struct {
+	config *serviceIdentity
+}
+
+// NewServiceIdentity creates an identity for TencentDB Agent Memory's
+// identity-scoped API. The IDs are normalized when the identity is created and
+// validated by NewServiceWithIdentity.
+func NewServiceIdentity(serviceID, teamID, agentID string) ServiceIdentity {
+	return ServiceIdentity{
+		config: &serviceIdentity{
+			serviceID: strings.TrimSpace(serviceID),
+			teamID:    strings.TrimSpace(teamID),
+			agentID:   strings.TrimSpace(agentID),
+		},
+	}
+}
+
+// NewService creates a TencentDB Agent Memory service that uses the Legacy
+// gateway API.
 func NewService(opts ...Option) (*Service, error) {
+	return newService(apiModeLegacy, nil, opts...)
+}
+
+// NewServiceWithIdentity creates a TencentDB Agent Memory service that uses
+// the identity-scoped V3 API. Identity must be created with
+// NewServiceIdentity, and its service, team, and agent IDs must all be non-empty.
+// User and session IDs come from the framework session. Use WithAPIKey when the
+// gateway requires Bearer authentication; self-hosted gateways that keep
+// authentication disabled can omit it, in which case V3 requests send the
+// non-secret Bearer placeholder required by the upstream gateway parser.
+func NewServiceWithIdentity(
+	identity ServiceIdentity,
+	opts ...Option,
+) (*Service, error) {
+	return newService(apiModeV3, identity.config, opts...)
+}
+
+func newService(mode apiMode, identity *serviceIdentity, opts ...Option) (*Service, error) {
 	options := defaultOptions()
 	for _, opt := range opts {
 		if opt != nil {
@@ -59,7 +101,7 @@ func NewService(opts ...Option) (*Service, error) {
 	options.ContextOffload = normalizeContextOffloadConfig(
 		options.ContextOffload,
 	)
-	client, err := newGatewayClient(options)
+	client, err := newGatewayClientWithMode(options, mode, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +134,9 @@ func (s *Service) contextOffloadClient() *offloadGatewayClient {
 }
 
 // IngestSession captures the latest user/assistant exchange and transcript
-// messages into the TencentDB Agent Memory gateway.
+// messages into the TencentDB Agent Memory gateway. Capture uses at-least-once
+// delivery: the checkpoint advances only after every batch is acknowledged,
+// so an ambiguous transport failure may replay L0 messages.
 func (s *Service) IngestSession(
 	ctx context.Context,
 	sess *session.Session,
@@ -133,8 +177,9 @@ func (s *Service) IngestSession(
 	}
 }
 
-// EndSession flushes short-term session state managed by the sidecar, if
-// supported by the gateway.
+// EndSession waits for queued capture work and asks legacy gateways to flush
+// their short-term session state. The V3 data plane has no remote session-end
+// operation, so V3 calls return after the local capture barrier completes.
 func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 	if s == nil {
 		return errors.New("tencentdb memory: nil service")
@@ -153,6 +198,10 @@ func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 	if err := s.waitForPreviousCapture(ctx, barrier); err != nil {
 		s.finishSerialBarrier(sessionKey, barrier, err)
 		return err
+	}
+	if s.client.usesV3API() {
+		s.finishSerialBarrier(sessionKey, barrier, nil)
+		return nil
 	}
 	_, err := s.client.endSession(ctx, endSessionRequest{
 		SessionKey: sessionKey,
@@ -280,12 +329,16 @@ func (s *Service) reserveIngestJob(sess *session.Session, sessionKey string) (in
 	if current, ok := s.inFlight[sessionKey]; !ok || scan.Latest.After(current) {
 		s.inFlight[sessionKey] = scan.Latest
 	}
-	messages, latestSynthetic := normalizeGatewayMessageTimestampsAfter(
-		scan.Messages,
-		time.Now(),
-		readBestEffortSyntheticTimestamp(sess),
-	)
-	writeBestEffortSyntheticTimestamp(sess, latestSynthetic)
+	messages := scan.Messages
+	if !s.client.usesV3API() {
+		var latestSynthetic int64
+		messages, latestSynthetic = normalizeGatewayMessageTimestampsAfter(
+			scan.Messages,
+			time.Now(),
+			readBestEffortSyntheticTimestamp(sess),
+		)
+		writeBestEffortSyntheticTimestamp(sess, latestSynthetic)
+	}
 	previous := s.serialTail[sessionKey]
 	serial := &captureSerialState{
 		sessionKey: sessionKey,

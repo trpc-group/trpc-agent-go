@@ -5525,6 +5525,70 @@ func TestContentRequestProcessor_ToolTranscriptModeKeepsAssistantText(t *testing
 	require.Empty(t, messages[0].ToolCalls)
 }
 
+func TestContentRequestProcessor_ToolTranscriptModeDoesNotCreateAssistantToolTurnPair(t *testing.T) {
+	newEvent := func(
+		eventID string,
+		responseID string,
+		msg model.Message,
+		object string,
+	) event.Event {
+		return event.Event{
+			ID:           eventID,
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				ID:      responseID,
+				Object:  object,
+				Choices: []model.Choice{{Message: msg}},
+			},
+		}
+	}
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			newEvent(
+				"completed-call-event",
+				"completed-call-response",
+				toolTranscriptTestCall("call_1", "old preface"),
+				model.ObjectTypeChatCompletion,
+			),
+			newEvent(
+				"completed-result-event",
+				"completed-result-response",
+				model.NewToolMessage("call_1", "lookup", "result"),
+				model.ObjectTypeToolResponse,
+			),
+			newEvent(
+				"incomplete-call-event",
+				"incomplete-call-response",
+				toolTranscriptTestCall("call_2", ""),
+				model.ObjectTypeChatCompletion,
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+	inv.AgentName = "test-agent"
+
+	messages := NewContentRequestProcessor(
+		WithToolTranscriptMode(ToolTranscriptModeOmitPreviousCompleted),
+	).getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 2)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Equal(t, "old preface", messages[0].Content)
+	require.Empty(t, messages[0].ToolCalls)
+	require.Equal(t, model.RoleAssistant, messages[1].Role)
+	require.Empty(t, messages[1].Content)
+	require.Len(t, messages[1].ToolCalls, 1)
+	require.Equal(t, "call_2", messages[1].ToolCalls[0].ID)
+}
+
 func TestContentRequestProcessor_ToolTranscriptModeKeepsUnmatchedResultChoices(t *testing.T) {
 	resultEvent := toolTranscriptTestEvent(
 		"req1",

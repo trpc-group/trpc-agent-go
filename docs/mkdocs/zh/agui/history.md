@@ -277,3 +277,27 @@ server, err := agui.New(
 ```
 
 完整示例可参考 [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow)，前端可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+## 尽力加载历史
+
+默认情况下，消息快照会严格校验已持久化 AG-UI 事件之间的配对关系。比如 `TEXT_MESSAGE_CONTENT` 需要先看到同一条消息的 `TEXT_MESSAGE_START`，`TOOL_CALL_RESULT` 需要匹配已经完成参数流的工具调用。如果历史数据中存在缺失、乱序或重复事件，快照路由会尽量返回出错位置之前已经还原出的 `MESSAGES_SNAPSHOT`，随后返回 `RUN_ERROR`。
+
+如果线上历史数据可能因为连接中断、前端工具调用降级、存储写入失败或版本切换而出现少量不完整事件，可以开启尽力加载模式：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithMessagesSnapshotBestEffortEnabled(true),
+)
+```
+
+开启后，消息快照在还原历史时会跳过无法识别或无法配对的单条 AG-UI event，并继续处理后续事件。被跳过的事件只会写入 warn 日志，不会让本次 `/history` 请求返回 `RUN_ERROR`；如果后续事件仍然能组成完整消息，它们会继续出现在 `MESSAGES_SNAPSHOT.messages` 中。该模式只影响历史快照还原，不改变实时对话路由的执行行为，也不会修复已经缺失的历史事件内容。
+
+尽力加载只处理事件内容可读取但无法还原为合法消息的情况。如果会话存储读取失败、`SessionService` 返回错误，或者消息快照路由无法定位会话，服务端仍会返回 `RUN_ERROR`。

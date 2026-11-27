@@ -1233,9 +1233,6 @@ func (s *Service) cleanupExpired(ctx context.Context) {
 	if s.opts.sessionTTL <= 0 && trackTTL <= 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	if err := s.cleanupExpiredEvents(ctx, time.Now()); err != nil {
 		log.ErrorfContext(ctx, "mongodb cleanup expired events failed: %v", err)
 	}
@@ -1256,9 +1253,18 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, t
 	if ttl <= 0 {
 		return nil
 	}
+	// Reserve a separate budget for each collection while honoring parent cancellation.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	cutoff := now.Add(-ttl)
 	pipeline := bson.A{
-		bson.M{"$match": bson.M{"deleted_at": nil}},
+		// Session writers store app_name as a string. Its full string range
+		// gives the planner bounds on the existing partial cleanup index,
+		// avoiding reads of soft-deleted history without a forced hint.
+		bson.M{"$match": bson.M{
+			"deleted_at": nil,
+			"app_name":   bson.M{"$gte": ""},
+		}},
 		bson.M{"$group": bson.M{
 			"_id": bson.M{
 				"app_name":   "$app_name",

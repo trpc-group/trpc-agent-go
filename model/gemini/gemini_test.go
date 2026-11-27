@@ -181,6 +181,14 @@ func TestModel_convertMessages(t *testing.T) {
 		want   []*genai.Content
 	}{
 		{
+			name:   "empty message",
+			fields: fields{m: &Model{}},
+			args: args{messages: []model.Message{{
+				Role: model.RoleUser,
+			}}},
+			want: []*genai.Content{},
+		},
+		{
 			name: "text",
 			fields: fields{
 				m: &Model{},
@@ -200,8 +208,10 @@ func TestModel_convertMessages(t *testing.T) {
 				},
 			},
 			want: []*genai.Content{
-				genai.NewContentFromText(text, genai.RoleModel),
-				genai.NewContentFromText(subText, genai.RoleModel),
+				genai.NewContentFromParts([]*genai.Part{
+					{Text: text},
+					{Text: subText},
+				}, genai.RoleModel),
 			},
 		},
 		{
@@ -233,8 +243,6 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromURI(imageURL, ""),
-				}, genai.RoleUser),
-				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(imageData), ""),
 				}, genai.RoleUser),
 			},
@@ -274,8 +282,6 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromURI(audioURL, "audio/mpeg"),
-				}, genai.RoleUser),
-				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(audioData), "audio/wav"),
 				}, genai.RoleUser),
 			},
@@ -315,8 +321,6 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromURI(videoURL, "video/mp4"),
-				}, genai.RoleUser),
-				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(videoData), "video/mp4"),
 				}, genai.RoleUser),
 			},
@@ -820,7 +824,8 @@ func TestModel_buildFinalResponse(t *testing.T) {
 					UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 						PromptTokenCount:        1,
 						CandidatesTokenCount:    1,
-						TotalTokenCount:         2,
+						TotalTokenCount:         9,
+						ThoughtsTokenCount:      7,
 						CachedContentTokenCount: 1,
 					},
 				},
@@ -857,10 +862,13 @@ func TestModel_buildFinalResponse(t *testing.T) {
 				},
 				Usage: &model.Usage{
 					PromptTokens:     1,
-					TotalTokens:      2,
+					TotalTokens:      9,
 					CompletionTokens: 1,
 					PromptTokensDetails: model.PromptTokensDetails{
 						CachedTokens: 1,
+					},
+					CompletionTokensDetails: model.CompletionTokensDetails{
+						ReasoningTokens: 7,
 					},
 				},
 			},
@@ -925,6 +933,10 @@ func TestModel_buildFinalResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildFinalResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil && tt.want.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				tt.want.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}
@@ -1040,6 +1052,10 @@ func TestModel_buildChunkResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildChunkResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil && tt.want.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				tt.want.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}
@@ -1153,6 +1169,82 @@ func TestModel_convertMessageContent_PreservesFunctionCallThoughtSignature(t *te
 	assert.Equal(t, signature, part.ThoughtSignature)
 }
 
+func TestModel_convertMessageContent_KeepsTextAndToolCallInOneAssistantTurn(t *testing.T) {
+	message := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "calling tool",
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city":"shenzhen"}`),
+			},
+		}},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleModel, contents[0].Role)
+	require.Len(t, contents[0].Parts, 2)
+	assert.Equal(t, "calling tool", contents[0].Parts[0].Text)
+	require.NotNil(t, contents[0].Parts[1].FunctionCall)
+	assert.Equal(t, "call-1", contents[0].Parts[1].FunctionCall.ID)
+}
+
+func TestModel_convertMessageContent_TextSignatureDoesNotCoverAssistantToolCall(t *testing.T) {
+	signature := []byte("text-thought-signature")
+	message := model.Message{
+		Role:               model.RoleAssistant,
+		Content:            "calling tool",
+		ReasoningSignature: base64.StdEncoding.EncodeToString(signature),
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city":"shenzhen"}`),
+			},
+		}},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 2)
+	assert.Equal(t, signature, contents[0].Parts[0].ThoughtSignature)
+	require.NotNil(t, contents[0].Parts[1].FunctionCall)
+	assert.Equal(
+		t,
+		[]byte(geminiSkipThoughtSignatureValidator),
+		contents[0].Parts[1].ThoughtSignature,
+	)
+}
+
+func TestModel_convertMessageContent_UnemittedTextSignatureDoesNotCoverToolCall(t *testing.T) {
+	message := model.Message{
+		Role:               model.RoleAssistant,
+		ReasoningSignature: base64.StdEncoding.EncodeToString([]byte("unused-signature")),
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city":"shenzhen"}`),
+			},
+		}},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 1)
+	require.NotNil(t, contents[0].Parts[0].FunctionCall)
+	assert.Equal(
+		t,
+		[]byte(geminiSkipThoughtSignatureValidator),
+		contents[0].Parts[0].ThoughtSignature,
+	)
+}
+
 func TestModel_convertMessageContent_InjectsSkipValidatorForCrossProviderFunctionCall(t *testing.T) {
 	args := []byte(`{"command":"echo hi"}`)
 	message := model.Message{
@@ -1186,6 +1278,43 @@ func TestModel_convertMessageContent_InjectsSkipValidatorForCrossProviderFunctio
 	require.NotNil(t, second.FunctionCall)
 	assert.Equal(t, []byte(geminiSkipThoughtSignatureValidator), first.ThoughtSignature)
 	assert.Empty(t, second.ThoughtSignature)
+}
+
+func TestModel_convertMessageContent_FirstParallelFunctionCallNeedsSignature(t *testing.T) {
+	signature := []byte("later-call-signature")
+	message := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "weather",
+					Arguments: []byte(`{"city":"shenzhen"}`),
+				},
+			},
+			{
+				ID: "call-2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "weather",
+					Arguments: []byte(`{"city":"guangzhou"}`),
+				},
+				ExtraFields: map[string]any{
+					geminiThoughtSignatureKey: signature,
+				},
+			},
+		},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 2)
+	assert.Equal(
+		t,
+		[]byte(geminiSkipThoughtSignatureValidator),
+		contents[0].Parts[0].ThoughtSignature,
+	)
+	assert.Equal(t, signature, contents[0].Parts[1].ThoughtSignature)
 }
 
 func TestModel_convertMessageContent_PreservesGeminiParallelFunctionCalls(t *testing.T) {
@@ -1763,6 +1892,104 @@ func TestModel_GenerateContentStreaming(t *testing.T) {
 		})
 	}
 	ctrl.Finish()
+}
+
+func TestModel_GenerateContentStreamingUsesLatestUsageSnapshot(t *testing.T) {
+	now := time.Now()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	chunkWithCache := &genai.GenerateContentResponse{
+		ResponseID:   "stream-cache-1",
+		CreateTime:   now,
+		ModelVersion: "gemini-2.5-pro",
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: "hello "}},
+			},
+		}},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        100,
+			CandidatesTokenCount:    4,
+			TotalTokenCount:         111,
+			CachedContentTokenCount: 80,
+			ThoughtsTokenCount:      7,
+		},
+	}
+	chunkWithRepeatedCache := &genai.GenerateContentResponse{
+		ResponseID:   "stream-cache-2",
+		CreateTime:   now,
+		ModelVersion: "gemini-2.5-pro",
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: "world"}},
+			},
+			FinishReason: genai.FinishReasonStop,
+		}},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        100,
+			CandidatesTokenCount:    10,
+			TotalTokenCount:         120,
+			CachedContentTokenCount: 80,
+			ThoughtsTokenCount:      10,
+		},
+	}
+	chunkWithoutUsage := &genai.GenerateContentResponse{
+		ResponseID:    "stream-cache-3",
+		CreateTime:    now,
+		ModelVersion:  "gemini-2.5-pro",
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{},
+	}
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).Times(1)
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{chunkWithCache, chunkWithRepeatedCache, chunkWithoutUsage})).
+		Times(1)
+
+	var callbackFinal *model.Response
+	m := &Model{
+		name:   "gemini-2.5-pro",
+		client: mockClient,
+		chatStreamCompleteCallback: func(
+			_ context.Context,
+			_ []*genai.Content,
+			_ *genai.GenerateContentConfig,
+			chatResponse *model.Response,
+		) {
+			callbackFinal = chatResponse
+		},
+	}
+
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	assert.NoError(t, err)
+
+	var final *model.Response
+	for resp := range ch {
+		if resp.Done {
+			final = resp
+		}
+	}
+	if assert.NotNil(t, final) && assert.NotNil(t, final.Usage) {
+		assert.Equal(t, "hello world", final.Choices[0].Message.Content)
+		assert.Equal(t, 100, final.Usage.PromptTokens)
+		assert.Equal(t, 10, final.Usage.CompletionTokens)
+		assert.Equal(t, 120, final.Usage.TotalTokens)
+		assert.Equal(t, 80, final.Usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 10, final.Usage.CompletionTokensDetails.ReasoningTokens)
+	}
+	if assert.NotNil(t, callbackFinal) && assert.NotNil(t, callbackFinal.Usage) {
+		assert.Equal(t, 100, callbackFinal.Usage.PromptTokens)
+		assert.Equal(t, 10, callbackFinal.Usage.CompletionTokens)
+		assert.Equal(t, 120, callbackFinal.Usage.TotalTokens)
+		assert.Equal(t, 80, callbackFinal.Usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 10, callbackFinal.Usage.CompletionTokensDetails.ReasoningTokens)
+	}
 }
 
 func seqFromSlice[T any](items []T) iter.Seq2[T, error] {

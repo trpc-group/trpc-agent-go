@@ -57,7 +57,7 @@ The client keeps using the same session ID until you switch it:
 Ask for the current time (for example, "What time is it in Asia/Shanghai?")
 to see the `current_time` tool call and tool result cross the A2A boundary.
 
-Use `-streaming=false` on the server to exercise blocking `message/send`.
+Use `-streaming=false` on the server to exercise blocking `SendMessage`.
 The client discovers the streaming capability from the Agent Card.
 
 The example uses in-memory session storage, so restarting the server clears its
@@ -69,23 +69,25 @@ Start the same server with the memory TaskManager enabled:
 
 ```bash
 cd examples
+export A2A_TASK_API_KEYS='{"<api-key>":"example-user"}'
 go run ./a2aagent/v1/server -retain-tasks
 ```
+
+`A2A_TASK_API_KEYS` is a JSON object whose keys are API keys and whose values are trusted user IDs. Replace the placeholder with a secret value; for production, load credentials from a secret manager and rotate them instead of putting them in source control or command history.
 
 Then run the direct A2A task client:
 
 ```bash
 cd examples
+export A2A_TASK_API_KEY="<same-api-key>"
 go run ./a2aagent/v1/taskclient \
   -prompt "Explain the A2A task lifecycle."
 ```
 
-The task client sends `message/send` with `returnImmediately=true`, receives an
-immediate Task snapshot, polls it with `tasks/get`, and finally verifies it with
-`tasks/list`. The memory TaskManager also enables retained lookup, cancellation,
-and resubscription. Continuation still requires a processor that emits an
-interrupted state, and push delivery requires additional push configuration.
+The server and task client read retained-task credentials only from these environment variables; command-line credential flags are intentionally not provided.
 
-Session state and A2A Task state remain independent: the Runner's session
-service owns conversation context, while the memory TaskManager retains A2A
-Task lifecycle state. Both are cleared when the server process restarts.
+The task client calls `SendMessage` with `returnImmediately=true`, receives an immediate Task snapshot, polls it through the Go method `GetTasks` (v1 wire operation `GetTask`), and verifies it through `ListTasks`. The memory TaskManager also retains the state required by `CancelTasks` (`CancelTask`) and `ResubscribeTask` (`SubscribeToTask`), but those operations only apply to eligible non-terminal Tasks and are not exercised by this client. Continuation still requires a processor that emits an interrupted state, and push delivery requires additional push configuration.
+
+The retained example authenticates `X-API-Key`, maps it to a trusted user ID on the server, and scopes Tasks to that identity. All send, lookup, list, cancel, and resubscribe requests for one Task must use a key mapped to the same user; a caller-supplied `X-User-ID` does not grant access.
+
+Session state and A2A Task state remain independent: the Runner's session service owns conversation context, while the memory TaskManager retains A2A Task lifecycle state. Both are cleared when the server process restarts.

@@ -78,6 +78,34 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Session 历史中的合成错误文案
+
+错误事件没有 assistant content 时，Runner 可能补充通用文案，使事件仍可展示，
+并能作为完整的 user/assistant 轮次持久化。ErrorMessage 插件也可以为同一目的
+提供自定义文案。这类内容是框架合成的展示数据，并不是模型输出。
+
+默认情况下，LLMAgent 不会删除或改写对外发送及持久化事件中的 assistant content
+与结构化错误，但在构造后续模型请求时会省略框架合成的错误文案。如果省略后出现
+相邻 user 消息，请求投影层会在本地合并它们，以维持模型服务可接受的消息序列。
+升级前的 Session 会通过一组尽力而为的特征识别：事件带有结构化错误、Runner
+完全一致的通用兜底文案及其 `"error"` finish reason，并且没有其他消息载荷。
+无标记事件不具备确定的来源信息，因此，与这组旧版特征完全一致的真实响应无法
+区分；如果这类响应必须继续对模型可见，请启用下方兼容选项。
+
+如果应用明确依赖旧版上下文行为，可以显式恢复：
+
+```go
+llmAgent := llmagent.New(
+    "demo-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithIncludeSyntheticErrorMessages(true),
+)
+```
+
+GraphAgent 从 Session 历史初始化图消息状态时采用相同默认行为，并提供对应的
+`graphagent.WithIncludeSyntheticErrorMessages` 兼容选项。详见
+[Graph 指南](./graph.md#synthetic-error-content-in-session-history)。
+
 <a id="placeholder-variables-session-state-injection"></a>
 
 ### 占位符变量（状态注入）
@@ -356,6 +384,11 @@ agent := llmagent.New(
 
 **注意：** 此选项仅影响发送给模型之前对历史消息的处理方式。当前响应的 `reasoning_content` 始终会被捕获并存储在会话事件中。
 
+框架将 `ProviderData` payload 字节视为不透明数据。对于带有原生 ProviderData 的消息，
+这些模式只修改投影出的 reasoning 字段，不会删除 ProviderData 中的 reasoning 或加密状态，
+匹配的原生适配器仍可能在下一轮发送它们。要改变这部分输入，可以编辑
+`Message.ProviderData.Payload`。需要恢复未完成的工具轮时，保留该轮的 ProviderData。
+
 ### 工具调用记录历史模式
 
 默认情况下，LLMAgent 会在后续请求中继续把历史工具调用及其对应工具结果发送给模型。这是最保守、兼容性最强的行为；但在包含大量已完成工具调用轮次的长会话中，这些历史 tool transcript 可能会占用不必要的上下文。
@@ -484,7 +517,7 @@ agent := llmagent.New(
 - 工具迭代上限收尾要求达到上限的这一轮中所有工具调用都由框架执行。如果其中任何调用是 external tool，或被 `WithToolExecutionFilter` 延后给调用方执行，该回复仍会计入 `MaxToolIterations`，但当前运行会沿用 caller-executed tool 的既有生命周期并直接结束，不再发起收尾调用。调用方后续继续执行时会创建新的 invocation，并使用独立的限制计数。
 - `MaxLLMCalls` 始终是严格的外层硬预算，收尾调用也计入其中。因此组合使用工具上限收尾和 `WithMaxLLMCalls` 时，需要预留一次 LLM 调用。
 - 最后一次模型请求会在消息尾部追加一条临时 user instruction，而不会修改已有 system prompt。`BeforeModel` callback 可以看到该消息，但它不会作为真实 user event 发送或持久化。
-- 收尾期间，框架会在 `BeforeModel` callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。
+- 默认情况下，收尾期间框架会在 `BeforeModel` callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。对于已验证支持 `tool_choice: "none"` 的 OpenAI 兼容端点，可通过 [模型配置](model.md#preserving-tools-during-call-limit-finalization) 保留工具定义并禁用调用，争取复用缓存。
 - 如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。

@@ -28,9 +28,12 @@ func TestSessionSummarizer_UsesLargestCompletePrefix(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		cacheSafeFork bool
+		requestBudget bool
 	}{
 		{name: "standalone"},
 		{name: "cache-safe fork", cacheSafeFork: true},
+		{name: "standalone with request budget", requestBudget: true},
+		{name: "cache-safe fork with request budget", cacheSafeFork: true, requestBudget: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			capture := &cacheSafeCaptureModel{
@@ -49,8 +52,14 @@ func TestSessionSummarizer_UsesLargestCompletePrefix(t *testing.T) {
 			twoRoundTokens := summaryPrefixRequestTokens(t, s, events[:4])
 			allRoundTokens := summaryPrefixRequestTokens(t, s, events)
 			require.Greater(t, allRoundTokens, twoRoundTokens)
-			capture.inputBudget = twoRoundTokens +
+			budget := twoRoundTokens +
 				(allRoundTokens-twoRoundTokens)/2
+			if test.requestBudget {
+				opts = append(opts, WithRequestInputTokenBudget(budget))
+				s = NewSummarizer(capture, opts...).(*sessionSummarizer)
+			} else {
+				capture.inputBudget = budget
+			}
 
 			ctx := context.Background()
 			if test.cacheSafeFork {
@@ -74,7 +83,7 @@ func TestSessionSummarizer_UsesLargestCompletePrefix(t *testing.T) {
 			require.NotContains(t, prompt, "assistant-marker-3")
 			tokens, err := countSummaryRequestTokens(ctx, capture.request)
 			require.NoError(t, err)
-			require.LessOrEqual(t, tokens, capture.inputBudget)
+			require.LessOrEqual(t, tokens, budget)
 			require.Equal(
 				t,
 				"assistant-event-2",

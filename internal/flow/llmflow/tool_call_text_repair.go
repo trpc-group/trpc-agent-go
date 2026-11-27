@@ -52,7 +52,7 @@ func repairResponseToolCallTextInPlace(
 	repaired := false
 	for i := range response.Choices {
 		msg := &response.Choices[i].Message
-		if msg.Role != model.RoleAssistant || len(msg.ToolCalls) > 0 {
+		if msg.Role != model.RoleAssistant || msg.ProviderData != nil || len(msg.ToolCalls) > 0 {
 			continue
 		}
 		text, ok := repairableMessageText(msg)

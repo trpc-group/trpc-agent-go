@@ -7,7 +7,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 require (
 	github.com/stretchr/testify v1.11.1
 	github.com/wneessen/go-mail v0.7.2
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 )
 
 require (

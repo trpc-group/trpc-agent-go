@@ -218,48 +218,49 @@ func (c *Callbacks) handleCallbackError(err error, firstErr *error) (shouldStop 
 	return false
 }
 
-// processBeforeModelResult processes before model callback result and updates context.
+// processBeforeModelResult merges a before model callback result into acc and updates ctx.
 // Returns whether to stop execution immediately.
 func (c *Callbacks) processBeforeModelResult(
 	result *BeforeModelResult,
 	ctx *context.Context,
-	lastResult **BeforeModelResult,
+	acc *BeforeModelResult,
+	hasResult *bool,
 ) (shouldStop bool) {
 	if result == nil {
 		return false
 	}
+	*hasResult = true
 	if result.Context != nil {
 		*ctx = result.Context
+		acc.Context = result.Context
 	}
 	if result.CustomResponse != nil {
-		*lastResult = result
+		acc.CustomResponse = result.CustomResponse
 		if !c.continueOnResponse {
 			return true
 		}
-	} else {
-		*lastResult = result
 	}
 	return false
 }
 
 // finalizeBeforeModelResult determines the final return value for before model callbacks.
 func (c *Callbacks) finalizeBeforeModelResult(
-	lastResult *BeforeModelResult,
+	acc BeforeModelResult,
+	hasResult bool,
 	firstErr error,
 ) (*BeforeModelResult, error) {
-	if lastResult != nil && lastResult.CustomResponse != nil {
-		if c.continueOnError && firstErr != nil {
-			return lastResult, firstErr
-		}
-		return lastResult, nil
-	}
 	if c.continueOnError && firstErr != nil {
-		return lastResult, firstErr
+		if !hasResult {
+			return nil, firstErr
+		}
+		out := acc
+		return &out, firstErr
 	}
-	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return lastResult, nil
+	out := acc
+	return &out, nil
 }
 
 func recoverModelCallbackPanic(
@@ -294,9 +295,14 @@ func (c *Callbacks) runBeforeModelCallback(
 
 // RunBeforeModel runs all before model callbacks in order.
 // This method uses the new structured callback interface.
-// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
+// Unless execution stops on a callback error, non-nil Context and
+// CustomResponse values are accumulated across callbacks so later empty,
+// legacy, or partial results preserve earlier values. Callback-owned result
+// structs are never mutated and their top-level fields are copied into the
+// returned result; referenced payloads are not deep-copied.
 func (c *Callbacks) RunBeforeModel(ctx context.Context, args *BeforeModelArgs) (*BeforeModelResult, error) {
-	var lastResult *BeforeModelResult
+	var acc BeforeModelResult
+	var hasResult bool
 	var firstErr error
 
 	for _, cb := range c.BeforeModel {
@@ -306,59 +312,61 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, args *BeforeModelArgs) (
 			return nil, err
 		}
 
-		if c.processBeforeModelResult(result, &ctx, &lastResult) {
+		if c.processBeforeModelResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return &out, firstErr
 			}
-			return result, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeBeforeModelResult(lastResult, firstErr)
+	return c.finalizeBeforeModelResult(acc, hasResult, firstErr)
 }
 
-// processAfterModelResult processes after model callback result and updates context.
+// processAfterModelResult merges an after model callback result into acc and updates ctx.
 // Returns whether to stop execution immediately.
 func (c *Callbacks) processAfterModelResult(
 	result *AfterModelResult,
 	ctx *context.Context,
-	lastResult **AfterModelResult,
+	acc *AfterModelResult,
+	hasResult *bool,
 ) (shouldStop bool) {
 	if result == nil {
 		return false
 	}
+	*hasResult = true
 	if result.Context != nil {
 		*ctx = result.Context
+		acc.Context = result.Context
 	}
 	if result.CustomResponse != nil {
-		*lastResult = result
+		acc.CustomResponse = result.CustomResponse
 		if !c.continueOnResponse {
 			return true
 		}
-	} else {
-		*lastResult = result
 	}
 	return false
 }
 
 // finalizeAfterModelResult determines the final return value for after model callbacks.
 func (c *Callbacks) finalizeAfterModelResult(
-	lastResult *AfterModelResult,
+	acc AfterModelResult,
+	hasResult bool,
 	firstErr error,
 ) (*AfterModelResult, error) {
-	if lastResult != nil && lastResult.CustomResponse != nil {
-		if c.continueOnError && firstErr != nil {
-			return lastResult, firstErr
-		}
-		return lastResult, nil
-	}
 	if c.continueOnError && firstErr != nil {
-		return lastResult, firstErr
+		if !hasResult {
+			return nil, firstErr
+		}
+		out := acc
+		return &out, firstErr
 	}
-	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return lastResult, nil
+	out := acc
+	return &out, nil
 }
 
 func (c *Callbacks) runAfterModelCallback(
@@ -372,9 +380,14 @@ func (c *Callbacks) runAfterModelCallback(
 
 // RunAfterModel runs all after model callbacks in order.
 // This method uses the new structured callback interface.
-// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
+// Unless execution stops on a callback error, non-nil Context and
+// CustomResponse values are accumulated across callbacks so later empty,
+// legacy, or partial results preserve earlier values. Callback-owned result
+// structs are never mutated and their top-level fields are copied into the
+// returned result; referenced payloads are not deep-copied.
 func (c *Callbacks) RunAfterModel(ctx context.Context, args *AfterModelArgs) (*AfterModelResult, error) {
-	var lastResult *AfterModelResult
+	var acc AfterModelResult
+	var hasResult bool
 	var firstErr error
 
 	for _, cb := range c.AfterModel {
@@ -384,13 +397,14 @@ func (c *Callbacks) RunAfterModel(ctx context.Context, args *AfterModelArgs) (*A
 			return nil, err
 		}
 
-		if c.processAfterModelResult(result, &ctx, &lastResult) {
+		if c.processAfterModelResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return &out, firstErr
 			}
-			return result, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeAfterModelResult(lastResult, firstErr)
+	return c.finalizeAfterModelResult(acc, hasResult, firstErr)
 }

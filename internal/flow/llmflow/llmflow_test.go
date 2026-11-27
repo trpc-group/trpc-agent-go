@@ -1060,6 +1060,7 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	req := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable"),
 		model.NewUserMessage("history"),
+		model.NewUserMessage("current"),
 	}}
 	summaryview.AttachProjection(inv, &summaryview.View{
 		ContentRequestLength: len(req.Messages),
@@ -1084,6 +1085,31 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 	require.False(t, view.Bound)
 	_, ok = summaryfork.Request(inv)
 	require.False(t, ok)
+}
+
+func TestTokenTailoringCollapsedHistory(t *testing.T) {
+	tests := []struct {
+		name   string
+		before int
+		after  int
+		want   bool
+	}{
+		{name: "many messages collapse to two", before: 16, after: 2, want: true},
+		{name: "many messages collapse to one", before: 16, after: 1, want: true},
+		{name: "three messages collapse to two", before: 3, after: 2, want: true},
+		{name: "two messages remain one", before: 2, after: 1, want: false},
+		{name: "history remains", before: 16, after: 3, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := imodelrequest.TokenTailoringRecord{
+				BeforeMessages: tt.before,
+				AfterMessages:  tt.after,
+			}
+			require.Equal(t, tt.want, tokenTailoringCollapsedHistory(record))
+		})
+	}
 }
 
 func TestCallLLM_LazyTokenTailoringFinalizesDiagnosticsAfterIteration(
@@ -3130,7 +3156,7 @@ func TestFlow_RunBeforeModelCallbacks_NoModelCallbacks(t *testing.T) {
 	inv.Plugins = stubPluginManager{}
 
 	ctx := context.Background()
-	gotCtx, resp, err := f.runBeforeModelCallbacks(ctx, inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(ctx, inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Equal(t, ctx, gotCtx)
 	require.Nil(t, resp)
@@ -3148,7 +3174,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesInvocationContext(t *testing.T) {
 		return &model.BeforeModelResult{Context: context.WithValue(ctx, testCtxKey{}, "v")}, nil
 	})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3169,7 +3195,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesReplacedInvocationContext(t *test
 		}, nil
 	})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3199,7 +3225,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesInvocationContextWithinCallbackGr
 			return nil, nil
 		})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3230,7 +3256,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesReplacedInvocationWithinCallbackG
 			return nil, nil
 		})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	callbackInvocation, ok := agent.InvocationFromContext(gotCtx)
@@ -3262,7 +3288,7 @@ func TestFlow_RunBeforeModelCallbacks_PreservesReplacementInvocationForFreshResu
 			}, nil
 		})
 	f := New(nil, nil, Options{ModelCallbacks: local})
-	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{})
+	gotCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), inv, &model.Request{}, inv.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", gotCtx.Value(testCtxKey{}))
@@ -3283,7 +3309,7 @@ func TestFlow_RunBeforeModelCallbacks_DoesNotMutateSharedBeforeModelResult(t *te
 	})
 	f := New(nil, nil, Options{ModelCallbacks: local})
 	firstInvocation := agent.NewInvocation(agent.WithInvocationID("first-invocation-id"))
-	firstCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), firstInvocation, &model.Request{})
+	firstCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), firstInvocation, &model.Request{}, firstInvocation.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", firstCtx.Value(testCtxKey{}))
@@ -3291,7 +3317,7 @@ func TestFlow_RunBeforeModelCallbacks_DoesNotMutateSharedBeforeModelResult(t *te
 	require.True(t, ok)
 	require.Same(t, firstInvocation, firstCallbackInvocation)
 	secondInvocation := agent.NewInvocation(agent.WithInvocationID("second-invocation-id"))
-	secondCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), secondInvocation, &model.Request{})
+	secondCtx, resp, err := f.runBeforeModelCallbacks(context.Background(), secondInvocation, &model.Request{}, secondInvocation.Model)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, "v", secondCtx.Value(testCtxKey{}))
@@ -4957,4 +4983,57 @@ func TestWaitEventTimeout_NoDeadline(t *testing.T) {
 	ctx := context.Background()
 	timeout := WaitEventTimeout(ctx)
 	require.Equal(t, 5*time.Second, timeout)
+}
+
+func TestProcessStreamingResponses_CallbackClearsTotalTokens(t *testing.T) {
+	f := New(nil, nil, Options{
+		ModelCallbacks: model.NewCallbacks().RegisterAfterModel(
+			func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+				if args.Response.IsPartial {
+					return nil, nil
+				}
+				replacement := *args.Response
+				replacement.Usage = &model.Usage{PromptTokens: 100, CompletionTokens: 11}
+				return &model.AfterModelResult{CustomResponse: &replacement}, nil
+			},
+		),
+	})
+	invocation := agent.NewInvocation(agent.WithInvocationID("clear-total"))
+	responseSeq := func(yield func(*model.Response) bool) {
+		if !yield(&model.Response{
+			IsPartial: true,
+			Usage:     &model.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110},
+		}) {
+			return
+		}
+		yield(&model.Response{
+			Done:    true,
+			Choices: []model.Choice{{Message: model.NewAssistantMessage("done")}},
+			Usage:   &model.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110},
+		})
+	}
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	defer provider.Shutdown(context.Background())
+	ctx, span := provider.Tracer("test").Start(
+		agent.NewInvocationContext(context.Background(), invocation), "chat",
+	)
+	lastEvent, err := f.processStreamingResponses(
+		ctx, invocation, nil,
+		&model.Request{GenerationConfig: model.GenerationConfig{Stream: true}},
+		responseSeq, make(chan *event.Event, 10), span, true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Zero(t, lastEvent.Usage.TotalTokens)
+	span.End()
+	attrs := map[string]attribute.Value{}
+	for _, kv := range recorder.Ended()[0].Attributes() {
+		attrs[string(kv.Key)] = kv.Value
+	}
+	total, present := attrs[semconvtrace.KeyGenAIUsageTotalTokens]
+	require.True(t, present)
+	require.Zero(t, total.AsInt64())
+	require.Equal(t, int64(100), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
+	require.Equal(t, int64(11), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
 }

@@ -161,6 +161,9 @@ func New(name string, opts ...Option) *LLMAgent {
 	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
 		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
+	if err := validateAndNormalizeToolSetToolNameModes(&options); err != nil {
+		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
+	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	// Also track which tools are user-registered (via WithTools) for filtering purposes.
@@ -262,7 +265,13 @@ func New(name string, opts ...Option) *LLMAgent {
 		// Explicitly configured via WithDefaultTransferMessage.
 		processor.SetDefaultTransferMessage(*options.DefaultTransferMessage)
 	}
-	responseProcessors = append(responseProcessors, toolcallProcessor)
+	// Provider action results must be recorded before the response's
+	// ordinary tool results.
+	responseProcessors = append(
+		responseProcessors,
+		processor.NewProviderActionResponseProcessor(),
+		toolcallProcessor,
+	)
 
 	// Always install the transfer processor so dynamic sub-agent updates
 	// (for example, via SubAgentSetter) can enable transfer_to_agent later.
@@ -465,6 +474,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithPreserveForeignMessages(options.PreserveForeignMessages),
+		processor.WithIncludeSyntheticErrorMessages(
+			options.includeSyntheticErrorMessages,
+		),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
@@ -558,12 +570,9 @@ func appendPostToolProcessor(
 	}
 
 	var postToolOpts []processor.PostToolOption
-	hasToolSurface := hasPotentialToolSurface(a, options)
-	postToolOpts = append(
-		postToolOpts,
-		processor.WithPostToolPromptBeforeResult(hasToolSurface),
-		processor.WithPostToolPromptCreateSystemMessage(hasToolSurface),
-	)
+	if !hasPotentialToolSurface(a, options) {
+		postToolOpts = append(postToolOpts, processor.WithPostToolPromptForModelTools())
+	}
 	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,
@@ -890,7 +899,10 @@ func appendStaticToolSetTools(
 
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		namedToolSet := itool.NewNamedToolSet(toolSet)
+		namedToolSet := itool.NewNamedToolSetWithMode(
+			toolSet,
+			toolSetToolNameMode(options.toolSetToolNameModes, toolSet),
+		)
 		for _, t := range namedToolSet.Tools(ctx) {
 			allTools = append(allTools, t)
 			userToolNames[t.Declaration().Name] = true
@@ -1532,21 +1544,22 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	a.setupInvocation(invocation)
 	var traceLease tracecapture.StepLease
 	if invocation.RunOptions.ExecutionTraceEnabled {
-		traceNodeID := agent.InvocationTraceNodeID(invocation)
-		traceCtx := agent.NewInvocationContext(ctx, invocation)
-		traceLease = tracecapture.EnsureInvocationStep(
-			traceCtx,
-			func() string {
-				return agent.StartExecutionTraceStep(
-					invocation,
-					traceNodeID,
-					llmAgentTraceInputSnapshot(invocation),
-					nil,
-				)
-			},
-		)
-		if traceLease.Owns {
-			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
+		if traceNodeID := executionTraceStepNodeID(invocation); traceNodeID != "" {
+			traceCtx := agent.NewInvocationContext(ctx, invocation)
+			traceLease = tracecapture.EnsureInvocationStep(
+				traceCtx,
+				func() string {
+					return agent.StartExecutionTraceStep(
+						invocation,
+						traceNodeID,
+						llmAgentTraceInputSnapshot(invocation),
+						nil,
+					)
+				},
+			)
+			if traceLease.Owns {
+				tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
+			}
 		}
 	}
 	ctx = a.withWorkspace(ctx, invocation)
@@ -2079,7 +2092,10 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	if a.option.RefreshToolSetsOnRun && len(a.option.ToolSets) > 0 {
 		dynamic := make([]tool.Tool, 0)
 		for _, toolSet := range a.option.ToolSets {
-			namedToolSet := itool.NewNamedToolSet(toolSet)
+			namedToolSet := itool.NewNamedToolSetWithMode(
+				toolSet,
+				toolSetToolNameMode(a.option.toolSetToolNameModes, toolSet),
+			)
 			setTools := namedToolSet.Tools(ctx)
 			dynamic = append(dynamic, setTools...)
 		}

@@ -12,15 +12,26 @@ package tencentdb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestGatewayClientEndpointsAndErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -157,4 +168,932 @@ func TestGatewayClientDecodeAndRequestEdges(t *testing.T) {
 	require.NoError(t, client.doJSON(context.Background(), httpMethodGet, "/empty", nil, &out), "empty response should be accepted")
 	require.Error(t, client.doJSON(context.Background(), httpMethodGet, "/bad-json", nil, &out), "expected unmarshal error")
 	require.Error(t, client.doJSONOnce(context.Background(), httpMethodGet, "://bad", nil, nil, true), "expected request build error")
+}
+
+func TestNewServiceWithIdentityValidation(t *testing.T) {
+	_, err := NewServiceWithIdentity(
+		ServiceIdentity{},
+		WithGatewayURL("http://127.0.0.1:8420"),
+	)
+	require.ErrorContains(t, err, "service identity is required")
+
+	tests := []struct {
+		name      string
+		serviceID string
+		teamID    string
+		agentID   string
+		apiKey    string
+		wantError string
+	}{
+		{
+			name:      "missing service ID",
+			teamID:    "team-1",
+			agentID:   "agent-1",
+			apiKey:    "key",
+			wantError: "service id is required",
+		},
+		{
+			name:      "missing team ID",
+			serviceID: "service-1",
+			agentID:   "agent-1",
+			apiKey:    "key",
+			wantError: "team id is required",
+		},
+		{
+			name:      "missing agent ID",
+			serviceID: "service-1",
+			teamID:    "team-1",
+			apiKey:    "key",
+			wantError: "agent id is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewServiceWithIdentity(
+				NewServiceIdentity(tt.serviceID, tt.teamID, tt.agentID),
+				WithGatewayURL("http://127.0.0.1:8420"),
+				WithAPIKey(tt.apiKey),
+			)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
+		WithGatewayURL("http://127.0.0.1:8420"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, apiModeV3, svc.client.mode)
+	assert.Empty(t, svc.client.apiKey)
+	require.NoError(t, svc.Close())
+
+	svc, err = NewServiceWithIdentity(
+		NewServiceIdentity(" service-1 ", " team-1 ", " agent-1 "),
+		WithGatewayURL("http://127.0.0.1:8420"),
+		WithAPIKey(" key "),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc.client.identity)
+	assert.Equal(t, "service-1", svc.client.identity.serviceID)
+	assert.Equal(t, "team-1", svc.client.identity.teamID)
+	assert.Equal(t, "agent-1", svc.client.identity.agentID)
+	require.NoError(t, svc.Close())
+}
+
+func TestNewServiceUsesLegacyAPI(t *testing.T) {
+	svc, err := NewService(WithGatewayURL("http://127.0.0.1:8420"))
+	require.NoError(t, err)
+	assert.Equal(t, apiModeLegacy, svc.client.mode)
+	assert.Nil(t, svc.client.identity)
+	require.NoError(t, svc.Close())
+}
+
+func TestNewGatewayClientRejectsInvalidModeState(t *testing.T) {
+	identity := &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	}
+	_, err := newGatewayClientWithMode(
+		Options{GatewayURL: "http://127.0.0.1:8420"},
+		apiModeLegacy,
+		identity,
+	)
+	require.ErrorContains(t, err, "legacy API does not accept service identity")
+
+	_, err = newGatewayClientWithMode(
+		Options{GatewayURL: "http://127.0.0.1:8420"},
+		apiMode(255),
+		nil,
+	)
+	require.ErrorContains(t, err, "unsupported API mode")
+}
+
+func TestV3VersionUnmarshal(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      v3Version
+		wantError bool
+	}{
+		{name: "string", input: `{"version":"v2"}`, want: "v2"},
+		{name: "number", input: `{"version":2}`, want: "2"},
+		{name: "null", input: `{"version":null}`, want: ""},
+		{name: "fraction", input: `{"version":2.5}`, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got struct {
+				Version v3Version `json:"version"`
+			}
+			err := json.Unmarshal([]byte(tt.input), &got)
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Version)
+		})
+	}
+}
+
+func TestGatewayClientV3WithoutAPIKey(t *testing.T) {
+	var authorization string
+	var serviceID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get(httpHeaderAuthorization)
+		serviceID = r.Header.Get(httpHeaderServiceID)
+		writeV3TestEnvelope(w, v3ConversationAddData{
+			AcceptedIDs:      []string{"message-1"},
+			AcceptedVersions: []string{"v1"},
+			TotalCount:       1,
+		})
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClientWithMode(Options{
+		GatewayURL: server.URL,
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	})
+	require.NoError(t, err)
+	_, err = client.capture(context.Background(), captureRequest{
+		UserID:    "user-1",
+		SessionID: "session-1",
+		Messages: []tdaiMessage{{
+			Role:    "user",
+			Content: "remember this",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer "+v3LocalBearerToken, authorization)
+	assert.Equal(t, "service-1", serviceID)
+}
+
+func TestTruncateV3MessageContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		content       string
+		wantContent   string
+		wantTruncated bool
+	}{
+		{
+			name:        "exact boundary",
+			content:     strings.Repeat("x", maxV3MessageContentUTF16Units),
+			wantContent: strings.Repeat("x", maxV3MessageContentUTF16Units),
+		},
+		{
+			name:    "one over boundary",
+			content: strings.Repeat("x", maxV3MessageContentUTF16Units+1),
+			wantContent: strings.Repeat(
+				"x",
+				maxV3MessageContentUTF16Units-
+					v3UTF16Length(v3TruncationMarker),
+			) + v3TruncationMarker,
+			wantTruncated: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, truncated := truncateV3MessageContent(tt.content)
+			assert.Equal(t, tt.wantContent, got)
+			assert.Equal(t, tt.wantTruncated, truncated)
+			assert.LessOrEqual(
+				t,
+				v3UTF16Length(got),
+				maxV3MessageContentUTF16Units,
+			)
+		})
+	}
+}
+
+func TestTruncateV3TextPreservesUTF8AtUTF16Boundary(t *testing.T) {
+	value := strings.Repeat("😀", 2) + "tail"
+	got := truncateV3UTF16(value, 5)
+	assert.Equal(t, "😀😀t", got)
+	assert.Equal(t, 5, v3UTF16Length(got))
+}
+
+func TestTruncateV3SearchQuery(t *testing.T) {
+	exact := strings.Repeat("q", maxV3SearchQueryUTF16Units)
+	assert.Equal(t, exact, truncateV3SearchQuery(exact))
+	assert.Equal(
+		t,
+		exact,
+		truncateV3SearchQuery(exact+"q"),
+	)
+}
+
+func TestGatewayClientV3BoundsSearchQueries(t *testing.T) {
+	var (
+		queriesMu           sync.Mutex
+		atomicQueries       []string
+		conversationQueries []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case pathV3AtomicSearch:
+			var req v3AtomicSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			queriesMu.Lock()
+			atomicQueries = append(atomicQueries, req.Query)
+			queriesMu.Unlock()
+			writeV3TestEnvelope(w, v3AtomicSearchData{})
+		case pathV3ConversationSearch:
+			var req v3ConversationSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			queriesMu.Lock()
+			conversationQueries = append(conversationQueries, req.Query)
+			queriesMu.Unlock()
+			writeV3TestEnvelope(w, v3ConversationSearchData{})
+		case pathV3ScenarioList:
+			writeV3TestEnvelope(w, v3ScenarioListData{})
+		case pathV3CoreRead:
+			writeV3TestEnvelope(w, v3CoreFile{})
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClientWithMode(Options{
+		GatewayURL: server.URL,
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	})
+	require.NoError(t, err)
+	query := strings.Repeat("q", maxV3SearchQueryUTF16Units+1)
+	want := strings.Repeat("q", maxV3SearchQueryUTF16Units)
+
+	_, err = client.searchMemories(context.Background(), searchMemoriesRequest{
+		Query:  query,
+		Limit:  1,
+		UserID: "user-1",
+	})
+	require.NoError(t, err)
+	_, err = client.searchConversations(context.Background(), searchConversationsRequest{
+		Query:     query,
+		Limit:     1,
+		SessionID: "session-1",
+		UserID:    "user-1",
+	})
+	require.NoError(t, err)
+	_, err = client.recall(context.Background(), recallRequest{
+		Query:  query,
+		UserID: "user-1",
+	})
+	require.NoError(t, err)
+
+	queriesMu.Lock()
+	gotAtomic := append([]string(nil), atomicQueries...)
+	gotConversation := append([]string(nil), conversationQueries...)
+	queriesMu.Unlock()
+	assert.Equal(t, []string{want, want}, gotAtomic)
+	assert.Equal(t, []string{want}, gotConversation)
+}
+
+func TestGatewayClientV3CaptureBatchesMessages(t *testing.T) {
+	tests := []struct {
+		name         string
+		messageCount int
+		wantSizes    []int
+	}{
+		{
+			name:         "exact boundary",
+			messageCount: maxV3ConversationBatchSize,
+			wantSizes:    []int{maxV3ConversationBatchSize},
+		},
+		{
+			name:         "one over boundary",
+			messageCount: maxV3ConversationBatchSize + 1,
+			wantSizes:    []int{maxV3ConversationBatchSize, 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				batchesMu sync.Mutex
+				batches   [][]v3Message
+			)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req v3ConversationAddRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				batchesMu.Lock()
+				batches = append(batches, append([]v3Message(nil), req.Messages...))
+				batchesMu.Unlock()
+				writeV3TestEnvelope(w, v3ConversationAddData{
+					AcceptedIDs:      make([]string, len(req.Messages)),
+					AcceptedVersions: make([]string, len(req.Messages)),
+					TotalCount:       len(req.Messages),
+				})
+			}))
+			defer server.Close()
+
+			client, err := newGatewayClientWithMode(Options{
+				GatewayURL: server.URL,
+			}, apiModeV3, &serviceIdentity{
+				serviceID: "service-1",
+				teamID:    "team-1",
+				agentID:   "agent-1",
+			})
+			require.NoError(t, err)
+
+			messages := make([]tdaiMessage, tt.messageCount)
+			wantContents := make([]string, tt.messageCount)
+			for i := range messages {
+				content := fmt.Sprintf("message-%03d", i)
+				messages[i] = tdaiMessage{Role: "user", Content: content}
+				wantContents[i] = content
+			}
+			captured, err := client.capture(context.Background(), captureRequest{
+				UserID:    "user-1",
+				SessionID: "session-1",
+				Messages:  messages,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.messageCount, captured.L0Recorded)
+
+			var (
+				gotSizes    []int
+				gotContents []string
+			)
+			batchesMu.Lock()
+			gotBatches := append([][]v3Message(nil), batches...)
+			batchesMu.Unlock()
+			for _, batch := range gotBatches {
+				gotSizes = append(gotSizes, len(batch))
+				for _, message := range batch {
+					gotContents = append(gotContents, message.Content)
+				}
+			}
+			assert.Equal(t, tt.wantSizes, gotSizes)
+			assert.Equal(t, wantContents, gotContents)
+		})
+	}
+}
+
+func TestGatewayClientV3CaptureRejectsPartialAcceptance(t *testing.T) {
+	tests := []struct {
+		name string
+		data v3ConversationAddData
+	}{
+		{
+			name: "accepted ids are incomplete",
+			data: v3ConversationAddData{
+				AcceptedIDs:      []string{"message-1"},
+				AcceptedVersions: []string{"v1"},
+				TotalCount:       2,
+			},
+		},
+		{
+			name: "total count is incomplete",
+			data: v3ConversationAddData{
+				AcceptedIDs:      []string{"message-1", "message-2"},
+				AcceptedVersions: []string{"v1", "v1"},
+				TotalCount:       1,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeV3TestEnvelope(w, tt.data)
+			}))
+			defer server.Close()
+
+			client, err := newGatewayClientWithMode(Options{
+				GatewayURL: server.URL,
+			}, apiModeV3, &serviceIdentity{
+				serviceID: "service-1",
+				teamID:    "team-1",
+				agentID:   "agent-1",
+			})
+			require.NoError(t, err)
+
+			_, err = client.capture(context.Background(), captureRequest{
+				UserID:    "user-1",
+				SessionID: "session-1",
+				Messages: []tdaiMessage{
+					{Role: "user", Content: "remember this"},
+					{Role: "assistant", Content: "stored"},
+				},
+			})
+			require.ErrorContains(t, err, "v3 capture partially accepted messages")
+		})
+	}
+}
+
+func TestGatewayClientV3RecallPropagatesContextError(t *testing.T) {
+	tests := []struct {
+		name             string
+		newContext       func() (context.Context, context.CancelFunc)
+		cancelAfterStart bool
+		want             error
+	}{
+		{
+			name: "canceled",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+			cancelAfterStart: true,
+			want:             context.Canceled,
+		},
+		{
+			name: "deadline exceeded",
+			newContext: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 100*time.Millisecond)
+			},
+			want: context.DeadlineExceeded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blockedRequests := make(chan struct{}, 2)
+			hc := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == pathV3AtomicSearch {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"code":0,"message":"ok","request_id":"request-1","data":{"items":[]}}`,
+						)),
+						Request: req,
+					}, nil
+				}
+				blockedRequests <- struct{}{}
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			})}
+			client, err := newGatewayClientWithMode(Options{
+				GatewayURL: "http://memory.test",
+				HTTPClient: hc,
+				Timeout:    time.Second,
+			}, apiModeV3, &serviceIdentity{
+				serviceID: "service-1",
+				teamID:    "team-1",
+				agentID:   "agent-1",
+			})
+			require.NoError(t, err)
+
+			ctx, cancel := tt.newContext()
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				_, err := client.recall(ctx, recallRequest{
+					Query:  "remembered preference",
+					UserID: "user-1",
+				})
+				result <- err
+			}()
+			for i := 0; i < 2; i++ {
+				select {
+				case <-blockedRequests:
+				case <-time.After(time.Second):
+					t.Fatal("v3 recall request did not start")
+				}
+			}
+			if tt.cancelAfterStart {
+				cancel()
+			}
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, tt.want)
+			case <-time.After(time.Second):
+				t.Fatal("v3 recall did not return after context completion")
+			}
+		})
+	}
+}
+
+func TestGatewayClientV3DataPlane(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		paths    []string
+		addReq   v3ConversationAddRequest
+		searches []v3Isolation
+	)
+	coreContent := "prefers concise code reviews"
+	scenarioContent := "Always include a transaction-boundary check."
+	scenarioCreatedAt := "2026-08-01T00:00:00Z"
+	scenarioUpdatedAt := "2026-08-13T00:00:00Z"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(httpHeaderAuthorization); got != "Bearer test-key" {
+			t.Errorf("Authorization = %q, want Bearer test-key", got)
+		}
+		if got := r.Header.Get(httpHeaderServiceID); got != "service-1" {
+			t.Errorf("service ID = %q, want service-1", got)
+		}
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case pathV3ConversationAdd:
+			mu.Lock()
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				mu.Unlock()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := json.Unmarshal(body, &addReq); err != nil {
+				mu.Unlock()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var rawAddReq struct {
+				Messages []map[string]any `json:"messages"`
+			}
+			if err := json.Unmarshal(body, &rawAddReq); err != nil {
+				mu.Unlock()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if !assert.Len(t, rawAddReq.Messages, 1) {
+				mu.Unlock()
+				http.Error(w, "unexpected message count", http.StatusBadRequest)
+				return
+			}
+			assert.NotContains(t, rawAddReq.Messages[0], "id")
+			mu.Unlock()
+			writeV3TestEnvelope(w, v3ConversationAddData{
+				AcceptedIDs:      []string{"m1"},
+				AcceptedVersions: []string{"v1"},
+				TotalCount:       1,
+			})
+		case pathV3AtomicSearch:
+			var req v3AtomicSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			searches = append(searches, req.v3Isolation)
+			mu.Unlock()
+			writeV3TestEnvelope(w, v3AtomicSearchData{Items: []v3AtomicSearchHit{{
+				ID:      "atomic-1",
+				Type:    "preference",
+				Content: "uses PostgreSQL for durable state",
+				Score:   0.9,
+			}}})
+		case pathV3ConversationSearch:
+			var req v3ConversationSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			searches = append(searches, req.v3Isolation)
+			mu.Unlock()
+			writeV3TestEnvelope(w, v3ConversationSearchData{Messages: []v3ConversationSearchHit{{
+				ID:      "conversation-1",
+				Role:    "user",
+				Content: "review the transaction boundary",
+				Score:   0.8,
+			}}})
+		case pathV3ScenarioList:
+			writeV3TestEnvelope(w, map[string]any{
+				"entries": []map[string]any{{
+					"path":       "reviews.md",
+					"version":    1,
+					"created_at": scenarioCreatedAt,
+					"updated_at": scenarioUpdatedAt,
+				}},
+				"total": 1,
+			})
+		case pathV3ScenarioRead:
+			var req v3ScenarioReadRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			searches = append(searches, req.v3Isolation)
+			mu.Unlock()
+			writeV3TestEnvelope(w, map[string]any{
+				"path":       req.Path,
+				"version":    2,
+				"content":    scenarioContent,
+				"created_at": scenarioCreatedAt,
+				"updated_at": scenarioUpdatedAt,
+			})
+		case pathV3CoreRead:
+			writeV3TestEnvelope(w, map[string]any{
+				"version":    3,
+				"content":    coreContent,
+				"created_at": scenarioCreatedAt,
+				"updated_at": scenarioUpdatedAt,
+			})
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClientWithMode(Options{
+		GatewayURL: server.URL,
+		APIKey:     "test-key",
+		Timeout:    time.Second,
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	})
+	require.NoError(t, err)
+
+	timestamp := time.Date(2026, 8, 13, 8, 30, 0, 0, time.UTC)
+	captured, err := client.capture(context.Background(), captureRequest{
+		UserID:    "user-1",
+		SessionID: "session-1",
+		Messages: []tdaiMessage{{
+			ID:        "m1",
+			Role:      "user",
+			Content:   "remember the boundary",
+			Timestamp: timestamp.UnixMilli(),
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, captured.L0Recorded)
+	assert.False(t, captured.SchedulerNotified)
+	mu.Lock()
+	assert.Equal(t, "team-1", addReq.TeamID)
+	assert.Equal(t, "agent-1", addReq.AgentID)
+	assert.Equal(t, "user-1", addReq.UserID)
+	assert.Equal(t, "session-1", addReq.SessionID)
+	require.Len(t, addReq.Messages, 1)
+	assert.Equal(t, timestamp.Format(time.RFC3339Nano), addReq.Messages[0].Timestamp)
+	mu.Unlock()
+
+	memories, err := client.searchMemories(context.Background(), searchMemoriesRequest{
+		Query:  "database",
+		Limit:  4,
+		Type:   "preference",
+		UserID: "user-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, memories.Total)
+	assert.Equal(t, "v3-atomic", memories.Strategy)
+	assert.Contains(t, memories.Results, "PostgreSQL")
+
+	conversations, err := client.searchConversations(context.Background(), searchConversationsRequest{
+		Query:     "transaction",
+		Limit:     3,
+		SessionID: "session-1",
+		UserID:    "user-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, conversations.Total)
+	assert.Contains(t, conversations.Results, "transaction boundary")
+
+	recalled, err := client.recall(context.Background(), recallRequest{
+		Query:  "how should reviews work",
+		UserID: "user-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v3-identity-scoped", recalled.Strategy)
+	assert.Equal(t, 3, recalled.MemoryCount)
+	assert.Contains(t, recalled.PrependContext, "PostgreSQL")
+	assert.NotContains(t, recalled.AppendSystemContext, "PostgreSQL")
+	assert.Contains(t, recalled.AppendSystemContext, coreContent)
+	assert.Contains(t, recalled.AppendSystemContext, "<agent-core>")
+	assert.NotContains(t, recalled.AppendSystemContext, "<user-core>")
+	assert.Contains(t, recalled.AppendSystemContext, "reviews.md")
+
+	scenario, err := client.readScenarioV3(
+		context.Background(),
+		"user-1",
+		" reviews.md ",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "reviews.md", scenario.Path)
+	assert.Equal(t, v3Version("2"), scenario.Version)
+	assert.Equal(t, scenarioContent, scenario.Content)
+	assert.Equal(t, scenarioCreatedAt, scenario.CreatedAt)
+	assert.Equal(t, scenarioUpdatedAt, scenario.UpdatedAt)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.NotContains(t, paths, pathEndSession)
+	require.GreaterOrEqual(t, len(searches), 4)
+	for _, isolation := range searches {
+		assert.Equal(t, "team-1", isolation.TeamID)
+		assert.Equal(t, "agent-1", isolation.AgentID)
+		assert.Equal(t, "user-1", isolation.UserID)
+	}
+	assert.Equal(t, "session-1", searches[1].SessionID)
+}
+
+func TestGatewayClientV3Errors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(v3ResponseEnvelope[struct{}]{
+			Code:      422,
+			Message:   "invalid isolation",
+			RequestID: "request-1",
+			Data:      &struct{}{},
+		})
+	}))
+	defer server.Close()
+	client, err := newGatewayClientWithMode(Options{
+		GatewayURL: server.URL,
+		APIKey:     "test-key",
+	}, apiModeV3, &serviceIdentity{
+		serviceID: "service-1",
+		teamID:    "team-1",
+		agentID:   "agent-1",
+	})
+	require.NoError(t, err)
+
+	_, err = client.searchMemories(context.Background(), searchMemoriesRequest{Query: "q", UserID: "user-1"})
+	require.ErrorContains(t, err, "code=422")
+	require.ErrorContains(t, err, "request_id=request-1")
+
+	_, err = client.searchMemories(context.Background(), searchMemoriesRequest{
+		Query:  "q",
+		Scene:  "project",
+		UserID: "user-1",
+	})
+	require.ErrorContains(t, err, "scene filtering is not supported")
+}
+
+func TestServiceV3IngestAndEndSession(t *testing.T) {
+	requests := make(chan v3ConversationAddRequest, 1)
+	releaseCapture := make(chan struct{})
+	var releaseOnce sync.Once
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		if r.URL.Path != pathV3ConversationAdd {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		var req v3ConversationAddRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests <- req
+		<-releaseCapture
+		writeV3TestEnvelope(w, v3ConversationAddData{
+			AcceptedIDs: []string{"m1", "m2"},
+			TotalCount:  2,
+		})
+	}))
+	defer server.Close()
+
+	svc, err := NewServiceWithIdentity(
+		NewServiceIdentity("service-1", "team-1", "agent-1"),
+		WithGatewayURL(server.URL),
+		WithAPIKey("test-key"),
+		WithIngestJobTimeout(time.Second),
+	)
+	require.NoError(t, err)
+	defer func() {
+		releaseOnce.Do(func() { close(releaseCapture) })
+		require.NoError(t, svc.Close())
+	}()
+	sess := captureReadySession()
+	require.NoError(t, svc.IngestSession(context.Background(), sess))
+	select {
+	case req := <-requests:
+		assert.Equal(t, sess.ID, req.SessionID)
+		assert.Equal(t, sess.UserID, req.UserID)
+		require.Len(t, req.Messages, 2)
+		events := sess.GetEvents()
+		require.Len(t, events, 2)
+		assert.Equal(t, formatV3Timestamp(events[0].Timestamp.UnixMilli()), req.Messages[0].Timestamp)
+		assert.Equal(t, formatV3Timestamp(events[1].Timestamp.UnixMilli()), req.Messages[1].Timestamp)
+	case <-time.After(time.Second):
+		t.Fatal("v3 capture request was not received")
+	}
+	assert.Zero(t, readBestEffortSyntheticTimestamp(sess))
+
+	endDone := make(chan error, 1)
+	go func() {
+		endDone <- svc.EndSession(context.Background(), sess)
+	}()
+	select {
+	case err := <-endDone:
+		t.Fatalf("EndSession completed before V3 capture: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseCapture) })
+	select {
+	case err := <-endDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("EndSession did not complete after V3 capture")
+	}
+
+	assert.Equal(t, int32(1), requestCount.Load(), "EndSession must not invent a remote v3 endpoint")
+	assert.Zero(t, readBestEffortSyntheticTimestamp(sess))
+}
+
+func writeV3TestEnvelope[T any](w http.ResponseWriter, data T) {
+	w.Header().Set(httpHeaderContentType, httpContentTypeJSON)
+	_ = json.NewEncoder(w).Encode(v3ResponseEnvelope[T]{
+		Code:      0,
+		Message:   "ok",
+		RequestID: "request-1",
+		Data:      &data,
+	})
+}
+
+func TestV3FormattingSkipsEmptyValues(t *testing.T) {
+	assert.Equal(t, "- [memory] useful", formatV3AtomicItems([]v3AtomicSearchHit{
+		{Content: "  "},
+		{Content: "useful"},
+	}))
+	assert.Equal(t, "[message] useful", formatV3ConversationHits([]v3ConversationSearchHit{
+		{Content: ""},
+		{Content: "useful"},
+	}))
+	scenarios, scenarioCount := formatV3ScenarioEntries([]v3ScenarioEntry{
+		{Path: " "},
+		{Path: "path.md"},
+		{Path: "folder/"},
+		{Path: "a.md"},
+		{Path: "b.md"},
+		{Path: "c.md"},
+	})
+	assert.Equal(t, "- path.md\n- folder/\n- a.md\n- b.md\n- c.md", scenarios)
+	assert.Equal(t, 5, scenarioCount)
+
+	entries := make([]v3ScenarioEntry, 0, maxV3ScenarioNavigationEntries+1)
+	for i := 0; i <= maxV3ScenarioNavigationEntries; i++ {
+		entries = append(entries, v3ScenarioEntry{Path: fmt.Sprintf("path-%03d.md", i)})
+	}
+	scenarios, scenarioCount = formatV3ScenarioEntries(entries)
+	assert.Equal(t, maxV3ScenarioNavigationEntries, scenarioCount)
+	assert.LessOrEqual(t, len(scenarios), maxV3ScenarioNavigationBytes)
+	assert.True(t, strings.HasSuffix(scenarios, v3TruncationMarker))
+	assert.NotContains(t, scenarios, "path-100.md")
+
+	largeEntries := make([]v3ScenarioEntry, 0, maxV3ScenarioNavigationEntries)
+	for i := 0; i < maxV3ScenarioNavigationEntries; i++ {
+		largeEntries = append(largeEntries, v3ScenarioEntry{
+			Path: fmt.Sprintf("folder/%s/%03d.md", strings.Repeat("界", 100), i),
+		})
+	}
+	scenarios, scenarioCount = formatV3ScenarioEntries(largeEntries)
+	assert.Positive(t, scenarioCount)
+	assert.Less(t, scenarioCount, maxV3ScenarioNavigationEntries)
+	assert.LessOrEqual(t, len(scenarios), maxV3ScenarioNavigationBytes)
+	assert.True(t, utf8.ValidString(scenarios))
+	assert.True(t, strings.HasSuffix(scenarios, v3TruncationMarker))
+	assert.Empty(t, formatV3Timestamp(0))
+	assert.True(t, strings.Contains(formatV3Timestamp(1), "1970-01-01"))
+}
+
+func TestBuildV3RecallResponseBoundsCompleteContext(t *testing.T) {
+	t.Run("oversized core", func(t *testing.T) {
+		rsp := buildV3RecallResponse(nil, nil, &v3CoreFile{
+			Content: strings.Repeat("界", maxV3CoreRecallSectionBytes),
+		})
+		assert.LessOrEqual(t, len(rsp.AppendSystemContext), maxV3CoreRecallSectionBytes)
+		assert.True(t, utf8.ValidString(rsp.AppendSystemContext))
+		assert.Contains(t, rsp.AppendSystemContext, v3TruncationMarker)
+		assert.Contains(t, rsp.AppendSystemContext, "</agent-core>")
+	})
+
+	t.Run("combined sources", func(t *testing.T) {
+		scenarioSectionBytes := maxV3RecallContextBytes -
+			maxV3AtomicRecallSectionBytes -
+			maxV3CoreRecallSectionBytes - 2
+		scenarioContentBytes := scenarioSectionBytes -
+			len("<scene-navigation>\n") -
+			len("\n</scene-navigation>")
+		firstPathBytes := scenarioContentBytes -
+			len(v3TruncationMarker) - len("- ")
+		require.Positive(t, firstPathBytes)
+
+		rsp := buildV3RecallResponse(
+			&v3AtomicSearchData{Items: []v3AtomicSearchHit{{
+				Content: strings.Repeat("a", maxV3RecallContextBytes),
+			}}},
+			&v3ScenarioListData{Entries: []v3ScenarioEntry{
+				{Path: strings.Repeat("s", firstPathBytes)},
+				{Path: strings.Repeat("overflow", maxV3ScenarioNavigationBytes)},
+			}},
+			&v3CoreFile{Content: strings.Repeat("c", maxV3RecallContextBytes)},
+		)
+		combined := rsp.PrependContext + rsp.AppendSystemContext
+		assert.Len(t, combined, maxV3RecallContextBytes)
+		assert.Equal(t, 3, strings.Count(combined, v3TruncationMarker))
+		assert.Contains(t, rsp.PrependContext, "</relevant-memories>")
+		assert.Contains(t, rsp.AppendSystemContext, "</agent-core>")
+		assert.Contains(t, rsp.AppendSystemContext, "</scene-navigation>")
+		assert.Equal(t, 3, rsp.MemoryCount)
+	})
 }

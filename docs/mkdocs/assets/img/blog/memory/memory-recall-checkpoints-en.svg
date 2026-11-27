@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Memory Passes Four Gates Before Reaching an Answer</title>
+  <desc id="desc">The same rule passes through a Session Event, Memory Entry, Reader, model request, and final answer. Formation, retrieval, injection, or use can fail independently.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#D9E6F2" stroke-width="1" opacity="0.38"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#3478F6"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#F8FBFE"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+
+  <g font-family="Inter, Arial, sans-serif">
+    <text x="72" y="78" fill="#102E4A" font-size="38" font-weight="500">An Agent Can Forget at Four Different Gates</text>
+    <text x="72" y="120" fill="#647B91" font-size="21">Trace the same information forward to find where the path broke</text>
+
+    <!-- One information token travels through the whole path -->
+    <rect x="610" y="164" width="380" height="62" rx="14" fill="#FFF2D9" stroke="#E7B65A" stroke-width="2"/>
+    <path d="M642 181h23l9 9v20h-32Z" fill="#FFFFFF" stroke="#D49B32" stroke-width="2"/>
+    <path d="M665 181v9h9" fill="none" stroke="#D49B32" stroke-width="2"/>
+    <text x="830" y="204" fill="#714C13" font-size="17" font-weight="500" text-anchor="middle">Rule moves through each stage</text>
+
+    <path d="M180 420H1392" fill="none" stroke="#BCD0E3" stroke-width="12" stroke-linecap="round"/>
+
+    <!-- Connectors -->
+    <g fill="none" stroke="#3478F6" stroke-width="5" marker-end="url(#arrow)">
+      <line x1="256" y1="420" x2="396" y2="420"/>
+      <line x1="546" y1="420" x2="686" y2="420"/>
+      <line x1="836" y1="420" x2="976" y2="420"/>
+      <line x1="1126" y1="420" x2="1266" y2="420"/>
+    </g>
+
+    <!-- Stage 1: Session Event -->
+    <g transform="translate(118 346)">
+      <path d="M20 0H104Q124 0 124 20V82Q124 102 104 102H58L30 126V102H20Q0 102 0 82V20Q0 0 20 0Z" fill="#EAF2FF" stroke="#76A7F5" stroke-width="3"/>
+      <path d="M27 31h70M27 52h56M27 73h64" stroke="#3478F6" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <text x="180" y="550" fill="#174A7C" font-size="23" font-weight="500" text-anchor="middle">Session Event</text>
+    <text x="180" y="582" fill="#657D92" font-size="18" text-anchor="middle">Original wording saved</text>
+
+    <!-- Stage 2: Memory Entry -->
+    <g transform="translate(418 355)">
+      <ellipse cx="53" cy="17" rx="53" ry="17" fill="#CFEEDF" stroke="#45A982" stroke-width="3"/>
+      <path d="M0 17v78c0 10 24 18 53 18s53-8 53-18V17" fill="#DFF5EC" stroke="#45A982" stroke-width="3"/>
+      <path d="M0 55c0 10 24 18 53 18s53-8 53-18" fill="none" stroke="#45A982" stroke-width="3"/>
+    </g>
+    <text x="470" y="550" fill="#176A50" font-size="23" font-weight="500" text-anchor="middle">Memory Entry</text>
+    <text x="470" y="582" fill="#657D92" font-size="18" text-anchor="middle">Long-term information formed</text>
+
+    <!-- Stage 3: Reader hit -->
+    <g transform="translate(704 352)">
+      <circle cx="49" cy="49" r="38" fill="#EAF2FF" stroke="#3478F6" stroke-width="4"/>
+      <line x1="77" y1="77" x2="108" y2="108" stroke="#3478F6" stroke-width="8" stroke-linecap="round"/>
+      <path d="M31 48h36M31 63h25" stroke="#3478F6" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <text x="760" y="550" fill="#174A7C" font-size="23" font-weight="500" text-anchor="middle">Reader hit</text>
+    <text x="760" y="582" fill="#657D92" font-size="18" text-anchor="middle">Retrieved this turn</text>
+
+    <!-- Stage 4: request -->
+    <g transform="translate(1001 342)">
+      <path d="M0 0h82l30 30v110H0Z" fill="#FFFFFF" stroke="#7DA9E7" stroke-width="3"/>
+      <path d="M82 0v30h30" fill="#DCEBFF" stroke="#7DA9E7" stroke-width="3"/>
+      <rect x="18" y="51" width="75" height="18" rx="5" fill="#FFF2D9"/>
+      <rect x="18" y="80" width="62" height="10" rx="5" fill="#CFE0F4"/>
+      <rect x="18" y="102" width="72" height="10" rx="5" fill="#CFE0F4"/>
+    </g>
+    <text x="1050" y="550" fill="#174A7C" font-size="23" font-weight="500" text-anchor="middle">Model request</text>
+    <text x="1050" y="582" fill="#657D92" font-size="18" text-anchor="middle">Relevant content injected</text>
+
+    <!-- Stage 5: answer -->
+    <g transform="translate(1284 348)">
+      <rect x="0" y="22" width="112" height="92" rx="28" fill="#DFF5EC" stroke="#45A982" stroke-width="3"/>
+      <circle cx="36" cy="65" r="8" fill="#16815D"/>
+      <circle cx="76" cy="65" r="8" fill="#16815D"/>
+      <path d="M34 88q22 18 44 0" fill="none" stroke="#16815D" stroke-width="4" stroke-linecap="round"/>
+      <path d="M56 22V4M43 4h26" stroke="#16815D" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <text x="1340" y="550" fill="#176A50" font-size="23" font-weight="500" text-anchor="middle">Final answer</text>
+    <text x="1340" y="582" fill="#657D92" font-size="18" text-anchor="middle">Model used it correctly</text>
+
+    <!-- Four diagnostic gates -->
+    <g>
+      <circle cx="325" cy="330" r="25" fill="#D65B59"/>
+      <text x="325" y="338" fill="#FFFFFF" font-size="22" font-weight="500" text-anchor="middle">1</text>
+      <text x="325" y="285" fill="#A33D3D" font-size="20" font-weight="500" text-anchor="middle">Formation</text>
+
+      <circle cx="615" cy="330" r="25" fill="#D65B59"/>
+      <text x="615" y="338" fill="#FFFFFF" font-size="22" font-weight="500" text-anchor="middle">2</text>
+      <text x="615" y="285" fill="#A33D3D" font-size="20" font-weight="500" text-anchor="middle">Retrieval</text>
+
+      <circle cx="905" cy="330" r="25" fill="#D65B59"/>
+      <text x="905" y="338" fill="#FFFFFF" font-size="22" font-weight="500" text-anchor="middle">3</text>
+      <text x="905" y="285" fill="#A33D3D" font-size="20" font-weight="500" text-anchor="middle">Injection</text>
+
+      <circle cx="1195" cy="330" r="25" fill="#D65B59"/>
+      <text x="1195" y="338" fill="#FFFFFF" font-size="22" font-weight="500" text-anchor="middle">4</text>
+      <text x="1195" y="285" fill="#A33D3D" font-size="20" font-weight="500" text-anchor="middle">Use</text>
+    </g>
+
+    <g fill="#425D73" font-size="18" text-anchor="middle">
+      <text x="325" y="706">Inspect Entry</text>
+      <text x="615" y="706">Inspect read result</text>
+      <text x="905" y="706">Inspect model.Request</text>
+      <text x="1195" y="706">Inspect answer basis</text>
+    </g>
+    <g fill="none" stroke="#8EA6BA" stroke-width="2">
+      <path d="M325 632v-37"/>
+      <path d="M615 632v-37"/>
+      <path d="M905 632v-37"/>
+      <path d="M1195 632v-37"/>
+    </g>
+    <g fill="#FFFFFF" stroke="#8EA6BA" stroke-width="3">
+      <circle cx="325" cy="648" r="14"/><circle cx="615" cy="648" r="14"/><circle cx="905" cy="648" r="14"/><circle cx="1195" cy="648" r="14"/>
+    </g>
+    <g stroke="#8EA6BA" stroke-width="4" stroke-linecap="round">
+      <line x1="335" y1="658" x2="347" y2="670"/><line x1="625" y1="658" x2="637" y2="670"/>
+      <line x1="915" y1="658" x2="927" y2="670"/><line x1="1205" y1="658" x2="1217" y2="670"/>
+    </g>
+
+    <path d="M190 760H1410" fill="none" stroke="#DCE6EF" stroke-width="3"/>
+    <text x="800" y="815" fill="#425D73" font-size="21" font-weight="500" text-anchor="middle">A successful API call, queued job, and correct answer each prove a different stage</text>
+  </g>
+</svg>

@@ -12,6 +12,8 @@ tRPC-Agent-Go provides comprehensive observability features built on the OpenTel
 - **Multi-platform Support**: Supports mainstream monitoring platforms such as Jaeger, Prometheus, Galileo, and ZhiYan Monitoring Bao.
 - **Flexible Configuration**: Supports multiple configuration methods and custom extensions.
 
+Chat spans treat token-bearing `Usage` values as snapshots. If a later snapshot (including one replaced by an after-model callback) has `TotalTokens == 0`, it clears a previously recorded `gen_ai.usage.total_tokens` to `0`. Nil, empty, and timing-only usage leave the previous total unchanged. A zero total is omitted until a nonzero total has been recorded.
+
 ## Integration with Different Monitoring Platforms
 
 ### Langfuse Integration
@@ -260,6 +262,16 @@ Trace data can be used to analyze:
 - **Dependencies**: Understand relationships between components.
 - **Concurrency Analysis**: Observe the effects of concurrent execution.
 
+For Graph LLM nodes, an error response is recorded on the `chat` span as well as
+in chat metrics. Both use the response after model callbacks to derive
+`error.type`: first choose the response error type as the base label, or `_OTHER`
+when the type is empty, then append `_` and the error code if the code is non-empty.
+For example, an empty type with code `429` produces `_OTHER_429`. The chat span
+is marked as an error; a parent `workflow` span may also record the propagated failure.
+Final response validation failures are also recorded on the chat span with the
+same `error.type` as chat metrics, including when a model callback supplied a
+successful replacement response before validation failed.
+
 ## Span Attribute Policy (Production Side)
 
 `telemetry/trace` provides an opt-in `SpanAttributePolicy` that controls collection and size of large payload **span attributes** at span creation time.
@@ -284,6 +296,8 @@ To reduce memory, prefer `Drop()` on attributes **this backend will not read**. 
 ### Coverage
 
 Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `execute_tool` (messages, llm request/response, workflow request/response, tool arguments/result, and related keys).
+
+For graph nodes, `gen_ai.workflow.response` omits executor-owned keys such as `graph.StateKeySession` from returned state updates, including `Command.Update`. Application fields keep their usual JSON encoding.
 
 ### Configuration
 

@@ -709,37 +709,58 @@ interrupted assistant event. GraphAgent workflows use the same Runner event
 pipeline, so this option also applies to graph LLM node text chunks; no
 graph-specific option is required.
 
-#### Resume Interrupted Runs (tools-first resume)
+#### Continue the Conversation After Stopping a Tool
 
-In long-running conversations, users may interrupt the agent while it is still
-in a tool-calling phase (for example, the last message in the session is an
-assistant message with `tool_calls`, but no tool result has been written yet).
-When you later reuse the same `sessionID`, you can ask the Runner to _resume_
-from that point instead of asking the model to repeat the tool calls:
+Send a new user message with the same `userID` and `sessionID`.
 
 ```go
-eventChan, err := r.Run(
-    ctx,
-    userID,
-    sessionID,
-    model.Message{},                // no new user message
-    agent.WithResume(true),         // enable resume mode
-)
+eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("What happened?"))
 ```
 
-When `WithResume(true)` is set:
+When a new top-level user turn continues with the same Responses model that
+issued the ordinary function calls, LLMAgent matches saved results by call ID without
+re-executing those calls. It preserves real results, including empty results
+and late results that can be attributed to a call unambiguously. For each
+missing result, the outgoing request gets a placeholder explaining that the
+previous run may have stopped before the outcome was recorded. The Session
+retains the original events. If a real result is saved later, the next request
+uses it in place of the placeholder. An earlier answer can still say the
+outcome was unknown, and prompt-cache reuse can stop at the changed output.
 
-- Runner inspects the latest persisted session event.
-- If the last event is an assistant response that contains `tool_calls` and
-  there is no later tool result, Runner will execute those pending tools first
-  (using the same tool set and callbacks as a normal step) and persist the
-  tool results into the session.
-- After tools finish, the normal LLM cycle continues using the updated session
-  history, so the model sees both the original tool calls and their results.
+If a new user message still fails with `function call "..." has no tool result`
+when using a custom model wrapper, check that the wrapper forwards
+`model.ProviderDataProjector` to the underlying Responses model so Runner can
+match the native call IDs. For tool namespaces, also forward `model.ProviderDataRequestProjector` to resolve
+registered tool names. Chat, `tool_search`, and other provider actions retain
+their existing behavior.
 
-If the last event is a user or tool message (or a plain assistant reply
-without `tool_calls`), `WithResume(true)` is a no-op and the flow behaves like
-today’s `Run` call.
+By default, Runner saves parallel tool results together. If A returns while B
+is running and the run stops before the combined result is saved, both appear
+as unknown. With `agent.WithToolResultEventPerCallEnabled(true)`, a result
+already saved for A reaches the model and only B appears as unknown.
+
+#### Resume Interrupted Runs (tools-first resume)
+
+To execute pending tool calls, pass an empty message with `agent.WithResume(true)`.
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResume(true))
+```
+
+With LLMAgent, Runner inspects the last persisted event. If it is an assistant
+reply with `tool_calls`, Runner executes those calls using the agent's tools and
+callbacks, saves the results, then calls the model. For Responses, it validates
+the saved call against the selected model before executing any tools. A retry
+can repeat an external action if the tool performed it before its result was
+saved. If a later user message already superseded an older function call,
+its missing result gets the same request-only placeholder described above.
+Only the current pending round is eligible for execution during resume.
+
+**Known limitation of explicit resume.** If parallel calls A and B were issued
+and the last event is A's result, Runner skips tool recovery and reports B's
+missing result before sending a Responses request. Send a new user message in
+the same session to continue with A's recorded result and B's outcome marked
+unknown, without rerunning either tool. [Recovery tracking issue](https://github.com/trpc-group/trpc-agent-go/issues/2757) · [Responses tool recovery](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call Arguments Auto Repair
 
@@ -1242,26 +1263,73 @@ eventChan, err := r.Run(
 )
 ```
 
-Supported modes (graph workflows):
+Supported modes (graph-specific events require a graph workflow):
 
 - `messages`: model output events (for example, `chat.completion.chunk`)
+- `latency_diagnostics`: `preprocessing.status` events carrying a decodable, non-null
+  `event.LatencyDiagnostic` extension
 - `updates`: `graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`: `graph.checkpoint.*`
 - `tasks`: task lifecycle events (`graph.node.*`, `graph.pregel.*`)
-- `debug`: same as `checkpoints` + `tasks`
+- `debug`: a preset combining `checkpoints` + `tasks`
 - `custom`: node-emitted events (`graph.node.custom`)
 
 Notes:
 
+- Modes supplied in one `WithStreamMode` call form a union; each matching event
+  is forwarded once. A later call replaces the previous mode selection.
+- `debug` is a preset over existing categories, not another disjoint category.
+  It does not include latency diagnostics.
+- Omitting `WithStreamMode` leaves StreamMode filtering disabled. Calling
+  `WithStreamMode()` with no arguments enables an empty selection, forwarding
+  only error events plus the Runner-generated completion event.
+- Selecting every supported mode is not equivalent to disabling filtering:
+  successful `tool.response` and `agent.transfer` events match no category and
+  are still filtered out. `custom` only matches `graph.node.custom`.
+- Events carrying `Response.Error` bypass StreamMode filtering. Runner emits
+  its final `runner.completion` independently of the selected categories.
+- StreamMode filtering does not bypass Runner's internal event processing or
+  persistence rules. Some graph producers also inspect the selected modes, as
+  described below; these existing generation behaviors are separate from
+  filtering.
 - When `agent.StreamModeMessages` is selected, graph-based Large Language Model
   (LLM) nodes enable final model response events automatically for that run.
   To override it, call `agent.WithGraphEmitFinalModelResponses(false)` after
   `agent.WithStreamMode(...)`.
-- StreamMode only affects what Runner forwards to your `eventChan`. Runner still
-  processes and persists events internally.
-- For graph workflows, some event types (for example, `graph.checkpoint.*`)
-  are emitted only when their corresponding mode is selected.
-- Runner always emits a final `runner.completion` event.
+- Graph checkpoint lifecycle events require selecting `checkpoints` or `debug`;
+  disabling graph executor events still suppresses them. Omitting StreamMode
+  does not enable their generation.
+
+To receive pre-LLM progress alongside model messages, enable diagnostic emission
+and subscribe to both categories:
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithLatencyDiagnostics(true),
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeLatencyDiagnostics,
+    ),
+)
+```
+
+For example, context compaction emits `started` before creating a summary and a
+terminal status (`completed`, `skipped`, or `error`) afterward. Both travel on
+the same event channel as model output. Applications can read the extension
+with `event.GetExtension[event.LatencyDiagnostic]` and select the stages they
+want to display, such as `context_compaction`.
+
+These are latency diagnostic status events, not OpenTelemetry spans. The current
+payload carries stage/status and context information; it does not include a
+duration field. This subscription works with an LLMAgent through Runner as well
+as graph workflows.
+
+`latency_diagnostics` only controls forwarding: it does not enable diagnostic
+emission or trigger compaction. `WithLatencyDiagnosticsEvents(false)` still suppresses
+diagnostic events. Selecting only `messages` continues to filter diagnostics;
+omitting StreamMode preserves the default unfiltered stream. `debug` and
+`custom` do not include diagnostics. Transport-specific mappings, such as A2A
+parts or UI progress events, remain the application's responsibility.
 
 ## 💾 Session Management
 
@@ -2026,6 +2094,31 @@ if err != nil {
 ```
 
 The default path is `/trpc-agent/v1/apps/{appName}`. `Describe` requests the remote structure, and `Run` requests the remote runs endpoint and restores the response into the framework-standard `event.Event` stream. For complete code, see `examples/trpcagent`.
+
+## Execution Trace Default (opt-in)
+
+Execution trace recording is disabled by default. A service that wants every
+run on a specific Runner to produce an execution trace can enable it once when
+constructing that Runner:
+
+```go
+r := runner.NewRunner("my-app", myAgent,
+    runner.WithExecutionTraceEnabled(true),
+)
+```
+
+This is a Runner-local default; it does not affect other Runners or telemetry
+integrations in the process. A single run can override the default:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithExecutionTraceEnabled(false),
+)
+```
 
 ## 📝 Summary
 

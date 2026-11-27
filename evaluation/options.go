@@ -11,6 +11,7 @@ package evaluation
 
 import (
 	"errors"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -18,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	tokenusage "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/usage"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
@@ -41,6 +43,7 @@ type options struct {
 	expectedRunner                    runner.Runner
 	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
+	additionalCallbacks               []*service.Callbacks
 	judgeRunner                       runner.Runner
 	toolMockRunner                    runner.Runner
 	judgeRunnerNumSamples             *int
@@ -53,6 +56,8 @@ type options struct {
 	runDetailsEnabled                 bool
 	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
+	inferenceStats                    *evalresult.InferenceStats
+	inferenceStatsMu                  sync.Mutex
 }
 
 // newOptions creates a new options with the default values.
@@ -132,10 +137,29 @@ func WithUserSimulator(sim usersimulation.Simulator) Option {
 	}
 }
 
-// WithCallbacks sets evaluation callbacks for evaluation service.
+// WithCallbacks replaces the evaluation callbacks, discarding callbacks appended
+// by earlier WithAdditionalCallbacks options. Constructor options are applied
+// before per-call options. A nil value falls back to the evaluation service's
+// defaults; use an empty, non-nil service.Callbacks to disable callbacks.
 func WithCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
 		o.callbacks = c
+		o.additionalCallbacks = nil
+	}
+}
+
+// WithAdditionalCallbacks appends lifecycle callbacks after the callbacks
+// selected by WithCallbacks or the evaluation service's defaults. Options are
+// applied in order, with constructor options before per-call options; a later
+// WithCallbacks replaces earlier additions. Nil is a no-op. Callback registration
+// slices are copied when merged, but callback functions and their captured state
+// are shared. Callbacks must support concurrent calls when the corresponding
+// stage or multiple runs are configured to run in parallel.
+func WithAdditionalCallbacks(c *service.Callbacks) Option {
+	return func(o *options) {
+		if c != nil {
+			o.additionalCallbacks = append(o.additionalCallbacks, c)
+		}
 	}
 }
 
@@ -257,4 +281,32 @@ func (o *options) validate(requireEvalService bool) error {
 		return errors.New("eval service is nil")
 	}
 	return nil
+}
+
+func (o *options) addInferenceStats(stats *evalresult.InferenceStats) {
+	if o == nil || stats == nil || (stats.Duration <= 0 && stats.TokenUsage == nil) {
+		return
+	}
+	o.inferenceStatsMu.Lock()
+	defer o.inferenceStatsMu.Unlock()
+	if o.inferenceStats == nil {
+		o.inferenceStats = &evalresult.InferenceStats{}
+	}
+	o.inferenceStats.Duration += stats.Duration
+	o.inferenceStats.TokenUsage = tokenusage.Add(o.inferenceStats.TokenUsage, stats.TokenUsage)
+}
+
+func (o *options) inferenceStatsValue() *evalresult.InferenceStats {
+	if o == nil {
+		return nil
+	}
+	o.inferenceStatsMu.Lock()
+	defer o.inferenceStatsMu.Unlock()
+	if o.inferenceStats == nil {
+		return nil
+	}
+	return &evalresult.InferenceStats{
+		Duration:   o.inferenceStats.Duration,
+		TokenUsage: tokenusage.Clone(o.inferenceStats.TokenUsage),
+	}
 }

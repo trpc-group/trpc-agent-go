@@ -151,6 +151,7 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 		sessionKey.UserID,
 		eventsForReduce,
 		reduce.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+		reduce.WithBestEffort(r.messagesSnapshotBestEffortEnabled),
 	)
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)

@@ -25,6 +25,32 @@ import (
 
 const stateKey = "trpc_agent.summary.model_visible_view"
 
+// Binding reasons explain why a model-visible view is or is not bound to the
+// final model request. They are stable, low-cardinality diagnostic values
+// recorded where the binding decision is made, because a later reader cannot
+// reconstruct which stage invalidated the binding.
+const (
+	// BindingReasonBound marks a view bound to the model request.
+	BindingReasonBound = "bound"
+	// BindingReasonAbsent marks a missing model-visible view.
+	BindingReasonAbsent = "absent"
+	// BindingReasonNotFinalized marks a projection that has not yet been
+	// finalized against a model request.
+	BindingReasonNotFinalized = "not_finalized"
+	// BindingReasonInvalidated marks a view invalidated explicitly, for
+	// example after provider-side token tailoring rewrote the request.
+	BindingReasonInvalidated = "invalidated"
+	// BindingReasonRequestMismatch marks a view whose projected items could
+	// not all be located in the final model request.
+	BindingReasonRequestMismatch = "request_mismatch"
+	// BindingReasonTransformMismatch marks a view whose projected items or
+	// whose transform provenance did not match the transform input.
+	BindingReasonTransformMismatch = "transform_mismatch"
+	// BindingReasonRebaseFailed marks a view whose items could not be mapped
+	// onto the transform output.
+	BindingReasonRebaseFailed = "rebase_failed"
+)
+
 type contextKey struct{}
 
 // invocationState keeps an immutable snapshot opaque to Invocation.View's
@@ -68,6 +94,9 @@ type View struct {
 	RequestTokens          int
 	ContentRequestLength   int
 	Bound                  bool
+	// BindingReason explains the current value of Bound. It is set at every
+	// stage that decides or invalidates the binding.
+	BindingReason string
 }
 
 // AttachProjection stores the content processor's pre-finalization projection.
@@ -75,7 +104,22 @@ func AttachProjection(inv *agent.Invocation, view *View) {
 	if inv == nil || view == nil {
 		return
 	}
-	inv.SetState(stateKey, &invocationState{view: cloneView(view)})
+	next := cloneStoredView(view)
+	setBindingReason(next, BindingReasonNotFinalized)
+	inv.SetState(stateKey, &invocationState{view: next})
+}
+
+// setBindingReason records why view is or is not bound. unbound is the reason
+// that applies when the binding attempt at this stage did not succeed.
+func setBindingReason(view *View, unbound string) {
+	if view == nil {
+		return
+	}
+	if view.Bound {
+		view.BindingReason = BindingReasonBound
+		return
+	}
+	view.BindingReason = unbound
 }
 
 // Clear removes the current projection and finalized view.
@@ -99,9 +143,14 @@ func Finalize(inv *agent.Invocation, req *model.Request, requestTokens int) {
 		return
 	}
 	view := state.view
-	next := cloneView(view)
+	next := cloneStoredView(view)
 	next.RequestTokens = requestTokens
 	next.Bound = !state.bindingInvalidated && bindItems(next, req.Messages)
+	if !state.bindingInvalidated {
+		// An already invalidated view keeps the reason recorded by the stage
+		// that invalidated it.
+		setBindingReason(next, BindingReasonRequestMismatch)
+	}
 	inv.SetState(stateKey, &invocationState{
 		view:               next,
 		bindingInvalidated: state.bindingInvalidated,
@@ -136,10 +185,9 @@ func RebaseAfterTransform(
 		len(before),
 	)
 	if !boundBefore {
-		next := cloneView(state.view)
-		next.Bound = false
+		next := cloneStoredView(state.view)
 		next.ContentRequestLength = len(after)
-		storeInvalidated(inv, next)
+		storeInvalidated(inv, next, BindingReasonTransformMismatch)
 		return false
 	}
 	transformed, ok := rebaseItems(
@@ -149,16 +197,16 @@ func RebaseAfterTransform(
 		len(before),
 	)
 	if !ok {
-		next := cloneView(state.view)
-		next.Bound = false
+		next := cloneStoredView(state.view)
 		next.ContentRequestLength = len(after)
-		storeInvalidated(inv, next)
+		storeInvalidated(inv, next, BindingReasonRebaseFailed)
 		return false
 	}
 	next := *state.view
 	next.Items = transformed
 	next.ContentRequestLength = len(after)
 	next.Bound = true
+	next.BindingReason = BindingReasonBound
 	inv.SetState(stateKey, &invocationState{view: &next})
 	return true
 }
@@ -211,6 +259,7 @@ func rebaseItems(
 
 	transformed := make([]Item, 0, len(after))
 	completed := make([]bool, len(items))
+	extensions := make(extensionCopies)
 	frontier := 0
 	for outputIndex := range after {
 		sourceIndex := sourceIndexForOutput(sourceIndexes, outputIndex)
@@ -220,7 +269,7 @@ func rebaseItems(
 		}
 		item := items[itemIndex]
 		item.Message = statecopy.Message(after[outputIndex])
-		item.EffectiveEvent = cloneEvent(item.EffectiveEvent)
+		item.EffectiveEvent = cloneEventWithExtensions(item.EffectiveEvent, extensions)
 		setEffectiveMessage(&item.EffectiveEvent, item.Message)
 		item.RequestIndex = outputIndex
 		item.Boundary = Boundary{}
@@ -319,12 +368,16 @@ func InvalidateBinding(inv *agent.Invocation) {
 	if !ok || state == nil || state.view == nil {
 		return
 	}
-	next := cloneView(state.view)
-	next.Bound = false
-	storeInvalidated(inv, next)
+	// The holder owns an immutable view, so invalidation only needs a new view
+	// header for the binding metadata. Keep sharing the read-only items instead
+	// of copying the complete model-visible history.
+	next := *state.view
+	storeInvalidated(inv, &next, BindingReasonInvalidated)
 }
 
-func storeInvalidated(inv *agent.Invocation, view *View) {
+func storeInvalidated(inv *agent.Invocation, view *View, reason string) {
+	view.Bound = false
+	view.BindingReason = reason
 	inv.SetState(stateKey, &invocationState{
 		view:               view,
 		bindingInvalidated: true,
@@ -361,6 +414,80 @@ func FromContext(ctx context.Context) (*View, bool) {
 		return nil, false
 	}
 	return cloneView(view), true
+}
+
+// Binding describes the model-visible view state used by summary diagnostics.
+// It carries only counts and stable reason values, never message content.
+type Binding struct {
+	// Present reports whether a model-visible view was available.
+	Present bool
+	// Bound reports whether the view items are proven to map to the model
+	// request that the model actually saw.
+	Bound bool
+	// Reason is the stable binding reason recorded by the stage that decided
+	// the binding. It is BindingReasonAbsent when no view is present.
+	Reason string
+	// Items is the number of model-visible history items in the view.
+	Items int
+	// RequestTokens is the token count recorded for the request the view was
+	// finalized against. It remains meaningful when Bound is false.
+	RequestTokens int
+}
+
+// BindingFromContext reports the binding state of the model-visible view
+// attached to ctx. It reads the stored snapshot without copying view items so
+// diagnostics never add a history copy. A missing view reports Present=false
+// with BindingReasonAbsent.
+func BindingFromContext(ctx context.Context) Binding {
+	if ctx == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	view, ok := ctx.Value(contextKey{}).(*View)
+	if !ok || view == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	return bindingFromView(view)
+}
+
+// BindingFromInvocation reports the binding state stored on inv. GetStateValue
+// holds the invocation lock only while retrieving the immutable
+// invocationState pointer; field reads then use that snapshot, which is never
+// mutated in place. The result does not copy view items. A missing invocation
+// or view reports Present=false with BindingReasonAbsent. Reason is always one
+// of the closed binding-reason constants.
+func BindingFromInvocation(inv *agent.Invocation) Binding {
+	if inv == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	state, ok := agent.GetStateValue[*invocationState](inv, stateKey)
+	if !ok || state == nil || state.view == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	return bindingFromView(state.view)
+}
+
+func bindingFromView(view *View) Binding {
+	if view == nil {
+		return Binding{Reason: BindingReasonAbsent}
+	}
+	return Binding{
+		Present:       true,
+		Bound:         view.Bound,
+		Reason:        view.bindingReason(),
+		Items:         len(view.Items),
+		RequestTokens: view.RequestTokens,
+	}
+}
+
+// bindingReason normalizes views built before a binding decision was recorded.
+func (v *View) bindingReason() string {
+	if v.Bound {
+		return BindingReasonBound
+	}
+	if v.BindingReason == "" {
+		return BindingReasonNotFinalized
+	}
+	return v.BindingReason
 }
 
 // Events returns the model-visible history as event-shaped callback input.
@@ -529,6 +656,16 @@ func toolCallIDs(calls []model.ToolCall) []string {
 }
 
 func cloneView(view *View) *View {
+	return cloneViewWithExtensions(view, nil)
+}
+
+// cloneStoredView owns its payloads but preserves extension sharing within
+// the immutable stored view. Mutable snapshots must use cloneView instead.
+func cloneStoredView(view *View) *View {
+	return cloneViewWithExtensions(view, make(extensionCopies))
+}
+
+func cloneViewWithExtensions(view *View, extensions extensionCopies) *View {
 	if view == nil {
 		return nil
 	}
@@ -537,12 +674,18 @@ func cloneView(view *View) *View {
 	for i := range view.Items {
 		cloned.Items[i] = view.Items[i]
 		cloned.Items[i].Message = statecopy.Message(view.Items[i].Message)
-		cloned.Items[i].EffectiveEvent = cloneEvent(view.Items[i].EffectiveEvent)
+		cloned.Items[i].EffectiveEvent = cloneEventWithExtensions(
+			view.Items[i].EffectiveEvent, extensions,
+		)
 	}
 	return &cloned
 }
 
 func cloneEvent(evt event.Event) event.Event {
+	return cloneEventWithExtensions(evt, nil)
+}
+
+func cloneEventWithExtensions(evt event.Event, extensions extensionCopies) event.Event {
 	cloned := evt
 	if evt.Response != nil {
 		cloned.Response = evt.Response.Clone()
@@ -589,9 +732,34 @@ func cloneEvent(evt event.Event) event.Event {
 	if evt.Extensions != nil {
 		cloned.Extensions = make(map[string]json.RawMessage, len(evt.Extensions))
 		for key, value := range evt.Extensions {
-			cloned.Extensions[key] = append(json.RawMessage(nil), value...)
+			cloned.Extensions[key] = extensions.clone(value)
 		}
 	}
+	return cloned
+}
+
+// extensionCopies is scoped to one stored-view copy. Parallel result items
+// inherit the same extension buffer; copy it once without decoding its JSON.
+// Buffer identity, rather than event ID, also preserves distinct projections
+// of the same event. The cache is discarded after copying, so it cannot retain
+// the source view. A nil cache gives each mutable snapshot item its own bytes.
+type extensionCopies map[extensionBuffer]json.RawMessage
+
+type extensionBuffer struct {
+	start  *byte
+	length int
+}
+
+func (copies extensionCopies) clone(value json.RawMessage) json.RawMessage {
+	if copies == nil || len(value) == 0 {
+		return append(json.RawMessage(nil), value...)
+	}
+	key := extensionBuffer{start: &value[0], length: len(value)}
+	if cloned, ok := copies[key]; ok {
+		return cloned
+	}
+	cloned := append(json.RawMessage(nil), value...)
+	copies[key] = cloned
 	return cloned
 }
 

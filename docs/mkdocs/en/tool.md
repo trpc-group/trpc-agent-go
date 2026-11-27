@@ -513,9 +513,85 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
+## Structured Tool Results
+
+Use `model.ToolResultContent` to return images or other media to the model,
+optionally alongside text.
+LLMAgent's default tool-call flow and Graph ToolsNode generate the tool result
+message automatically; no `ToolResultMessages` callback is required.
+
+When a Graph tool returns `InterruptError`, its `complete` event carries any
+JSON-serializable pause payload in `Message.Content` while the call waits to
+resume.
+
+The [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
+supports images in tool results; the adapter version and model provider must
+also support this capability. For Chat Completions, return text-only tool
+results. Mixed text and image results produce an empty tool response in the
+default flow: neither the text nor the image reaches the model, and no user
+message is injected automatically.
+
+The following tool returns text and an image by ID. The application supplies
+`loadPNG`, which returns raw PNG bytes.
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+type ReadImageArgs struct {
+    ImageID string `json:"image_id"`
+}
+
+readImageTool := function.NewFunctionTool(
+    func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
+        data, err := loadPNG(ctx, args.ImageID)
+        if err != nil {
+            return nil, err
+        }
+        text := "Image loaded."
+        return model.ToolResultContent{
+            {Type: model.ContentTypeText, Text: &text},
+            {Type: model.ContentTypeImage, Image: &model.Image{
+                Data: data, Format: "png",
+            }},
+        }, nil
+    },
+    function.WithName("read_image"),
+    function.WithDescription("Read an image by ID."),
+)
+```
+
+For a custom `tool.CallableTool`, keep the `(any, error)` return signature of
+`Call` and return a `model.ToolResultContent` value. Streamable tools return the
+value in `tool.FinalResultChunk.Result`.
+
+Usage notes:
+
+- **Return type:** return `model.ToolResultContent` by value. `[]byte`, bare
+  `[]model.ContentPart`, and `*model.ToolResultContent` still use JSON handling.
+  A nil or empty slice of this type produces an empty tool result; it does not
+  suppress the response.
+- **Image data:** put raw image file bytes in `Image.Data` and their format
+  (such as `"png"`) in `Image.Format`. The model adapter performs any required
+  Base64 encoding when building the request. Use `Image.URL` for image addresses.
+  Do not modify the returned content or its byte buffers while the framework is
+  processing the result.
+- **Content order:** text and media parts retain their order. No separators are
+  added between text parts.
+- **Custom processing:** in LLMAgent, a configured result formatter applies to
+  results produced by the tool. Results supplied by a `BeforeTool` callback or
+  plugin without running the tool use default conversion. `ToolResultMessages`
+  can still override the default message. See
+  [Tool Result Formatting](#tool-result-formatting).
+
 ## Tool Result Formatting
 
-Function Tools use JSON for model-visible tool result messages by default. Use
+Function Tools use JSON for ordinary model-visible tool results and preserve
+`model.ToolResultContent` as described above. Use
 `function.WithResultFormatter` when a tool needs custom text, such as an
 XML-like observation, without constructing `model.Message` or managing the tool
 call ID.
@@ -559,13 +635,14 @@ The formatter receives the final result after `AfterTool` callbacks. It changes
 only `DefaultToolMessage.Content`; the framework still manages the tool message
 role, name, tool call ID, ordering, events, and session persistence.
 
-- Without a formatter, existing JSON output remains unchanged.
+- Without a formatter, ordinary results retain their existing JSON output;
+  `model.ToolResultContent` uses the structured-content conversion above.
 - A formatting error or panic is reported as an error. The framework does not
   fall back to JSON or run the completed tool again. Formatting is presentation
   only, so a tool that already ran still applies its session state updates.
 - A formatter runs only when the tool declared a result for the call. When it
-  did not, the framework keeps the default JSON: permission results, state-only
-  final stream results, the `CustomResult` a `BeforeTool` callback or plugin
+  did not, the framework uses the default result conversion: permission
+  results, state-only final stream results, the `CustomResult` a `BeforeTool` callback or plugin
   returns to short-circuit the call, and stream content the framework merged
   because a stream ended without `tool.FinalResultChunk` (see below). An
   `AfterTool` callback replacing the result of a tool that did run is a
@@ -575,27 +652,28 @@ role, name, tool call ID, ordering, events, and session persistence.
   intermediate events are unchanged. A streamable tool must declare that final
   result with `tool.FinalResultChunk`. When a stream ends without one, the
   final result is the stream content merged by the framework rather than the
-  tool's declared output type, so the formatter is skipped, the default JSON is
-  kept, and the framework logs a warning. An `AfterTool` callback that replaces
-  the merged content does not make the call eligible for formatting again; emit
+  tool's declared output type, so the formatter is skipped, default result
+  conversion is used, and the framework logs a warning. An `AfterTool` callback
+  that replaces the merged content does not make the call eligible for formatting again; emit
   `tool.FinalResultChunk` to have a streamable result formatted.
-- For tools that update session state, the state update consumes the tool
-  message content the framework would send without a formatter, which is the
-  JSON of the result produced after `AfterTool` callbacks. A formatter is not
+- For tools that update session state, the state update consumes the raw
+  result's JSON after `AfterTool` callbacks, independently of structured-content
+  conversion or formatting. A formatter is not
   part of the state protocol: even if a formatter breaks the read-only contract
   and mutates a pointer or map result in place, the session records the value
   from before that mutation. When
-  `ToolResultMessages` rewrites the tool message content, the rewritten content
+  `ToolResultMessages` rewrites `Message.Content`, the rewritten content
   wins, exactly as it did before formatting existed.
 - The `ToolResultMessages` callback still runs after the default tool result
   message is prepared and may replace it with the messages returned by the
-  callback. Continue using it for multiple messages, multimodal content, or
+  callback. Continue using it for multiple messages, custom content mapping, or
   complete control of the message protocol. Note that a formatter is configured
   per tool while `ToolResultMessages` is registered for the whole agent: for a
   tool with a formatter, the callback receives formatted text in
   `DefaultToolMessage.Content` rather than JSON. A callback that needs
   structured data should read `ToolResultMessagesInput.Result` instead of
-  parsing `DefaultToolMessage.Content`.
+  parsing `DefaultToolMessage.Content`. When rebuilding a message, preserve
+  `DefaultToolMessage.ContentParts` to retain media and content references.
 
 The formatter's return value becomes the default tool result message. The
 formatting function can apply any escaping, truncation, or validation required
@@ -968,10 +1046,47 @@ agent := llmagent.New("mcp-assistant",
 
 ### Tool Name Prefixing
 
-When an MCP ToolSet is wired into an `LLMAgent` via `WithToolSets`, the
-framework wraps it with `NamedToolSet`. The model sees each remote tool under
-`{toolSetName}_{remoteToolName}` while the underlying MCP `tools/call` still
-uses the original remote name.
+When a ToolSet (including an MCP ToolSet) is wired into an `LLMAgent` via
+`WithToolSets` or `WithActivatableToolSets`, the framework wraps it with
+`NamedToolSet`. By default, a ToolSet named `github` whose tool declaration is
+`search` is exposed to the model as `github_search`. The underlying Tool still
+receives the original tool name.
+
+Use `llmagent.WithToolSetToolNameMode` to configure the model-facing names for
+an individual registered ToolSet:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// githubToolSet is any tool.ToolSet implementation whose Name() is "github".
+agent := llmagent.New("assistant",
+    llmagent.WithToolSets([]tool.ToolSet{githubToolSet}),
+    llmagent.WithToolSetToolNameMode(
+        "github",
+        tool.ToolSetToolNameModeOriginal,
+    ),
+)
+```
+
+The available modes are:
+
+- `tool.ToolSetToolNameModeQualified` (default): exposes names as
+  `{toolSetName}_{toolName}`.
+- `tool.ToolSetToolNameModeOriginal`: exposes each Tool's original declaration
+  name without the ToolSet prefix.
+
+The option also applies to activatable ToolSets and ToolSets refreshed after
+their tool list changes. It changes only the model-visible declaration name;
+`ToolSet.Name()` remains the identity used for activation, policy, and tracing,
+and calls still reach the underlying Tool. When using original names, callers
+must ensure that names are unique across all tools visible in a model request.
+Agent construction rejects blank or unregistered ToolSet names and unsupported
+modes.
+
+For MCP ToolSets specifically:
 
 - Default ToolSet name is `"mcp"`, so a remote tool `search` becomes
   `mcp_search`.
@@ -992,6 +1107,26 @@ agent := llmagent.New("multi-mcp",
 )
 // Model-visible names: github_search, slack_search, ...
 ```
+
+### MCP Schema Compatibility
+
+The MCP ToolSet maps a JSON Schema type array, such as
+`{"type":["null","integer"]}`, to
+`{"anyOf":[{"type":"null"},{"type":"integer"}]}`.
+`tool.Schema.Type` holds a single type; `tool.Schema.AnyOf` represents the
+allowed alternatives, including `null`. Type arrays are supported in
+converted input and output schemas, including nested properties,
+property-level array item schemas, and `$defs`.
+
+Optional and nullable are independent: `required` controls whether a property
+must be present, while a `null` branch permits a JSON `null` value. Tool
+arguments are forwarded without type coercion, and the MCP server is
+responsible for validating them.
+
+Schema conversion supports a subset of JSON Schema. Explicit remote `anyOf`
+keywords and root-level `default`, `enum`, `items`, and `additionalProperties`
+are not imported. The selected model adapter and endpoint must support the
+emitted schema.
 
 ### MCP Annotations and Permission Metadata
 
@@ -1299,6 +1434,30 @@ agent := llmagent.New(
     llmagent.WithTools(broker.Tools()),
 )
 ```
+
+Named HTTP servers configured through `WithServers` may use a structurally
+valid absolute URL with a custom scheme when the host runtime provides a
+compatible `HTTPReqHandler`. The broker does not check for that handler at
+configuration time. Ad-hoc URL selectors remain HTTP/HTTPS only.
+
+For custom-scheme named servers, unhandled operation errors are replaced with
+an endpoint-neutral message. `context.Canceled` and `context.DeadlineExceeded`
+remain detectable with `errors.Is`, and host code can classify or inspect the
+cause with `errors.Is`, `errors.As`, or `errors.Unwrap`. The top-level error
+text remains endpoint-neutral. Errors about the model's request, such as an
+unknown tool or missing arguments, remain actionable. `WithErrorInterceptor`
+receives the underlying error and endpoint first, so hosts can still log,
+classify, or replace the error.
+
+#### One-Shot Clients and Server-Initiated Messages
+
+Every broker operation uses a single-use MCP client and does not consume
+server-initiated messages. For code-configured named servers that use a
+custom URL scheme, streamable HTTP clients disable the background `GET`
+stream. Host options are applied afterward, so an internal host that needs
+the stream can opt back in with `tmcp.WithClientGetSSEEnabled(true)`.
+Named HTTP/HTTPS servers and ad-hoc HTTP/HTTPS targets keep the
+trpc-mcp-go default.
 
 #### Server Description
 

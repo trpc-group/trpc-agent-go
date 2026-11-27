@@ -1,5 +1,7 @@
 # tRPC-Agent-Go A2A 集成指南
 
+> 本文介绍面向 A2A v0.2.x 的旧版 `server/a2a` 与 `agent/a2aagent` 包。新接入和迁移说明请参考 [A2A v1.0 接入与迁移指南](a2a_v1.md)。
+
 ## 概述
 
 tRPC-Agent-Go 提供了完整的 A2A (Agent-to-Agent) 解决方案，包含两个核心组件：
@@ -115,6 +117,34 @@ server, _ := a2aserver.New(
 兼容继续镜像到 `status.message.metadata`，展示文本位于
 `status.message.parts`。
 
+#### 流式 Message 只输出增量文本
+
+默认情况下，流式 Message 会输出 `choice.Delta` 中的增量文本和思考内容，
+也会在非 partial 事件中输出 `choice.Message` 中的完整文本和思考内容。
+客户端可通过 `metadata.object_type` 区分 `chat.completion.chunk` 与
+`chat.completion`，并通过 `metadata.llm_response_id` 关联响应。
+
+如果需要兼容将每个 TextPart 都追加显示的客户端，可以在 Message 流式模式下
+开启 `WithStreamingMessageTextDeltaOnly(true)`：
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+	a2aserver.WithStreamingMessageTextDeltaOnly(true),
+)
+```
+
+此选项默认为 `false`。开启后，默认事件转换器只从 `choice.Delta` 读取文本和
+思考内容，恢复 v1.11.0 之前的行为。如果正文只存在于 `choice.Message` 中，
+即使此前没有任何增量，正文也不会输出；需要接收这类完整回复的调用方不应开启。
+
+携带 `object_type` 等有效 metadata 的完成事件仍会输出。空事件沿用现有规则：
+如果没有剩余的 Part，且 metadata 只包含 `llm_response_id`，整条事件会被省略。
+事件 Part mapper、工具调用、代码执行和任务状态更新仍正常工作。非流式响应、Artifact 流式输出及自定义
+`EventToA2AMessage` 转换器不受影响，也不会增加文本缓存或去重判断。
+
 #### 直接使用 A2A 协议客户端调用
 
 ```go
@@ -155,6 +185,10 @@ func main() {
 会在 Cookie Jar 中遵循 anonymous `Set-Cookie` 的 Path、Domain、过期和删除指令。
 它不会接入 `SessionService`，也不负责持久化 session state。
 应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
+
+`NewAnonymousA2AClient` 仅在请求期间从响应或自定义 HTTP handler 观察到有效匿名 Cookie，且配置的 Cookie Jar 接受同一值并可用于 agent URL 后，才解除初始化 gate。预加载 Cookie 会随请求发送，但本身不能确认初始化完成；自定义服务端必须通过 `Set-Cookie` 回写已接受的 Cookie，或返回替代值，后续请求才能并发执行。内置 A2A Server 已具备该行为。
+
+浏览器匿名身份连续性要求同站部署。服务端 Cookie 使用 `SameSite=Lax`，因此浏览器不会在跨站 JSON-RPC POST 请求中携带该 Cookie。当前端页面与 A2A 接口同站但跨源时，Fetch 请求必须设置 `credentials: "include"`，部署层还必须为该前端的明确 Origin 返回 `Access-Control-Allow-Origin`，并设置 `Access-Control-Allow-Credentials: true`。跨站部署应改为提供可信用户身份；当前不支持跨站匿名 Cookie 连续性。
 
 #### 匿名 Principal 行为
 
@@ -910,7 +944,7 @@ subAgent, _ := a2aagent.New(
 
 关于 A2A 协议中工具调用、代码执行、思考内容等事件的传递规范，以及 Metadata 字段定义、ADK 兼容模式、分布式追踪等详细说明，请参考独立文档：
 
-**[A2A 协议交互规范](a2a-interaction.md)**
+**[A2A 协议交互规范](https://trpc-group.github.io/trpc-agent-go/zh/a2a-interaction/)**
 
 该文档定义了 trpc-agent-go 在 A2A 协议之上的扩展规范，是 Client 和 Server 实现的标准参考。
 
@@ -952,6 +986,7 @@ subAgent, _ := a2aagent.New(
 | `WithResponseRewriter(rewriter)` | 改写或丢弃出站 A2A unary/streaming 结果 |
 | `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
 | `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
+| `WithStreamingMessageTextDeltaOnly(enabled)` | Message 流式模式只输出 Delta 文本和思考内容（默认 false） |
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
 | `WithADKCompatibility(enabled)` | ADK 兼容模式（默认：开启） |
 | `WithErrorHandler(handler)` | 自定义错误处理 |

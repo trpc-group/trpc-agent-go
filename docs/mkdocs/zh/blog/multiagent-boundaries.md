@@ -200,5 +200,5 @@ UI 不展示内部过程，不代表父 Agent 不需要结果；trace 里有完�
 - [Team 文档](../team.md)
 - [TaskRun 文档](../taskrun.md)
 - [Graph 文档](../graph.md)
-- [A2A 文档](../a2a.md)
+- [A2A v1.0 文档](../a2a_v1.md)
 - [Tool 文档](../tool.md)

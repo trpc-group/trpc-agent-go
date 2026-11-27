@@ -16,6 +16,7 @@ trpc-agent-go supports multiple vector store implementations:
 | [Elasticsearch](elasticsearch.md) | Supports v7/v8/v9 versions |
 | [Qdrant](qdrant.md) | High-performance vector database |
 | [Milvus](milvus.md) | High-performance vector database |
+| [ChromaDB](chromadb.md) | Chroma v2 REST API |
 
 ## Search Modes
 
@@ -87,3 +88,4 @@ All vector stores support filter functionality, including ID filtering, metadata
 - [Elasticsearch](elasticsearch.md) - Elasticsearch configuration
 - [Qdrant](qdrant.md) - Qdrant configuration
 - [Milvus](milvus.md) - Milvus configuration
+- [ChromaDB](chromadb.md) - ChromaDB configuration

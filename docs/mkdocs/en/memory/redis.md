@@ -28,12 +28,21 @@ if err != nil {
 
 **Note**: `WithRedisClientURL` takes priority over `WithRedisInstance`
 
-**Redis ACL requirement**: `UpdateMemory` uses a server-side Lua script to
-atomically validate and rotate memory IDs. ACL users must be allowed to run
-`EVALSHA` and `EVAL` (`EVAL` is required when the script is not yet cached), in
-addition to `HGET` and the script's `HEXISTS`, `HSET`, and `HDEL` commands and access to
-the configured memory-key pattern. Do not remove `EVAL` after warm-up because
-the Redis script cache can be cleared by a restart or `SCRIPT FLUSH`.
+**Redis ACL requirement**: The default per-user memory limit is `1000`. When the
+configured limit is positive, `AddMemory` uses a server-side Lua script to
+atomically check the capacity and write the memory. This script calls
+`HEXISTS`, `HLEN`, and `HSET`. `UpdateMemory` always uses a Lua script to
+atomically validate and rotate memory IDs; its update path uses `HGET`, and its
+script calls `HEXISTS`, `HSET`, and `HDEL`.
+
+ACL users must be allowed to run `EVALSHA` and `EVAL` (`EVAL` is required when
+a script is not yet cached), the commands used by both scripts, and access the
+configured memory-key pattern. Do not remove `EVAL` after warm-up because the
+Redis script cache can be cleared by a restart or `SCRIPT FLUSH`. Redis-compatible
+backends must support server-side Lua for these scripted paths.
+
+`WithMemoryLimit(0)` keeps `AddMemory` on the direct `HSET` path without a
+scripting dependency. `UpdateMemory` still uses Lua.
 
 **Key prefix example**:
 

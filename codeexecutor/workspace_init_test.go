@@ -257,6 +257,41 @@ func TestWorkspaceInitEngine_ForwardsWorkspaceInstanceProvider(t *testing.T) {
 	require.Equal(t, WorkspaceInstanceID("instance-1"), got)
 }
 
+type workspaceScopeFlag bool
+
+func (f workspaceScopeFlag) WorkspacePerInvocation() bool { return bool(f) }
+
+func TestWorkspaceInitEngine_ForwardsWorkspacePerInvocation(t *testing.T) {
+	type scopedManager struct {
+		*fakeWM
+		workspaceScopeFlag
+	}
+	type scopedInstanceManager struct {
+		*rotatingWM
+		workspaceScopeFlag
+	}
+	for _, tc := range []struct {
+		name  string
+		inner WorkspaceManager
+		want  bool
+	}{
+		{"plain/enabled", scopedManager{&fakeWM{}, true}, true},
+		{"plain/disabled", scopedManager{&fakeWM{}, false}, false},
+		{"plain/unsupported", &fakeWM{}, false},
+		{"instance/enabled", scopedInstanceManager{&rotatingWM{}, true}, true},
+		{"instance/disabled", scopedInstanceManager{&rotatingWM{}, false}, false},
+		{"instance/unsupported", &rotatingWM{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := NewEngine(tc.inner, nil, nil)
+			manager := newWorkspaceInitEngine(inner, nil).Manager()
+			scoped, ok := manager.(interface{ WorkspacePerInvocation() bool })
+			require.True(t, ok)
+			require.Equal(t, tc.want, scoped.WorkspacePerInvocation())
+		})
+	}
+}
+
 func TestWorkspaceInitEngine_InstanceChangeRerunsHooks(t *testing.T) {
 	innerManager := &rotatingWM{instanceID: "instance-1"}
 	inner := NewEngine(innerManager, &recordingFS{}, &recordingRunner{})

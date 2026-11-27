@@ -105,15 +105,18 @@ class PythonASTParser(ast.NodeVisitor):
     def _build_func_params(self, args: ast.arguments) -> str:
         """Build full parameter list string from ast.arguments."""
         parts = []
-        defaults_offset = len(args.args) - len(args.defaults)
+        positional_args = args.posonlyargs + args.args
+        defaults_offset = len(positional_args) - len(args.defaults)
 
-        for i, arg in enumerate(args.args):
+        for i, arg in enumerate(positional_args):
             param = arg.arg
             if arg.annotation:
                 param += ": {}".format(ast.unparse(arg.annotation))
             if i >= defaults_offset:
                 param += "={}".format(ast.unparse(args.defaults[i - defaults_offset]))
             parts.append(param)
+            if args.posonlyargs and i == len(args.posonlyargs) - 1:
+                parts.append("/")
 
         if args.vararg:
             param = "*{}".format(args.vararg.arg)
@@ -224,15 +227,10 @@ class PythonASTParser(ast.NodeVisitor):
         is_method = self.current_class is not None
         entity_type = "Method" if is_method else "Function"
 
-        params = []
-        for arg in node.args.args:
-            param = arg.arg
-            if arg.annotation:
-                param += ": {}".format(ast.unparse(arg.annotation))
-            params.append(param)
+        params = self._build_func_params(node.args)
         returns = " -> {}".format(ast.unparse(node.returns)) if node.returns else ""
         async_prefix = "async " if is_async else ""
-        signature = "{}def {}({}){}".format(async_prefix, node.name, ", ".join(params), returns)
+        signature = "{}def {}({}){}".format(async_prefix, node.name, params, returns)
 
         if is_method:
             node_id = "{}.{}.{}".format(self.module_path, self.current_class, node.name)

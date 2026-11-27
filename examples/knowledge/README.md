@@ -51,6 +51,7 @@ Persistent vector storage options:
 
 | Case | Description | Extra Environment |
 |------|-------------|-------------------|
+| chroma/ | ChromaDB over the Chroma v2 REST API | `CHROMA_URL`, `CHROMA_COLLECTION`, `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE` |
 | postgres/ | PostgreSQL with pgvector extension | `PGVECTOR_HOST`, `PGVECTOR_PORT`, `PGVECTOR_USER`, `PGVECTOR_PASSWORD`, `PGVECTOR_DATABASE`, `PGVECTOR_TABLE` |
 | elasticsearch/ | Elasticsearch (v7/v8/v9) | `ELASTICSEARCH_HOSTS`, `ELASTICSEARCH_USERNAME`, `ELASTICSEARCH_PASSWORD`, `ELASTICSEARCH_INDEX_NAME` |
 | tcvector/ | Tencent VectorDB | `TCVECTOR_URL`, `TCVECTOR_USERNAME`, `TCVECTOR_PASSWORD`, `TCVECTOR_COLLECTION` |

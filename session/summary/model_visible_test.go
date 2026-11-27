@@ -570,6 +570,7 @@ func TestSummaryBoundaryAndEffectiveCheckSession(t *testing.T) {
 		now,
 	)
 	check := summarizer.buildCheckSessionWithSelection(
+		context.Background(),
 		sess,
 		summaryEventSelection{
 			events:    []event.Event{effective},

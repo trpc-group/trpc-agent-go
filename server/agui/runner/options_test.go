@@ -85,6 +85,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
 	assert.True(t, opts.ConcurrentMessageStreamsEnabled)
 	assert.False(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
+	assert.False(t, opts.MessagesSnapshotBestEffortEnabled)
 	assert.False(t, opts.DistributedCancelEnabled)
 	assert.Equal(t, time.Second, opts.DistributedCancelPollInterval)
 }
@@ -203,6 +204,11 @@ func TestWithConcurrentMessageStreamsEnabled(t *testing.T) {
 func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
 	opts := NewOptions(WithMessagesSnapshotRunLifecycleEventsEnabled(true))
 	assert.True(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
+}
+
+func TestWithMessagesSnapshotBestEffortEnabled(t *testing.T) {
+	opts := NewOptions(WithMessagesSnapshotBestEffortEnabled(true))
+	assert.True(t, opts.MessagesSnapshotBestEffortEnabled)
 }
 
 func TestWithPostRunFinalizationTimeout(t *testing.T) {

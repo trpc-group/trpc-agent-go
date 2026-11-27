@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsearch/lexical"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -187,14 +188,10 @@ func (p *Plugin) Register(r *plugin.Registry) {
 func (p *Plugin) indexTool(t tool.Tool) {
 	decl := t.Declaration()
 	name := decl.Name
-	parsed := parseToolName(name)
 	p.toolsByName[name] = t
 	p.metaByName[name] = &toolMetadata{
-		Parts:       parsed.Parts,
-		Full:        parsed.Full,
 		Description: decl.Description,
-		descLower:   strings.ToLower(decl.Description),
-		nameLower:   strings.ToLower(name),
+		document:    lexical.NewDocument(name, decl.Description),
 	}
 	p.nameByLower[strings.ToLower(name)] = name
 }

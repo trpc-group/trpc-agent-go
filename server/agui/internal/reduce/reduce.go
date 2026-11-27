@@ -17,6 +17,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -99,6 +100,11 @@ func Reduce(appName, userID string, events []session.TrackEvent, opt ...Option) 
 	for _, trackEvent := range events {
 		if err = r.reduce(trackEvent); err != nil {
 			err = fmt.Errorf("reduce: %w", err)
+			if opts.bestEffort {
+				log.Warnf("agui reduce: skip malformed track event: err=%v", err)
+				err = nil
+				continue
+			}
 			break
 		}
 	}

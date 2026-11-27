@@ -207,6 +207,12 @@ func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
 	assert.True(t, ro.MessagesSnapshotRunLifecycleEventsEnabled)
 }
 
+func TestWithMessagesSnapshotBestEffortEnabled(t *testing.T) {
+	opts := newOptions(WithMessagesSnapshotBestEffortEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.MessagesSnapshotBestEffortEnabled)
+}
+
 func TestWithCancelEnabled(t *testing.T) {
 	opts := newOptions(WithCancelEnabled(true))
 	assert.True(t, opts.cancelEnabled)

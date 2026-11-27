@@ -96,6 +96,40 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Synthetic Error Content in Session History
+
+When an error event has no assistant content, Runner may add a generic message
+so the event remains displayable and can be persisted as a complete
+user/assistant turn. The ErrorMessage plugin can provide customized content
+for the same purpose. This content is presentation data synthesized by the
+framework, not model output.
+
+By default, LLMAgent leaves the emitted and persisted assistant content and
+structured error intact, but omits framework-synthesized error content when
+building later model requests. If omission leaves adjacent user messages, the
+request projection merges them locally to preserve a provider-valid sequence.
+Legacy sessions are handled with a best-effort signature: a structured error,
+Runner's exact generic fallback, its `"error"` finish reason, and no other
+message payload. Marker-free events have no definitive provenance, so a real
+response matching that complete legacy signature is indistinguishable; enable
+the compatibility option below if such responses must remain model-visible.
+
+Applications that intentionally relied on the previous context behavior can
+restore it explicitly:
+
+```go
+llmAgent := llmagent.New(
+    "demo-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithIncludeSyntheticErrorMessages(true),
+)
+```
+
+GraphAgent applies the same default while seeding graph message state from
+session history and exposes the matching
+`graphagent.WithIncludeSyntheticErrorMessages` compatibility option. See the
+[Graph guide](./graph.md#synthetic-error-content-in-session-history).
+
 ### Placeholder Variables (State Injection)
 
 LLMAgent automatically injects state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
@@ -379,6 +413,13 @@ agent := llmagent.New(
 
 **Note:** This option only affects how historical messages are processed before sending to the model. The current response's `reasoning_content` is always captured and stored in session events.
 
+The framework treats `ProviderData` payload bytes as opaque. For messages with
+native ProviderData, these modes only change the projected reasoning fields;
+they do not remove reasoning or encrypted state from ProviderData, which a
+matching native adapter can still send on the next request. Edit
+`Message.ProviderData.Payload` to change that input. Keep ProviderData for
+unfinished tool rounds that need to be resumed.
+
 ### Tool Transcript History Mode
 
 By default, LLMAgent sends historical tool calls and their matching tool
@@ -531,7 +572,7 @@ agent := llmagent.New(
 - Tool-limit finalization requires every tool call in the limit-reaching iteration to be framework-executed. If any call is external or deferred by `WithToolExecutionFilter`, the response still counts toward `MaxToolIterations`, but the current run follows the existing caller-executed lifecycle and ends without a finalization call. A later caller continuation is a new invocation with independent limits.
 - `MaxLLMCalls` remains a strict outer budget. Finalization calls count toward it, so reserve an LLM call when combining tool-limit finalization with `WithMaxLLMCalls`.
 - For the final model request, the instruction is appended as a transient tail user message without changing the existing system prompt. It is visible to before-model callbacks but is not emitted or persisted as a user event.
-- During finalization, tools and forced tool-choice fields are removed before before-model callbacks and scrubbed again after callbacks. If a tool call is still produced, the framework rejects it without executing the tool.
+- By default, finalization removes tools and forced tool-choice fields before before-model callbacks and scrubs them again after callbacks. Verified OpenAI-compatible endpoints can instead retain tool definitions with `tool_choice: "none"`; see [model configuration](model.md#preserving-tools-during-call-limit-finalization). If a tool call is still produced, the framework rejects it without executing the tool.
 - If both finalization policies become eligible on the same LLM call, the LLM-limit instruction takes precedence.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.

@@ -37,7 +37,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
+	"trpc.group/trpc-go/trpc-agent-go/internal/providerdata"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/statecopy"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -48,6 +51,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -129,6 +133,8 @@ func WithNodeType(nodeType NodeType) Option {
 
 // WithUserInputKey sets the state key used as one-shot user input for LLM and
 // Agent nodes. When empty, StateKeyUserInput is used.
+// Non-default keys keep the legacy override path and do not opt into the LLM
+// node's retention of unchanged ContentParts-derived input.
 func WithUserInputKey(key string) Option {
 	return func(node *Node) {
 		node.userInputKey = key
@@ -607,10 +613,11 @@ func executeNodeWithWorkflowTrace(
 	}
 	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
 	workflow := &itelemetry.Workflow{
-		Name:    fmt.Sprintf("execute_function_node %s", id),
-		ID:      id,
-		Type:    workflowTypeFromNodeType(nodeType),
-		Request: state.safeClone(),
+		Name:           fmt.Sprintf("execute_function_node %s", id),
+		ID:             id,
+		Type:           workflowTypeFromNodeType(nodeType),
+		Request:        state.safeClone(),
+		FilterResponse: filterNodeResponse,
 	}
 	defer func() {
 		itelemetry.TraceWorkflow(span, workflow)
@@ -708,10 +715,11 @@ func (sg *StateGraph) AddLLMNode(
 		var workflow *itelemetry.Workflow
 		if recordWorkflow {
 			workflow = &itelemetry.Workflow{
-				Name:    workflowName,
-				ID:      id,
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           workflowName,
+				ID:             id,
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 		}
 		defer func() {
@@ -1368,8 +1376,25 @@ func (r *llmRunner) executeUserInputStage(
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
-			used[len(used)-1] = model.NewUserMessage(userInput)
-			ops = append(ops, ReplaceLastUser{Content: userInput})
+			if userInputKey == StateKeyUserInput &&
+				matchesPartsUserInputOrigin(state, userInput) {
+				// Keep the final invocation projection, including Content-only
+				// messages produced by an event projector.
+			} else if resolved, ok := resolveProjectedCurrentUser(
+				state,
+				used[len(used)-1],
+				userInput,
+			); ok {
+				if !model.MessagesEqual(resolved, used[len(used)-1]) {
+					used[len(used)-1] = resolved
+					ops = append(ops, ReplaceLastUser{
+						Content: resolved.Content,
+					})
+				}
+			} else {
+				used[len(used)-1] = model.NewUserMessage(userInput)
+				ops = append(ops, ReplaceLastUser{Content: userInput})
+			}
 		}
 	} else {
 		used = append(used, model.NewUserMessage(userInput))
@@ -1395,6 +1420,22 @@ func (r *llmRunner) executeUserInputStage(
 			r.nodeID: asst.Content,
 		},
 	}, nil
+}
+
+func resolveProjectedCurrentUser(
+	state State,
+	msg model.Message,
+	userInput string,
+) (model.Message, bool) {
+	execCtx := executionContextFromState(state)
+	if execCtx == nil {
+		return model.Message{}, false
+	}
+	return messageprojection.ResolveCurrentUser(
+		execCtx.Invocation,
+		msg,
+		userInput,
+	)
 }
 
 func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span oteltrace.Span) (any, error) {
@@ -1630,6 +1671,11 @@ func (r *llmRunner) executeModel(
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
+	if callModel != nil && providerdata.MessagesHaveData(request.Messages) {
+		if err := providerdata.ValidateHistory(request.Messages, callModel); err != nil {
+			return nil, err
+		}
+	}
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	emittedModelStartEvent := false
@@ -2081,6 +2127,11 @@ func shouldEmitModelResponseEvent(
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) (context.Context, *event.Event, error) {
 	currentInvocation := invocationFromContextOrDefault(ctx, config.Invocation)
+	var nativeSnapshot providerdata.ResponseSnapshot
+	hasAfterCallbacks := hasAfterModelCallbacks(currentInvocation, config.ModelCallbacks)
+	if hasAfterCallbacks {
+		nativeSnapshot = providerdata.SnapshotResponse(config.Response)
+	}
 	timingInfo := responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
@@ -2129,6 +2180,11 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		}
 	}
 	currentInvocation = invocationFromContextOrDefault(ctx, config.Invocation)
+	if hasAfterCallbacks {
+		if err := providerdata.ReprojectResponse(nativeSnapshot, config.Response, config.LLMModel, config.Request); err != nil {
+			return ctx, nil, err
+		}
+	}
 	timingInfo = responseUsageTimingInfo(currentInvocation)
 	if config.Tracker != nil {
 		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
@@ -2147,6 +2203,13 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 	if currentInvocation != nil &&
 		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
 		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
+	}
+	var producer model.Info
+	if config.LLMModel != nil {
+		producer = config.LLMModel.Info()
+	}
+	if err := providerdata.ValidateResponse(config.Response, producer); err != nil {
+		return ctx, nil, err
 	}
 	llmEvent := event.NewResponseEvent(
 		config.InvocationID,
@@ -2173,7 +2236,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 				config.Response.Error.Message,
 			),
 		)
-		return ctx, nil, fmt.Errorf(
+		return ctx, llmEvent, fmt.Errorf(
 			"model API error: %s",
 			config.Response.Error.Message,
 		)
@@ -2229,6 +2292,13 @@ func generateModelStream(
 	request *model.Request,
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
+	if request != nil && providerdata.MessagesHaveData(request.Messages) {
+		if err := providerdata.ValidateHistory(request.Messages, llmModel); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return modelResponseStream{}, err
+		}
+	}
 	// Generate content.
 	if iterModel, ok := llmModel.(model.IterModel); ok {
 		seq, err := iterModel.GenerateContentIter(ctx, request)
@@ -2406,10 +2476,11 @@ func newToolsNodeRuntime(
 		var workflow *itelemetry.Workflow
 		if startedSpan {
 			workflow = &itelemetry.Workflow{
-				Name:    "execute_tools_node",
-				ID:      "execute_tools_node",
-				Type:    workflowTypeFromNodeType(node.Type),
-				Request: state.safeClone(),
+				Name:           "execute_tools_node",
+				ID:             "execute_tools_node",
+				Type:           workflowTypeFromNodeType(node.Type),
+				Request:        state.safeClone(),
+				FilterResponse: filterNodeResponse,
 			}
 			defer func() {
 				itelemetry.TraceWorkflow(span, workflow)
@@ -2437,19 +2508,22 @@ func newToolsNodeRuntime(
 		}
 
 		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+		resultContents := make([]toolResultOutput, len(toolCalls))
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
-			ToolCalls:      toolCalls,
-			Tools:          effectiveTools,
-			InvocationID:   invocationID,
-			EventChan:      eventChan,
-			Span:           span,
-			State:          state,
-			NodeID:         nodeID,
-			EnableParallel: parallel,
-			Concurrency:    concurrencyLimiter,
-			ToolCallbacks:  toolCallbacks,
-			RetryPolicy:    configuredRetryPolicy,
+			ToolCalls:          toolCalls,
+			SkipArgumentRepair: hasNativeProviderDataToolCallInState(state),
+			Tools:              effectiveTools,
+			InvocationID:       invocationID,
+			EventChan:          eventChan,
+			Span:               span,
+			State:              state,
+			NodeID:             nodeID,
+			EnableParallel:     parallel,
+			Concurrency:        concurrencyLimiter,
+			ToolCallbacks:      toolCallbacks,
+			RetryPolicy:        configuredRetryPolicy,
+			resultContents:     resultContents,
 		})
 		if err != nil {
 			if workflow != nil {
@@ -2461,8 +2535,12 @@ func newToolsNodeRuntime(
 		clearAgentToolSubgraphInterruptState(state, nodeID)
 
 		if len(newMessages) > 0 {
-			upd[StateKeyLastToolResponse] =
-				newMessages[len(newMessages)-1].Content
+			lastIndex := len(newMessages) - 1
+			lastResponse := newMessages[lastIndex].Content
+			if content := toolResultContentAt(resultContents, lastIndex).structuredJSON(); content != nil {
+				lastResponse = string(content)
+			}
+			upd[StateKeyLastToolResponse] = lastResponse
 		}
 
 		if nodeID != "" {
@@ -2473,11 +2551,15 @@ func newToolsNodeRuntime(
 			}
 
 			responses := make([]toolNodeResponse, 0, len(newMessages))
-			for _, msg := range newMessages {
+			for i, msg := range newMessages {
+				output := toolResultContentAt(resultContents, i).raw
+				if output == nil {
+					output = toolNodeResponseOutput(msg)
+				}
 				responses = append(responses, toolNodeResponse{
 					ToolID:   msg.ToolID,
 					ToolName: msg.ToolName,
-					Output:   json.RawMessage(msg.Content),
+					Output:   output,
 				})
 			}
 
@@ -4213,7 +4295,7 @@ func runAfterToolPluginCallbacks(
 	}
 
 	callbacks := invocation.Plugins.ToolCallbacks()
-	if callbacks == nil {
+	if callbacks == nil || len(callbacks.AfterTool) == 0 {
 		return ctx, nil, nil
 	}
 
@@ -4236,6 +4318,10 @@ func runAfterToolPluginCallbacks(
 	if errors.As(runErr, &interruptErr) {
 		return ctx, nil, runErr
 	}
+	// A non-nil CustomResult from a registered AfterTool hook is an explicit
+	// plugin replacement and skips node AfterTool callbacks. An empty
+	// AfterTool list is skipped above so the released no-callback echo of
+	// args.Result is not treated as an override.
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if err != nil {
 			return ctx, afterResult.CustomResult,
@@ -4332,6 +4418,14 @@ func runTool(
 	return finalCtx, result, modifiedArgs, err
 }
 
+func repairToolCallArguments(ctx context.Context, toolCall *model.ToolCall, skipArgumentRepair []bool) {
+	skipJSONRepair := len(skipArgumentRepair) > 0 && skipArgumentRepair[0]
+	if invocation, ok := agent.InvocationFromContext(ctx); ok && !skipJSONRepair &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+		jsonrepair.RepairToolCallArgumentsInPlace(ctx, toolCall)
+	}
+}
+
 func runToolWithEventContexts(
 	ctx context.Context,
 	toolCall model.ToolCall,
@@ -4340,11 +4434,10 @@ func runToolWithEventContexts(
 	state State,
 	retryPolicy *tool.RetryPolicy,
 	toolCallIndex int,
+	skipArgumentRepair ...bool,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
-	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
-		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
-	}
+	repairToolCallArguments(ctx, &toolCall, skipArgumentRepair)
 	decl := t.Declaration()
 	startInvocation := invocationFromContextOrFallback(ctx, nil)
 
@@ -4502,7 +4595,7 @@ func callToolWithRetry(
 	state State,
 	toolCallIndex int,
 ) (any, error) {
-	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
+	runtimeTool, ok := itool.ResolveSemantic(callableTool).(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {
 		var err error
@@ -4807,6 +4900,10 @@ type modelExecutionConfig struct {
 const (
 	errMsgNoModelResponse = "no response received from model"
 	errMsgNoModelChoices  = "model returned no choices"
+	// errMsgProviderActions reports a response that delegates provider-native
+	// actions, such as a client-executed tool search, which LLM nodes do not
+	// complete. Treating it as the node result would lose the pending action.
+	errMsgProviderActions = "model response requests provider actions, which graph LLM nodes do not complete"
 )
 
 type modelDeltaStreamTap struct {
@@ -4879,6 +4976,13 @@ func validateFinalModelResponse(
 		))
 		return nil, errors.New(errMsgNoModelChoices)
 	}
+	if providerdata.ResponseRequestsActions(resp) {
+		span.SetAttributes(attribute.String(
+			"trpc.go.agent.error",
+			errMsgProviderActions,
+		))
+		return nil, errors.New(errMsgProviderActions)
+	}
 	return resp, nil
 }
 
@@ -4901,6 +5005,9 @@ func mergeToolCallsIntoFinalResponse(
 	toolCalls []model.ToolCall,
 ) {
 	if resp == nil || len(resp.Choices) == 0 {
+		return
+	}
+	if providerdata.ResponseHasData(resp) {
 		return
 	}
 	if len(resp.Choices[0].Message.ToolCalls) >= len(toolCalls) {
@@ -5310,9 +5417,17 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	}
 	p.tap.WriteDelta(response)
 	trackModelResponseTelemetry(response, p.tracker)
-	p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	nativeResponse := providerdata.ResponseHasData(response)
+	if nativeResponse {
+		// A native completion supplies the full tool list. Use the callback's
+		// final list without restoring calls collected before the callback.
+		p.toolCalls = nil
+	} else {
+		p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	}
 	p.finalResponse = response
 	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
+	var responseErr error
 	if p.fastResponsePath {
 		responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 		lastEvent, err := emitFastModelResponseEvent(
@@ -5326,12 +5441,9 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 			reusableEvent,
 		)
 		p.lastEvent = lastEvent
-		if err != nil {
-			return false, err
-		}
+		responseErr = err
 	} else {
-		var err error
-		p.ctx, p.lastEvent, err = processModelResponse(p.ctx, modelResponseConfig{
+		p.ctx, p.lastEvent, responseErr = processModelResponse(p.ctx, modelResponseConfig{
 			Response:         response,
 			Invocation:       p.invocation,
 			StableInvocation: p.stableInvocation,
@@ -5346,9 +5458,6 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 			Span:             p.config.Span,
 			NodeID:           p.config.NodeID,
 		})
-		if err != nil {
-			return false, err
-		}
 	}
 	p.invocation = invocationFromContextOrDefault(p.ctx, p.invocation)
 	p.observabilityInvocation = refreshObservabilityInvocationView(
@@ -5356,6 +5465,14 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 		p.stableInvocation,
 		p.config,
 	)
+	// Trace the same processed response used by metrics, including callback replacements.
+	if p.lastEvent != nil {
+		response = p.lastEvent.Response
+		if response != nil && !response.IsPartial &&
+			(nativeResponse || providerdata.ResponseHasData(response)) {
+			p.finalResponse = response
+		}
+	}
 	traceProcessedModelResponse(
 		p.config.Span,
 		&p.chatTraceState,
@@ -5365,12 +5482,30 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 		response,
 		p.lastEvent,
 	)
+	if responseErr != nil {
+		return false, responseErr
+	}
 	return true, nil
 }
 
 func (p *modelResponseProcessor) finalize() (*model.Response, error) {
 	finalResponse, err := validateFinalModelResponse(p.config.Span, p.finalResponse)
 	if err != nil {
+		if !tracingDisabled(p.invocation) && p.config.Span.IsRecording() {
+			// Final validation can fail after a callback supplied a successful response.
+			// Keep that response's trace attributes and record the final failure used by metrics.
+			p.chatTraceState.TraceChat(p.config.Span, &itelemetry.TraceChatAttributes{
+				Invocation: p.observabilityInvocation,
+				Request:    p.config.Request,
+			})
+			p.config.Span.SetAttributes(
+				attribute.String(semconvtrace.KeyErrorType,
+					itelemetry.ToErrorType(err, semconvtrace.ValueDefaultErrorType)),
+				attribute.String(semconvtrace.KeyErrorMessage, err.Error()),
+			)
+			p.config.Span.SetStatus(codes.Error, err.Error())
+			p.config.Span.RecordError(err)
+		}
 		return nil, err
 	}
 	mergeToolCallsIntoFinalResponse(finalResponse, p.toolCalls)
@@ -5465,7 +5600,7 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 		switch m.Role {
 		case model.RoleAssistant:
 			if len(m.ToolCalls) > 0 {
-				return m.ToolCalls, nil
+				return providerdata.ToolCallsForExecution(m), nil
 			}
 		case model.RoleUser:
 			// Stop scanning when we encounter a user message.
@@ -5480,6 +5615,25 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 
 	span.SetAttributes(attribute.String("trpc.go.agent.error", "no assistant message with tool calls found"))
 	return nil, errors.New("no assistant message with tool calls found")
+}
+
+func hasNativeProviderDataToolCallInState(state State) bool {
+	messages, ok := state[StateKeyMessages].([]model.Message)
+	if !ok {
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		switch message.Role {
+		case model.RoleAssistant:
+			if len(message.ToolCalls) > 0 {
+				return message.ProviderData != nil
+			}
+		case model.RoleUser:
+			return false
+		}
+	}
+	return false
 }
 
 // toolCallsConfig contains configuration for processing tool calls.
@@ -5501,6 +5655,11 @@ type toolCallsConfig struct {
 	RetryPolicy *tool.RetryPolicy
 	// Concurrency limits active calls across invocations of the owning node.
 	Concurrency *toolcall.Limiter
+	// SkipArgumentRepair is true when these calls came from a ProviderData
+	// message whose editable arguments must not be rewritten automatically.
+	SkipArgumentRepair bool
+	// resultContents records serialized tool results by call index for node outputs.
+	resultContents []toolResultOutput
 }
 
 type parallelToolCallCancelCause struct {
@@ -5523,32 +5682,46 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	if toolCallbacks == nil {
 		toolCallbacks, _ = extractToolCallbacks(config.State)
 	}
-	completedMessages := completedToolMessagesForNode(config.State, config.NodeID)
+	completedMessages, completedResultContents := completedToolMessagesAndContentsForNode(
+		config.State,
+		config.NodeID,
+	)
 	// Serial path or single tool call.
 	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
 		completedThisRun := make(map[string]model.Message)
+		completedResultContentsThisRun := make(map[string]json.RawMessage)
 		for i, toolCall := range config.ToolCalls {
 			completedKey := completedToolMessageKey(i, toolCall)
 			if msg, ok := completedMessages[completedKey]; ok {
 				newMessages = append(newMessages, msg)
+				setToolResultContent(config.resultContents, i, toolResultOutput{
+					raw: completedResultContents[completedKey], structured: true,
+				})
 				continue
 			}
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
-				ToolCall:      toolCall,
-				ToolCallIndex: i,
-				Tools:         config.Tools,
-				InvocationID:  config.InvocationID,
-				EventChan:     config.EventChan,
-				Span:          config.Span,
-				ToolCallbacks: toolCallbacks,
-				State:         config.State,
-				RetryPolicy:   config.RetryPolicy,
-				Concurrency:   config.Concurrency,
+				ToolCall:           toolCall,
+				SkipArgumentRepair: config.SkipArgumentRepair,
+				ToolCallIndex:      i,
+				Tools:              config.Tools,
+				InvocationID:       config.InvocationID,
+				EventChan:          config.EventChan,
+				Span:               config.Span,
+				ToolCallbacks:      toolCallbacks,
+				State:              config.State,
+				RetryPolicy:        config.RetryPolicy,
+				Concurrency:        config.Concurrency,
+				resultContents:     config.resultContents,
 			})
 			if err != nil {
 				if IsInterruptError(err) {
-					recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
+					recordCompletedToolMessages(
+						config.State,
+						config.NodeID,
+						completedThisRun,
+						completedResultContentsThisRun,
+					)
 					setAgentToolInterruptStateFromError(config.State, err)
 				} else {
 					clearCompletedToolMessages(config.State, config.NodeID)
@@ -5557,6 +5730,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			}
 			newMessages = append(newMessages, toolMessage)
 			completedThisRun[completedKey] = toolMessage
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, i).structuredJSON()
 		}
 		clearCompletedToolMessages(config.State, config.NodeID)
 		return newMessages, nil
@@ -5584,6 +5758,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		completedKey := completedToolMessageKey(i, tc)
 		if msg, ok := completedMessages[completedKey]; ok {
 			out[i] = msg
+			setToolResultContent(config.resultContents, i, toolResultOutput{
+				raw: completedResultContents[completedKey], structured: true,
+			})
 			continue
 		}
 		pendingCalls = append(pendingCalls, pendingCall{idx: i, tc: tc})
@@ -5603,17 +5780,19 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		go func(ctx context.Context) {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
-				ToolCall:      tc,
-				ToolCallIndex: i,
-				Tools:         config.Tools,
-				InvocationID:  config.InvocationID,
-				EventChan:     config.EventChan,
-				Span:          config.Span,
-				ToolCallbacks: toolCallbacks,
-				State:         config.State,
-				RetryPolicy:   config.RetryPolicy,
-				Concurrency:   config.Concurrency,
-				TraceRecorder: traceRecorder,
+				ToolCall:           tc,
+				SkipArgumentRepair: config.SkipArgumentRepair,
+				ToolCallIndex:      i,
+				Tools:              config.Tools,
+				InvocationID:       config.InvocationID,
+				EventChan:          config.EventChan,
+				Span:               config.Span,
+				ToolCallbacks:      toolCallbacks,
+				State:              config.State,
+				RetryPolicy:        config.RetryPolicy,
+				Concurrency:        config.Concurrency,
+				TraceRecorder:      traceRecorder,
+				resultContents:     config.resultContents,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
@@ -5636,6 +5815,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	// Aggregate while preserving order.
 	errsByIndex := make([]error, len(config.ToolCalls))
 	completedThisRun := make(map[string]model.Message)
+	completedResultContentsThisRun := make(map[string]json.RawMessage)
 	for r := range results {
 		if r.err != nil {
 			errsByIndex[r.idx] = r.err
@@ -5645,6 +5825,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			out[r.idx] = r.msg
 			completedKey := completedToolMessageKey(r.idx, config.ToolCalls[r.idx])
 			completedThisRun[completedKey] = r.msg
+			completedResultContentsThisRun[completedKey] = toolResultContentAt(config.resultContents, r.idx).structuredJSON()
 		}
 	}
 	traceRecorder.flush(ctx)
@@ -5658,7 +5839,12 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		causalError,
 	); err != nil {
 		if IsInterruptError(err) {
-			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
+			recordCompletedToolMessages(
+				config.State,
+				config.NodeID,
+				completedThisRun,
+				completedResultContentsThisRun,
+			)
 			setAgentToolInterruptStateFromError(config.State, err)
 		} else {
 			clearCompletedToolMessages(config.State, config.NodeID)
@@ -5706,50 +5892,95 @@ func selectToolCallError(errs []error, causalError error) error {
 }
 
 func completedToolMessagesForNode(state State, nodeID string) map[string]model.Message {
-	if state == nil || nodeID == "" {
-		return nil
-	}
-	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
-	if !ok {
-		return nil
-	}
-	rawMessages, ok := nodes[nodeID].(map[string]any)
-	if !ok {
-		return nil
-	}
-	messages := make(map[string]model.Message, len(rawMessages))
-	for key, raw := range rawMessages {
-		msg, ok := modelMessageFromAny(raw)
-		if ok {
-			messages[key] = msg
-		}
-	}
+	messages, _ := completedToolMessagesAndContentsForNode(state, nodeID)
 	return messages
 }
 
+type completedToolMessageRecord struct {
+	model.Message
+	ResultContent json.RawMessage `json:"result_content,omitempty"`
+}
+
+func completedToolMessagesAndContentsForNode(
+	state State,
+	nodeID string,
+) (map[string]model.Message, map[string]json.RawMessage) {
+	if state == nil || nodeID == "" {
+		return nil, nil
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	rawMessages, ok := nodes[nodeID].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	messages := make(map[string]model.Message, len(rawMessages))
+	contents := make(map[string]json.RawMessage, len(rawMessages))
+	for key, raw := range rawMessages {
+		msg, resultContent, ok := completedToolMessageRecordFromAny(raw)
+		if ok {
+			messages[key] = msg
+			if len(resultContent) > 0 {
+				contents[key] = resultContent
+			}
+		}
+	}
+	return messages, contents
+}
+
 func modelMessageFromAny(raw any) (model.Message, bool) {
+	msg, _, ok := completedToolMessageRecordFromAny(raw)
+	return msg, ok
+}
+
+func completedToolMessageRecordFromAny(
+	raw any,
+) (model.Message, json.RawMessage, bool) {
 	switch msg := raw.(type) {
 	case model.Message:
-		return msg, true
+		return msg, nil, true
 	case *model.Message:
 		if msg == nil {
-			return model.Message{}, false
+			return model.Message{}, nil, false
 		}
-		return *msg, true
+		return *msg, nil, true
+	case completedToolMessageRecord:
+		return msg.Message, msg.ResultContent, true
+	case *completedToolMessageRecord:
+		if msg == nil {
+			return model.Message{}, nil, false
+		}
+		return msg.Message, msg.ResultContent, true
 	default:
 		data, err := json.Marshal(raw)
 		if err != nil {
-			return model.Message{}, false
+			return model.Message{}, nil, false
+		}
+		var record completedToolMessageRecord
+		if err := json.Unmarshal(data, &record); err == nil && record.Message.Role != "" {
+			return record.Message, record.ResultContent, true
 		}
 		var decoded model.Message
 		if err := json.Unmarshal(data, &decoded); err != nil {
-			return model.Message{}, false
+			return model.Message{}, nil, false
 		}
-		return decoded, true
+		return decoded, nil, true
 	}
 }
 
 func recordCompletedToolMessage(state State, nodeID string, key string, msg model.Message) {
+	recordCompletedToolMessageWithResultContent(state, nodeID, key, msg, nil)
+}
+
+func recordCompletedToolMessageWithResultContent(
+	state State,
+	nodeID string,
+	key string,
+	msg model.Message,
+	resultContent json.RawMessage,
+) {
 	if state == nil || nodeID == "" || key == "" {
 		return
 	}
@@ -5763,12 +5994,30 @@ func recordCompletedToolMessage(state State, nodeID string, key string, msg mode
 		rawMessages = make(map[string]any)
 		nodes[nodeID] = rawMessages
 	}
+	if len(resultContent) > 0 {
+		rawMessages[key] = completedToolMessageRecord{
+			Message:       msg,
+			ResultContent: append(json.RawMessage(nil), resultContent...),
+		}
+		return
+	}
 	rawMessages[key] = msg
 }
 
-func recordCompletedToolMessages(state State, nodeID string, messages map[string]model.Message) {
+func recordCompletedToolMessages(
+	state State,
+	nodeID string,
+	messages map[string]model.Message,
+	resultContents map[string]json.RawMessage,
+) {
 	for key, msg := range messages {
-		recordCompletedToolMessage(state, nodeID, key, msg)
+		recordCompletedToolMessageWithResultContent(
+			state,
+			nodeID,
+			key,
+			msg,
+			resultContents[key],
+		)
 	}
 }
 
@@ -5796,17 +6045,19 @@ func agentToolCallKey(index int, toolCall model.ToolCall) string {
 
 // singleToolCallConfig contains configuration for executing a single tool call.
 type singleToolCallConfig struct {
-	ToolCall      model.ToolCall
-	ToolCallIndex int
-	Tools         map[string]tool.Tool
-	InvocationID  string
-	EventChan     chan<- *event.Event
-	Span          oteltrace.Span
-	ToolCallbacks *tool.Callbacks
-	State         State
-	RetryPolicy   *tool.RetryPolicy
-	Concurrency   *toolcall.Limiter
-	TraceRecorder *graphToolTraceRecorder
+	ToolCall           model.ToolCall
+	SkipArgumentRepair bool
+	ToolCallIndex      int
+	Tools              map[string]tool.Tool
+	InvocationID       string
+	EventChan          chan<- *event.Event
+	Span               oteltrace.Span
+	ToolCallbacks      *tool.Callbacks
+	State              State
+	RetryPolicy        *tool.RetryPolicy
+	Concurrency        *toolcall.Limiter
+	TraceRecorder      *graphToolTraceRecorder
+	resultContents     []toolResultOutput
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -5892,6 +6143,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		config.State,
 		config.RetryPolicy,
 		config.ToolCallIndex,
+		config.SkipArgumentRepair,
 	)
 	eventInvocation := invocationFromContextOrFallback(
 		finalCtx,
@@ -5929,18 +6181,20 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 			}
 		}
 	}
+	resultMessage := successfulToolResultMessage(result, err, config.ToolCall)
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(finalCtx, eventInvocation, toolCompleteEventConfig{
-		EventChan:    config.EventChan,
-		InvocationID: eventInvocationID,
-		ToolName:     name,
-		ToolID:       id,
-		NodeID:       nodeID,
-		StartTime:    startTime,
-		Result:       result,
-		Error:        eventErr,
-		Arguments:    modifiedArgs,
-		ResponseID:   responseID,
+		EventChan:     config.EventChan,
+		InvocationID:  eventInvocationID,
+		ToolName:      name,
+		ToolID:        id,
+		NodeID:        nodeID,
+		StartTime:     startTime,
+		Result:        result,
+		Error:         eventErr,
+		Arguments:     modifiedArgs,
+		ResponseID:    responseID,
+		resultMessage: resultMessage,
 	})
 	if startedSpan {
 		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
@@ -6028,7 +6282,71 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		content,
 		nil,
 	)
+	setToolResultContent(config.resultContents, config.ToolCallIndex, toolResultOutput{
+		raw: content, structured: resultMessage != nil,
+	})
+	if resultMessage != nil {
+		return *resultMessage, nil
+	}
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func successfulToolResultMessage(result any, callErr error, call model.ToolCall) *model.Message {
+	if callErr != nil {
+		return nil
+	}
+	message, ok := itool.ResultMessage(result)
+	if !ok {
+		return nil
+	}
+	// Allocate only after conversion succeeds so ordinary results do not pay
+	// for a message that will be discarded.
+	resultMessage := new(model.Message)
+	*resultMessage = message
+	resultMessage.ToolID = call.ID
+	resultMessage.ToolName = call.Function.Name
+	return resultMessage
+}
+
+type toolResultOutput struct {
+	raw        json.RawMessage
+	structured bool
+}
+
+func (output toolResultOutput) structuredJSON() json.RawMessage {
+	// Ordinary results already carry their original JSON in Message.Content.
+	if output.structured {
+		return output.raw
+	}
+	return nil
+}
+
+func setToolResultContent(contents []toolResultOutput, index int, content toolResultOutput) {
+	if index >= 0 && index < len(contents) && len(content.raw) > 0 {
+		contents[index] = content
+	}
+}
+
+func toolResultContentAt(contents []toolResultOutput, index int) toolResultOutput {
+	if index < 0 || index >= len(contents) {
+		return toolResultOutput{}
+	}
+	return contents[index]
+}
+
+func toolNodeResponseOutput(message model.Message) json.RawMessage {
+	if len(message.ContentParts) > 0 {
+		content, err := json.Marshal(message.ContentParts)
+		if err == nil {
+			return content
+		}
+	}
+	content := []byte(message.Content)
+	if json.Valid(content) {
+		return json.RawMessage(content)
+	}
+	content, _ = json.Marshal(message.Content)
+	return content
 }
 
 func graphToolTraceContext(ctx context.Context, state State) (*agent.Invocation, string) {
@@ -6114,16 +6432,17 @@ func emitToolStartEvent(
 
 // toolCompleteEventConfig contains configuration for tool complete events.
 type toolCompleteEventConfig struct {
-	EventChan    chan<- *event.Event
-	InvocationID string
-	ToolName     string
-	ToolID       string
-	NodeID       string
-	ResponseID   string
-	StartTime    time.Time
-	Result       any
-	Error        error
-	Arguments    []byte
+	EventChan     chan<- *event.Event
+	InvocationID  string
+	ToolName      string
+	ToolID        string
+	NodeID        string
+	ResponseID    string
+	StartTime     time.Time
+	Result        any
+	Error         error
+	Arguments     []byte
+	resultMessage *model.Message
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
@@ -6160,6 +6479,11 @@ func emitToolCompleteEvent(
 		WithToolEventError(config.Error),
 		WithToolEventIncludeResponse(true),
 	)
+	if config.Error == nil && config.resultMessage != nil {
+		// Events can be persisted and consumed independently of graph state.
+		// Keep their model-visible payload consistent without sharing media buffers.
+		toolCompleteEvent.Response.Choices[0].Message = statecopy.Message(*config.resultMessage)
+	}
 	agent.EmitEvent(ctx, invocation, config.EventChan, toolCompleteEvent)
 	return toolCompleteEvent
 }

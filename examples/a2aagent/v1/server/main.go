@@ -12,12 +12,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	a2aauth "trpc.group/trpc-go/trpc-a2a-go/v2/auth"
+	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
 	memorytaskmanager "trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -29,6 +34,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
+
+const taskAuthHeader = "X-API-Key"
 
 var (
 	host = flag.String(
@@ -112,6 +119,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("create Agent Card: %v", err)
 	}
+	if *retainTasks {
+		headerName := taskAuthHeader
+		headerLocation := a2aprotocolserver.SecuritySchemeInHeader
+		card.SecuritySchemes = map[string]a2aprotocolserver.SecurityScheme{
+			"taskApiKey": {
+				Type: a2aprotocolserver.SecuritySchemeTypeAPIKey,
+				Name: &headerName,
+				In:   &headerLocation,
+			},
+		}
+		card.SecurityRequirements = []map[string][]string{{"taskApiKey": {}}}
+	}
 
 	agentRunner := runner.NewRunner(
 		info.Name,
@@ -130,13 +149,32 @@ func main() {
 	}
 	taskManagerName := "stateless"
 	if *retainTasks {
+		apiKeyUsers, err := parseTaskAPIKeys(os.Getenv("A2A_TASK_API_KEYS"))
+		if err != nil {
+			log.Fatalf("configure retained task authentication: %v", err)
+		}
 		// Supplying a builder is the explicit opt-in boundary for retained A2A Tasks.
 		taskManagerName = "memory"
-		serverOptions = append(serverOptions, a2aserver.WithTaskManagerBuilder(func(
-			processor taskmanager.MessageProcessor,
-		) (taskmanager.TaskManager, error) {
-			return memorytaskmanager.NewTaskManager(processor)
-		}))
+		serverOptions = append(
+			serverOptions,
+			a2aserver.WithExtraA2AOptions(a2aprotocolserver.WithAuthProvider(
+				a2aauth.NewAPIKeyAuthProvider(apiKeyUsers, taskAuthHeader),
+			)),
+			a2aserver.WithTaskManagerBuilder(func(
+				processor taskmanager.MessageProcessor,
+			) (taskmanager.TaskManager, error) {
+				return memorytaskmanager.NewTaskManager(
+					processor,
+					memorytaskmanager.WithOwnerResolver(func(ctx context.Context) (string, error) {
+						userID, ok := a2aserver.UserIDFromContext(ctx)
+						if !ok || userID == "" {
+							return "", fmt.Errorf("authenticated user ID is required for retained tasks")
+						}
+						return userID, nil
+					}),
+				)
+			}),
+		)
 	}
 
 	server, err := a2aserver.New(serverOptions...)
@@ -152,6 +190,25 @@ func main() {
 	if err := server.Start(*host); err != nil {
 		log.Fatalf("run A2A server: %v", err)
 	}
+}
+
+func parseTaskAPIKeys(value string) (map[string]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, errors.New("A2A_TASK_API_KEYS is required when retain-tasks is enabled")
+	}
+	apiKeyUsers := make(map[string]string)
+	if err := json.Unmarshal([]byte(value), &apiKeyUsers); err != nil {
+		return nil, fmt.Errorf("parse A2A_TASK_API_KEYS JSON: %w", err)
+	}
+	if len(apiKeyUsers) == 0 {
+		return nil, errors.New("A2A_TASK_API_KEYS must contain at least one API key")
+	}
+	for apiKey, userID := range apiKeyUsers {
+		if strings.TrimSpace(apiKey) == "" || strings.TrimSpace(userID) == "" {
+			return nil, errors.New("A2A_TASK_API_KEYS must not contain empty API keys or user IDs")
+		}
+	}
+	return apiKeyUsers, nil
 }
 
 type currentTimeArgs struct {

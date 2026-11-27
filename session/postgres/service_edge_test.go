@@ -1086,8 +1086,9 @@ func TestGetSummariesList_FiltersStaleAndPreservesBoundary(t *testing.T) {
 		"summary",
 		"updated_at",
 	}).
-		AddRow("sess1", "filter1", freshBytes, cutoffAt).
-		AddRow("sess1", "filter2", staleBytes, createdAt.Add(-time.Minute))
+		AddRow("sess1", "filter1", freshBytes, createdAt.Add(-time.Hour)).
+		AddRow("sess1", "filter2", staleBytes, createdAt.Add(time.Hour)).
+		AddRow("unknown", "filter3", []byte("invalid-json"), cutoffAt)
 
 	mock.ExpectQuery(
 		"SELECT session_id, filter_key, summary, updated_at FROM session_summaries",
@@ -1106,6 +1107,41 @@ func TestGetSummariesList_FiltersStaleAndPreservesBoundary(t *testing.T) {
 	assert.Equal(t, "fresh", result[0]["filter1"].Summary)
 	assert.Equal(t, "event-fresh", result[0]["filter1"].Boundary.LastEventID)
 	assert.Nil(t, result[0]["filter2"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetSummariesList_CurrentInvalidSummaryReturnsError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{
+		AppName:   "app1",
+		UserID:    "user1",
+		SessionID: "sess1",
+	}
+	createdAt := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(
+		"SELECT session_id, filter_key, summary, updated_at FROM session_summaries",
+	).
+		WithArgs("app1", "user1", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"session_id",
+			"filter_key",
+			"summary",
+			"updated_at",
+		}).AddRow("sess1", "filter1", []byte("invalid-json"), createdAt))
+
+	result, err := s.getSummariesList(
+		context.Background(),
+		[]session.Key{key},
+		[]time.Time{createdAt},
+	)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "unmarshal summary failed")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

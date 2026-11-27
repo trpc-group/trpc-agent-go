@@ -23,7 +23,7 @@ type RunAgentInput struct {
 	RunID          string          // Run ID, used to correlate run lifecycle events.
 	ParentRunID    *string         // Parent run ID. Optional.
 	State          any             // Arbitrary state; object-shaped values are merged into RuntimeState by default.
-	Messages       []Message       // Message list used to pass the current user input or external tool results.
+	Messages       []Message       // Message list used to pass user input, external tool results, or framework-supplied assistant messages.
 	Tools          []Tool          // Tool definitions. Protocol field. Optional.
 	Context        []Context       // Context list. Protocol field. Optional.
 	ForwardedProps any             // Arbitrary forwarded fields, usually for business-specific parameters.
@@ -156,6 +156,12 @@ After the previous event stream returns a tool call that needs external executio
 ```
 
 Each `role=tool` message corresponds to one tool call result. `toolCallId` associates the result with the tool call from the previous event stream, `name` is the tool name, and `content` carries the tool output as a string. `id` becomes the message id when the server returns the `TOOL_CALL_RESULT` event.
+
+### Framework-supplied Assistant Messages
+
+When the backend has already generated the final reply and no model call is needed, the tail message in `messages` can use `role=assistant` with non-empty string `content`. The Runner appends it to an existing session that already contains a real `role=user` message, persists it to the session transcript and AG-UI track, and does not invoke the underlying Agent. On success, SSE returns only `RUN_STARTED` and `RUN_FINISHED`; persistence failures return `RUN_STARTED` and `RUN_ERROR`.
+
+An assistant-only new session fails instead of fabricating a user message, so the history start boundary remains the first real user message.
 
 ## RunAgentInput Hook
 

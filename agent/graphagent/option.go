@@ -161,7 +161,8 @@ type Options struct {
 	PreserveForeignMessages bool
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
-	EventMessageProjector EventMessageProjector
+	EventMessageProjector         EventMessageProjector
+	includeSyntheticErrorMessages bool
 
 	// ExecutorOptions allows passing additional executor options directly.
 	// These options are applied after the mapped options (ChannelBufferSize,
@@ -408,6 +409,19 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithIncludeSyntheticErrorMessages controls whether assistant content
+// synthesized by Runner or the error-message plugin is included when
+// GraphAgent seeds model-facing messages from session history. By default,
+// synthesized content remains emitted and persisted but is omitted from the
+// model-facing history. When omission leaves adjacent user messages, the
+// messages are merged to preserve a provider-valid sequence. Set include to
+// true to restore the previous model-context behavior.
+func WithIncludeSyntheticErrorMessages(include bool) Option {
+	return func(opts *Options) {
+		opts.includeSyntheticErrorMessages = include
 	}
 }
 

@@ -16,6 +16,12 @@ Users obtain event streams through the `runner.Run()` method, then listen to eve
 type Event struct {
     // Response is the basic response structure of Event, carrying LLM responses.
     *model.Response
+
+    // RunOutcome describes runner completion outcomes such as explicit cancellation
+    // or deadline expiration. It is nil for non-completion events, normal
+    // completion, and generic cancellation.
+    RunOutcome *RunOutcome `json:"run_outcome,omitempty"`
+
     // RequestID The unique identifier for this request.
     // It can be passed via runner.Run using agent.WithRequestID.
 	RequestID string `json:"requestID,omitempty"`
@@ -205,13 +211,13 @@ type Usage struct {
 }
 
 type PromptTokensDetails struct {
-    // Number of cached tokens in the prompt.
+    // Number of cached tokens read from prompt cache.
     CachedTokens int `json:"cached_tokens"`
 
-    // Number of tokens used to create the cache (Anthropic).
+    // Number of prompt tokens written to cache (e.g., OpenAI/compatible cache_write_tokens / cache_creation_tokens, Anthropic/Bedrock cache writes).
     CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 
-    // Number of tokens read from cache (Anthropic).
+    // Number of prompt tokens read from an explicit provider cache (e.g., Anthropic/Bedrock or gateway cache_read_tokens).
     CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 }
 

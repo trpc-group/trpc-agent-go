@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -128,12 +129,18 @@ func TestProcessEventCmd_Empty(t *testing.T) {
 func TestProcessEventCmd_SkipsMalformedJSON(t *testing.T) {
 	_, rdb := setupRedis(t)
 	ctx := context.Background()
+	warnings := 0
+	originalWarn := log.WarnfContext
+	log.WarnfContext = func(context.Context, string, ...any) { warnings++ }
+	t.Cleanup(func() { log.WarnfContext = originalWarn })
 
 	validEvt := &event.Event{ID: "e1", Timestamp: time.Now()}
 	b, _ := json.Marshal(validEvt)
 	rdb.ZAdd(ctx, "events:test",
 		redis.Z{Score: 1, Member: string(b)},
 		redis.Z{Score: 2, Member: "not-valid-json"},
+		redis.Z{Score: 3, Member: `{"choices":[{"message":{"provider_data":{}}}]}`},
+		redis.Z{Score: 4, Member: `{"choices":[{"message":{"provider_data":"invalid"}}]}`},
 	)
 
 	pipe := rdb.Pipeline()
@@ -145,6 +152,16 @@ func TestProcessEventCmd_SkipsMalformedJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, events, 1)
 	assert.Equal(t, "e1", events[0].ID)
+	require.Equal(t, 1, warnings, "multiple malformed events log only once per read")
+
+	_, err = ProcessEventCmd(ctx, cmd)
+	require.NoError(t, err)
+	require.Equal(t, 2, warnings, "a later read must still report malformed events")
+
+	cmd.SetVal([]string{string(b)})
+	_, err = ProcessEventCmd(ctx, cmd)
+	require.NoError(t, err)
+	require.Equal(t, 2, warnings, "valid events do not produce a warning")
 }
 
 // =============================================================================
@@ -331,5 +348,22 @@ func TestProcessStateCmd_Error(t *testing.T) {
 		// ProcessStateCmd should handle the error
 		_, err := ProcessStateCmd(cmd)
 		require.Error(t, err)
+	}
+}
+
+// TestParseSummaryWriteResult pins the set-if-newer reply classification
+// shared by both storage layouts. Only int64 0 and 1 are stored or stale;
+// anything else is unknown so callers never guess, and never turn a successful
+// script execution into an error.
+func TestParseSummaryWriteResult(t *testing.T) {
+	assert.Equal(t, SummaryWriteApplied, ParseSummaryWriteResult(int64(1)),
+		"1 means the write was applied")
+	assert.Equal(t, SummaryWriteStale, ParseSummaryWriteResult(int64(0)),
+		"0 means a stale write was skipped")
+
+	for _, result := range []any{int64(2), int64(-1), int(1), uint64(1), "1", nil} {
+		write := ParseSummaryWriteResult(result)
+		assert.Equal(t, SummaryWriteUnknown, write, "result %#v", result)
+		assert.False(t, write.Applied(), "an unrecognized reply must not report applied")
 	}
 }

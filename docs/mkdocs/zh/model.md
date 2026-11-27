@@ -12,6 +12,41 @@ Model 模块具有以下核心特性：
 - **完整错误处理**：提供双层错误处理机制，区分系统错误和 API 错误
 - **可扩展配置**：支持丰富的自定义配置项，满足不同场景需求
 
+<a id="preserving-tools-during-call-limit-finalization"></a>
+
+### 在调用上限收尾时保留工具定义
+
+下面的 Agent 最多执行 5 轮工具调用。达到上限进入收尾时，Agent 会再请模型基于已有结果回答。如果模型仍提出工具调用，框架会拒绝执行。
+
+- 默认情况下，收尾请求不发送工具定义（`tools`）。
+- 开启此选项后，收尾请求按平时的规则生成 `tools`，并发送 `tool_choice: "none"`。保留工具定义有机会复用前面请求的提示词缓存。
+
+请先验证模型和网关支持 `tool_choice: "none"`，再启用这个选项。
+
+```go
+m := openai.New(modelName,
+    openai.WithBaseURL(baseURL),
+    openai.WithAPIKey(apiKey),
+    openai.WithPreserveToolsWhenDisabled(true),
+)
+a := llmagent.New("assistant",
+    llmagent.WithModel(m),
+    llmagent.WithTools(tools),
+    llmagent.WithMaxToolIterations(5),
+    llmagent.WithToolIterationLimitFinalization("请基于已有结果回答。"),
+)
+```
+
+这个选项也适用于 LLM 调用次数上限触发的收尾。收尾请求计入 `MaxLLMCalls`。如果端点报错，框架会直接返回错误。
+
+<details>
+<summary>使用模型包装器时</summary>
+<p>外层需要转发 <code>PreservesToolsWhenDisabled() bool</code>，框架才会保留传给模型的工具定义。
+未转发时，框架会移除请求中的工具定义和工具控制字段。
+内层 OpenAI 模型如果开启了此选项，仍会发送 <code>tool_choice: "none"</code>，也可以发送由内层配置或回调提供的工具定义。</p>
+</details>
+
+
 ## 快速开始
 
 ### 在 Agent 中使用 Model
@@ -284,6 +319,8 @@ type CompletionTokensDetails struct {
 
 对于 OpenAI-compatible 服务，返回中的 `completion_tokens_details.reasoning_tokens` 会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。当服务方没有消耗或没有上报 reasoning tokens 时，该值可能为 `0`；如果希望 reasoning 模型进入推理行为，请按模型能力设置 `ReasoningEffort` 和/或 `ThinkingEnabled`。
 
+对于 Gemini，流式和非流式响应中的 `usageMetadata.thoughtsTokenCount` 均会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。流式最终用量保留各分块中最新的非零 token 计数，包括缓存和推理 token；尾随分块未携带用量时会保留之前的计数。
+
 ## OpenAI Model
 
 ### 模型名称参数
@@ -400,6 +437,12 @@ func main() {
     }
 }
 ```
+
+对于非流式 OpenAI 兼容调用，如果 HTTP 200 响应的整个 JSON 响应体是 `null`，
+框架会通过 `Response.Error` 报告错误，其中 `Type` 为 `model.ErrorTypeAPIError`，
+`Done` 为 `true`。这适用于 `GenerateContent` 和 `GenerateContentIter`，
+此类无效响应不会触发 chat response callback。合法响应中的 `message.content: null`
+（例如工具调用响应）不受影响。
 
 ### 结构化输出
 
@@ -588,6 +631,37 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+非流式 `WithChatResponseCallback` 如果修改 prompt 或缓存 token 计数，
+`Usage.PromptCacheAccounting` 会保持未声明状态，遥测按旧版兼容逻辑处理，
+不再假定修改后的计数仍采用服务方原始口径。只读回调，以及仅修改输出 token、
+总 token 或响应内容的回调，仍保留服务方口径。此行为同时适用于
+`GenerateContent` 和 `GenerateContentIter`。如果需要在重写 usage 后明确声明
+口径，可以在接收框架 `model.Response` 的模型 `AfterModel` 回调中设置
+`PromptCacheAccounting`。
+
+##### 流式工具调用索引兼容
+
+OpenAI-compatible adapter 会在累积前修正负数 `tool_calls[].index`，无需
+升级 SDK。单个工具调用的 `-1` 索引会归零，与新版 OpenAI Go SDK 的兼容
+逻辑一致。混合或冲突索引会被分配到不同的非负索引，并通过服务方原始索引
+到累积索引的映射跟踪后续分片。因此，即使合法索引晚于负索引出现，省略 ID
+的续片也能归属到正确的工具调用。映射按 choice 隔离；合法索引不与已分配
+索引冲突时会保留。
+因负索引调用而发生重映射的调用，会在后续冲突中保留这一来源信息，避免将
+其他服务方索引的新调用误并入已有调用。
+已知 ID 可以在不同索引上建立别名。若新的 ID 随后使用该别名索引声明调用，
+新调用会接管该别名；原调用保留已分配索引，仍可通过 ID 续接。
+别名索引上的分片若携带函数名但没有 ID，会按原始显式索引回退处理，避免将
+先于 ID 到达的名称拼到别名所属的旧调用中；后续 ID 和参数续片沿用新映射。
+仅携带参数的续片在别名被其他调用接管前，仍可沿别名续接。
+缺失或为 null 的索引不会建立服务方索引映射。适配器优先匹配已知 ID；否则，
+若只有一个身份兼容的已有调用，续片会归入该调用，即使其索引不为零；无法
+唯一匹配时仍回退到零。对于显式索引，没有对应映射时，身份兼容的元数据或
+参数续片仍可沿用已分配的非负索引，包括延迟到达的名称、ID 和分片传输的
+函数名。
+对于交错的多个工具调用，服务方仍需提供能明确区分调用的索引或 ID；缺失 ID
+且索引缺失或由多个调用共用时，没有足够信息从多个候选中还原分片所属调用。
+
 ##### 自定义流式 Usage 聚合
 
 OpenAI-compatible adapter 默认会请求流式 usage，并聚合服务方返回的
@@ -622,6 +696,12 @@ accumulator 中的 usage。因此，下一个 chunk 看到的 `current` 就是�
 回调返回值会整体替换累计后的 `model.Usage`。返回值中没有填写的字段，
 不会自动从 `current` 或 `delta` 补回。
 
+`PromptCacheAccounting` 也遵循这个规则：adapter 会将返回的口径保留在下一次
+`current` 和最终响应中。如果回调把 `PromptTokens` 转换成未缓存的输入量，
+应在返回值中设置 `PromptCacheAccountingExclusive`。空值或未知口径走旧版
+遥测兼容逻辑，adapter 不会将其覆盖为 `PromptCacheAccountingInclusive`。
+中间响应仍使用服务方原始的计数和口径。
+
 标准 OpenAI-compatible stream 的原始内容 chunk 中，`usage` 为 `null`。
 adapter 在调用回调前，会把这个空值映射为零值 `model.Usage`。最后的
 usage-only chunk 才包含完整总量：
@@ -645,8 +725,8 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 | `CompletionTokens` | 服务方上报的模型输出 token 总量 |
 | `TotalTokens` | 服务方上报的总 token，通常等于 prompt 加 completion |
 | `PromptTokensDetails.CachedTokens` | OpenAI-compatible Prompt Cache 命中的输入 token，通常是 `PromptTokens` 的子集 |
-| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token，主要对应 Anthropic 风格缓存 |
-| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token，主要对应 Anthropic 风格缓存 |
+| `PromptTokensDetails.CacheCreationTokens` | 写入/创建缓存的输入 token。OpenAI-compatible 适配器按 `cache_write_tokens` → `cache_creation_tokens` → `cache_creation_input_tokens` 取首个正值，先查 `prompt_tokens_details`（Responses API 为 `input_tokens_details`，并优先使用原生 `cache_write_tokens` 字段），再回退顶层 `usage`；Anthropic/Bedrock 则映射其原生缓存写入字段 |
+| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token。OpenAI-compatible 适配器仅从 `prompt_tokens_details.cache_read_tokens`（Responses API 为 `input_tokens_details.cache_read_tokens`）读取，无顶层 `usage` 回退；Anthropic/Bedrock 则映射其原生缓存读字段 |
 | `CompletionTokensDetails.ReasoningTokens` | Completion usage 中服务方上报的推理 token |
 | `TimingInfo` | 可选的框架耗时信息，不属于计费 token |
 | `TimingInfo.FirstTokenDuration` | 每次模型调用从请求开始到第一个有效 reasoning、content 或 tool-call chunk 的耗时，多个模型调用会累加 |
@@ -656,6 +736,28 @@ Accumulator 保存的是一个完整的 `model.Usage`：
 `WithAccumulateChunkTokenUsage` 属于 OpenAI-compatible adapter，因此回调
 只会收到上游 OpenAI-compatible 响应和 adapter 映射支持的字段；其他服务方
 专用字段保持为零。
+
+OpenAI-compatible Chat Completions 适配器对 Prompt Cache 扩展字段的读取位置
+与优先级如下（未上报这些字段的服务方对应值保持为 `0`）：
+
+- **缓存读取**：仅从 `prompt_tokens_details.cache_read_tokens` 读取并映射到
+  `PromptTokensDetails.CacheReadTokens`（不支持顶层 `usage` 回退）；标准
+  `prompt_tokens_details.cached_tokens` 仍映射到 `PromptTokensDetails.CachedTokens`。
+- **缓存写入**：按 `cache_write_tokens` → `cache_creation_tokens` →
+  `cache_creation_input_tokens` 顺序取首个正整数，映射到
+  `PromptTokensDetails.CacheCreationTokens`。同时上报的别名不会相加（例如
+  `cache_write_tokens=256` 与 `cache_creation_tokens=128` 同时出现时取
+  `256`），值为 0 的占位字段也不会遮蔽后续别名。先检查
+  `prompt_tokens_details`，均无正值时再按相同顺序回退检查顶层 `usage`。
+  Responses API 适配器在原生 `input_tokens_details.cache_write_tokens` 之后
+  使用相同顺序。
+
+流式响应中这两个计数与其他 token 字段一样按 chunk 累加；配置了
+`WithAccumulateChunkTokenUsage` 回调时，最终值由回调的返回值决定，因此
+上报累计快照的服务方可以保留最新一次快照。
+
+结束标记之后的 usage-only chunk 仍会累加 token 计数，并在聚合后的响应中
+保留各个 choice 最近一次非空的 `finish_reason`。
 
 `TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
 OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator
@@ -1745,19 +1847,33 @@ counter := model.NewSimpleTokenCounter(
     model.WithApproxRunesPerToken(1.6),  // 中文场景推荐值
 )
 
-// 2. 设置为全局计数器（影响所有摘要触发）
+// 2. 设置进程默认计数器；agent 显式配置的请求计数器优先
 summary.SetTokenCounter(counter)
 
 // 3. 创建摘要器
 summarizer := summary.NewSummarizer(
     summaryModel,
-    summary.WithTokenThreshold(4000),  // 使用自定义计数器评估
+    summary.WithTokenThreshold(4000),  // 阈值单位为估算 token 数
 )
 ```
+
+`summary.SetTokenCounter(...)` 配置摘要检查和摘要请求估算的进程默认计数器，
+同时作为模型可见 request view 计数和 LLM 调用前摘要触发的默认值。Agent 显式
+设置的 `WithContextCompactionTokenCounter(...)` 对该 agent 的请求计数优先，
+关闭 context compaction 时也适用。进程默认值在每次评估时读取，因此后续更新
+会影响已创建的 agent；`SetTokenCounter(nil)` 恢复内置 `SimpleTokenCounter`。
+自定义计数器须支持并发调用。Tool result 压缩和模型层 token tailoring 保留独立
+默认值，如需相同的估算口径，应为这些路径显式配置计数器。
 
 #### 7. Token 裁剪（Token Tailoring）
 
 Token Tailoring 是一种智能的消息管理技术，用于在消息超出模型上下文窗口限制时自动裁剪消息，确保请求能够成功发送到 LLM API。该功能特别适用于长对话场景，能够在保留关键上下文的同时，将消息列表控制在模型的 token 限制内。
+
+Token Tailoring **默认关闭**。如需在请求发送给模型服务前自动裁剪消息，必须显式设置
+`openai.WithEnableTokenTailoring(true)`。仅设置 `openai.WithMaxInputTokens(...)`
+或 `openai.WithContextWindow(...)` 只会配置预算或窗口，不会开启裁剪。即使关闭裁剪，
+其他框架流程仍可通过 `Model.InputTokenBudget` 和 `Model.Info` 读取这些配置。
+会话摘要和上下文压缩需要单独配置。
 
 **自动模式（推荐）**：
 
@@ -2145,6 +2261,261 @@ llm := openai.New(
 如果不需要在流式阶段解析工具入参，只关心最终调用结果，建议保持
 `WithShowToolCallDelta` 的默认关闭状态，以避免处理部分 JSON 片段，
 并保留默认的“仅流式输出助手文本”的简洁行为。
+
+## OpenAI Responses API
+
+使用 `model/openai/sdkv3/responses` 接入 OpenAI Responses API，支持对话、流式输出和函数调用。通过 `responses.New` 创建模型，再传给 `LLMAgent` 即可使用。
+
+该适配器从独立的 `model/openai/sdkv3` Go 模块发布，要求 Go 1.25 或更高版本，目前固定使用 OpenAI Go SDK `v3.74.0`。`sdkv3` 路径表示 SDK 的主版本，适配器模块自身按 `v1.x` 发布。此模块只提供 Responses。使用 Chat Completions 时，继续使用 `model/openai` 的 `openai.New`。
+
+### 环境变量与最小集成
+
+省略 `responses.WithAPIKey` 时，OpenAI SDK 读取 `OPENAI_API_KEY`。省略 `responses.WithBaseURL` 时，SDK 读取 `OPENAI_BASE_URL`，默认地址为 `https://api.openai.com/v1`。
+
+下面的示例创建一个非流式聊天 Agent，并打印助手回复。使用 Runner 时，需持续读取事件通道直到关闭，或取消本次运行的 context。
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+func main() {
+    ctx := context.Background()
+    userID := "demo-user"
+    sessionID := "demo-session"
+
+    llm := responses.New("gpt-5")
+    agent := llmagent.New(
+        "responses-chat",
+        llmagent.WithModel(llm),
+        llmagent.WithDescription("A concise chat assistant."),
+        llmagent.WithInstruction("Answer the user's questions clearly and concisely."),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: false}),
+    )
+    r := runner.NewRunner("responses-chat-example", agent)
+    defer r.Close()
+
+    events, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("Hello"))
+    if err != nil {
+        log.Printf("run: %v", err)
+        return
+    }
+    for evt := range events {
+        if evt == nil || evt.Response == nil {
+            continue
+        }
+        if evt.Error != nil {
+            log.Printf("event: %s", evt.Error.Message)
+            continue
+        }
+        if len(evt.Response.Choices) == 0 {
+            continue
+        }
+        msg := evt.Response.Choices[0].Message
+        if msg.Role == model.RoleAssistant && msg.Content != "" {
+            fmt.Println(msg.Content)
+        }
+    }
+}
+```
+
+未传入会话服务时，Runner 会创建内存会话，并在 `Close` 时关闭它。示例显式传入内存会话，生命周期同样限于当前进程。本地工具的接法见 [`examples/openairesponses/tools/main.go`](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/openairesponses/tools/main.go)。
+
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses) 是独立的 Go 1.25 模块。`-model` 默认为 `gpt-5`，`-streaming` 默认为 `true`。
+
+```bash
+cd examples/openairesponses
+export OPENAI_API_KEY="your-api-key"
+# 可选。设置后由 SDK 读取 OPENAI_BASE_URL。
+# export OPENAI_BASE_URL="https://api.openai.com/v1"
+
+go run ./chat
+go run ./chat -streaming=false
+go run ./tools
+go run ./tools -streaming=false
+```
+
+输入 `/exit` 结束对话。在 `tools` 中，于同一进程里分两轮提问，例如先说 `Calculate 123 * 456.`，再说 `Add 789 to that result.`。同一会话会保留第一轮结果供第二轮使用，进程退出后即丢弃。示例 README 给出了示意交互。
+
+### 工具返回图片
+
+自定义 ReadImage 工具可以通过 `ToolResultMessages` 返回一条 `RoleTool` 消息，
+保留原 `ToolID`，把图片放入 `ContentParts`。Responses 适配器会生成原生的
+`function_call_output.output` 内容块，并关联到对应的工具调用。纯文本工具结果仍使用原来的
+字符串格式，普通 JSON 文本不会被自动解释为图片块。原始字节使用 `AddImageData`，
+图片 URL 或已编码的 data URL 使用 `AddImageURL`。
+
+可参考 [ReadImage 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses#readimage-tool)
+和[工具返回图片说明](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#images-returned-by-local-tools)。
+所选模型和网关需要支持工具输出中的图片。
+
+### 回调与模型历史
+
+适配器填写 `Message.ProviderData` 的 `Protocol` 和 `Model`，分别记录原生协议和配置的模型名。
+编辑原生输出时，保留这两个字段，用所选 SDK 解析、修改并写回 `Payload`。
+用官方 SDK 编辑消息时，`ResponseOutputMessageParam` 可保留消息 ID、status 和 phase。
+未编辑的 Item 可以保留原始 JSON。
+
+完整的 `AfterModel` 回调链结束后，若原生 Payload 有变化，框架会在发布事件、保存响应和
+执行工具前重新生成正文、reasoning、`ToolCalls` 等字段。只改原生工具参数即可同时影响
+本次工具执行与下一轮模型历史。Payload 未改变时，现有的展示字段和工具投影改写继续有效。
+同时改写两者时，以新 Payload 为准。普通 Chat Completions 的回调行为保持不变。
+
+`BeforeModel` 改写的是本次请求的历史副本；`BeforeTool` 的 `ModifiedArguments` 只影响
+本次工具执行，不反写原生历史。只脱敏展示字段时，原文仍可能保存在 ProviderData 中。
+需要恢复未完成的工具轮时，保留该轮的 ProviderData。完整示例和模型包装器要求见
+[适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#editing-native-output)。
+
+### 切换模型与恢复工具调用
+
+在 Responses 模型之间切换时，框架按原顺序发送已完成的原生记录，包括加密推理，由目标服务决定能否复用。
+在目标模型上设置 `responses.WithCrossModelReasoningPolicy(responses.CrossModelReasoningPolicyOmitEncryptedContent)` 后，每次请求都会省略其他配置模型的历史推理项中的 `encrypted_content`，会话仍保留原始记录。目标服务收到的推理项仍包含原有的 ID 和摘要。如果目标服务需要按 ID 查找该项，而生成该项时使用了默认的 `store=false`，请求仍可能返回 HTTP 400。
+切到内置 Chat Completions 适配器时，本次请求携带可见历史，并按 `call_id` 匹配工具调用和结果。
+原生正文与可见正文一致时，URL 引用中尚未出现的链接会作为普通文本附在本次请求中。回调改写正文后，使用改写后的内容；清空纯文本回复时，Chat 也会省略该回复的引用。切回 Responses 后仍可使用会话中保存的原生记录。Chat 跳过已配对的原生工具搜索调用和结果，保留普通函数调用及结果。Chat 会发送当前请求过滤后允许使用的工具，包括注册为延迟加载的工具。只有旧搜索结果里才有的工具不会加入 Chat 工具列表。切回 Responses 时会重放保存的搜索记录；后续调用已过期的临时工具时，需要重新搜索。
+
+- **Runner 运行 LLMAgent 时**，`agent.WithResume(true)` 会在执行挂起的原生工具调用前核对产生该调用的协议和模型名。此时换模型会在工具执行前报错。
+- **Graph 从 checkpoint 恢复时**，如果中断点在工具节点前，Graph 会先执行工具，随后由下一个 LLM 节点选择模型。
+  工具结果写入 checkpoint 后，即使下游模型报错，从最新 checkpoint 恢复也会复用已保存的结果。显式重放工具执行前的旧 checkpoint，可能再次执行同一个工具调用。
+
+### 工具搜索
+
+工具搜索（tool search）让模型在需要时再加载工具定义。它需要在 Responses 模型上显式开启，
+并且模型必须支持 `tool_search`；OpenAI 文档列出的是 `gpt-5.4` 及更新的模型。哪些工具延迟
+加载由 Agent 决定。延迟加载的工具仍由 Agent 注册、过滤和执行，变化的只是模型一开始能看到的内容。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
+// 托管搜索：由 API 在请求中声明的延迟工具里搜索。
+llm := responses.New("gpt-5.4", responses.WithHostedToolSearch())
+
+agent := llmagent.New(
+    "support",
+    llmagent.WithModel(llm),
+    llmagent.WithTools([]tool.Tool{currentTime, deferred.Tool(shippingETA)}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crm, deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billing),
+    }),
+)
+```
+
+客户端搜索配置的 handler 返回 `[]responses.ToolSearchEntry`。下面的 handler 在发票查询时，
+加载 billing namespace 中的候选：
+
+```go
+import (
+    "context"
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+)
+
+search := responses.WithClientToolSearch(
+    func(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
+        var entries []responses.ToolSearchEntry
+        if strings.Contains(strings.ToLower(req.Query), "invoice") {
+            for _, entry := range req.Candidates {
+                if entry.Namespace == "billing" {
+                    entries = append(entries, entry)
+                }
+            }
+        }
+        return entries, nil
+    },
+)
+llm := responses.New("gpt-5.4", search)
+// 按上例通过 llmagent.WithModel 注册 llm。
+```
+
+- `deferred.Tool` 和 `deferred.ToolSet` 包装工具后，分别通过 `WithTools`、`WithToolSets` 或
+  `WithActivatableToolSets` 注册。不传选项时全部延迟；需要选择成员时使用 `deferred.WithFilter`。
+  filter 在请求时接收原始工具，返回 true 表示延迟，false 表示立即暴露。可以按成员原始名称选择，
+  策略也适用于刷新后的成员，包括 MCP 工具。`WithFilter(nil)` 恢复全部延迟，多次设置时以最后一次为准。
+- 包装策略会覆盖工具自身的 `tool.DeferredTool` 偏好；未包装的工具保留自身偏好。Agent 和单次
+  运行的工具过滤器仍然生效。关闭包装后的 ToolSet 会关闭原 ToolSet，包装本身不会创建新连接。
+- Agent 和单次运行的过滤器看到的是注册时的包装器，仍可使用 `Declaration()` 和
+  `tool.MetadataOf`；需要断言具体类型时，可通过 `Original() tool.Tool` 逐层取得原工具。
+- 含有延迟成员的 ToolSet 会以同名 namespace 发送，描述取自 `tool.ToolSetDescriber`，MCP ToolSet
+  使用 `ConnectionConfig.Description`。模型返回的调用通过保存的 namespace 和成员名称映射回已注册
+  的工具，不通过拆分注册名确定身份。执行注册名仍需在当前请求中唯一；namespace 分组不会解决注册目录中的重名。
+- 直接调用 `GenerateContent` 时，用 `IsFinalResponse()` 判断是否得到最终回复。
+  客户端搜索待执行时，`Done` 为 `false`。若同一条消息中没有普通函数调用，`FinishReason` 为 `nil`。
+  `LLMAgent` 会调用 handler，并在下一次模型调用前把
+  `tool_search_output` 作为工具消息保存。`req.Candidates` 同样是 `[]responses.ToolSearchEntry`。
+  每个条目包含 `Namespace`、`NamespaceDescription`、`Name`、`Tool`，声明通过
+  `entry.Tool.Declaration()` 读取。候选的 `Name` 已经是模型侧名称，可能与工具声明中的名称不同。
+- 返回原候选即可选中它。也可以复制候选后设置 `entry.Tool = sandboxTool`，换成另一个执行对象，
+  或构造包含外部 `tool.Tool` 的新条目。新条目的 `Name` 可以省略，此时使用工具声明中的名称。
+  没有注册延迟工具时，客户端搜索仍然可用。`Run.ToolFilter` 也会筛选返回的替换对象和外部工具，
+  普通工具执行权限和工具回调继续生效。
+- 当前 Run 借用返回的工具对象，业务负责资源清理。Session 保存模型当时看到的定义。
+  下一次 Run 可以通过 Agent 注册的工具执行原样选回的候选。如果调用的是上一次 Run
+  返回的替身或外部对象，模型会收到提示重新搜索的工具错误，Handler 可以再次提供执行对象。
+- handler 报错时，本次运行结束，同一响应中的普通函数调用保持待执行。在发送下一条用户消息前，
+  用 `model.Message{}` 和 `agent.WithResume(true)` 恢复同一会话。搜索重试成功后，框架执行待处理的函数。
+  搜索没有命中时，handler 可以返回空结果，让模型继续。
+- Graph 的 LLM 节点以及当前的 failover、hedge 包装器遇到待执行的客户端搜索会报错。
+  托管模式在有延迟工具或搜索历史时发送搜索入口。
+  Chat Completions 继续将注册工具作为普通函数提供。
+- `plugin/toolsearch` 有独立的延迟工具注册方式，不使用 `tool.DeferredTool`；不要与原生工具搜索
+  同时使用。
+
+非 MCP 的自定义 ToolSet 可以把描述作为实例字段，并实现可选的 `Description()` 方法。下面是业务
+自己定义的类型；`lookupInvoice` 和 `listInvoices` 是已创建的 `tool.Tool`，生成的 `billing` 可用于
+上面的注册代码：
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type staticToolSet struct {
+    name        string
+    description string
+    tools       []tool.Tool
+}
+
+func (s staticToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s staticToolSet) Close() error                     { return nil }
+func (s staticToolSet) Name() string                     { return s.name }
+func (s staticToolSet) Description() string              { return s.description }
+
+// 在 Agent 初始化时，注册工具组之前构造：
+billing := staticToolSet{
+    name:        "billing",
+    description: "查询发票、支付和退款状态",
+    tools:       []tool.Tool{lookupInvoice, listInvoices},
+}
+```
+
+`deferred.ToolSet` 会保留这段描述，适配器将它写入 `namespace.description`；客户端搜索的
+`ToolSearchEntry.NamespaceDescription` 也使用这段描述。
+
+[`examples/openairesponses`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/openairesponses)
+中的 `go run ./toolsearch -mode server` 和 `go run ./toolsearch -mode client` 分别演示两种模式。
+完整契约和尚未验证的边界见
+[适配器 README](https://github.com/trpc-group/trpc-agent-go/tree/main/model/openai/sdkv3/responses#tool-search)。
+
+### 说明
+
+- 每次请求都发送客户端维护的完整对话。默认 `store=false`。`WithStore(true)` 只改变提供方侧的存储。在普通的 `LLMAgent` 和 `Runner` 用法中，业务代码不需要读取或修改 `Message.ProviderData`。请把该记录视为敏感的对话状态。注册了 Responses 模型但从未选中它，不会改写已有的旧会话。
+- 下游模块需要包含 `Message.ProviderData` 和 `Info.ProviderDataProtocol` 的根模块版本；使用工具搜索还需要 `model.ProviderActionCompleter`、`model.ProviderDataRequestProjector` 和 `tool.ToolSetDescriber`，以上示例还使用了 `tool/deferred`。所需的根模块版本要先于适配器版本发布。仓库内的相对 `replace` 只用于本地开发，不会传递给下游。`model.Message` 和 `model.Info` 增加了字段，用位置复合字面量构造这两个结构的代码必须改为具名字段，即使应用从不选择 Responses 也是如此。
+- 消息 JSON 使用 `provider_data` 保存 `Message.ProviderData`，其中包含 `provider`、`model` 和 `payload`。框架将 `payload` 视为不透明数据。`Info` 的 JSON key 是 `ProviderDataProtocol`，为空时省略。框架校验记录格式以及接收适配器对该协议的支持。恢复挂起的原生操作时，还需匹配原生产者。较旧的框架在重写会话时可能丢弃不认识的 `provider_data` 字段，因此不要让较旧 writer 重写含有原生 ProviderData 的会话。
+- 通过 `previous_response_id` 或 `conversation` 做服务端续接、工具搜索以外的托管工具、后台执行、审批交互和提供方侧历史压缩都不在此适配器内。未知输出类型（包括托管工具调用）会直接失败。此适配器不是完整的 Responses API 客户端。`openai.WithShowToolCallDelta` 不是 Responses 的选项。`Stop`、presence penalty、frequency penalty 和 logprobs 会被拒绝。请求设置了 `MaxTokens`、`Temperature` 或 `TopP` 时，这些字段会被发送。示例只设置 `GenerationConfig.Stream`。
+- 函数调用由框架中的工具执行器处理，不使用 OpenAI 托管工具。`Runner` 只执行完成的 assistant 消息中的调用。没有合法完成事件的流是错误，其中的部分函数调用不会被执行。流式示例会显示 assistant 文本增量，工具调用只取完成消息里的 `Message.ToolCalls`，工具结果只取已提交的工具消息。
+- 历史、回调、摘要、兼容性、恢复、模块版本和发布要求见 [Responses 适配器 README](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md)。
 
 ## Anthropic Model
 

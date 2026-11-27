@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"time"
@@ -28,6 +29,15 @@ var (
 	modelContentPartsType = reflect.TypeOf([]model.ContentPart(nil))
 	modelToolCallsType    = reflect.TypeOf([]model.ToolCall(nil))
 )
+
+func copyProviderData(record *model.ProviderData) *model.ProviderData {
+	if record == nil {
+		return nil
+	}
+	copied := *record
+	copied.Payload = bytes.Clone(record.Payload)
+	return &copied
+}
 
 // DeepCopier defines an interface for types that can perform deep copies of themselves.
 type DeepCopier interface {
@@ -414,6 +424,7 @@ func deepCopyModelMessagesWithVisited(
 		visited[key] = out
 		for i := range in {
 			out[i] = in[i]
+			out[i].ProviderData = copyProviderData(in[i].ProviderData)
 			if parts := in[i].ContentParts; parts != nil {
 				out[i].ContentParts = deepCopyModelContentPartsWithVisited(parts, visited)
 			}
@@ -426,6 +437,7 @@ func deepCopyModelMessagesWithVisited(
 	out := make([]model.Message, len(in))
 	for i := range in {
 		out[i] = in[i]
+		out[i].ProviderData = copyProviderData(in[i].ProviderData)
 		if parts := in[i].ContentParts; parts != nil {
 			out[i].ContentParts = deepCopyModelContentPartsWithVisited(parts, visited)
 		}

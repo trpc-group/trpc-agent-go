@@ -1934,9 +1934,13 @@ LLM 摘要，也不会像 token tailoring 那样直接丢弃完整消息轮次�
 - Pass 2 会跳过 `session_load` 自身返回的 tool result，避免“恢复结果再次被压缩”。`session_load` 的返回大小由它自己的窗口参数和 `content_limit` 控制；如果需要读取超大结果，应让模型分片加载，而不是一次拉回全文
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底。它按消息轮次裁剪，因此恢复片段应保持足够小，避免在最后的模型请求中被整体挤出
-- Context compaction 默认使用 `SimpleTokenCounter`。中文内容较多或 provider
-  tokenization 特殊时，建议通过 `WithContextCompactionTokenCounter(...)`
-  传入与 token tailoring 相同的自定义 counter。
+- 调用前同步摘要和自动摘要检查使用的请求 token 数，优先采用 agent 显式设置的
+  `WithContextCompactionTokenCounter(...)`；未设置时使用
+  `summary.SetTokenCounter(...)` 配置的进程默认值，再回落到 `SimpleTokenCounter`。
+  进程默认值在每次评估时读取，因此修改后已创建的 agent 也会生效；关闭 context
+  compaction 时，自动摘要的请求计数仍遵循同一规则。
+- Tool result 预算与模型层 token tailoring 保留各自的默认计数器。中文内容较多或
+  provider tokenization 特殊时，如需统一估算口径，应为这些路径显式配置相同的 counter。
 
 ```go
 counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1.6))
@@ -2135,7 +2139,7 @@ summarizer := summary.NewSummarizer(
 
 **重要说明：**
 
-- **全局影响**：`SetTokenCounter` 会影响当前进程中所有的 `CheckTokenThreshold` 评估。建议在应用初始化时一次性设置。
+- **全局影响**：`SetTokenCounter` 配置当前进程的摘要检查和摘要请求估算，同时作为模型可见请求计数与调用前摘要触发的默认计数器。Agent 显式设置的 `WithContextCompactionTokenCounter` 对该 agent 的请求计数优先。因此检查使用最终 request view、无需重新统计原始事件时，自定义计数规则仍然生效。Tool result 压缩和模型层 token tailoring 保留独立默认值。建议在应用初始化时设置；后续更新对接下来的评估生效，`SetTokenCounter(nil)` 恢复内置默认值。自定义计数器须支持并发调用。
 - **默认计数器**：如果不设置，将使用默认配置的 `SimpleTokenCounter`（约每 token 对应 4 个字符）。
 - **使用场景**：
   - 需要精确估算 token 时使用准确的 tokenizer（如 tiktoken）

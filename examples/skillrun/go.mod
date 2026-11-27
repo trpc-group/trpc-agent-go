@@ -9,11 +9,12 @@ replace (
 
 require (
 	github.com/google/uuid v1.6.0
-	trpc.group/trpc-go/trpc-agent-go v0.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.5.0
 )
 
 require (
+	connectrpc.com/connect v1.18.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.4.14 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect

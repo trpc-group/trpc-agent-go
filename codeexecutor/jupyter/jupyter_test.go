@@ -11,10 +11,14 @@ package jupyter
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -634,6 +638,95 @@ func TestNewWithFakePythonError(t *testing.T) {
 		WithLogFile(filepath.Join(tmp, "k.log")),
 	)
 	assert.Error(t, err)
+}
+
+func TestNewCleansUpGatewayOnClientError(t *testing.T) {
+	tmp := t.TempDir()
+	pidFile := filepath.Join(tmp, "gateway.pid")
+	fake := filepath.Join(tmp, "python")
+	if runtime.GOOS == "windows" {
+		fake += ".exe"
+	}
+	const fakeGatewaySource = `package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+)
+
+func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" {
+			return
+		}
+	}
+	if pidFile := os.Getenv("FAKE_JUPYTER_PID_FILE"); pidFile != "" {
+		_ = os.WriteFile(pidFile, []byte(fmt.Sprint(os.Getpid())), 0o644)
+	}
+	fmt.Fprintln(os.Stderr, "is available at http://127.0.0.1:8888")
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+`
+	source := filepath.Join(tmp, "fake_gateway.go")
+	if err := os.WriteFile(source, []byte(fakeGatewaySource), 0o644); err != nil {
+		t.Fatalf("write fake gateway: %v", err)
+	}
+	if output, err := exec.Command("go", "build", "-o", fake, source).CombinedOutput(); err != nil {
+		t.Fatalf("build fake gateway: %v\n%s", err, output)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", tmp+string(os.PathListSeparator)+oldPath)
+	oldPIDFile := os.Getenv("FAKE_JUPYTER_PID_FILE")
+	_ = os.Setenv("FAKE_JUPYTER_PID_FILE", pidFile)
+	defer os.Setenv("PATH", oldPath)
+	defer os.Setenv("FAKE_JUPYTER_PID_FILE", oldPIDFile)
+
+	_, err := New(
+		WithPort(0),
+		WithStartTimeout(2*time.Second),
+		WithWaitReadyTimeout(100*time.Millisecond),
+	)
+	assert.Error(t, err)
+
+	var pid int
+	if !assert.Eventually(t, func() bool {
+		data, readErr := os.ReadFile(pidFile)
+		if readErr != nil {
+			return false
+		}
+		pid, readErr = strconv.Atoi(strings.TrimSpace(string(data)))
+		return readErr == nil
+	}, time.Second, 10*time.Millisecond) {
+		return
+	}
+	t.Cleanup(func() {
+		if !processRunning(pid) {
+			return
+		}
+		process, findErr := os.FindProcess(pid)
+		if findErr == nil {
+			_ = process.Kill()
+			_, _ = process.Wait()
+		}
+	})
+	assert.Eventually(t, func() bool {
+		return !processRunning(pid)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func processRunning(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		output, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH").Output()
+		return err == nil && strings.Contains(string(output), strconv.Itoa(pid))
+	}
+	return process.Signal(syscall.Signal(0)) == nil
 }
 
 // Timeout path: child stays alive, but we hit startup timeout first.

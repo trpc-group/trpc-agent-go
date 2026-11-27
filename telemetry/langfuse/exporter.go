@@ -149,7 +149,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 		case semconvtrace.KeyGenAIUsageInputTokens, semconvtrace.KeyGenAIUsageOutputTokens,
 			semconvtrace.KeyGenAIUsageTotalTokens,
 			semconvtrace.KeyGenAIUsageInputTokensCached, semconvtrace.KeyGenAIUsageInputTokensCacheRead,
-			semconvtrace.KeyGenAIUsageInputTokensCacheCreation:
+			semconvtrace.KeyGenAIUsageInputTokensCacheCreation, semconvtrace.KeyGenAIUsageInputTokensCacheAccounting:
 		default:
 			newAttributes = append(newAttributes, attr)
 		}
@@ -175,6 +175,7 @@ type llmSpanCollected struct {
 	outputMessagesOTel *string
 	toolDefinitions    *string
 	usage              usageDetails
+	usageAccounting    string
 	attrs              []*commonpb.KeyValue // non-LLM attributes to keep
 }
 
@@ -200,7 +201,7 @@ func transformCallLLM(span *tracepb.Span) {
 	}
 
 	// observation.usage_details
-	usage := collected.usage.normalized()
+	usage := collected.usage.normalized(collected.usageAccounting)
 	if !usage.empty() {
 		if usageJSON, err := json.Marshal(usage); err == nil {
 			newAttributes = append(newAttributes, stringKV(observationUsageDetails, string(usageJSON)))
@@ -250,6 +251,8 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 			c.usage.InputCacheRead = attr.Value.GetIntValue()
 		case semconvtrace.KeyGenAIUsageInputTokensCacheCreation:
 			c.usage.InputCacheCreation = attr.Value.GetIntValue()
+		case semconvtrace.KeyGenAIUsageInputTokensCacheAccounting:
+			c.usageAccounting = attr.Value.GetStringValue()
 		default:
 			c.attrs = append(c.attrs, attr)
 		}

@@ -34,6 +34,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -57,14 +58,6 @@ const (
 	// Maximum bytes read back from the sandbox for a single file when
 	// collecting outputs.
 	maxReadSizeBytes = 4 * 1024 * 1024 // 4 MiB
-
-	// Sentinels used to frame RunProgram stdout / stderr / exit code so
-	// wrapper-script noise is stripped before returning to callers.
-	sentinelStdoutBegin = "__E2B_STDOUT_BEGIN__"
-	sentinelStdoutEnd   = "__E2B_STDOUT_END__"
-	sentinelStderrBegin = "__E2B_STDERR_BEGIN__"
-	sentinelStderrEnd   = "__E2B_STDERR_END__"
-	sentinelExitPrefix  = "__E2B_EXITCODE__="
 
 	metadataFileMode = 0o600
 )
@@ -92,6 +85,12 @@ func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
 	}}
 }
 
+// WorkspacePerInvocation reports whether agent tools acquire a fresh workspace
+// for each invocation.
+func (r *workspaceRuntime) WorkspacePerInvocation() bool {
+	return r != nil && r.cfg.workspacePersistence == WorkspacePersistencePerTurn
+}
+
 // CreateWorkspace creates a per-execution directory inside the sandbox.
 func (r *workspaceRuntime) CreateWorkspace(
 	ctx context.Context,
@@ -103,29 +102,25 @@ func (r *workspaceRuntime) CreateWorkspace(
 	defer span.End()
 	_ = pol
 
-	if r.ce == nil || r.ce.sbx == nil {
+	if r == nil || r.ce == nil {
 		return codeexecutor.Workspace{}, errors.New(
 			"e2b: sandbox not initialized",
 		)
 	}
-
-	if r.cfg.workspacePersistence == WorkspacePersistencePerSession && execID == "" {
-		return codeexecutor.Workspace{}, errors.New(
-			"e2b: execID must not be empty when using WorkspacePersistencePerSession",
-		)
+	snap, err := r.ce.useSandbox(ctx)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return codeexecutor.Workspace{}, err
 	}
-
-	safe := sanitize(execID)
-	var wsPath string
-	if r.cfg.workspacePersistence == WorkspacePersistencePerSession {
-		// Use a stable hash of the raw exec ID to avoid collisions from
-		// sanitize() (e.g. "a/b" and "a_b" both sanitize to "a_b").
-		h := stableWorkspaceHash(execID)
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
-	} else {
-		suf := time.Now().UnixNano()
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+	// Per-session hashes avoid sanitize() collisions ("a/b" and "a_b").
+	// Auto-recreate puts the process-local generation in the path so a handle
+	// from the previous instance cannot address the replacement.
+	wsPath, err := r.allocateWorkspacePath(execID, snap.generation)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return codeexecutor.Workspace{}, err
 	}
+	ctx = withSandboxSnap(ctx, snap)
 
 	var sb strings.Builder
 	sb.WriteString("set -e; mkdir -p ")
@@ -162,8 +157,13 @@ func (r *workspaceRuntime) Cleanup(
 	if ws.Path == "" {
 		return nil
 	}
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
 	script := "rm -rf " + shellQuote(ws.Path)
-	_, _, _, err := r.runBash(ctx, script, defaultRmTimeout)
+	_, _, _, err = r.runBash(ctx, script, defaultRmTimeout)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}
@@ -183,6 +183,11 @@ func (r *workspaceRuntime) PutFiles(
 	defer span.End()
 	if len(files) == 0 {
 		return nil
+	}
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
 	}
 
 	data, err := tarGzFromFiles(files)
@@ -227,6 +232,11 @@ func (r *workspaceRuntime) PutDirectory(
 	if to != "" {
 		dest = path.Join(ws.Path, filepath.ToSlash(to))
 	}
+	ctx, err = r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
 	if err := r.uploadTarGzAndExtract(ctx, dest, data); err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return err
@@ -243,6 +253,10 @@ func (r *workspaceRuntime) StageDirectory(
 	to string,
 	opt codeexecutor.StageOptions,
 ) error {
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		return err
+	}
 	if err := r.PutDirectory(ctx, ws, src, to); err != nil {
 		return err
 	}
@@ -274,6 +288,11 @@ func (r *workspaceRuntime) Collect(
 	patterns = codeexecutor.NormalizeGlobs(patterns)
 	if len(patterns) == 0 {
 		return nil, nil
+	}
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 	paths, err := r.listFilesByGlob(ctx, ws.Path, patterns)
 	if err != nil {
@@ -323,6 +342,10 @@ func (r *workspaceRuntime) StageInputs(
 		ctx,
 		ws.Path,
 		func(ctx context.Context) error {
+			ctx, err := r.bindContext(ctx, ws)
+			if err != nil {
+				return err
+			}
 			return r.stageInputsLocked(ctx, ws, specs)
 		},
 	)
@@ -333,14 +356,14 @@ func (r *workspaceRuntime) stageInputsLocked(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
-	if r.ce == nil || r.ce.sbx == nil {
+	if _, ok := sandboxSnapFrom(ctx); !ok {
 		return errors.New("e2b: sandbox not initialized")
 	}
 	md, err := r.loadWorkspaceMetadata(ctx, ws)
 	if err != nil {
 		return err
 	}
-	for _, sp := range specs {
+	for i, sp := range specs {
 		mode := strings.ToLower(strings.TrimSpace(sp.Mode))
 		if mode == "" {
 			mode = "copy"
@@ -352,6 +375,10 @@ func (r *workspaceRuntime) stageInputsLocked(
 		}
 		resolved, ver, err := r.stageInput(ctx, ws, md, sp, mode, to)
 		if err != nil {
+			if i > 0 && codeexecutor.IsWorkspaceRetrySafe(err) {
+				// Retrying StageInputs would replay earlier input writes.
+				return errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+			}
 			return err
 		}
 		md.Inputs = append(md.Inputs, codeexecutor.InputRecord{
@@ -506,6 +533,10 @@ func (r *workspaceRuntime) CollectOutputs(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.OutputSpec,
 ) (codeexecutor.OutputManifest, error) {
+	ctx, err := r.bindContext(ctx, ws)
+	if err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
 	globs := codeexecutor.NormalizeGlobs(spec.Globs)
 	paths, err := r.listFilesByGlob(ctx, ws.Path, globs)
 	if err != nil {
@@ -592,18 +623,39 @@ func (r *workspaceRuntime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
+	if spec.Timeout <= 0 {
+		spec.Timeout = defaultRunTimeout
+	}
+	if r.ce != nil && r.ce.maxProgramTimeout > 0 && spec.Timeout > r.ce.maxProgramTimeout {
+		spec.Timeout = r.ce.maxProgramTimeout
+	}
+	return r.runProgram(ctx, ws, spec)
+}
+
+// runProgram uses the operation's resolved timeout without the program cap.
+// Metadata commits and cleanup retain their own file-operation deadlines.
+func (r *workspaceRuntime) runProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (res codeexecutor.RunResult, err error) {
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrCmd, spec.Cmd),
 		attribute.String(codeexecutor.AttrCwd, spec.Cwd),
 	)
-	defer span.End()
+	defer func() {
+		span.SetAttributes(
+			attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
+			attribute.Bool(codeexecutor.AttrTimedOut, res.TimedOut),
+		)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 
 	timeout := spec.Timeout
-	if timeout <= 0 {
-		timeout = defaultRunTimeout
-	}
-
 	cwd := ws.Path
 	if spec.Cwd != "" {
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
@@ -623,104 +675,61 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	// envAssign is the leading `env ...` / `env -i ...` token spliced
-	// in front of the command. When spec.CleanEnv is set
-	// (workspace_exec / skill_run policy mode) it becomes `env -i ...`
-	// so the spawned program starts from an empty environment plus the
-	// workspace base vars and a minimal PATH, honoring
-	// RunProgramSpec.CleanEnv on the e2b backend (issue #1845).
-	envAssign := envToken(baseEnv, spec.Env, spec.CleanEnv)
-
-	quotedCmd := shellQuote(spec.Cmd)
-	var quotedArgs strings.Builder
-	for _, a := range spec.Args {
-		quotedArgs.WriteByte(' ')
-		quotedArgs.WriteString(shellQuote(a))
+	bootstrap := programBootstrap
+	if spec.Stdin == "" {
+		// Old envd versions ignore Start.Stdin=false. Close the program input
+		// explicitly without depending on Process.CloseStdin.
+		bootstrap += " < /dev/null"
+	}
+	args := []string{"-c", bootstrap, "trpc-run", runDir, outDir, cwd, "/usr/bin/env"}
+	envArgs, err := programEnvArgs(baseEnv, spec.Env, spec.CleanEnv)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	args = append(args, envArgs...)
+	args = append(args, spec.Cmd)
+	args = append(args, spec.Args...)
+	if err := validateProgramArgs(spec.Cmd, args); err != nil {
+		return codeexecutor.RunResult{}, err
 	}
 
-	var stdinRedir string
-	if spec.Stdin != "" {
-		b64 := base64.StdEncoding.EncodeToString([]byte(spec.Stdin))
-		stdinRedir = " < <(printf %s " + shellQuote(b64) + " | base64 -d)"
+	snap, err := r.bindWorkspace(ctx, ws)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
 	}
-
-	inner := fmt.Sprintf(
-		"mkdir -p %s %s && cd %s && %s%s%s%s",
-		shellQuote(runDir), shellQuote(outDir),
-		shellQuote(cwd),
-		envAssign, quotedCmd, quotedArgs.String(),
-		stdinRedir,
-	)
-	script := buildRunWrapper(inner)
-
 	start := time.Now()
-	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)
-	dur := time.Since(start)
-
-	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
-
-	timedOut := false
+	result, err := ci.RunProcess(ctx, snap.sbx, envdprocess.Request{
+		Cmd: "/bin/bash", Args: args, Stdin: spec.Stdin, Timeout: timeout,
+	})
 	if err != nil {
-		if isTimeoutErr(err) {
-			timedOut = true
-			err = nil
-		}
+		err = r.ce.observeLoss(ctx, snap, err)
+	}
+	res = codeexecutor.RunResult{
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		ExitCode: result.ExitCode,
+		Duration: time.Since(start),
+		TimedOut: result.TimedOut,
 	}
 
-	res := codeexecutor.RunResult{
-		Stdout:   stdout,
-		Stderr:   stderr,
-		ExitCode: exit,
-		Duration: dur,
-		TimedOut: timedOut,
-	}
-	span.SetAttributes(
-		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
-		attribute.Bool(codeexecutor.AttrTimedOut, res.TimedOut),
-	)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-	}
 	return res, err
 }
 
-// buildRunWrapper produces a bash script that executes `inner` while framing
-// stdout/stderr/exit-code with sentinels, so the driver can parse them out.
-func buildRunWrapper(inner string) string {
-	var b strings.Builder
-	b.WriteString("__ERR=$(mktemp); ")
-	b.WriteString("echo " + sentinelStdoutBegin + "; ")
-	b.WriteString("{ ")
-	b.WriteString(inner)
-	b.WriteString("; } 2>\"$__ERR\"; __EC=$?; ")
-	b.WriteString("echo " + sentinelStdoutEnd + "; ")
-	b.WriteString("echo " + sentinelExitPrefix + "$__EC; ")
-	b.WriteString("echo " + sentinelStderrBegin + " >&2; ")
-	b.WriteString("cat \"$__ERR\" >&2; ")
-	b.WriteString("echo " + sentinelStderrEnd + " >&2; ")
-	b.WriteString("rm -f \"$__ERR\"")
-	return b.String()
-}
+// programBootstrap keeps preparation under the same process deadline. Dynamic
+// values are positional arguments, and caller environment variables reach only
+// the final env invocation. exec preserves the managed PID for the program.
+const programBootstrap = `/bin/mkdir -p -- "$1" "$2" && cd -- "$3" && shift 3 && exec "$@"`
 
-// parseFramedOutput extracts the user's stdout/stderr and exit code from the
-// framed streaming output produced by buildRunWrapper.
-func parseFramedOutput(rawStdout, rawStderr string) (string, string, int) {
-	stdout := extractBetween(rawStdout, sentinelStdoutBegin,
-		sentinelStdoutEnd)
-	stderr := extractBetween(rawStderr, sentinelStderrBegin,
-		sentinelStderrEnd)
-	exit := 0
-	if idx := strings.LastIndex(rawStdout, sentinelExitPrefix); idx >= 0 {
-		rest := rawStdout[idx+len(sentinelExitPrefix):]
-		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-			rest = rest[:nl]
-		}
-		rest = strings.TrimSpace(rest)
-		if v, err := strconv.Atoi(rest); err == nil {
-			exit = v
+func validateProgramArgs(cmd string, args []string) error {
+	if cmd == "" {
+		return errors.New("e2b: command is empty")
+	}
+	for _, arg := range args {
+		if strings.ContainsRune(arg, 0) {
+			return errors.New("e2b: program arguments must not contain NUL")
 		}
 	}
-	return stdout, stderr, exit
+	return nil
 }
 
 // extractBetween returns the text between begin and end sentinels. Surrounding
@@ -822,13 +831,27 @@ func (r *workspaceRuntime) runBash(
 	return stdout, stderr, exit, err
 }
 
+func (r *workspaceRuntime) sandboxForBash(ctx context.Context) (sandboxSnap, error) {
+	if snap, ok := sandboxSnapFrom(ctx); ok {
+		return snap, nil
+	}
+	if r == nil || r.ce == nil {
+		return sandboxSnap{}, errors.New("e2b: sandbox not initialized")
+	}
+	if r.ce.autoRecreate {
+		return sandboxSnap{}, errors.New("e2b: sandbox generation is not bound")
+	}
+	return r.ce.useSandbox(ctx)
+}
+
 // runBashStreaming is the low-level primitive: it invokes Sandbox.RunCode
 // with LanguageBash and collects the combined stream outputs.
 func (r *workspaceRuntime) runBashStreaming(
 	ctx context.Context, script string, timeout time.Duration,
 ) (string, string, int, error) {
-	if r.ce == nil || r.ce.sbx == nil {
-		return "", "", 0, errors.New("e2b: sandbox not initialized")
+	snap, err := r.sandboxForBash(ctx)
+	if err != nil {
+		return "", "", 0, err
 	}
 	var stdoutB, stderrB strings.Builder
 	opts := &ci.RunCodeOpts{
@@ -837,8 +860,9 @@ func (r *workspaceRuntime) runBashStreaming(
 		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
 		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
 	}
-	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
+	exec, err := snap.sbx.RunCode(ctx, script, opts)
 	if err != nil {
+		err = r.ce.observeLoss(ctx, snap, err)
 		return stdoutB.String(), stderrB.String(), -1, err
 	}
 	if exec.Error != nil {
@@ -847,14 +871,6 @@ func (r *workspaceRuntime) runBashStreaming(
 		)
 	}
 	return stdoutB.String(), stderrB.String(), 0, nil
-}
-
-func isTimeoutErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout")
 }
 
 func tarGzFromFiles(files []codeexecutor.PutFile) ([]byte, error) {
@@ -1172,6 +1188,9 @@ func (r *workspaceRuntime) loadWorkspaceMetadata(
 	full := path.Join(ws.Path, codeexecutor.MetaFileName)
 	data, _, err := r.readFile(ctx, full, maxReadSizeBytes)
 	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceRetryUnsafe) {
+			return md, err
+		}
 		return md, nil // fall back to fresh metadata
 	}
 	trimmed := strings.TrimSpace(string(data))
@@ -1237,7 +1256,7 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 	script.WriteString("echo \"metadata path is a directory\" >&2; exit 1; ")
 	script.WriteString("fi; mv -f \"$tmp\" \"$dest\"")
 	script.WriteString("; trap - EXIT")
-	res, err := r.RunProgram(
+	res, err := r.runProgram(
 		ctx,
 		ws,
 		codeexecutor.RunProgramSpec{
@@ -1249,6 +1268,10 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 		},
 	)
 	if err != nil {
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			// A new attempt would repeat the completed metadata staging write.
+			return errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+		}
 		return err
 	}
 	if res.ExitCode != 0 {
@@ -1274,7 +1297,7 @@ func (r *workspaceRuntime) cleanupMetadataTemp(
 		return
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
-	_, _ = r.RunProgram(
+	_, _ = r.runProgram(
 		cleanupCtx,
 		codeexecutor.Workspace{Path: path.Dir(tmpPath)},
 		codeexecutor.RunProgramSpec{

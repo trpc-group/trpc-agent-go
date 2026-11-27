@@ -523,7 +523,6 @@ Not sure where to start? Pick a path by what you want to build:
 - [examples/agenttool](examples/agenttool) – Wrap agents as callable tools.
 - [examples/multitools](examples/multitools) – Multiple tools orchestration.
 - [examples/duckduckgo](examples/duckduckgo) – Web search tool integration.
-- [examples/filetoolset](examples/filetoolset) – File operations as tools.
 - [examples/fileinput](examples/fileinput) – Provide files as inputs.
 - [examples/agenttool](examples/agenttool) shows streaming and non-streaming
   patterns.

@@ -641,14 +641,23 @@ func TestGetSession_Success(t *testing.T) {
 		SessionID: "test-session",
 	}
 
-	// Mock session state
+	location := time.FixedZone("UTC+8", 8*60*60)
+	createdAt := time.Date(2026, 8, 25, 17, 0, 0, 0, location)
+	updatedAt := createdAt.Add(time.Minute)
+	databaseCreatedAt := time.Date(2026, 8, 25, 17, 0, 0, 0, time.UTC)
+	databaseUpdatedAt := databaseCreatedAt.Add(time.Minute)
+
+	// Mock session state. PostgreSQL TIMESTAMP scans the original wall-clock
+	// fields as UTC, while the JSON envelope preserves the original offset.
 	sessState := &SessionState{
-		ID:    "test-session",
-		State: session.StateMap{"key1": []byte("value1")},
+		ID:        "test-session",
+		State:     session.StateMap{"key1": []byte("value1")},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
 	stateBytes, _ := json.Marshal(sessState)
 	stateRows := sqlmock.NewRows([]string{"state", "created_at", "updated_at"}).
-		AddRow(stateBytes, time.Now(), time.Now())
+		AddRow(stateBytes, databaseCreatedAt, databaseUpdatedAt)
 
 	mock.ExpectQuery("SELECT state, created_at, updated_at FROM session_states").
 		WithArgs("test-app", "test-user", "test-session", sqlmock.AnyArg()).
@@ -687,7 +696,8 @@ func TestGetSession_Success(t *testing.T) {
 
 	// Mock: Batch load summaries with data
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary, updated_at FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}).
+			AddRow(key.SessionID, "legacy", nil, createdAt.Add(-time.Hour)))
 
 	sess, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
@@ -696,6 +706,8 @@ func TestGetSession_Success(t *testing.T) {
 	assert.Equal(t, []byte("value1"), sess.State["key1"])
 	assert.Equal(t, 1, len(sess.Events))
 	assert.Equal(t, "Hello, world!", sess.Events[0].Response.Choices[0].Message.Content)
+	assert.True(t, sess.CreatedAt.Equal(createdAt))
+	assert.True(t, sess.UpdatedAt.Equal(updatedAt))
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -1005,10 +1017,18 @@ func TestListSessions_Success(t *testing.T) {
 		UserID:  "user-123",
 	}
 
-	// Prepare session state
+	location := time.FixedZone("UTC+8", 8*60*60)
+	createdAt := time.Date(2026, 8, 25, 17, 0, 0, 0, location)
+	updatedAt := createdAt.Add(time.Minute)
+	databaseCreatedAt := time.Date(2026, 8, 25, 17, 0, 0, 0, time.UTC)
+	databaseUpdatedAt := databaseCreatedAt.Add(time.Minute)
+
+	// Prepare session state. The JSON timestamps preserve the original offset.
 	sessState := SessionState{
-		ID:    "session-1",
-		State: session.StateMap{"key1": []byte(`"value1"`)},
+		ID:        "session-1",
+		State:     session.StateMap{"key1": []byte(`"value1"`)},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
 	stateBytes, _ := json.Marshal(sessState)
 
@@ -1026,7 +1046,7 @@ func TestListSessions_Success(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, state, created_at, updated_at FROM session_states")).
 		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"session_id", "state", "created_at", "updated_at"}).
-			AddRow("session-1", stateBytes, time.Now(), time.Now()))
+			AddRow("session-1", stateBytes, databaseCreatedAt, databaseUpdatedAt))
 
 	// Mock: Batch load events (empty)
 	evt := event.NewResponseEvent("inv-1", "author", &model.Response{
@@ -1045,9 +1065,10 @@ func TestListSessions_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}).
 			AddRow("session-1", eventBytes))
 
-	// Mock: Batch load summaries (empty)
+	// Mock: A stale incompatible summary must not fail the session listing.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT session_id, filter_key, summary, updated_at FROM session_summaries")).
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}).
+			AddRow("session-1", "legacy", []byte("invalid json"), createdAt.Add(-time.Hour)))
 
 	sessions, err := s.ListSessions(ctx, userKey)
 	require.NoError(t, err)
@@ -1055,6 +1076,8 @@ func TestListSessions_Success(t *testing.T) {
 	assert.Equal(t, "session-1", sessions[0].ID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 	assert.Equal(t, "hello", sessions[0].Events[0].Choices[0].Message.Content)
+	assert.True(t, sessions[0].CreatedAt.Equal(createdAt))
+	assert.True(t, sessions[0].UpdatedAt.Equal(updatedAt))
 }
 
 func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
@@ -1098,6 +1121,8 @@ func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "session-1", sessions[0].ID)
+	assert.True(t, sessions[0].CreatedAt.Equal(now))
+	assert.True(t, sessions[0].UpdatedAt.Equal(now))
 	assert.Empty(t, sessions[0].Events)
 	assert.Nil(t, sessions[0].Tracks)
 	assert.NoError(t, mock.ExpectationsWereMet())

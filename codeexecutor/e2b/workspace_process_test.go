@@ -1,0 +1,666 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package e2b
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
+)
+
+type workspaceProcessInput struct {
+	data []byte
+	done chan struct{}
+}
+
+type workspaceProcessHandler struct {
+	processconnect.UnimplementedProcessHandler
+	mu       sync.Mutex
+	requests []*process.StartRequest
+	headers  []http.Header
+	inputs   map[uint32]*workspaceProcessInput
+	stdout   string
+	stderr   string
+	exitCode int32
+	start    func(context.Context, *connect.Request[process.StartRequest], *connect.ServerStream[process.StartResponse]) error
+	signal   func(*process.SendSignalRequest)
+}
+
+func (h *workspaceProcessHandler) Start(ctx context.Context, req *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
+	h.mu.Lock()
+	h.requests = append(h.requests, req.Msg)
+	h.headers = append(h.headers, req.Header().Clone())
+	pid := uint32(len(h.requests))
+	input := &workspaceProcessInput{done: make(chan struct{})}
+	h.inputs[pid] = input
+	h.mu.Unlock()
+	if h.start != nil {
+		return h.start(ctx, req, stream)
+	}
+	if err := sendWorkspaceStart(stream, pid); err != nil {
+		return err
+	}
+	if req.Msg.GetStdin() {
+		select {
+		case <-input.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return sendWorkspaceResult(stream, h.stdout, h.stderr, h.exitCode)
+}
+
+func (h *workspaceProcessHandler) SendInput(_ context.Context, req *connect.Request[process.SendInputRequest]) (*connect.Response[process.SendInputResponse], error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	input := h.inputs[req.Msg.Process.GetPid()]
+	if input == nil {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("unknown process"))
+	}
+	input.data = append(input.data, req.Msg.Input.GetStdin()...)
+	return connect.NewResponse(&process.SendInputResponse{}), nil
+}
+
+func (h *workspaceProcessHandler) CloseStdin(_ context.Context, req *connect.Request[process.CloseStdinRequest]) (*connect.Response[process.CloseStdinResponse], error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	input := h.inputs[req.Msg.Process.GetPid()]
+	if input == nil {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("unknown process"))
+	}
+	select {
+	case <-input.done:
+	default:
+		close(input.done)
+	}
+	return connect.NewResponse(&process.CloseStdinResponse{}), nil
+}
+
+func (h *workspaceProcessHandler) SendSignal(_ context.Context, req *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {
+	if h.signal != nil {
+		h.signal(req.Msg)
+	}
+	return connect.NewResponse(&process.SendSignalResponse{}), nil
+}
+
+func sendWorkspaceStart(stream *connect.ServerStream[process.StartResponse], pid uint32) error {
+	return stream.Send(&process.StartResponse{Event: &process.ProcessEvent{
+		Event: &process.ProcessEvent_Start{Start: &process.ProcessEvent_StartEvent{Pid: pid}},
+	}})
+}
+
+func sendWorkspaceResult(stream *connect.ServerStream[process.StartResponse], stdout, stderr string, exit int32) error {
+	for _, data := range []*process.ProcessEvent_DataEvent{
+		{Output: &process.ProcessEvent_DataEvent_Stdout{Stdout: []byte(stdout)}},
+		{Output: &process.ProcessEvent_DataEvent_Stderr{Stderr: []byte(stderr)}},
+	} {
+		if err := stream.Send(&process.StartResponse{Event: &process.ProcessEvent{
+			Event: &process.ProcessEvent_Data{Data: data},
+		}}); err != nil {
+			return err
+		}
+	}
+	return stream.Send(&process.StartResponse{Event: &process.ProcessEvent{
+		Event: &process.ProcessEvent_End{End: &process.ProcessEvent_EndEvent{Exited: true, ExitCode: exit}},
+	}})
+}
+
+func TestWorkspaceExecE2BPersistenceAcrossTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		persistence WorkspacePersistenceMode
+		recreate    bool
+		init        bool
+		creates     int
+	}{
+		{name: "default per turn", creates: 2},
+		{name: "per turn with sandbox recreation and init", recreate: true, init: true, creates: 2},
+		{name: "per session with sandbox recreation and init", persistence: WorkspacePersistencePerSession, recreate: true, init: true, creates: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			t.Cleanup(srv.close)
+			opts := []Option{WithAutoRecreate(tc.recreate)}
+			if tc.persistence == WorkspacePersistencePerSession {
+				opts = append(opts, WithWorkspacePersistence(tc.persistence))
+			}
+			var executor codeexecutor.CodeExecutor = newMockedExecutor(t, srv, opts...)
+			var initialized []string
+			if tc.init {
+				wrapped, err := codeexecutor.NewWorkspaceInitExecutor(executor, func(_ context.Context, env codeexecutor.WorkspaceInitEnv) error {
+					initialized = append(initialized, env.Workspace.Path)
+					return nil
+				})
+				require.NoError(t, err)
+				executor = wrapped
+			}
+			a := llmagent.New("e2b",
+				llmagent.WithCodeExecutor(executor),
+				llmagent.WithWorkspacePreparersDisabled(true),
+				llmagent.WithWorkspaceExecAllowedCommands("true"),
+			)
+			sess := &session.Session{AppName: "app", UserID: "user", ID: "same-session"}
+			for i := 0; i < 2; i++ {
+				inv := agent.NewInvocation()
+				inv.Session = sess
+				// A view created before the first tool call must share its workspace.
+				for _, current := range []*agent.Invocation{inv, inv.View()} {
+					ctx := agent.NewInvocationContext(context.Background(), current)
+					tools, _ := a.InvocationToolSurface(ctx, current)
+					var execTool tool.CallableTool
+					for _, candidate := range tools {
+						if candidate.Declaration().Name == "workspace_exec" {
+							execTool = candidate.(tool.CallableTool)
+							break
+						}
+					}
+					require.NotNil(t, execTool)
+					_, err := execTool.Call(ctx, []byte("{\"command\":\"true\"}"))
+					require.NoError(t, err)
+				}
+			}
+
+			srv.mu.Lock()
+			creates := srv.execCalls
+			srv.mu.Unlock()
+			require.Equal(t, tc.creates, creates, "the only interpreter calls create workspaces")
+			srv.process.mu.Lock()
+			requests := append([]*process.StartRequest(nil), srv.process.requests...)
+			srv.process.mu.Unlock()
+			require.Len(t, requests, 4)
+			// RunProgram passes WORKSPACE_DIR to each native process.
+			workspace := func(req *process.StartRequest) string {
+				t.Helper()
+				prefix := codeexecutor.WorkspaceEnvDirKey + "="
+				for _, arg := range req.GetProcess().GetArgs() {
+					if strings.HasPrefix(arg, prefix) {
+						return strings.TrimPrefix(arg, prefix)
+					}
+				}
+				t.Fatal("native process has no workspace directory")
+				return ""
+			}
+			first, second := workspace(requests[0]), workspace(requests[2])
+			require.Equal(t, first, workspace(requests[1]))
+			require.Equal(t, second, workspace(requests[3]))
+			if tc.persistence == WorkspacePersistencePerSession {
+				require.Equal(t, first, second)
+				require.Equal(t, []string{first}, initialized)
+			} else {
+				require.NotEqual(t, first, second)
+				if tc.init {
+					require.Equal(t, []string{first, second}, initialized)
+				}
+			}
+		})
+	}
+}
+
+func TestRunProgramNativeOutputAndStdin(t *testing.T) {
+	srv := newMockE2BServer(t, func(string) string {
+		t.Error("RunProgram must not use /execute")
+		return ""
+	})
+	defer srv.close()
+	srv.process.stdout = "before\n__E2B_STDOUT_END__\nafter\x00中文\n\n" + strings.Repeat("x", 128*1024)
+	srv.process.stderr = "__E2B_STDERR_END__\n__E2B_EXITCODE__=99\n\n"
+	srv.process.exitCode = 7
+	c := newMockedExecutor(t, srv)
+	stdin := "input\x00\n" + strings.Repeat("s", 128*1024)
+	result, err := c.Engine().Runner().RunProgram(context.Background(),
+		codeexecutor.Workspace{Path: "/tmp/workspace"},
+		codeexecutor.RunProgramSpec{Cmd: "cat", Stdin: stdin})
+	require.NoError(t, err)
+	assert.Equal(t, srv.process.stdout, result.Stdout)
+	assert.Equal(t, srv.process.stderr, result.Stderr)
+	assert.Equal(t, 7, result.ExitCode)
+	assert.False(t, result.TimedOut)
+	assert.Positive(t, result.Duration)
+	assert.Zero(t, srv.execCalls)
+	srv.process.mu.Lock()
+	defer srv.process.mu.Unlock()
+	assert.Equal(t, stdin, string(srv.process.inputs[1].data))
+	select {
+	case <-srv.process.inputs[1].done:
+	default:
+		t.Error("stdin EOF was not sent")
+	}
+}
+
+func TestRunProgramDefaultTimeout(t *testing.T) {
+	for _, timeout := range []time.Duration{0, -time.Second, 2 * time.Minute} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			c := newMockedExecutor(t, srv)
+			_, err := c.RunProgram(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"},
+				codeexecutor.RunProgramSpec{Cmd: "true", Timeout: timeout})
+			require.NoError(t, err)
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+			require.NoError(t, err)
+			want := timeout
+			if want <= 0 {
+				want = 30 * time.Second
+			}
+			assert.InDelta(t, want.Milliseconds(), ms, 1000)
+			assert.False(t, srv.process.requests[0].GetStdin())
+		})
+	}
+}
+
+func TestRunProgramMaxTimeout(t *testing.T) {
+	for _, engine := range []bool{false, true} {
+		for _, tc := range []struct {
+			name string
+			max  time.Duration
+			raw  time.Duration
+			want time.Duration
+		}{
+			{"disabled", 0, time.Minute, time.Minute},
+			{"negative", -time.Second, time.Minute, time.Minute},
+			{"shorter", 10 * time.Second, 5 * time.Second, 5 * time.Second},
+			{"equal", 10 * time.Second, 10 * time.Second, 10 * time.Second},
+			{"longer", 10 * time.Second, time.Minute, 10 * time.Second},
+			{"default_capped", 10 * time.Second, 0, 10 * time.Second},
+			{"negative_request", 10 * time.Second, -time.Second, 10 * time.Second},
+			{"default_preserved", time.Minute, 0, 30 * time.Second},
+		} {
+			t.Run(fmt.Sprintf("engine=%t/%s", engine, tc.name), func(t *testing.T) {
+				srv := newMockE2BServer(t, nil)
+				defer srv.close()
+				c := newMockedExecutor(t, srv,
+					WithMaxProgramTimeout(tc.max),
+					WithExecutionTimeout(time.Nanosecond),
+				)
+				var runner codeexecutor.ProgramRunner = c
+				if engine {
+					runner = c.Engine().Runner()
+				}
+				result, err := runner.RunProgram(context.Background(),
+					codeexecutor.Workspace{Path: "/tmp/ws"},
+					codeexecutor.RunProgramSpec{Cmd: "true", Timeout: tc.raw})
+				require.NoError(t, err)
+				assert.False(t, result.TimedOut)
+				srv.process.mu.Lock()
+				defer srv.process.mu.Unlock()
+				require.Len(t, srv.process.headers, 1)
+				ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				assert.InDelta(t, tc.want.Milliseconds(), ms, 1000)
+			})
+		}
+	}
+}
+
+func TestWorkspaceExecMaxProgramTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		max  time.Duration
+		args string
+		want time.Duration
+	}{
+		{"longer", 10 * time.Second, `{"command":"true","timeout_sec":60}`, 10 * time.Second},
+		{"shorter", 10 * time.Second, `{"command":"true","timeout_sec":5}`, 5 * time.Second},
+		{"omitted", 10 * time.Second, `{"command":"true"}`, 10 * time.Second},
+		{"default_preserved", 10 * time.Minute, `{"command":"true"}`, 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(tc.max))
+			_, err := workspaceexec.NewExecTool(c).Call(context.Background(), []byte(tc.args))
+			require.NoError(t, err)
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, 1)
+			ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+			require.NoError(t, err)
+			assert.InDelta(t, tc.want.Milliseconds(), ms, 1000)
+		})
+	}
+}
+
+func TestMaxProgramTimeoutDoesNotLimitWorkspaceMetadata(t *testing.T) {
+	for _, exitCode := range []int32{0, 1} {
+		t.Run(fmt.Sprintf("commit_exit=%d", exitCode), func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			srv.process.exitCode = exitCode
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(10*time.Second))
+			ctx := context.Background()
+			ws := codeexecutor.Workspace{ID: "metadata", Path: "/tmp/ws"}
+			err := c.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+				From: "host://" + t.TempDir(), To: "work/inputs",
+			}})
+			metadataCalls := 1
+			if exitCode == 0 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "metadata commit failed")
+				metadataCalls++
+			}
+			_, err = c.Engine().Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+				Cmd: "true", Timeout: time.Minute,
+			})
+			require.NoError(t, err)
+
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, metadataCalls+1)
+			assert.Contains(t, strings.Join(srv.process.requests[0].Process.Args, " "), "mv -f")
+			if metadataCalls == 2 {
+				assert.Contains(t, strings.Join(srv.process.requests[1].Process.Args, " "), "rm -f")
+			}
+			for i, header := range srv.process.headers {
+				ms, err := strconv.Atoi(header.Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				want := 60 * time.Second
+				if i == metadataCalls {
+					want = 10 * time.Second
+				}
+				assert.InDelta(t, want.Milliseconds(), ms, 1000)
+			}
+		})
+	}
+}
+
+func TestMaxProgramTimeoutDoesNotLimitInterpreter(t *testing.T) {
+	srv := newMockE2BServer(t, func(string) string {
+		return ndjsonLines(stdoutMsg("interpreter output"))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithMaxProgramTimeout(time.Nanosecond))
+	result, err := c.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{Code: "print('interpreter output')", Language: "python"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "interpreter output")
+	assert.Equal(t, 1, srv.execCalls)
+}
+
+// Execute the request's bootstrap locally to test actual argv, environment,
+// directory preparation and exit behavior, rather than matching script text.
+func TestRunProgramBootstrap(t *testing.T) {
+	if _, err := exec.LookPath("/bin/bash"); err != nil {
+		t.Skip("bootstrap execution test requires /bin/bash")
+	}
+	for _, clean := range []bool{false, true} {
+		t.Run(fmt.Sprintf("clean=%t", clean), func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			srv.process.start = func(ctx context.Context, req *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
+				if err := sendWorkspaceStart(stream, 1); err != nil {
+					return err
+				}
+				command := exec.CommandContext(ctx, req.Msg.Process.Cmd, req.Msg.Process.Args...)
+				command.Env = []string{"PATH=/usr/bin:/bin", "INHERITED=present"}
+				var stdout, stderr bytes.Buffer
+				command.Stdout, command.Stderr = &stdout, &stderr
+				err := command.Run()
+				var exitError *exec.ExitError
+				var exit int32
+				if errors.As(err, &exitError) {
+					exit = int32(exitError.ExitCode())
+				} else if err != nil {
+					return err
+				}
+				return sendWorkspaceResult(stream, stdout.String(), stderr.String(), exit)
+			}
+			c := newMockedExecutor(t, srv)
+			ws := codeexecutor.Workspace{Path: t.TempDir()}
+			var err error
+			ws.Path, err = filepath.EvalSymlinks(ws.Path)
+			require.NoError(t, err)
+			literal := "' \" $(echo injected);\n*"
+			env := map[string]string{"FOO": literal, "WORKSPACE_DIR": "override"}
+			result, err := c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+				Cmd: "/bin/sh", Args: []string{"-c", `printf '%s\n' "$PWD" "$INHERITED" "$FOO" "$WORKSPACE_DIR" "$1" "$2"; test -d "$RUN_DIR" && test -d "$OUTPUT_DIR" || exit 9; exit 7`, "test", literal, ""},
+				Cwd: "out", Env: env, CleanEnv: clean,
+			})
+			require.NoError(t, err)
+			inherited := "present"
+			if clean {
+				inherited = ""
+			}
+			realPath, err := filepath.EvalSymlinks(filepath.Join(ws.Path, "out"))
+			require.NoError(t, err)
+			assert.Equal(t, strings.Join([]string{realPath, inherited, literal, "override", literal, "", ""}, "\n"), result.Stdout)
+			assert.Empty(t, result.Stderr)
+			assert.Equal(t, 7, result.ExitCode)
+			assert.Equal(t, map[string]string{"FOO": literal, "WORKSPACE_DIR": "override"}, env)
+		})
+	}
+}
+
+func TestRunProgramInvalidArguments(t *testing.T) {
+	for _, spec := range []codeexecutor.RunProgramSpec{
+		{}, {Cmd: "echo\x00"}, {Cmd: "echo", Args: []string{"\x00"}},
+		{Cmd: "echo", Cwd: "\x00"}, {Cmd: "echo", Env: map[string]string{"A=B": "x"}},
+	} {
+		srv := newMockE2BServer(t, nil)
+		c := newMockedExecutor(t, srv)
+		_, err := c.RunProgram(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"}, spec)
+		require.Error(t, err)
+		assert.Empty(t, srv.process.requests)
+		srv.close()
+	}
+}
+
+func TestRunProgramCancellationAndTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		caller bool
+		max    time.Duration
+	}{
+		{"program", false, 0},
+		{"caller", true, 0},
+		{"program_capped", false, 100 * time.Millisecond},
+		{"caller_capped", true, 5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			rpc := srv.rpc
+			srv.rpc = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/Start") {
+					// Exercise the client's owned timer, not a second timer in
+					// Connect's mock server rounded to whole milliseconds. RPC
+					// deadline errors are covered separately as stream failures.
+					assert.NotEmpty(t, r.Header.Get("Connect-Timeout-Ms"))
+					r.Header.Del("Connect-Timeout-Ms")
+				}
+				rpc.ServeHTTP(w, r)
+			})
+			srv.process.start = func(ctx context.Context, _ *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
+				if err := sendWorkspaceStart(stream, 1); err != nil {
+					return err
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			killed := make(chan struct{}, 1)
+			srv.process.signal = func(*process.SendSignalRequest) { killed <- struct{}{} }
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(tc.max))
+			ctx := context.Background()
+			timeout := 100 * time.Millisecond
+			if tc.caller {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, timeout)
+				defer cancel()
+				timeout = time.Minute
+			}
+			if tc.max > 0 {
+				timeout = time.Minute
+			}
+			result, err := c.RunProgram(ctx, codeexecutor.Workspace{Path: "/tmp/ws"},
+				codeexecutor.RunProgramSpec{Cmd: "sleep", Args: []string{"60"}, Timeout: timeout})
+			if tc.caller {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.False(t, result.TimedOut)
+				select {
+				case <-killed:
+				default:
+					t.Error("caller deadline did not clean up the process")
+				}
+			} else {
+				require.NoError(t, err)
+				assert.True(t, result.TimedOut)
+			}
+		})
+	}
+}
+
+func TestRunProgramPreservesPartialOutputOnStreamFailure(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+	srv.process.start = func(_ context.Context, _ *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
+		if err := sendWorkspaceStart(stream, 1); err != nil {
+			return err
+		}
+		if err := stream.Send(&process.StartResponse{Event: &process.ProcessEvent{
+			Event: &process.ProcessEvent_Data{Data: &process.ProcessEvent_DataEvent{
+				Output: &process.ProcessEvent_DataEvent_Stdout{Stdout: []byte("partial\n")},
+			}},
+		}}); err != nil {
+			return err
+		}
+		return connect.NewError(connect.CodeDeadlineExceeded, errors.New("gateway timeout"))
+	}
+	c := newMockedExecutor(t, srv)
+	result, err := c.RunProgram(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"},
+		codeexecutor.RunProgramSpec{Cmd: "echo"})
+	require.ErrorContains(t, err, "gateway timeout")
+	assert.False(t, result.TimedOut)
+	assert.Equal(t, "partial\n", result.Stdout)
+}
+
+func TestRunProgramConcurrentRequests(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := c.RunProgram(context.Background(), codeexecutor.Workspace{Path: fmt.Sprintf("/tmp/ws-%d", i)},
+				codeexecutor.RunProgramSpec{Cmd: "cat", Stdin: fmt.Sprintf("input-%d", i), Env: map[string]string{"INDEX": strconv.Itoa(i)}})
+			assert.NoError(t, err)
+		}(i)
+	}
+	wg.Wait()
+	srv.process.mu.Lock()
+	defer srv.process.mu.Unlock()
+	require.Len(t, srv.process.requests, 8)
+	for index, req := range srv.process.requests {
+		input := string(srv.process.inputs[uint32(index+1)].data)
+		value := strings.TrimPrefix(input, "input-")
+		assert.Contains(t, req.Process.Args, "INDEX="+value)
+		assert.Contains(t, req.Process.Args, "/tmp/ws-"+value)
+	}
+}
+
+func TestRunProgramUninitializedSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ce   *CodeExecutor
+	}{
+		{name: "missing executor"},
+		{name: "missing sandbox", ce: &CodeExecutor{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := &workspaceRuntime{ce: tc.ce}
+			result, err := runtime.RunProgram(context.Background(),
+				codeexecutor.Workspace{Path: "/tmp/ws"}, codeexecutor.RunProgramSpec{Cmd: "true"})
+			require.ErrorContains(t, err, "sandbox not initialized")
+			assert.Empty(t, result.Stdout)
+			assert.Empty(t, result.Stderr)
+			assert.Zero(t, result.ExitCode)
+			assert.False(t, result.TimedOut)
+		})
+	}
+}
+
+func TestRunProgramBootstrapFailuresAndEOF(t *testing.T) {
+	if _, err := exec.LookPath("/bin/bash"); err != nil {
+		t.Skip("requires /bin/bash")
+	}
+	for _, tc := range []struct {
+		name, cmd, cwd string
+		exit           int
+	}{
+		{"missing command", "trpc-command-does-not-exist", "", 127},
+		{"missing directory", "/bin/echo", "missing", 1},
+		{"empty stdin", "/bin/cat", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			srv.process.start = func(ctx context.Context, req *connect.Request[process.StartRequest], stream *connect.ServerStream[process.StartResponse]) error {
+				if err := sendWorkspaceStart(stream, 1); err != nil {
+					return err
+				}
+				cmd := exec.CommandContext(ctx, req.Msg.Process.Cmd, req.Msg.Process.Args...)
+				// Model an old server that ignores Start.Stdin=false and leaves input open.
+				reader, writer, err := os.Pipe()
+				if err != nil {
+					return err
+				}
+				defer reader.Close()
+				defer writer.Close()
+				cmd.Stdin = reader
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &stdout, &stderr
+				err = cmd.Run()
+				var exitError *exec.ExitError
+				var exit int32
+				if errors.As(err, &exitError) {
+					exit = int32(exitError.ExitCode())
+				} else if err != nil {
+					return err
+				}
+				return sendWorkspaceResult(stream, stdout.String(), stderr.String(), exit)
+			}
+			c := newMockedExecutor(t, srv)
+			result, err := c.RunProgram(context.Background(), codeexecutor.Workspace{Path: t.TempDir()},
+				codeexecutor.RunProgramSpec{Cmd: tc.cmd, Cwd: tc.cwd, Timeout: 2 * time.Second})
+			require.NoError(t, err)
+			assert.False(t, result.TimedOut)
+			assert.Equal(t, tc.exit, result.ExitCode)
+			if tc.exit != 0 {
+				assert.NotEmpty(t, result.Stderr)
+			}
+		})
+	}
+}

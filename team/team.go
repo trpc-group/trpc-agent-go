@@ -198,18 +198,27 @@ func (t *Team) runCoordinator(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
-	if t.coordinator == nil {
+	t.mu.RLock()
+	name := t.name
+	coordinator := t.coordinator
+	members := append([]agent.Agent(nil), t.members...)
+	t.mu.RUnlock()
+	if coordinator == nil {
 		return nil, errors.New("coordinator is nil")
 	}
-	rootNodeID := teamtrace.RootNodeID(invocation, t.name)
-	teamtrace.SetMemberTraceRootForInvocation(invocation, rootNodeID)
+	traceRootNodeID := teamtrace.TraceRootNodeID(invocation, name)
+	surfaceRootNodeID := teamtrace.RootNodeID(invocation, name)
+	surfaceLayout := teamtrace.NewCoordinatorLayout(surfaceRootNodeID, members)
+	teamtrace.SetMemberTraceRootForInvocation(invocation, traceRootNodeID)
+	teamtrace.SetMemberSurfaceRootForInvocation(invocation, surfaceRootNodeID)
 	agent.SetInvocationSurfaceRootNodeID(
 		invocation,
-		teamtrace.CoordinatorNodeID(rootNodeID),
+		surfaceLayout.CoordinatorNodeID,
 	)
-	coordinatorEventCh, err := t.coordinator.Run(ctx, invocation)
+	coordinatorEventCh, err := coordinator.Run(ctx, invocation)
 	if err != nil {
 		agent.ClearInvocationSurfaceRootNodeID(invocation)
+		teamtrace.ClearMemberSurfaceRootForInvocation(invocation)
 		teamtrace.ClearMemberTraceRootForInvocation(invocation)
 		return nil, err
 	}
@@ -223,13 +232,20 @@ func wrapCoordinatorInvocationState(
 	invocation *agent.Invocation,
 	src <-chan *event.Event,
 ) <-chan *event.Event {
-	if invocation == nil || src == nil {
+	if invocation == nil {
 		return src
+	}
+	if src == nil {
+		agent.ClearInvocationSurfaceRootNodeID(invocation)
+		teamtrace.ClearMemberSurfaceRootForInvocation(invocation)
+		teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		return nil
 	}
 	out := make(chan *event.Event)
 	go func() {
 		defer close(out)
 		defer teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		defer teamtrace.ClearMemberSurfaceRootForInvocation(invocation)
 		defer agent.ClearInvocationSurfaceRootNodeID(invocation)
 		for evt := range src {
 			out <- evt
@@ -476,15 +492,21 @@ func newMemberToolSet(
 	members []agent.Agent,
 ) tool.ToolSet {
 	scope := agentToolHistoryScope(cfg.historyScope)
+	memberList := append([]agent.Agent(nil), members...)
 	tools := make([]tool.Tool, 0, len(members))
-	for _, m := range members {
-		tools = append(tools, agenttool.NewTool(
+	for i, m := range members {
+		agentTool := agenttool.NewTool(
 			m,
 			agenttool.WithSkipSummarization(cfg.skipSummarization),
 			agenttool.WithStreamInner(cfg.streamInner),
 			agenttool.WithInnerTextMode(cfg.innerTextMode),
 			agenttool.WithHistoryScope(scope),
-		))
+		)
+		tools = append(tools, &mountedMemberTool{
+			Tool:        agentTool,
+			memberIndex: i,
+			members:     memberList,
+		})
 	}
 	return &staticToolSet{name: cfg.name, tools: tools}
 }
@@ -517,6 +539,57 @@ func (s *staticToolSet) Tools(context.Context) []tool.Tool {
 func (s *staticToolSet) Close() error { return nil }
 
 func (s *staticToolSet) Name() string { return s.name }
+
+type mountedMemberTool struct {
+	*agenttool.Tool
+	memberIndex int
+	members     []agent.Agent
+}
+
+func (t *mountedMemberTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return t.Tool.Call(t.mountContext(ctx), jsonArgs)
+}
+
+func (t *mountedMemberTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	return t.Tool.StreamableCall(t.mountContext(ctx), jsonArgs)
+}
+
+func (t *mountedMemberTool) mountContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	mount, ok := t.memberMount(ctx)
+	if !ok {
+		return ctx
+	}
+	return teamtrace.ContextWithMemberMount(ctx, mount)
+}
+
+func (t *mountedMemberTool) memberMount(ctx context.Context) (teamtrace.MemberMount, bool) {
+	parentInv, ok := agent.InvocationFromContext(ctx)
+	if !ok || parentInv == nil {
+		return teamtrace.MemberMount{}, false
+	}
+	traceRootNodeID := teamtrace.MemberTraceRootForInvocation(parentInv)
+	surfaceRootNodeID := teamtrace.MemberSurfaceRootForInvocation(parentInv)
+	if traceRootNodeID == "" || surfaceRootNodeID == "" {
+		return teamtrace.MemberMount{}, false
+	}
+	traceLayout := teamtrace.NewCoordinatorLayout(traceRootNodeID, t.members)
+	surfaceLayout := teamtrace.NewCoordinatorLayout(surfaceRootNodeID, t.members)
+	if t.memberIndex < 0 ||
+		t.memberIndex >= len(traceLayout.MemberNodeIDs) ||
+		t.memberIndex >= len(surfaceLayout.MemberNodeIDs) {
+		return teamtrace.MemberMount{}, false
+	}
+	return teamtrace.MemberMount{
+		TraceNodeID:       traceLayout.MemberNodeIDs[t.memberIndex],
+		SurfaceRootNodeID: surfaceLayout.MemberNodeIDs[t.memberIndex],
+	}, true
+}
 
 func wireSwarmRoster(members []agent.Agent) error {
 	setters := make([]agent.SubAgentSetter, 0, len(members))

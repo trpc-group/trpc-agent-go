@@ -648,7 +648,7 @@ capabilities:
   `postgres`, `pgvector`
 - Tool providers: `duckduckgo`, `webfetch_http`
 - ToolSet providers: `mcp`, `file`, `openapi`, `google`,
-  `wikipedia`, `arxivsearch`, `email`
+  `wikipedia`, `arxivsearch`, `email`, `youcom`
 - Skills: skill directories driven by `SKILL.md`
 
 On top of that, `openclaw` adds several tools that are especially

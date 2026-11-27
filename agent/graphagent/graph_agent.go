@@ -25,7 +25,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageprojection"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/partsuserinput"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	utilmessage "trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -396,6 +399,7 @@ func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.In
 
 func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.Invocation) graph.State {
 	var initialState graph.State
+	messageprojection.ClearCurrentUser(invocation)
 
 	if ga.initialState != nil {
 		// Clone the base initial state to avoid modifying the original.
@@ -416,6 +420,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	if invocation.Session != nil {
 		// Build a temporary request to reuse the processor logic.
 		req := &model.Request{}
+		var projectedCurrentUser model.Message
+		var hasProjectedCurrentUser bool
 
 		// Default processor: include (possibly overridden) + preserve same branch.
 		contentOpts := []processor.ContentOption{
@@ -441,12 +447,28 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithPreserveForeignMessages(
 				ga.options.PreserveForeignMessages,
 			),
+			processor.WithIncludeSyntheticErrorMessages(
+				ga.options.includeSyntheticErrorMessages,
+			),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithEventMessageProjector(
 				processor.EventMessageProjector(
 					ga.options.EventMessageProjector,
 				),
+			),
+			processor.WithSyntheticErrorUserMergeObserver(
+				func(
+					inv *agent.Invocation,
+					evt event.Event,
+					msg model.Message,
+				) {
+					if !isCurrentInvocationUserMessage(inv, evt, msg) {
+						return
+					}
+					projectedCurrentUser = msg
+					hasProjectedCurrentUser = true
+				},
 			),
 		}
 		if ga.options.ReasoningContentMode != "" {
@@ -460,6 +482,13 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		p := processor.NewContentRequestProcessor(contentOpts...)
 		// We only need messages side effect; no output channel needed.
 		p.ProcessRequest(ctx, invocation, req, nil)
+		if hasProjectedCurrentUser && len(req.Messages) > 0 {
+			messageprojection.SetCurrentUser(
+				invocation,
+				projectedCurrentUser,
+				req.Messages[len(req.Messages)-1],
+			)
+		}
 		if len(req.Messages) > 0 {
 			initialState[graph.StateKeyMessages] = req.Messages
 		}
@@ -467,22 +496,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		appendNonUserInvocationMessage(initialState, invocation.Message)
 	}
 
-	// Add invocation message to state.
-	// When resuming from checkpoint, only add user input if it's meaningful content
-	// (not just a resume signal), following LangGraph's pattern.
-	isResuming := invocation.RunOptions.RuntimeState != nil &&
-		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
-
-	if invocation.Message.Content != "" && invocation.Message.Role == model.RoleUser {
-		// If resuming and the message is just "resume", don't add it as input.
-		// This allows pure checkpoint resumption without input interference.
-		if isResuming && invocation.Message.Content == "resume" {
-			// Skip adding user_input to preserve checkpoint state.
-		} else {
-			// Add user input for normal execution or resume with meaningful input.
-			initialState[graph.StateKeyUserInput] = invocation.Message.Content
-		}
-	}
+	projectInvocationUserInput(initialState, invocation)
 	// Add session context if available.
 	if invocation.Session != nil {
 		initialState[graph.StateKeySession] = invocation.Session
@@ -495,6 +509,87 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+// projectInvocationUserInput writes the current user turn onto user_input.
+//
+// Agent Builder / AG-UI often encode ordinary text in ContentParts with
+// empty Content. Prefer Content unchanged when it is non-empty; otherwise
+// join textual ContentParts. When resuming, preserve the legacy Content
+// "resume" sentinel and also recognize text-only ContentParts.
+//
+// An inherited parts-only origin is dropped so a fresh turn cannot keep a
+// stale seed from initial or runtime state. The generic resume merge ignores
+// keys that start with "_". Only the scoped both-key replacement reads the
+// value written here. A meaningful user turn (nonempty Content or any
+// content parts), other than the resume sentinel, stores an empty string as
+// a clear signal. A nonempty parts-only projection replaces that signal with
+// the projected text. A blank user message, a non-user message, and a plain
+// resume leave the key absent, which is not a clear signal. Public
+// user_input assignment is unchanged. Execution initialization removes the
+// empty string before a fresh run is executed or checkpointed.
+func projectInvocationUserInput(initialState graph.State, invocation *agent.Invocation) {
+	delete(initialState, partsuserinput.Key)
+	isResuming := invocation.RunOptions.RuntimeState != nil &&
+		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
+	if invocation.Message.Role != model.RoleUser ||
+		(isResuming && isPlainResumeInput(invocation.Message)) {
+		return
+	}
+	if invocation.Message.Content != "" || len(invocation.Message.ContentParts) > 0 {
+		initialState[partsuserinput.Key] = ""
+	}
+	if userInput := utilmessage.TextContent(invocation.Message); userInput != "" {
+		initialState[graph.StateKeyUserInput] = userInput
+		if invocation.Message.Content == "" &&
+			len(invocation.Message.ContentParts) > 0 {
+			initialState[partsuserinput.Key] = userInput
+		}
+	}
+}
+
+// isPlainResumeInput reports whether msg is the checkpoint resume sentinel.
+//
+// Legacy Content sentinel: when Content is non-empty, skip iff Content ==
+// "resume", matching the pre-ContentParts rule. Extra image/file parts do not
+// change that decision; Content remains highest priority.
+//
+// ContentParts sentinel: when Content is empty, skip only a text-only
+// projection of "resume". A non-text payload is not a sentinel, and the
+// joined text parts are written as user_input.
+func isPlainResumeInput(msg model.Message) bool {
+	if msg.Content != "" {
+		return msg.Content == "resume"
+	}
+	if utilmessage.TextContent(msg) != "resume" {
+		return false
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText {
+			return false
+		}
+	}
+	return true
+}
+
+func isCurrentInvocationUserMessage(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) bool {
+	if inv == nil || len(evt.Choices) == 0 ||
+		evt.InvocationID != inv.InvocationID ||
+		evt.RequestID != inv.RunOptions.RequestID {
+		return false
+	}
+	original := evt.Choices[0].Message
+	if inv.Message.Role == "" {
+		return original.Role == model.RoleUser &&
+			original.Content == inv.Message.Content &&
+			msg.Role == model.RoleUser
+	}
+	return model.MessagesEqual(inv.Message, original) &&
+		msg.Role == model.RoleUser
 }
 
 func appendNonUserInvocationMessage(initialState graph.State, message model.Message) {

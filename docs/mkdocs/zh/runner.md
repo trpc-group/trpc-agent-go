@@ -675,39 +675,49 @@ eventChan, err := r.Run(
 同一套 Runner event pipeline，因此 graph LLM 节点的文本 chunk 同样受该选项控制，
 不需要额外的 graph 专用开关。
 
-#### 中断恢复（工具优先继续执行）
+#### 停止工具后继续对话
 
-在真实业务里，用户可能在 Agent 还处于“工具调用阶段”时中断：
-
-- 会话里的最后一条消息是带 `tool_calls` 的 assistant 消息；
-- 但对应的工具结果（tool result）还没来得及写回 Session。
-
-之后如果你想在同一个 `sessionID` 上“继续上次的任务”，可以开启
-`WithResume(true)`，让 Runner 先把上次未完成的工具调用执行完，再进入
-下一轮 LLM 调用：
+沿用原来的 `userID` 和 `sessionID`，直接发送新的用户消息。
 
 ```go
-eventChan, err := r.Run(
-    ctx,
-    userID,
-    sessionID,
-    model.Message{},          // 没有新的用户输入
-    agent.WithResume(true),   // 开启恢复模式
-)
+eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("刚才发生了什么？"))
 ```
 
-开启 `WithResume(true)` 时，Runner 会：
+在新的顶层用户轮次中，若沿用发起普通函数调用的 Responses 模型，LLMAgent 会按调用 ID 匹配
+已保存的结果，不会重跑这些调用。真实结果会保留，包括空结果，以及能够明确归属到调用的
+迟到结果。每个缺失结果仅在发给模型的请求中标记为“上次运行可能在结果记录前被打断，
+执行状态未知”。Session 保留原始事件。如果之后保存了真实结果，下次请求会用它替换占位。
+模型先前的回答可能仍说结果未知，提示词缓存也可能只能复用到这处变更之前。
 
-- 读取当前 Session 中最新的一条事件；
-- 如果最后一条是「带 `tool_calls` 的 assistant 回复」，且之后没有对应的
-  工具结果事件：
-  - 使用当前 Agent 注册的工具集合和回调，执行这些“未完成的工具调用”；
-  - 把工具执行结果写入 Session（作为 tool 消息事件）；
-- 工具执行结束后，再按正常流程发起新一轮 LLM 调用，此时模型能看到
-  “上一次的 tool_calls + 对应的工具结果”，不会重复要求调用同一工具。
+使用自定义模型包装器时，如果发新消息仍报 `function call "..." has no tool result`，
+请检查包装器是否将 `model.ProviderDataProjector` 转发给底层 Responses 模型，以便 Runner 匹配原生调用 ID。
+使用工具命名空间时，还需要转发
+`model.ProviderDataRequestProjector` 以解析注册的工具名。Chat、`tool_search` 和其他
+provider action 保持原有行为。
 
-如果最后一条事件是 user / tool 消息，或者是普通的 assistant 文本回复，
-则 `WithResume(true)` 不会做任何额外处理，行为等同于普通的 `Run` 调用。
+Runner 默认合并保存并行工具的结果。如果 A 已返回、B 仍在运行，停止时整批结果还没写入
+Session，模型会看到 A 和 B 都是未知。开启 `agent.WithToolResultEventPerCallEnabled(true)`
+后，如果 A 的结果已经写入 Session，模型能看到 A 的真实结果，只有 B 标为未知。
+
+#### 中断恢复（工具优先继续执行）
+
+要执行上次挂起的工具调用，传入空消息和 `agent.WithResume(true)`。
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithResume(true))
+```
+
+使用 LLMAgent 时，Runner 检查 Session 中最后一条已保存的事件。如果它是带
+`tool_calls` 的 assistant 回复，Runner 会使用当前 Agent 的工具和回调执行这些调用，
+保存结果后再请求模型。对于 Responses，Runner 会在执行工具前检查所选模型是否与已保存的调用匹配。
+如果工具之前已产生外部副作用，但结果尚未保存，重试可能重复执行该操作。当前挂起轮次
+仍按原有方式恢复；已被后续用户消息取代的旧函数调用轮次，则按上文所述仅修复发出的请求，
+不会重新执行其中的工具。
+
+**显式恢复的已知限制。** 并行调用 A 和 B 时，如果最后一条事件是 A 的结果，B 的结果尚未保存，
+Runner 会跳过工具恢复，并在发送 Responses 请求前报告缺少 B 的结果。此时可以在同一 Session
+发新消息继续聊。模型会收到 A 的真实结果和 B 的状态未知提示，Runner 不会重新执行这两个工具。
+[恢复问题跟踪](https://github.com/trpc-group/trpc-agent-go/issues/2757) · [Responses 工具恢复说明](https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/sdkv3/responses/README.md#tool-recovery-boundaries)
 
 #### Tool Call 参数自动修复
 
@@ -1170,24 +1180,61 @@ eventChan, err := r.Run(
 )
 ```
 
-支持的模式（图式工作流）：
+支持的模式（图相关事件需要图式工作流）：
 
 - `messages`：模型输出事件（例如 `chat.completion.chunk`）
+- `latency_diagnostics`：携带可解析、非 null 的 `event.LatencyDiagnostic` 扩展的
+  `preprocessing.status` 事件
 - `updates`：`graph.state.update` / `graph.channel.update` / `graph.execution`
 - `checkpoints`：`graph.checkpoint.*`
 - `tasks`：任务生命周期事件（`graph.node.*`、`graph.pregel.*`）
-- `debug`：等价于 `checkpoints` + `tasks`
+- `debug`：组合 `checkpoints` + `tasks` 的预设
 - `custom`：节点主动发出的自定义事件（`graph.node.custom`）
 
 注意事项：
 
+- 同一次 `WithStreamMode` 调用中传入多个模式时取并集，每条匹配事件只转发一次。
+  再次调用会覆盖前一次的模式选择。
+- `debug` 是已有类别的组合预设，不是另一个互斥的基础类别，也不包含延迟诊断。
+- 未调用 `WithStreamMode` 时不启用 StreamMode 过滤；显式调用无参数的
+  `WithStreamMode()` 会启用空选择，只转发错误事件和 Runner 生成的完成事件。
+- 选择全部支持的模式不等于关闭过滤：成功的 `tool.response` 和 `agent.transfer`
+  事件不匹配任何类别，仍会被过滤。`custom` 只匹配 `graph.node.custom`。
+- 携带 `Response.Error` 的事件不受 StreamMode 过滤限制；Runner 最终生成的
+  `runner.completion` 也不受所选类别限制。
+- StreamMode 过滤不会跳过 Runner 内部的事件处理或持久化规则。部分 Graph 事件的
+  生成逻辑也会检查所选模式，具体行为如下；这些既有生成行为与过滤是不同的环节。
 - 当选择 `agent.StreamModeMessages` 时，Runner 会为本次运行自动开启 Graph 的最终响应事件
   输出。若你需要关闭该行为，请在 `agent.WithStreamMode(...)` 之后调用
   `agent.WithGraphEmitFinalModelResponses(false)` 覆盖。
-- StreamMode 只影响 Runner 向你的 `eventChan` 转发哪些事件；Runner 内部仍会处理并持久化
-  所有事件。
-- 对于图式工作流，部分事件类型（例如 `graph.checkpoint.*`）只会在选择对应模式时才会产生。
-- Runner 总会额外发出一条 `runner.completion` 完成事件。
+- Graph checkpoint 生命周期事件需要选择 `checkpoints` 或 `debug` 才会生成；
+  禁用 Graph executor 事件时仍不会生成。未配置 StreamMode 不会开启这类事件的生成。
+
+若要在接收模型消息的同时展示模型调用前的处理进度，需要开启诊断事件并订阅两种类别：
+
+```go
+eventChan, err := r.Run(ctx, userID, sessionID, message,
+    agent.WithLatencyDiagnostics(true),
+    agent.WithStreamMode(
+        agent.StreamModeMessages,
+        agent.StreamModeLatencyDiagnostics,
+    ),
+)
+```
+
+例如，上下文压缩在创建摘要前发出 `started`，之后发出终态
+（`completed`、`skipped` 或 `error`）。这些事件与模型输出通过同一个 channel 传递。
+业务可用 `event.GetExtension[event.LatencyDiagnostic]` 读取扩展，选择需要展示的阶段，
+例如 `context_compaction`。
+
+这里订阅的是延迟诊断状态事件，不是 OpenTelemetry span。当前数据包含阶段、状态和
+上下文信息，不含耗时字段。普通 LLMAgent 经 Runner 运行时同样可以使用此订阅，
+不要求使用 Graph。
+
+`latency_diagnostics` 只控制转发，不会开启诊断事件或触发压缩。
+`WithLatencyDiagnosticsEvents(false)` 仍会禁止诊断事件产生。
+只订阅 `messages` 时仍会过滤诊断；未配置 StreamMode 时保留默认的不过滤行为。
+`debug` 和 `custom` 不包含诊断。A2A Part 或 UI 进度事件等协议转换仍由业务完成。
 
 ## 💾 会话管理
 
@@ -1946,6 +1993,30 @@ if err != nil {
 ```
 
 默认路径为 `/trpc-agent/v1/apps/{appName}`。`Describe` 请求远端 structure，`Run` 请求远端 runs 接口并恢复为框架标准 `event.Event` 流。更多完整代码可参考 `examples/trpcagent`。
+
+## ExecutionTrace 默认策略（显式开启）
+
+ExecutionTrace 默认关闭。如果一个服务希望某个 Runner 的每次运行都生成
+ExecutionTrace，可以在构造该 Runner 时统一开启：
+
+```go
+r := runner.NewRunner("my-app", myAgent,
+    runner.WithExecutionTraceEnabled(true),
+)
+```
+
+这是 Runner 局部默认值，不会影响进程中的其他 Runner 或 telemetry 集成。单次
+运行仍可覆盖该默认值：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithExecutionTraceEnabled(false),
+)
+```
 
 ## 📝 总结
 

@@ -42,6 +42,17 @@ func WithDomain(domain string) Option {
 	return func(c *CodeExecutor) { c.domain = domain }
 }
 
+// WithClientIDHostSuffix controls the legacy client ID suffix in sandbox
+// hostnames. It is enabled by default. When enabled, the suffix is appended
+// only when the response domain is empty and the client ID is non-empty.
+// When disabled, fallback hostnames use only the sandbox ID and configured
+// domain. A non-empty response domain always takes precedence without a suffix.
+// This applies to Code Interpreter, native processes, and Sandbox().GetHost
+// for both new and connected sandboxes.
+func WithClientIDHostSuffix(enabled bool) Option {
+	return func(c *CodeExecutor) { c.disableClientIDHostSuffix = !enabled }
+}
+
 // WithAPIURL overrides the full base URL of the E2B management API
 // (e.g. "https://api.e2b.app" or "http://127.0.0.1:8080"). When set it
 // takes precedence over WithDomain/WithDebug URL construction. Falls back
@@ -65,15 +76,41 @@ func WithSandboxTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.sandboxTimeout = t }
 }
 
-// WithRequestTimeout sets the HTTP request timeout.
+// WithRequestTimeout sets the default HTTP request timeout.
+// Zero uses the default of 30 seconds. A negative value disables that default
+// deadline. For code execution it bounds the wait for response headers, not
+// reading the execution stream or an HTTP error body, and it is not added to
+// WithExecutionTimeout.
+// An http.Client.Timeout on the configured client still covers the whole
+// exchange, including a response body, and should be left unset or longer
+// than streams that must stay open. RunCode reports that deadline separately
+// from this option and records whether headers had already arrived. Increasing
+// this option does not extend http.Client.Timeout.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
 
-// WithExecutionTimeout sets the per-cell code execution timeout.
-// Use a negative value to disable timeouts.
+// WithExecutionTimeout sets the per-cell code execution deadline used by
+// ExecuteCode. It bounds how long the client reads the response body after
+// headers arrive, including the execution stream and an HTTP error body. Zero
+// uses the default of 300 seconds. A negative value disables that body
+// deadline and does not disable the request timeout.
+// Ending the client wait does not stop the remote code or kill the sandbox.
+// This option does not apply to RunProgram. An http.Client.Timeout is
+// independent of this deadline; when it fires while the body is being read,
+// RunCode does not report it as an execution TimeoutError.
 func WithExecutionTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.executionTimeout = t }
+}
+
+// WithMaxProgramTimeout caps the timeout of each RunProgram invocation,
+// including calls through Engine and workspace_exec. The cap is applied after
+// resolving the invocation's default timeout; it does not replace that default.
+// A non-positive value leaves program timeouts uncapped (the default).
+// This option does not affect ExecuteCode, workspace file operations, or the
+// sandbox lifetime. WithExecutionTimeout separately controls ExecuteCode.
+func WithMaxProgramTimeout(t time.Duration) Option {
+	return func(c *CodeExecutor) { c.maxProgramTimeout = t }
 }
 
 // WithEnvVars sets environment variables injected into the sandbox at start.
@@ -97,8 +134,56 @@ func WithHeaders(headers map[string]string) Option {
 }
 
 // WithSandboxID connects to an existing sandbox instead of creating one.
+// The connected sandbox is not owned by the executor. Combining it with
+// WithAutoRecreate returns an error from New or NewWithContext.
 func WithSandboxID(sandboxID string) Option {
 	return func(c *CodeExecutor) { c.sandboxID = sandboxID }
+}
+
+// WithAutoRecreate controls on-demand replacement of an executor-owned sandbox.
+// The default is false. False keeps the sandbox created or connected by New for
+// every later call, including after that instance expires or disappears.
+//
+// WithAutoRecreate(true) and WithSandboxID together are rejected at
+// construction. An externally supplied sandbox stays under its owner's control.
+// Pause also releases ownership; a paused sandbox is not recreated.
+//
+// When the option is enabled, a later call may create one replacement from the
+// template, environment variables, metadata, and connection settings captured
+// at construction, including defaults resolved from the environment. The
+// replacement is a new instance. The executor does not restore sandbox-local
+// files, running processes, or interpreter state. Files on persistent mounts
+// may remain available.
+// Logical workspace IDs may be reused, but their directories, staged inputs,
+// bootstrap, and workspace init hooks are applied again through the existing
+// workspace registry. Paths created while this option is on include the
+// process-local generation, so a handle from the previous instance does not
+// name the replacement. The workspace instance ID also includes an identity
+// unique to this executor, so two executors in one process do not share it.
+// There is no background probe and no retry loop.
+// Callers of one dead generation share a single creation attempt. A failed
+// attempt stays retryable by a later call. A failed operation that may have
+// reached the sandbox is unsafe to replay, even if the failure does not confirm
+// sandbox loss. After a successful switch, the triggering error asks the caller
+// to check required files and the runtime environment before continuing.
+// A call that completes recovery before dispatch returns the notice before
+// submitting its operation. A subsequent call can use the replacement.
+// A replacement that loses to Close or Pause is killed. After a replacement
+// is published, the owned sandbox it replaced is killed.
+//
+// Expiry time alone, a transport or execution timeout, a lost stream, an HTTP
+// 5xx, and an arbitrary HTTP 404 do not prove that the sandbox was deleted.
+// A code-interpreter HTTP 502 or 504, and an envd response reported as
+// Connect unimplemented, only authorize one management check. Replacement is
+// allowed only after that API reports that this sandbox resource is missing
+// or that its state is terminal, such as killed or expired. Running and
+// paused states are left in place.
+//
+// Sandbox returns the instance published at that moment. A held
+// *codeinterpreter.Sandbox does not follow a later replacement. SandboxID
+// reports the published instance and is empty when none is published.
+func WithAutoRecreate(enabled bool) Option {
+	return func(c *CodeExecutor) { c.autoRecreate = enabled }
 }
 
 // WithLanguage sets the default language used when a code block does not
@@ -132,6 +217,8 @@ const (
 // WorkspacePersistencePerTurn (a fresh workspace per CreateWorkspace call). Use
 // WorkspacePersistencePerSession when multi-turn agents should keep files and
 // intermediate state across turns.
+// During a session, agent tools share a per-turn workspace within one
+// invocation and acquire a fresh one on the next invocation.
 func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
 	return func(c *CodeExecutor) { c.workspacePersistence = mode }
 }
@@ -141,6 +228,8 @@ type CodeExecutor struct {
 	mu sync.Mutex
 
 	// Connection-level options.
+	disableClientIDHostSuffix bool
+
 	apiKey         string
 	accessToken    string
 	domain         string
@@ -154,10 +243,12 @@ type CodeExecutor struct {
 	httpClient     *http.Client
 	headers        map[string]string
 	sandboxID      string
+	autoRecreate   bool
 
 	// Execution-level options.
-	executionTimeout time.Duration
-	defaultLanguage  ci.RunCodeLanguage
+	executionTimeout  time.Duration
+	maxProgramTimeout time.Duration
+	defaultLanguage   ci.RunCodeLanguage
 
 	// Workspace integration (runs entirely inside the sandbox).
 	sandboxRunBase       string
@@ -165,7 +256,24 @@ type CodeExecutor struct {
 	rt                   *workspaceRuntime
 
 	// Sandbox instance.
-	sbx *ci.Sandbox
+	sbx           *ci.Sandbox
+	createSandbox func(context.Context) (*ci.Sandbox, error)
+	// executorID distinguishes this executor from others in the same process.
+	// It is assigned once by New and is never reused.
+	executorID uint64
+	// generation identifies the published instance inside this executor.
+	// It starts at 1 and increases only when auto-recreate publishes a
+	// replacement. It is never reused, even if a provider reuses a sandbox ID.
+	generation uint64
+	// deadGeneration is the published generation confirmed gone by GetInfo.
+	// Zero means the published generation is not awaiting replacement.
+	deadGeneration uint64
+	inflight       *recreateCall
+	closing        *closeAttempt
+	// closed is set for the duration of Close and stays set after a successful
+	// close. A failed kill clears it so Close can be retried. Recovery checks
+	// it before publishing so Close cannot be undone by a replacement.
+	closed bool
 	// owned indicates whether the CodeExecutor owns the sandbox lifecycle
 	// (i.e., it created the sandbox itself and should kill it on Close).
 	owned bool
@@ -178,6 +286,8 @@ func New(opts ...Option) (*CodeExecutor, error) {
 }
 
 // NewWithContext is like New but accepts a context used for sandbox setup.
+// It copies environment, metadata, and header maps after applying the options,
+// so later caller edits do not change the configuration used for replacements.
 func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
 	c := &CodeExecutor{
 		template:         ci.DefaultTemplate,
@@ -189,21 +299,16 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	for _, opt := range opts {
 		opt(c)
 	}
-
-	sbxOpts := &ci.SandboxOpts{
-		APIKey:         c.apiKey,
-		AccessToken:    c.accessToken,
-		Domain:         c.domain,
-		APIURL:         c.apiURL,
-		Debug:          c.debug,
-		RequestTimeout: c.requestTimeout,
-		Timeout:        c.sandboxTimeout,
-		Template:       c.template,
-		Metadata:       c.metadata,
-		EnvVars:        c.envVars,
-		HTTPClient:     c.httpClient,
-		Headers:        c.headers,
+	if c.autoRecreate && c.sandboxID != "" {
+		return nil, fmt.Errorf(
+			"e2b: WithAutoRecreate cannot be combined with WithSandboxID",
+		)
 	}
+
+	c.envVars = cloneStringMap(c.envVars)
+	c.metadata = cloneStringMap(c.metadata)
+	c.headers = cloneStringMap(c.headers)
+	sbxOpts := c.sandboxOpts()
 
 	var (
 		sbx *ci.Sandbox
@@ -213,13 +318,16 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		sbx, err = ci.Connect(ctx, c.sandboxID, sbxOpts)
 		c.owned = false
 	} else {
-		sbx, err = ci.Create(ctx, sbxOpts)
+		c.createSandbox = ci.PrepareCreate(*sbxOpts)
+		sbx, err = c.createSandbox(ctx)
 		c.owned = true
 	}
 	if err != nil {
 		return nil, fmt.Errorf("e2b: create/connect sandbox: %w", err)
 	}
 	c.sbx = sbx
+	c.executorID = nextExecutorIdentity()
+	c.generation = 1
 
 	// Workspace runtime runs all file/program operations inside the sandbox.
 	c.rt = newWorkspaceRuntime(c)
@@ -228,16 +336,32 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	return c, nil
 }
 
-// SandboxID returns the current sandbox id.
+// SandboxID returns the ID of the sandbox currently published by this executor.
+// It is empty when no sandbox is published.
+//
+// The value is a snapshot of that publication. WithAutoRecreate can publish a
+// different instance later; this call does not subscribe the caller to that
+// change.
 func (c *CodeExecutor) SandboxID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.sbx == nil {
 		return ""
 	}
 	return c.sbx.SandboxID()
 }
 
-// Sandbox exposes the underlying sandbox for advanced usage.
-func (c *CodeExecutor) Sandbox() *ci.Sandbox { return c.sbx }
+// Sandbox returns the code-interpreter sandbox published for advanced use.
+//
+// The pointer is a snapshot. WithAutoRecreate may later publish a different
+// instance; methods on a previously returned *codeinterpreter.Sandbox keep
+// using the instance they already reference and are not redirected. Sandbox
+// returns nil when no instance is published, including after Close releases it.
+func (c *CodeExecutor) Sandbox() *ci.Sandbox {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sbx
+}
 
 // CodeBlockDelimiter returns the fenced code delimiter.
 func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
@@ -245,14 +369,16 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 }
 
 // ExecuteCode executes all code blocks sequentially in the sandbox and
-// aggregates their output.
+// aggregates their output. Each block uses WithExecutionTimeout as its stream
+// deadline and WithRequestTimeout as its header deadline. A timeout stops the
+// client wait and returns an error; it does not kill the remote code or the
+// sandbox.
 func (c *CodeExecutor) ExecuteCode(
 	ctx context.Context, input codeexecutor.CodeExecutionInput,
 ) (codeexecutor.CodeExecutionResult, error) {
-	if c.sbx == nil {
-		return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
-			"e2b: sandbox not initialized",
-		)
+	snap, err := c.useSandbox(ctx)
+	if err != nil {
+		return codeexecutor.CodeExecutionResult{}, err
 	}
 
 	var (
@@ -263,7 +389,7 @@ func (c *CodeExecutor) ExecuteCode(
 
 	for i, block := range input.CodeBlocks {
 		lang := pickLanguage(block.Language, c.defaultLanguage)
-		exec, err := c.sbx.RunCode(ctx, block.Code, &ci.RunCodeOpts{
+		exec, err := snap.sbx.RunCode(ctx, block.Code, &ci.RunCodeOpts{
 			Language: lang,
 			Timeout:  c.executionTimeout,
 			OnStdout: func(m ci.OutputMessage) {
@@ -274,6 +400,7 @@ func (c *CodeExecutor) ExecuteCode(
 			},
 		})
 		if err != nil {
+			err = c.observeLoss(ctx, snap, err)
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
 				"e2b: execute block %d: %w", i, err,
 			)
@@ -478,7 +605,19 @@ func (c *CodeExecutor) StageDirectory(
 	return c.ensureRuntime().StageDirectory(ctx, ws, src, to, opt)
 }
 
-// RunProgram executes a command inside the sandbox workspace.
+// RunProgram executes a command through native envd inside the sandbox workspace.
+// A non-positive timeout uses 30 seconds. Non-zero program exits are returned
+// in RunResult with a nil error; cancellation and transport failures are errors.
+// TimedOut is set only for the envd process deadline and is identified from
+// that error's type and chain. Caller cancellation, a caller deadline, and an
+// unrelated failure whose text contains "timeout" do not set TimedOut.
+// Recognized Linux signal termination returns exit code 128 + signal with a
+// nil error, preserving captured output (for example, SIGTERM returns 143).
+// Finite stdin requires a known envd version of at least 0.5.2. Output is
+// captured without trimming or truncation. There is no Code Interpreter fallback.
+// Remote programs default to root to match standard Code Interpreter workspace
+// ownership. Custom templates should set Authorization through WithHeaders to
+// select their kernel account; an explicit Authorization header takes precedence.
 func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
@@ -494,6 +633,8 @@ func (c *CodeExecutor) Collect(
 }
 
 // StageInputs maps external inputs into the sandbox workspace.
+// A stale workspace error after writing an input or staging metadata also
+// matches [codeexecutor.ErrWorkspaceRetryUnsafe].
 func (c *CodeExecutor) StageInputs(
 	ctx context.Context, ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
@@ -527,20 +668,17 @@ func (c *CodeExecutor) ExecuteInline(
 // tool/workspaceexec policy mode run on the e2b backend instead of
 // failing closed.
 //
-// Scope note: the e2b Jupyter `/execute` API exposes no hook to
-// launch the *framing* shell (the kernel-side bash that runs our
-// script and the output sentinels) in an empty environment, so that
-// shell still inherits the sandbox environment. This is not a
-// model-injection vector: the sandbox environment is fixed by the
-// template / WithEnvVars at sandbox creation (operator-controlled),
-// and model-supplied env (spec.Env) is confined to the `env -i`
-// invocation rather than the framing shell. The SupportsCleanEnv
-// contract is about the spawned program's environment, which `env -i`
-// satisfies.
+// RunProgram uses native envd processes with separate stdout and stderr.
+// ExecuteCode continues to use Code Interpreter kernels. Workspace filesystem
+// operations still require the Code Interpreter endpoint.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
+	var manager codeexecutor.WorkspaceManager = rt
+	if c.autoRecreate {
+		manager = &instanceWorkspaceRuntime{workspaceRuntime: rt}
+	}
 	return codeexecutor.NewEngineWithCapabilities(
-		rt, rt, rt,
+		manager, rt, rt,
 		codeexecutor.Capabilities{SupportsCleanEnv: true},
 	)
 }
@@ -551,7 +689,9 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 // pause it; connected executors should leave lifecycle management to the
 // creator.
 // After a successful pause the executor relinquishes ownership so that a
-// subsequent Close() call does not kill the paused sandbox.
+// subsequent Close() call does not kill the paused sandbox. WithAutoRecreate
+// does not install a replacement after that, including when creation is
+// already in progress; that unpublished sandbox is killed.
 func (c *CodeExecutor) Pause(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -570,16 +710,25 @@ func (c *CodeExecutor) Pause(ctx context.Context) error {
 	return nil
 }
 
-// Close terminates the owned sandbox (if any).
+// Close releases the executor. When this executor owns the published sandbox,
+// Close kills it. A not-found response for a sandbox already confirmed dead
+// counts as a successful kill. Other kill errors leave that sandbox published
+// so Close can be retried. Concurrent callers share the same attempt and result.
+// After Close has released the executor, recreation cannot publish a
+// replacement; an instance created while Close is in progress is killed
+// instead. A Close after a successful Close is a no-op.
 func (c *CodeExecutor) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.sbx != nil && c.owned {
-		if err := c.sbx.Kill(context.Background()); err != nil {
-			log.Debugf("e2b: kill sandbox: %v", err)
-			return err
-		}
+	attempt, sbx, owned, wait := c.beginClose()
+	if wait {
+		<-attempt.done
+		return attempt.err
 	}
-	c.sbx = nil
-	return nil
+	if attempt == nil {
+		return nil
+	}
+	var err error
+	if sbx != nil && owned {
+		err = sbx.Kill(context.Background())
+	}
+	return c.finishClose(attempt, sbx, owned, err)
 }

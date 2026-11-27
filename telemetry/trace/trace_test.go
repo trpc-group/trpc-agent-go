@@ -12,11 +12,71 @@ package trace
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 )
+
+func TestInstrumentationTracerIdentity(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(resource.Empty()),
+		sdktrace.WithSpanProcessor(recorder),
+	)
+
+	_, span := instrumentationTracer(provider).Start(context.Background(), "test")
+	span.End()
+
+	ended := recorder.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(ended))
+	}
+	scope := ended[0].InstrumentationScope()
+	if scope.Name != itelemetry.InstrumentName {
+		t.Fatalf("scope name = %q, want %q", scope.Name, itelemetry.InstrumentName)
+	}
+	if scope.Version != identity.InstrumentationVersion() {
+		t.Fatalf("scope version = %q, want %q", scope.Version, identity.InstrumentationVersion())
+	}
+}
+
+func TestBuildResourceUsesDefaultServiceName(t *testing.T) {
+	t.Setenv("OTEL_SERVICE_NAME", "")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+
+	res, err := buildResource(context.Background(), &options{})
+	if err != nil {
+		t.Fatalf("buildResource() error = %v", err)
+	}
+	serviceName, ok := res.Set().Value(semconv.ServiceNameKey)
+	if !ok {
+		t.Fatal("service.name should be set by default")
+	}
+	defaultServiceName, ok := resource.Default().Set().Value(semconv.ServiceNameKey)
+	if !ok {
+		t.Fatal("OpenTelemetry default resource does not contain service.name")
+	}
+	if serviceName.AsString() != defaultServiceName.AsString() {
+		t.Fatalf("service.name = %q, want %q", serviceName.AsString(), defaultServiceName.AsString())
+	}
+	if !strings.HasPrefix(serviceName.AsString(), "unknown_service:") {
+		t.Fatalf("service.name = %q, want unknown_service fallback", serviceName.AsString())
+	}
+	if _, ok := res.Set().Value(semconv.ServiceNamespaceKey); ok {
+		t.Fatal("service.namespace should be unset by default")
+	}
+	if _, ok := res.Set().Value(semconv.ServiceVersionKey); ok {
+		t.Fatal("service.version should be unset by default")
+	}
+}
 
 func TestGRPCTracesEndpoint(t *testing.T) {
 	const (

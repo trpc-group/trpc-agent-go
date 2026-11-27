@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"trpc.group/trpc-go/trpc-agent-go/internal/telemetry/identity"
 	ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
 )
 
@@ -195,6 +196,25 @@ func TestInitOperationCounters_Idempotent(t *testing.T) {
 	c2 := initOperationCounters()
 	assert.NotNil(t, c1)
 	assert.Equal(t, c1, c2, "should return the same counters map")
+}
+
+func TestInitOperationCountersUsesModuleVersion(t *testing.T) {
+	reader, cleanup := setupMetricProvider(t)
+	defer cleanup()
+
+	counters := initOperationCounters()
+	require.NotNil(t, counters)
+	counters[opCreateSession].Add(context.Background(), 1)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name == meterName {
+			assert.Equal(t, identity.ModuleVersion(modulePath), sm.Scope.Version)
+			return
+		}
+	}
+	t.Fatalf("instrumentation scope %q not found", meterName)
 }
 
 func TestRecordStorageRoute_UnknownOperation(t *testing.T) {

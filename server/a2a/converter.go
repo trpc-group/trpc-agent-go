@@ -127,10 +127,11 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
 	// of "type").
-	adkCompatibility          bool
-	graphEventObjectAllowlist []string
-	streamingEventType        StreamingEventType
-	eventPartMappers          []EventToA2APartMapper
+	adkCompatibility              bool
+	graphEventObjectAllowlist     []string
+	streamingEventType            StreamingEventType
+	streamingMessageTextDeltaOnly bool
+	eventPartMappers              []EventToA2APartMapper
 }
 
 const graphObjectPrefix = "graph."
@@ -552,6 +553,8 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
 		},
 		false,
 	)
+	appendChunk := evt.Response.IsPartial
+	taskArtifact.Append = &appendChunk
 	taskArtifact.Metadata = metadata
 	return &taskArtifact
 }
@@ -565,9 +568,13 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 ) (protocol.StreamingMessageResult, error) {
 	choice := event.Response.Choices[0]
 	parts := c.buildTextParts(choice.Delta)
-	if !event.Response.IsPartial {
+	usesSnapshot := false
+	deltaOnly := c.streamingEventType == StreamingEventTypeMessage &&
+		c.streamingMessageTextDeltaOnly
+	if !event.Response.IsPartial && !deltaOnly {
 		if messageParts := c.buildTextParts(choice.Message); len(messageParts) > 0 {
 			parts = messageParts
+			usesSnapshot = true
 		}
 	}
 
@@ -578,7 +585,13 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	parts = append(parts, mapperParts...)
 
 	if len(parts) > 0 {
-		return c.convertPartsToA2AStreamingResult(event, options, parts), nil
+		result := c.convertPartsToA2AStreamingResult(event, options, parts)
+		if update, ok := result.(*protocol.TaskArtifactUpdateEvent); ok &&
+			!usesSnapshot {
+			appendChunk := true
+			update.Append = &appendChunk
+		}
+		return result, nil
 	}
 
 	if result, ok := c.convertMetadataOnlyToA2AStreamingMessage(event, options); ok {

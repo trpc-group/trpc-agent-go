@@ -16,6 +16,9 @@
 // that fallback and fills the Choices content itself, so callers can surface a
 // customised, tenant-specific, or localised message to end users while keeping
 // the structured Response.Error intact for debugging and downstream consumers.
+// Rewritten content is marked as framework-synthesised so LLMAgent can keep it
+// in emitted and persisted events without treating it as model-generated
+// history in subsequent requests.
 //
 // Scope:
 //
@@ -36,6 +39,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/errorcontent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 )
@@ -97,6 +101,7 @@ func (p *errorMessagePlugin) onEvent(
 		reason := p.finishReason
 		updated.Response.Choices[0].FinishReason = &reason
 	}
+	errorcontent.MarkSynthetic(&updated)
 	return &updated, nil
 }
 

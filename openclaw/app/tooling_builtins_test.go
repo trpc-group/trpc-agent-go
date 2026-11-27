@@ -11,8 +11,10 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -24,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1145,6 +1148,97 @@ func TestNewEmailToolSet_NameOverride(t *testing.T) {
 	require.NotNil(t, ts)
 	require.Equal(t, "mail", ts.Name())
 	require.NotEmpty(t, ts.Tools(context.Background()))
+}
+
+func TestNewYouComToolSet_RequiresAPIKey(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "")
+
+	_, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "api key is required")
+}
+
+func TestNewYouComToolSet_EnvFallbackAndNameOverride(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "k")
+
+	cfg := yamlNode(t, `
+num_results: 5
+country: "US"
+safe_search: "moderate"
+timeout: 200ms
+`)
+	ts, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{Name: "yc", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+	require.Equal(t, "yc", ts.Name())
+	tools := ts.Tools(context.Background())
+	require.NotEmpty(t, tools)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"YOU.COM WEB SEARCH",
+	)
+}
+
+func TestNewYouComToolSet_ConfigAPIKeyWins(t *testing.T) {
+	t.Setenv(envYouComAPIKey, "from-env")
+
+	// The tool set builds its own HTTP client on top of http.DefaultTransport;
+	// point a cloned transport at the self-signed test cert for this test.
+	oldTransport := http.DefaultTransport
+	testTransport := oldTransport.(*http.Transport).Clone()
+	testTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test-only
+	http.DefaultTransport = testTransport
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+
+	var mu sync.Mutex
+	var gotKey string
+	srv := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			gotKey = r.Header.Get("X-API-Key")
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":{"web":[],"news":[]}}`))
+		},
+	))
+	defer srv.Close()
+
+	cfg := yamlNode(t, fmt.Sprintf(`
+api_key: "from-config"
+base_url: %q
+num_results: 3
+`, srv.URL))
+	ts, err := newYouComToolSet(
+		registry.ToolSetProviderDeps{},
+		registry.PluginSpec{Name: "yc", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+	require.Equal(t, "yc", ts.Name())
+	tools := ts.Tools(context.Background())
+	require.NotEmpty(t, tools)
+
+	// The configured key must win over the environment variable: assert it
+	// through an actual search request rather than construction alone.
+	searchTool, ok := tools[0].(interface {
+		Call(context.Context, []byte) (any, error)
+	})
+	require.True(t, ok)
+	reqJSON, err := json.Marshal(map[string]string{"query": "precedence"})
+	require.NoError(t, err)
+	_, err = searchTool.Call(context.Background(), reqJSON)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, "from-config", gotKey)
 }
 
 func mcpConn(

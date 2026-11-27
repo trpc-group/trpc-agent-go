@@ -11,8 +11,15 @@ package tencentdb
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+	maxV3RecallContextBytes       = 24 << 10
+	maxV3AtomicRecallSectionBytes = 8 << 10
+	maxV3CoreRecallSectionBytes   = 8 << 10
 )
 
 func latestUserText(req *model.Request) string {
@@ -44,6 +51,64 @@ func injectRecallContext(req *model.Request, rsp *recallResponse) {
 	if userCtx := strings.TrimSpace(rsp.PrependContext); userCtx != "" {
 		insertBeforeLatestUser(req, model.NewUserMessage(userCtx))
 	}
+}
+
+func formatV3RecallSection(tag, content string, maxBytes int) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	prefix := "<" + tag + ">\n"
+	suffix := "\n</" + tag + ">"
+	contentBytes := maxBytes - len(prefix) - len(suffix)
+	if contentBytes <= len(v3TruncationMarker) {
+		return ""
+	}
+	content, _ = truncateV3UTF8Bytes(content, contentBytes)
+	return prefix + content + suffix
+}
+
+func appendV3RecallSystemSection(
+	parts []string,
+	remaining int,
+	tag string,
+	content string,
+	maxBytes int,
+) ([]string, int, bool) {
+	separatorBytes := 0
+	if len(parts) > 0 {
+		separatorBytes = 2
+	}
+	available := remaining - separatorBytes
+	if available <= 0 {
+		return parts, remaining, false
+	}
+	section := formatV3RecallSection(tag, content, min(maxBytes, available))
+	if section == "" {
+		return parts, remaining, false
+	}
+	return append(parts, section), remaining - separatorBytes - len(section), true
+}
+
+func truncateV3UTF8Bytes(content string, maxBytes int) (string, bool) {
+	if len(content) <= maxBytes {
+		return content, false
+	}
+	limit := maxBytes - len(v3TruncationMarker)
+	if limit <= 0 {
+		return "", true
+	}
+	end := 0
+	for offset := 0; offset < len(content); {
+		_, size := utf8.DecodeRuneInString(content[offset:])
+		next := offset + size
+		if next > limit {
+			break
+		}
+		end = next
+		offset = next
+	}
+	return content[:end] + v3TruncationMarker, true
 }
 
 func firstNonEmpty(values ...string) string {

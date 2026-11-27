@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v1.1.1
+	trpc.group/trpc-go/trpc-agent-go v1.12.0
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v1.1.1
 )
 

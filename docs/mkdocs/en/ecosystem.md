@@ -885,7 +885,10 @@ Contribution directions:
 - OTLP Export: uses `otlpmetricgrpc`, supports environment variable override:
   - `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`.
   - `OTEL_EXPORTER_OTLP_ENDPOINT` (fallback).
-- Resource Identification: automatically fills `service.namespace/name/version`.
+- Resource Identification: uses the OpenTelemetry SDK fallback for `service.name`;
+  `service.namespace/version` are omitted unless explicitly configured.
+- Instrumentation Scope: identifies tRPC-Agent-Go metrics by meter name and the
+  emitting module version found in Go build information.
 
 Example (start metrics and report Counter):
 
@@ -934,6 +937,10 @@ Contribution directions:
 - OTLP Export: uses `otlptracegrpc`, supports environment variable override:
   - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
   - `OTEL_EXPORTER_OTLP_ENDPOINT` (fallback).
+- Resource Identification: uses the OpenTelemetry SDK fallback for `service.name`;
+  `service.namespace/version` are omitted unless explicitly configured.
+- Instrumentation Scope: uses `trpc.agent.go` and the framework version found in
+  Go build information to identify spans emitted by tRPC-Agent-Go.
 - Propagator: enables `TraceContext` by default.
 
 Example (start tracing and create Span):

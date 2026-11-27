@@ -251,6 +251,21 @@ func TestSummaryCutoffTimeAndClone(t *testing.T) {
 	})
 }
 
+func TestSummaryPositionalLiteralCompatibility(t *testing.T) {
+	updatedAt := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+	sum := Summary{
+		"summary",
+		[]string{"topic"},
+		updatedAt,
+		NewSummaryBoundary("branch", updatedAt),
+	}
+
+	require.Equal(t, "summary", sum.Summary)
+	require.Equal(t, []string{"topic"}, sum.Topics)
+	require.Equal(t, updatedAt, sum.UpdatedAt)
+	require.Equal(t, "branch", sum.Boundary.FilterKey)
+}
+
 func TestSummaryPrefixCutoff(t *testing.T) {
 	base := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
 

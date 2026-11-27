@@ -1,0 +1,337 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package clickhouse
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+)
+
+// internalMetadataKey is the only key the store writes into the metadata
+// column. Everything the store persists on its own, including
+// document.EmbeddingText, lives inside that envelope, while caller metadata is
+// nested one level deeper. No caller-supplied metadata key can therefore be
+// overwritten by internal state, and callers never observe the envelope.
+const internalMetadataKey = "__clickhouse_v1"
+
+// Document mapping between trpc-agent-go document.Document and the ClickHouse row.
+//
+//	trpc-agent-go Document          ClickHouse column
+//	─────────────────────           ───────────────────
+//	ID                              id        String
+//	Name                            name      String
+//	Content                         content   String
+//	Metadata (map[string]any)       metadata  String (JSON encoded envelope)
+//	EmbeddingText                   metadata  envelope field "embedding_text"
+//	CreatedAt (time.Time)           created_at DateTime64(6)
+//	UpdatedAt (time.Time)           updated_at DateTime64(6)
+//	embedding ([]float64)           embedding Array(Float64)
+//	filterFields                    <name>    Nullable typed column
+//
+// Filter fields declared through WithFilterFields are materialized as dedicated
+// Nullable typed columns in addition to being present in the JSON-encoded
+// metadata. Nullable is required to tell a document that never set a field
+// apart from one that set it to the type's zero value: filtering on
+// "count = 0" must not match documents without a count.
+
+// storedMetadata is the envelope persisted in the metadata column. Caller
+// metadata is nested under Metadata so that no caller key can collide with the
+// fields the store owns.
+type storedMetadata struct {
+	// Metadata is the caller-supplied document metadata, returned unchanged.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// EmbeddingText persists document.EmbeddingText across a round trip.
+	EmbeddingText string `json:"embedding_text,omitempty"`
+}
+
+// row is the internal in-memory representation of a ClickHouse row.
+type row struct {
+	id            string
+	name          string
+	content       string
+	embedding     []float64
+	embeddingText string
+	metadata      map[string]any
+	createdAt     time.Time
+	updatedAt     time.Time
+}
+
+// docToRow converts a trpc-agent-go document and embedding into an internal row.
+//
+// now is a caller-supplied timestamp used for created_at and updated_at to keep
+// tests deterministic.
+func (vs *VectorStore) docToRow(doc *document.Document, embedding []float64, now time.Time) (*row, error) {
+	if doc == nil {
+		return nil, errDocumentRequired
+	}
+	if doc.ID == "" {
+		return nil, errDocumentIDRequired
+	}
+	return &row{
+		id:            doc.ID,
+		name:          doc.Name,
+		content:       doc.Content,
+		embedding:     embedding,
+		embeddingText: doc.EmbeddingText,
+		metadata:      doc.Metadata,
+		createdAt:     now,
+		updatedAt:     now,
+	}, nil
+}
+
+// rowToDoc converts an internal row back into a trpc-agent-go document.
+func (vs *VectorStore) rowToDoc(r *row) (*document.Document, []float64, error) {
+	if r == nil {
+		return nil, nil, fmt.Errorf("clickhouse: row is nil")
+	}
+	doc := &document.Document{
+		ID:            r.id,
+		Name:          r.name,
+		Content:       r.content,
+		Metadata:      r.metadata,
+		EmbeddingText: r.embeddingText,
+		CreatedAt:     r.createdAt,
+		UpdatedAt:     r.updatedAt,
+	}
+	return doc, r.embedding, nil
+}
+
+// marshalMetadata JSON-encodes caller metadata and the persisted embedding text
+// into the metadata column value. Both are nested under internalMetadataKey so
+// that no caller metadata key can be shadowed by internal state.
+func marshalMetadata(m map[string]any, embeddingText string) (string, error) {
+	b, err := json.Marshal(map[string]any{
+		internalMetadataKey: storedMetadata{Metadata: m, EmbeddingText: embeddingText},
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// unmarshalMetadata JSON-decodes a metadata column value into caller metadata
+// and the persisted embedding text.
+//
+// A value written without the envelope, for example directly by an external
+// writer, is treated as plain caller metadata with no embedding text. That
+// includes external JSON that happens to carry a top-level key named like
+// internalMetadataKey: only a value marshalMetadata could have produced is
+// unpacked, so no caller metadata is lost or rejected.
+//
+// One shape stays ambiguous: {"__clickhouse_v1":{}} is exactly what this store
+// writes for a document with no metadata and no embedding text, so it is always
+// read back as the empty envelope. That single shape is reserved; every other
+// use of the key is returned to the caller unchanged.
+func unmarshalMetadata(s string) (map[string]any, string, error) {
+	if s == "" {
+		return map[string]any{}, "", nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return nil, "", err
+	}
+	if stored, ok := storedEnvelope(raw); ok {
+		if stored.Metadata == nil {
+			stored.Metadata = map[string]any{}
+		}
+		return stored.Metadata, stored.EmbeddingText, nil
+	}
+	var md map[string]any
+	if err := json.Unmarshal([]byte(s), &md); err != nil {
+		return nil, "", err
+	}
+	if md == nil {
+		md = map[string]any{}
+	}
+	return md, "", nil
+}
+
+// storedEnvelope returns the decoded envelope when the whole column value is one
+// marshalMetadata could have produced, and false otherwise.
+//
+// The store always writes the envelope as the only top-level key, so any other
+// top-level key already rules it out. The payload must decode into
+// storedMetadata without unknown fields, which excludes scalars and objects
+// carrying a field the store never writes.
+//
+// Both storedMetadata fields are omitempty, so marshalMetadata never emits an
+// empty one: {"metadata":null}, {"metadata":{}}, and {"embedding_text":""} are
+// therefore external values, not envelopes, and are left to the caller.
+func storedEnvelope(raw map[string]json.RawMessage) (storedMetadata, bool) {
+	if len(raw) != 1 {
+		return storedMetadata{}, false
+	}
+	envelope, ok := raw[internalMetadataKey]
+	if !ok {
+		return storedMetadata{}, false
+	}
+	// Reject a scalar or null payload before looking at individual fields.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(envelope, &fields); err != nil || fields == nil {
+		return storedMetadata{}, false
+	}
+	var stored storedMetadata
+	dec := json.NewDecoder(bytes.NewReader(envelope))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&stored); err != nil {
+		return storedMetadata{}, false
+	}
+	if _, ok := fields["metadata"]; ok && len(stored.Metadata) == 0 {
+		return storedMetadata{}, false
+	}
+	if _, ok := fields["embedding_text"]; ok && stored.EmbeddingText == "" {
+		return storedMetadata{}, false
+	}
+	return stored, true
+}
+
+// filterFieldValues extracts the declared filter-field values from metadata and
+// converts them to the typed column values expected by the ClickHouse driver.
+// A field the document does not carry yields nil, which is stored as SQL NULL so
+// filtering can tell it apart from an explicit zero value.
+func (vs *VectorStore) filterFieldValues(metadata map[string]any) ([]any, error) {
+	if len(vs.option.filterFields) == 0 {
+		return nil, nil
+	}
+	values := make([]any, len(vs.option.filterFields))
+	for i, spec := range vs.option.filterFields {
+		v, err := convertFilterFieldValue(spec.Type, metadata[spec.Name])
+		if err != nil {
+			return nil, fmt.Errorf("clickhouse: filter field %q: %w", spec.Name, err)
+		}
+		values[i] = v
+	}
+	return values, nil
+}
+
+// convertFilterFieldValue converts a metadata value to the typed value expected
+// by the ClickHouse column for the given FilterFieldType. A nil value yields
+// nil, which the driver writes as SQL NULL.
+func convertFilterFieldValue(t FilterFieldType, v any) (any, error) {
+	switch t {
+	case FilterFieldString:
+		if v == nil {
+			return nil, nil
+		}
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("expected string, got %T", v)
+		}
+		return s, nil
+	case FilterFieldInt64:
+		if v == nil {
+			return nil, nil
+		}
+		return toInt64(v)
+	case FilterFieldFloat64:
+		if v == nil {
+			return nil, nil
+		}
+		return toFloat64(v)
+	default:
+		return nil, fmt.Errorf("unknown FilterFieldType %d", t)
+	}
+}
+
+// toInt64 converts a supported numeric value to int64.
+func toInt64(v any) (int64, error) {
+	switch x := v.(type) {
+	case int:
+		return int64(x), nil
+	case int8:
+		return int64(x), nil
+	case int16:
+		return int64(x), nil
+	case int32:
+		return int64(x), nil
+	case int64:
+		return x, nil
+	case uint:
+		if uint64(x) > math.MaxInt64 {
+			return 0, fmt.Errorf("uint value %d overflows int64", x)
+		}
+		return int64(x), nil
+	case uint8:
+		return int64(x), nil
+	case uint16:
+		return int64(x), nil
+	case uint32:
+		return int64(x), nil
+	case uint64:
+		if x > math.MaxInt64 {
+			return 0, fmt.Errorf("uint64 value %d overflows int64", x)
+		}
+		return int64(x), nil
+	case float32:
+		return floatToInt64(float64(x))
+	case float64:
+		return floatToInt64(x)
+	case json.Number:
+		return x.Int64()
+	default:
+		return 0, fmt.Errorf("expected integer, got %T", v)
+	}
+}
+
+// floatToInt64 validates a floating-point value before converting it to int64.
+func floatToInt64(f float64) (int64, error) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("non-finite float %v cannot be int64", f)
+	}
+	if f != math.Trunc(f) {
+		return 0, fmt.Errorf("float %v is not an integer", f)
+	}
+	// math.MaxInt64 is not representable in float64 and rounds up to 2^63, so
+	// comparing against it would let 2^63 pass and make int64(f) overflow.
+	// Compare against 2^63 exclusively instead. math.MinInt64 (-2^63) is exact.
+	if f < math.MinInt64 || f >= math.Exp2(63) {
+		return 0, fmt.Errorf("float %v out of int64 range", f)
+	}
+	return int64(f), nil
+}
+
+// toFloat64 converts a supported numeric value to float64.
+func toFloat64(v any) (float64, error) {
+	switch x := v.(type) {
+	case int:
+		return float64(x), nil
+	case int8:
+		return float64(x), nil
+	case int16:
+		return float64(x), nil
+	case int32:
+		return float64(x), nil
+	case int64:
+		return float64(x), nil
+	case uint:
+		return float64(x), nil
+	case uint8:
+		return float64(x), nil
+	case uint16:
+		return float64(x), nil
+	case uint32:
+		return float64(x), nil
+	case uint64:
+		return float64(x), nil
+	case float32:
+		return float64(x), nil
+	case float64:
+		return x, nil
+	case json.Number:
+		return x.Float64()
+	default:
+		return 0, fmt.Errorf("expected float64, got %T", v)
+	}
+}

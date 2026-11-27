@@ -32,14 +32,58 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// memoryLimitRaceHook makes legacy top-level HLEN calls observe the same
+// pre-write count. The atomic Lua path does not issue top-level HLEN commands.
+type memoryLimitRaceHook struct {
+	expected int
+	mu       sync.Mutex
+	seen     int
+	ready    chan struct{}
+}
+
 type rotationRaceHook struct {
 	once   sync.Once
 	inject func()
 }
 
-type updateMemoryScriptHook struct {
+type memoryScriptHook struct {
 	result int64
 	err    error
+}
+
+func (h *memoryLimitRaceHook) DialHook(next goredis.DialHook) goredis.DialHook {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return next(ctx, network, addr)
+	}
+}
+
+func (h *memoryLimitRaceHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		err := next(ctx, cmd)
+		if err != nil || cmd.Name() != "hlen" {
+			return err
+		}
+
+		h.mu.Lock()
+		h.seen++
+		if h.seen == h.expected {
+			close(h.ready)
+		}
+		h.mu.Unlock()
+
+		select {
+		case <-h.ready:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (h *memoryLimitRaceHook) ProcessPipelineHook(
+	next goredis.ProcessPipelineHook,
+) goredis.ProcessPipelineHook {
+	return next
 }
 
 func (h *rotationRaceHook) DialHook(next goredis.DialHook) goredis.DialHook {
@@ -73,13 +117,13 @@ func (h *rotationRaceHook) ProcessPipelineHook(next goredis.ProcessPipelineHook)
 	}
 }
 
-func (h *updateMemoryScriptHook) DialHook(next goredis.DialHook) goredis.DialHook {
+func (h *memoryScriptHook) DialHook(next goredis.DialHook) goredis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return next(ctx, network, addr)
 	}
 }
 
-func (h *updateMemoryScriptHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+func (h *memoryScriptHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
 	return func(ctx context.Context, cmd goredis.Cmder) error {
 		switch cmd.Name() {
 		case "eval", "evalsha":
@@ -98,7 +142,7 @@ func (h *updateMemoryScriptHook) ProcessHook(next goredis.ProcessHook) goredis.P
 	}
 }
 
-func (h *updateMemoryScriptHook) ProcessPipelineHook(
+func (h *memoryScriptHook) ProcessPipelineHook(
 	next goredis.ProcessPipelineHook,
 ) goredis.ProcessPipelineHook {
 	return next
@@ -630,7 +674,7 @@ func TestService_UpdateMemory_ScriptFailureLeavesResultUntouched(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
-	svc.redisClient.AddHook(&updateMemoryScriptHook{
+	svc.redisClient.AddHook(&memoryScriptHook{
 		err: fmt.Errorf("script failed"),
 	})
 	result := &memory.UpdateResult{MemoryID: "unchanged"}
@@ -698,7 +742,7 @@ func TestService_UpdateMemory_UnexpectedScriptResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
-	svc.redisClient.AddHook(&updateMemoryScriptHook{result: 99})
+	svc.redisClient.AddHook(&memoryScriptHook{result: 99})
 	result := &memory.UpdateResult{MemoryID: "unchanged"}
 	err = svc.UpdateMemory(
 		ctx,
@@ -779,10 +823,97 @@ func TestService_MemoryLimit(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
-	require.NoError(t, svc.AddMemory(ctx, userKey, "first", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "first", []string{"original"}))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "first", []string{"updated"}))
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{"updated"}, entries[0].Memory.Topics)
+
 	err = svc.AddMemory(ctx, userKey, "second", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "memory limit exceeded")
+}
+
+func TestService_MemoryLimitConcurrentAddIsAtomic(t *testing.T) {
+	const concurrentAdds = 8
+
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+	svc, err := NewService(WithRedisClientURL(url), WithMemoryLimit(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	svc.redisClient.AddHook(&memoryLimitRaceHook{
+		expected: concurrentAdds,
+		ready:    make(chan struct{}),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "concurrent-user"}
+	start := make(chan struct{})
+	errorsCh := make(chan error, concurrentAdds)
+	var waitGroup sync.WaitGroup
+	for i := 0; i < concurrentAdds; i++ {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			<-start
+			errorsCh <- svc.AddMemory(ctx, userKey, fmt.Sprintf("memory-%d", index), nil)
+		}(i)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsCh)
+
+	var successes int
+	for err := range errorsCh {
+		if err == nil {
+			successes++
+			continue
+		}
+		require.ErrorContains(t, err, "memory limit exceeded")
+	}
+	require.Equal(t, 1, successes)
+
+	entries, err := svc.ReadMemories(ctx, userKey, concurrentAdds)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+func TestService_AddMemory_ScriptFailure(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+	svc, err := NewService(WithRedisClientURL(url), WithMemoryLimit(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	svc.redisClient.AddHook(&memoryScriptHook{err: fmt.Errorf("script failed")})
+	err = svc.AddMemory(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"memory",
+		nil,
+	)
+	require.ErrorContains(t, err, "store memory entry failed")
+}
+
+func TestService_AddMemory_UnexpectedScriptResult(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+	svc, err := NewService(WithRedisClientURL(url), WithMemoryLimit(1))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	svc.redisClient.AddHook(&memoryScriptHook{result: -1})
+	err = svc.AddMemory(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"memory",
+		nil,
+	)
+	require.ErrorContains(t, err, "unexpected result -1")
 }
 
 func TestService_Tools_DefaultEnabled(t *testing.T) {

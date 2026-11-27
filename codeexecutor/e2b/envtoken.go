@@ -11,6 +11,7 @@
 package e2b
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -24,75 +25,41 @@ import (
 // is needed.
 const minimalCleanPATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-// envToken builds the leading `env ...` (or `env -i ...`) token that
-// RunProgram splices in front of the quoted command inside the bash
-// script handed to the sandbox.
-//
-//   - base holds the runtime-supplied workspace variables
-//     (WORKSPACE_DIR, SKILLS_DIR, ...); a base entry is dropped when
-//     spec overrides the same key, matching the "user env wins"
-//     behaviour.
-//   - spec holds the caller/tool-supplied env. When a command policy
-//     is active the tool layer has already scrubbed it before it
-//     reaches the runtime.
-//   - clean selects `env -i` (empty starting environment) and the
-//     minimalCleanPATH fallback, injected only when spec carries no
-//     PATH so `env -i` can still resolve the command name.
-//
-// The result is terminated with a trailing space, or empty when
-// clean is false and there is nothing to inject; a clean token
-// always contains at least PATH. This is the e2b copy of the
-// container runtime's helper: the two backends are separate modules,
-// so each keeps its own unexported version rather than sharing a
-// package across the module boundary.
-func envToken(base, spec map[string]string, clean bool) string {
-	parts := make([]string, 0, len(base)+len(spec))
-	for _, k := range sortedEnvKeys(base) {
-		if _, ok := spec[k]; ok {
-			continue
-		}
-		parts = append(parts, k+"="+shellQuote(base[k]))
-	}
-	for _, k := range sortedEnvKeys(spec) {
-		parts = append(parts, k+"="+shellQuote(spec[k]))
-	}
+// programEnvArgs builds literal env arguments. Caller values override workspace
+// defaults and never become shell source or the bootstrap shell environment.
+func programEnvArgs(base, spec map[string]string, clean bool) ([]string, error) {
+	args := []string{}
 	if clean {
-		if !hasPathKey(base, spec) {
-			parts = append(
-				[]string{"PATH=" + shellQuote(minimalCleanPATH)},
-				parts...,
-			)
+		args = append(args, "-i")
+	}
+	args = append(args, "--")
+	if clean {
+		if _, ok := spec["PATH"]; !ok {
+			if _, ok := base["PATH"]; !ok {
+				args = append(args, "PATH="+minimalCleanPATH)
+			}
 		}
-		return "env -i " + strings.Join(parts, " ") + " "
 	}
-	if len(parts) == 0 {
-		return ""
+	merged := make(map[string]string, len(base)+len(spec))
+	for key, value := range base {
+		merged[key] = value
 	}
-	return "env " + strings.Join(parts, " ") + " "
-}
-
-// hasPathKey reports whether the effective environment (base entries
-// not overridden by spec, plus spec) already defines PATH. The check
-// is case-sensitive because the sandbox targets Linux, where a
-// lowercase "Path" is a distinct variable and must not suppress the
-// minimalCleanPATH injection.
-func hasPathKey(base, spec map[string]string) bool {
-	if _, ok := spec["PATH"]; ok {
-		return true
+	for key, value := range spec {
+		merged[key] = value
 	}
-	_, ok := base["PATH"]
-	return ok
-}
-
-// sortedEnvKeys returns the map keys in sorted order so the generated
-// script is deterministic (Go map iteration order is randomised);
-// environment-variable order on an `env` invocation is semantically
-// irrelevant.
-func sortedEnvKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	keys := make([]string, 0, len(merged))
+	for key := range merged {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	return keys
+	for _, key := range keys {
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			return nil, fmt.Errorf("e2b: invalid environment variable name %q", key)
+		}
+		if strings.ContainsRune(merged[key], 0) {
+			return nil, fmt.Errorf("e2b: environment variable %q contains NUL", key)
+		}
+		args = append(args, key+"="+merged[key])
+	}
+	return args, nil
 }

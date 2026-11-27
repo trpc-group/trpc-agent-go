@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/client"
+	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -61,10 +62,11 @@ func New(opts ...Option) (*WeKnoraAgent, error) {
 
 // sendErrorEvent sends an error event to the event channel
 func (r *WeKnoraAgent) sendErrorEvent(ctx context.Context, eventChan chan<- *event.Event,
-	invocation *agent.Invocation, errorMessage string) {
+	invocation *agent.Invocation, errorMessage, upstreamID string) {
 	agent.EmitEvent(ctx, invocation, eventChan, event.New(
 		invocation.InvocationID,
 		r.name,
+		withUpstreamResponseID(upstreamID),
 		event.WithResponse(&model.Response{
 			Error: &model.ResponseError{
 				Message: errorMessage,
@@ -155,12 +157,19 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 	go func() {
 		defer close(eventChan)
 
+		// All chunks and the final completion belong to one response.
+		responseID := uuid.NewString()
+		var upstreamID string
 		var aggregatedContentBuilder strings.Builder
 		var aggregatedReasoningBuilder strings.Builder
 
 		err := r.weknoraClient.AgentQAStreamWithRequest(ctx, sessionID, req, func(resp *client.AgentStreamResponse) error {
 			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return err
+			}
+
+			if resp.ID != "" {
+				upstreamID = resp.ID
 			}
 
 			if resp.ResponseType == client.AgentResponseTypeAnswer || resp.ResponseType == client.AgentResponseTypeThinking {
@@ -181,6 +190,7 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 						invocation.InvocationID,
 						r.name,
 						event.WithResponse(&model.Response{
+							ID:        responseID,
 							Object:    model.ObjectTypeChatCompletionChunk,
 							Choices:   []model.Choice{{Delta: message}},
 							Timestamp: time.Now(),
@@ -189,6 +199,7 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 							Done:      false,
 						}),
 						event.WithObject(model.ObjectTypeChatCompletionChunk),
+						withUpstreamResponseID(upstreamID),
 					)
 					agent.EmitEvent(ctx, invocation, eventChan, evt)
 				}
@@ -200,12 +211,12 @@ func (r *WeKnoraAgent) runStreaming(ctx context.Context, invocation *agent.Invoc
 		})
 
 		if err != nil {
-			r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
+			r.sendErrorEvent(ctx, eventChan, invocation, err.Error(), upstreamID)
 			return
 		}
 
 		// Send final aggregated event
-		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), aggregatedReasoningBuilder.String())
+		r.sendFinalStreamingEvent(ctx, eventChan, invocation, responseID, aggregatedContentBuilder.String(), aggregatedReasoningBuilder.String(), upstreamID)
 	}()
 
 	return eventChan, nil
@@ -216,13 +227,18 @@ func (r *WeKnoraAgent) sendFinalStreamingEvent(
 	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
+	responseID string,
 	aggregatedContent string,
 	aggregatedReasoning string,
+	upstreamID string,
 ) {
 	agent.EmitEvent(ctx, invocation, eventChan, event.New(
 		invocation.InvocationID,
 		r.name,
+		withUpstreamResponseID(upstreamID),
 		event.WithResponse(&model.Response{
+			ID:        responseID,
+			Object:    model.ObjectTypeChatCompletion,
 			Done:      true,
 			IsPartial: false,
 			Timestamp: time.Now(),
@@ -281,4 +297,18 @@ func (r *WeKnoraAgent) getWeKnoraClient(
 
 func genSessionKey(sessionID string) string {
 	return fmt.Sprintf("weknora_session_%s", sessionID)
+}
+
+// withUpstreamResponseID snapshots the latest non-empty upstream ID without
+// changing the stable response identity used by downstream message consumers.
+func withUpstreamResponseID(upstreamID string) event.Option {
+	return func(evt *event.Event) {
+		if upstreamID == "" {
+			return
+		}
+		event.WithExtension("weknora", struct {
+			Version    int    `json:"version"`
+			ResponseID string `json:"response_id"`
+		}{Version: 1, ResponseID: upstreamID})(evt)
+	}
 }

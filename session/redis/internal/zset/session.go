@@ -1064,34 +1064,42 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 
 // CreateSummary creates or updates a summary for the session.
 // Uses Lua script to atomically merge filterKey summary only if newer.
+//
+// It reports the set-if-newer classification. A successful script execution
+// never becomes a caller-visible error just because the reply is unrecognized;
+// that reply is classified as unknown instead of stored or stale. The TTL
+// refresh runs whenever the script itself succeeds, as it always has, because
+// the stored key stays live either way.
 func (c *Client) CreateSummary(
 	ctx context.Context,
 	key session.Key,
 	filterKey string,
 	sum *session.Summary,
 	ttl time.Duration,
-) error {
+) (write util.SummaryWriteResult, err error) {
 	payload, err := json.Marshal(sum)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		return util.SummaryWriteUnknown, fmt.Errorf("marshal summary failed: %w", err)
 	}
 
 	sumKey := c.sessionSummaryKey(key)
 	hashField := key.SessionID
 
-	if _, err := c.runScript(
+	result, err := c.runScript(
 		ctx, luaSummariesSetIfNewer, []string{sumKey}, hashField, filterKey, string(payload),
-	).Result(); err != nil {
-		return fmt.Errorf("store summary (lua) failed: %w", err)
+	).Result()
+	if err != nil {
+		return util.SummaryWriteUnknown, fmt.Errorf("store summary (lua) failed: %w", err)
 	}
+	write = util.ParseSummaryWriteResult(result)
 
 	if ttl > 0 {
 		if err := c.client.Expire(ctx, sumKey, ttl).Err(); err != nil {
-			return fmt.Errorf("expire summary failed: %w", err)
+			return write, fmt.Errorf("expire summary failed: %w", err)
 		}
 	}
 
-	return nil
+	return write, nil
 }
 
 // GetSummary retrieves summaries for the session.

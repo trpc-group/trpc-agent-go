@@ -1,5 +1,7 @@
 # tRPC-Agent-Go A2A Integration Guide
 
+> This guide covers the legacy `server/a2a` and `agent/a2aagent` packages for A2A v0.2.x. For new integrations and migration guidance, see [A2A v1.0 Integration and Migration Guide](a2a_v1.md).
+
 ## Overview
 
 tRPC-Agent-Go provides a complete A2A (Agent-to-Agent) solution with two core components:
@@ -119,6 +121,39 @@ machine-readable fields preferred on the outer metadata, mirrored into
 `status.message.metadata` for `0.1` compatibility, and display text in
 `status.message.parts`.
 
+#### Delta-only text in streaming Messages
+
+By default, streaming Messages include both incremental text and reasoning
+from `choice.Delta` and complete text and reasoning from `choice.Message` on
+non-partial events. Clients can distinguish `chat.completion.chunk` from
+`chat.completion` using `metadata.object_type` and associate responses using
+`metadata.llm_response_id`.
+
+For compatibility with clients that append every text part, enable
+`WithStreamingMessageTextDeltaOnly(true)` together with Message streaming:
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+	a2aserver.WithStreamingMessageTextDeltaOnly(true),
+)
+```
+
+This option defaults to `false`. When enabled, the default event converter
+takes text and reasoning only from `choice.Delta`, restoring the behavior
+before v1.11.0. Text present only in `choice.Message` is omitted even if no
+deltas preceded it, so do not enable this mode when the caller needs replies
+that are available only as complete messages.
+
+Completion events with meaningful metadata, such as `object_type`, are still
+emitted. Existing empty-event rules apply: if no parts remain and the only
+metadata is `llm_response_id`, the entire event is omitted. Event Part mappers,
+tool calls, code execution, and task status updates continue to work.
+Unary responses, artifact streaming, and custom `EventToA2AMessage` converters
+are unaffected. No text buffering or duplicate detection is performed.
+
 #### Direct A2A Protocol Client Call
 
 ```go
@@ -163,6 +198,10 @@ directives in its cookie jar. It does not connect to `SessionService` or
 persist session state itself.
 Browser clients should complete one initial request before starting concurrent
 anonymous message sends, or provide a trusted user identity instead.
+
+`NewAnonymousA2AClient` releases its initialization gate only after it observes a valid anonymous cookie from a response or custom HTTP handler and the configured cookie jar accepts the same value for the agent URL. A preloaded anonymous cookie is sent, but does not by itself confirm initialization; custom servers must reissue the accepted cookie, or return a replacement, with `Set-Cookie` before later requests can proceed concurrently. The built-in A2A server already does this.
+
+Anonymous browser continuity requires a same-site deployment. The server cookie uses `SameSite=Lax`, so browsers do not send it on cross-site JSON-RPC POST requests. When the browser UI and A2A endpoint are same-site but cross-origin, Fetch requests must use `credentials: "include"`, and the deployment must allow credentialed CORS by setting `Access-Control-Allow-Origin` to the UI's explicit origin and `Access-Control-Allow-Credentials` to `true`. Cross-site deployments should provide a trusted user identity instead; cross-site anonymous cookie continuity is not supported.
 
 #### Anonymous Principal Behavior
 
@@ -601,6 +640,11 @@ a2aAgent, err := a2aagent.New(
 )
 ```
 
+When a streaming run is canceled, `A2AAgent` stops waiting for remote events
+even if the remote event channel remains open and silent. Cancellation does not
+produce a successful final response. The HTTP handler and SDK remain responsible
+for releasing their own network resources.
+
 Whether the client sends a streaming request follows this priority:
 
 1. Per-call override via `agent.WithStream(...)`
@@ -985,6 +1029,7 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithResponseRewriter(rewriter)` | Rewrite or drop outbound A2A unary/streaming results |
 | `WithRunOptions(opts...)` | Append RunOptions to every invocation |
 | `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
+| `WithStreamingMessageTextDeltaOnly(enabled)` | Use only Delta text and reasoning in Message streaming (default: false) |
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
 | `WithADKCompatibility(enabled)` | ADK compatibility mode (default: enabled) |
 | `WithErrorHandler(handler)` | Custom error handler |

@@ -139,6 +139,8 @@ type options struct {
 
 	// textOnlyMessageContent overrides the variant default when set.
 	textOnlyMessageContent *bool
+
+	preserveToolsWhenDisabled bool
 }
 
 var (
@@ -160,6 +162,24 @@ var (
 
 // Option is a function that configures an OpenAI model.
 type Option func(*options)
+
+// WithPreserveToolsWhenDisabled keeps tool definitions in requests where the
+// framework disables tool calls, such as during call-limit finalization.
+// The default is false, which omits the definitions in those requests.
+//
+// When enabled, tools follow the usual request processing. The adapter sets
+// tool_choice to "none" after callbacks, extra fields, and SDK JSON options,
+// even if the tool list is empty. The legacy functions and function_call
+// fields are omitted during finalization.
+//
+// Enable this only for endpoints verified to honor "none". Preserving tool
+// definitions can help reuse the prompt cache. API errors and unexpected tool
+// calls follow the existing finalization error path.
+func WithPreserveToolsWhenDisabled(enabled bool) Option {
+	return func(opts *options) {
+		opts.preserveToolsWhenDisabled = enabled
+	}
+}
 
 // WithAPIKey sets the API key for the OpenAI client.
 func WithAPIKey(key string) Option {
@@ -205,6 +225,9 @@ func WithChatRequestJSONCallback(fn ChatRequestJSONCallbackFunc) Option {
 
 // WithChatResponseCallback sets the function to be called after receiving a chat response.
 // Used for non-streaming responses.
+// If the callback changes prompt or cache token counts, the resulting model.Usage
+// leaves PromptCacheAccounting unspecified so consumers use their legacy fallback.
+// Changes only to output counts or other response fields preserve provider accounting.
 func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatResponseCallback = fn
@@ -369,18 +392,25 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
-// When enabled, the system will automatically calculate max input tokens using the model's
-// context window minus reserved tokens and protocol overhead.
+// WithEnableTokenTailoring controls automatic message trimming before sending a
+// request to the model provider. It is disabled by default.
+// Setting WithMaxInputTokens or WithContextWindow alone does not enable trimming.
+// When enabled, trimming uses Model.InputTokenBudget, which derives the budget
+// from the context window unless a positive WithMaxInputTokens limit is set.
 func WithEnableTokenTailoring(enabled bool) Option {
 	return func(opts *options) {
 		opts.EnableTokenTailoring = enabled
 	}
 }
 
-// WithMaxInputTokens sets only the input token limit for token tailoring.
-// The counter/strategy will be lazily initialized if not provided.
-// Defaults to SimpleTokenCounter and MiddleOutStrategy.
+// WithMaxInputTokens sets the messages input budget used by Model.InputTokenBudget
+// and token tailoring. A non-positive limit derives the budget from the context
+// window instead.
+// This option does not enable automatic trimming; use
+// WithEnableTokenTailoring(true) to apply trimming before provider requests.
+// The input budget remains available to other framework consumers when trimming
+// is disabled. The default counter and strategy are SimpleTokenCounter and
+// MiddleOutStrategy.
 func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
 		opts.MaxInputTokens = limit
@@ -389,6 +419,10 @@ func WithMaxInputTokens(limit int) Option {
 
 // WithContextWindow sets the model context window size in tokens for this
 // model instance.
+// This option does not enable automatic trimming; use
+// WithEnableTokenTailoring(true) to apply trimming before provider requests.
+// The window is also exposed through Model.Info for other framework consumers,
+// such as context-threshold summaries, regardless of the trimming setting.
 func WithContextWindow(tokens int) Option {
 	return func(opts *options) {
 		if tokens > 0 {
@@ -401,10 +435,23 @@ func WithContextWindow(tokens int) Option {
 type AccumulateChunkUsage func(u model.Usage, delta model.Usage) model.Usage
 
 // WithAccumulateChunkTokenUsage sets the function to be called to accumulate chunk token usage.
+// The returned PromptCacheAccounting is preserved for subsequent calls and the
+// final response. An empty or unknown mode keeps the legacy telemetry fallback;
+// the adapter does not infer a mode for custom accumulated usage.
 func WithAccumulateChunkTokenUsage(a AccumulateChunkUsage) Option {
 	return func(opts *options) {
 		opts.accumulateChunkUsage = a
 	}
+}
+
+func hasUsageTokens(usage model.Usage) bool {
+	return usage.PromptTokens != 0 ||
+		usage.CompletionTokens != 0 ||
+		usage.TotalTokens != 0 ||
+		usage.PromptTokensDetails.CachedTokens != 0 ||
+		usage.PromptTokensDetails.CacheReadTokens != 0 ||
+		usage.PromptTokensDetails.CacheCreationTokens != 0 ||
+		usage.CompletionTokensDetails.ReasoningTokens != 0
 }
 
 // inverseOpenAISDKAddChunkUsage calculates the inverse of OPENAISKDAddChunkUsage, related to the current openai sdk version
@@ -414,7 +461,9 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 		CompletionTokens: u.CompletionTokens - delta.CompletionTokens,
 		TotalTokens:      u.TotalTokens - delta.TotalTokens,
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
+			CachedTokens:        int(u.PromptTokensDetails.CachedTokens - delta.PromptTokensDetails.CachedTokens),
+			CacheReadTokens:     u.PromptTokensDetails.CacheReadTokens - delta.PromptTokensDetails.CacheReadTokens,
+			CacheCreationTokens: u.PromptTokensDetails.CacheCreationTokens - delta.PromptTokensDetails.CacheCreationTokens,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(u.CompletionTokensDetails.ReasoningTokens - delta.CompletionTokensDetails.ReasoningTokens),
@@ -423,13 +472,21 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 }
 
 // completionUsageToModelUsage converts openai.CompletionUsage to model.Usage.
+//
+// Besides the OpenAI-standard cached_tokens, the conversion surfaces the prompt
+// cache read and cache write counts that providers and gateways report in
+// prompt_tokens_details (and top-level usage fallback for cache writes). Those
+// counts stay 0 for providers that do not report them.
 func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
+	cacheReadTokens, cacheCreationTokens := usageCacheTokens(usage)
 	return model.Usage{
 		PromptTokens:     int(usage.PromptTokens),
 		CompletionTokens: int(usage.CompletionTokens),
 		TotalTokens:      int(usage.TotalTokens),
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
+			CachedTokens:        int(usage.PromptTokensDetails.CachedTokens),
+			CacheReadTokens:     cacheReadTokens,
+			CacheCreationTokens: cacheCreationTokens,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(usage.CompletionTokensDetails.ReasoningTokens),
@@ -438,8 +495,12 @@ func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
 }
 
 // modelUsageToCompletionUsage converts model.Usage to openai.CompletionUsage.
+//
+// The prompt cache read and write counts are carried through the same
+// prompt_tokens_details extra fields that completionUsageToModelUsage reads,
+// so a custom WithAccumulateChunkTokenUsage result keeps them.
 func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
-	return openai.CompletionUsage{
+	converted := openai.CompletionUsage{
 		PromptTokens:     int64(usage.PromptTokens),
 		CompletionTokens: int64(usage.CompletionTokens),
 		TotalTokens:      int64(usage.TotalTokens),
@@ -450,6 +511,9 @@ func modelUsageToCompletionUsage(usage model.Usage) openai.CompletionUsage {
 			ReasoningTokens: int64(usage.CompletionTokensDetails.ReasoningTokens),
 		},
 	}
+	setUsageCacheTokens(&converted, usage.PromptTokensDetails.CacheReadTokens,
+		usage.PromptTokensDetails.CacheCreationTokens)
+	return converted
 }
 
 // WithTokenCounter sets the TokenCounter used for token tailoring.

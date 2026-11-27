@@ -495,10 +495,73 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 因此，如果你会在回调里替换 context，记得把已有的 context value
 一并透传。
 
+## 结构化工具结果
+
+工具需要向模型返回图片等媒体时，使用 `model.ToolResultContent`，可同时返回文字。
+LLMAgent 的默认工具调用流程和 Graph ToolsNode 会自动生成工具结果消息，无需配置
+`ToolResultMessages` 回调。
+
+Graph 工具返回 `InterruptError` 时，调用暂停等待恢复，`complete` 事件将可序列化的
+暂停载荷以 JSON 写入 `Message.Content`。
+
+[Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
+支持在工具结果中返回图片，需配合支持此能力的适配器版本和模型服务。
+Chat Completions 请使用纯文本工具结果。默认流程中的图文混合结果会发送空回执，
+其中的文字和图片都不会传给模型，也不会自动转为 user message。
+
+下面的工具按图片 ID 返回文字和图片；`loadPNG` 由业务实现，返回 PNG 原始字节。
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+type ReadImageArgs struct {
+    ImageID string `json:"image_id"`
+}
+
+readImageTool := function.NewFunctionTool(
+    func(ctx context.Context, args ReadImageArgs) (model.ToolResultContent, error) {
+        data, err := loadPNG(ctx, args.ImageID)
+        if err != nil {
+            return nil, err
+        }
+        text := "Image loaded."
+        return model.ToolResultContent{
+            {Type: model.ContentTypeText, Text: &text},
+            {Type: model.ContentTypeImage, Image: &model.Image{
+                Data: data, Format: "png",
+            }},
+        }, nil
+    },
+    function.WithName("read_image"),
+    function.WithDescription("Read an image by ID."),
+)
+```
+
+自行实现 `tool.CallableTool` 时，`Call` 保持 `(any, error)` 签名，直接返回
+`model.ToolResultContent` 值即可。流式工具将该值放入 `tool.FinalResultChunk.Result`。
+
+使用时注意：
+
+- **返回类型**：按值返回 `model.ToolResultContent`。`[]byte`、普通
+  `[]model.ContentPart` 和 `*model.ToolResultContent` 仍按 JSON 处理。
+  该类型的 nil 或空切片会生成空工具结果，不会省略回执。
+- **图片数据**：`Image.Data` 接收图片文件的原始字节，`Image.Format` 指定格式
+  （如 `"png"`）；模型适配器在构造请求时完成所需的 Base64 编码。图片地址使用
+  `Image.URL`。框架处理结果期间，请勿修改返回的内容及其字节缓冲区。
+- **内容顺序**：文字和媒体块保留返回顺序，多个文本块之间不自动插入分隔符。
+- **自定义处理**：LLMAgent 对工具执行产生的结果应用已配置的 result formatter。
+  `BeforeTool` 回调或插件短路返回的结果使用默认转换；`ToolResultMessages` 回调仍可
+  覆盖默认消息。详见[工具结果格式化](#工具结果格式化)。
+
 ## 工具结果格式化
 
-Function Tool 默认使用 JSON 构造模型可见的工具结果消息。当某个工具需要 XML-like
-observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
+Function Tool 对普通返回值使用 JSON，对 `model.ToolResultContent` 使用上面的
+结构化内容转换。当某个工具需要 XML-like observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
 `model.Message` 或维护 tool call ID。
 
 当前支持：
@@ -538,12 +601,13 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
 `DefaultToolMessage.Content`。消息角色、工具名、tool call ID 配对、顺序、事件和
 会话记录仍由框架维护。
 
-- 未配置 formatter 时，现有默认 JSON 输出保持不变。
+- 未配置 formatter 时，普通返回值保持原有 JSON 输出；`model.ToolResultContent`
+  使用上面的结构化内容转换。
 - formatter 返回错误或发生 panic 时，本次工具结果会报告错误；框架不会回退 JSON，
   也不会重新执行已经完成的工具。格式化失败只是展示失败，工具已经执行完毕，它的会话
   状态更新照常写入。
-- formatter 只在工具为本次调用声明了结果时才会运行。工具没有声明结果时，框架保持
-  默认 JSON：`tool.PermissionResult`、仅携带状态的流式最终结果、`BeforeTool`
+- formatter 只在工具为本次调用声明了结果时才会运行。工具没有声明结果时，框架使用
+  默认结果转换：`tool.PermissionResult`、仅携带状态的流式最终结果、`BeforeTool`
   callback 或插件短路本次调用时返回的 `CustomResult`，以及流结束时没有
   `tool.FinalResultChunk` 而由框架合并出的流内容（见下一条）。工具确实执行并声明了
   结果时，`AfterTool` callback 的替换值属于另一种情况：它会被格式化，因此必须是
@@ -551,20 +615,20 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
 - 其他 `StreamableTool` 只格式化最终结果，中间事件不变。流式工具必须通过
   `tool.FinalResultChunk` 声明这个最终结果。若数据流结束时没有 final chunk，最终
   结果就是框架合并出的流内容，而不是工具声明的输出类型，此时框架跳过 formatter、
-  保持默认 JSON，并打印一条告警；`AfterTool` callback 即使替换了合并内容，本次调用
+  使用默认结果转换，并打印一条告警；`AfterTool` callback 即使替换了合并内容，本次调用
   也不会重新具备格式化资格。要让流式结果被格式化，请发出
   `tool.FinalResultChunk`。
-- 对于会更新会话状态的工具，状态更新消费的是「未配置 formatter 时框架会发出的那条
-  工具消息内容」，也就是 `AfterTool` callback 处理后结果的 JSON。formatter 不参与
-  状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
-  修改前的内容。如果 `ToolResultMessages` 改写了工具消息内容，则以改写后的内容为
+- 对于会更新会话状态的工具，状态更新消费的是 `AfterTool` callback 处理后原始
+  返回值的 JSON，与结构化内容转换或格式化无关。formatter 不参与状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
+  修改前的内容。如果 `ToolResultMessages` 改写了 `Message.Content`，则以改写后的内容为
   准——这与引入 formatter 之前的行为一致。
 - `ToolResultMessages` callback 仍会在默认工具结果消息生成后执行，并可用其返回的消息
-  覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。注意
+  覆盖默认消息；多消息、自定义内容转换或完全接管消息协议的场景继续使用该 callback。注意
   formatter 是按工具配置的，而 `ToolResultMessages` 是整个 Agent 全局的：对配置了
   formatter 的工具，回调拿到的 `DefaultToolMessage.Content` 是格式化后的文本而不是
   JSON。回调如果需要结构化数据，请读取 `ToolResultMessagesInput.Result`，不要解析
-  `DefaultToolMessage.Content`。
+  `DefaultToolMessage.Content`。重建消息时，应保留 `DefaultToolMessage.ContentParts` 中的
+  媒体和内容引用。
 
 Formatter 返回的文本会直接写入默认工具结果消息，可以在格式化函数中按业务协议处理
 转义、截断和格式校验。Formatter 必须把入参结果视为只读：同一个结果对象随后会作为
@@ -928,9 +992,44 @@ agent := llmagent.New("mcp-assistant",
 
 ### 工具名前缀
 
-通过 `WithToolSets` 把 MCP ToolSet 挂到 `LLMAgent` 上时，框架会用
-`NamedToolSet` 包装它。模型侧看到的工具名为
-`{toolSetName}_{远端工具名}`，实际 MCP `tools/call` 仍使用远端原始名称。
+通过 `WithToolSets` 或 `WithActivatableToolSets` 把 ToolSet（包括 MCP
+ToolSet）挂到 `LLMAgent` 上时，框架会用 `NamedToolSet` 包装它。默认情况下，
+名称为 `github` 的 ToolSet 中声明了 `search` 工具，模型侧看到的是
+`github_search`，底层 Tool 仍会收到原始工具名。
+
+可以使用 `llmagent.WithToolSetToolNameMode` 为某个已注册的 ToolSet 配置
+模型侧工具名：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// githubToolSet 是任意 Name() 返回 "github" 的 tool.ToolSet 实现。
+agent := llmagent.New("assistant",
+    llmagent.WithToolSets([]tool.ToolSet{githubToolSet}),
+    llmagent.WithToolSetToolNameMode(
+        "github",
+        tool.ToolSetToolNameModeOriginal,
+    ),
+)
+```
+
+可选模式如下：
+
+- `tool.ToolSetToolNameModeQualified`（默认）：暴露为
+  `{toolSetName}_{toolName}`。
+- `tool.ToolSetToolNameModeOriginal`：使用 Tool 原始声明中的名称，不加
+  ToolSet 前缀。
+
+该选项同样适用于可激活 ToolSet，以及工具列表刷新后的 ToolSet。它只改变
+模型可见的声明名称；`ToolSet.Name()` 仍作为激活、策略和追踪使用的身份标识，
+实际调用仍会转发到底层 Tool。使用原始名称时，调用方需要保证同一次模型请求
+中所有可见工具的名称唯一。Agent 构建时会拒绝空 ToolSet 名称、未注册的
+ToolSet 名称以及不支持的 mode。
+
+对于 MCP ToolSet：
 
 - 默认 ToolSet 名为 `"mcp"`，远端工具 `search` 会暴露为 `mcp_search`。
 - 挂载多个 MCP ToolSet 时，请用 `mcp.WithName(...)` 为每个 ToolSet 设置
@@ -948,6 +1047,20 @@ agent := llmagent.New("multi-mcp",
 )
 // 模型可见名称：github_search、slack_search、...
 ```
+
+### MCP Schema 兼容性
+
+MCP ToolSet 将 `{"type":["null","integer"]}` 这类 JSON Schema 类型数组映射为
+`{"anyOf":[{"type":"null"},{"type":"integer"}]}`。`tool.Schema.Type` 表示单个
+类型，`tool.Schema.AnyOf` 表示包括 `null` 在内的允许类型分支。类型数组可用于转换后的
+输入、输出 Schema，包括嵌套属性、属性中的数组元素 Schema 和 `$defs`。
+
+可选与可空彼此独立：`required` 决定属性是否必须出现，`null` 分支允许属性值为
+JSON `null`。工具参数按原始类型透传，不做类型强制转换，由 MCP 服务端负责校验。
+
+Schema 转换仅支持 JSON Schema 的部分能力，不导入远端显式 `anyOf` 关键字，以及
+根级的 `default`、`enum`、`items` 和 `additionalProperties`。所选模型适配器和
+端点需要支持转换后的 Schema。
 
 ### MCP Annotations 与权限 Metadata
 
@@ -1249,6 +1362,26 @@ agent := llmagent.New(
     llmagent.WithTools(broker.Tools()),
 )
 ```
+
+通过 `WithServers` 配置的 named HTTP server 可以使用带自定义 scheme 的、
+结构合法的绝对 URL，前提是宿主运行时提供兼容的 `HTTPReqHandler`。broker 不会
+在配置阶段检查该 handler 是否存在。运行时直接传入的 URL 仍然只允许 HTTP/HTTPS。
+
+对于自定义 scheme 的命名 server，未被 interceptor 处理的操作错误会替换成不含
+endpoint 的固定错误。`context.Canceled` 和 `context.DeadlineExceeded` 仍可通过
+`errors.Is` 识别；宿主代码也可以通过 `errors.Is`、`errors.As` 或 `errors.Unwrap`
+分类或检查 cause，但顶层错误文本仍不包含 endpoint。工具不存在、缺少必填参数等
+模型请求错误仍会照常返回，便于模型自纠。`WithErrorInterceptor` 会先收到原始错误
+和 endpoint，宿主仍可记录、分类或替换错误。
+
+#### 一次性客户端与服务端主动消息
+
+每次 broker 操作都会使用一个一次性 MCP client，且不会消费服务端主动消息。
+对于代码配置的、使用自定义 scheme 的命名 server，streamable HTTP client
+会关闭后台 `GET` 流。宿主 option 会在 broker 默认值之后应用；内部宿主
+确实需要该流时，可以通过 `tmcp.WithClientGetSSEEnabled(true)` 重新开启。
+既有的 HTTP/HTTPS 命名 server 和 ad-hoc HTTP/HTTPS 目标继续沿用
+trpc-mcp-go 的默认行为。
 
 #### Server Description（服务描述）
 
