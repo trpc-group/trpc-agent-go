@@ -12,11 +12,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -292,4 +294,94 @@ func mcpJSONRPCResponse(status int, id any, result any) *http.Response {
 		"result":  result,
 	})
 	return mcpHTTPResponse(status, string(body))
+}
+
+func TestToolSet_StreamableHTTP404TriggersSessionReconnect(t *testing.T) {
+	var initCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.ID == nil {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		switch req.Method {
+		case "initialize":
+			n := initCount.Add(1)
+			w.Header().Set("Mcp-Session-Id", fmt.Sprintf("sess-%d", n))
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"protocolVersion": "2025-03-26",
+					"serverInfo":      map[string]any{"name": "test", "version": "1.0.0"},
+					"capabilities":    map[string]any{},
+				},
+			})
+		case "tools/list":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"tools": []any{map[string]any{
+						"name":        "lookup",
+						"description": "lookup item",
+						"inputSchema": map[string]any{"type": "object"},
+					}},
+				},
+			})
+		case "tools/call":
+			if r.Header.Get("Mcp-Session-Id") == "sess-1" {
+				http.Error(w, "Session not found or expired", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"content": []any{map[string]any{"type": "text", "text": "ok"}},
+				},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ts := NewMCPToolSet(
+		ConnectionConfig{
+			Transport: "streamable",
+			ServerURL: srv.URL,
+			Timeout:   2 * time.Second,
+		},
+		WithSessionReconnect(3),
+		WithMCPOptions(tmcp.WithClientGetSSEEnabled(false)),
+	)
+	defer func() { require.NoError(t, ts.Close()) }()
+
+	require.NoError(t, ts.Init(ctx))
+	tools := ts.Tools(ctx)
+	require.Len(t, tools, 1)
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+
+	res, err := callable.Call(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, int32(2), initCount.Load())
 }
