@@ -58,6 +58,8 @@ type Runtime struct {
 	restrictedPreflightDone  chan struct{}
 	restrictedPreflightReady bool
 	restrictedPreflightErr   error
+
+	egressRelayPath string
 }
 
 // NewRuntime constructs a sandbox runtime.
