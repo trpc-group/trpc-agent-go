@@ -206,6 +206,20 @@ its name with an empty namespace. Direct
 
 ### Client-executed search
 
+The built-in keyword handler searches the current request's deferred candidates
+by model-facing name, namespace, and tool description. It shares lexical
+scoring with `plugin/toolsearch`. An exact name match limits the results to
+that name. Otherwise, the handler ranks positive-scoring matches and returns
+up to five by default. Set a lower limit to load fewer tool definitions per
+search. The following configuration loads at most three.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+
+search := toolsearch.NewKeyword(toolsearch.WithKeywordMaxResults(3))
+llm := responses.New("gpt-5.4", responses.WithClientToolSearch(search))
+```
+
 The handler returns entries containing both the model-facing identity and the
 tool object to execute:
 
@@ -755,9 +769,10 @@ cannot be promised.
 This adapter requires a root module version containing `Message.ProviderData` and
 `Info.ProviderDataProtocol`. Tool search additionally requires a root version
 containing `model.ProviderActionCompleter`, `model.ProviderDataRequestProjector`,
-and `tool.ToolSetDescriber`; the examples above also use `tool/deferred`. The
-adapter uses root internal packages, so its required root version must be the
-matching release rather than any later root version. Repository-relative
+and `tool.ToolSetDescriber`. The keyword handler uses the shared lexical scoring
+package `internal/toolsearch/lexical` from the root module. The examples above also
+use `tool/deferred`. Pin the adapter to the root release that contains its
+internal dependencies. Repository-relative
 `replace` directives support local development only; downstream consumers
 must resolve a compatible root version
 because dependency modules' `replace` directives are not inherited. Publish

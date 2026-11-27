@@ -21,12 +21,12 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -45,7 +45,7 @@ func main() {
 	case "server":
 		search = responses.WithHostedToolSearch()
 	case "client":
-		search = responses.WithClientToolSearch(keywordSearch)
+		search = responses.WithClientToolSearch(toolsearch.NewKeyword())
 	default:
 		log.Fatalf("unsupported -mode %q: use server or client", *mode)
 	}
@@ -103,53 +103,6 @@ func main() {
 	if err := scanner.Err(); err != nil {
 		log.Printf("read input: %v", err)
 	}
-}
-
-// keywordSearch scores whole-word matches and gives tool names extra weight.
-func keywordSearch(_ context.Context, req *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error) {
-	query := searchWords(req.Query)
-	scores := make([]int, len(req.Candidates))
-	best := 0
-	for i, candidate := range req.Candidates {
-		keywords := candidate.Namespace + " " + candidate.Name + " " + candidate.Tool.Declaration().Description
-		scores[i] = countMatches(query, keywords) + countMatches(query, candidate.Name)
-		best = max(best, scores[i])
-	}
-	// Allow a one-point gap for short matches and up to a third of a stronger score.
-	margin := max(1, best/3)
-	var result []responses.ToolSearchEntry
-	for i, score := range scores {
-		if score > 0 && best-score <= margin {
-			result = append(result, req.Candidates[i])
-		}
-	}
-	return result, nil
-}
-
-func countMatches(query map[string]bool, text string) int {
-	count := 0
-	for word := range searchWords(text) {
-		if query[word] {
-			count++
-		}
-	}
-	return count
-}
-
-func searchWords(text string) map[string]bool {
-	words := make(map[string]bool)
-	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	}) {
-		switch word {
-		case "and", "for", "from", "get", "its", "look", "the", "tool", "tools", "with":
-			continue
-		}
-		if len(word) > 2 {
-			words[word] = true
-		}
-	}
-	return words
 }
 
 // staticToolSet is a fixed ToolSet with a description. The description becomes

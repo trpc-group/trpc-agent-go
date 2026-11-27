@@ -18,11 +18,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
+	search := toolsearch.NewKeyword()
 	candidates := []responses.ToolSearchEntry{
 		{Namespace: "billing", NamespaceDescription: "Billing tools for invoices and payments.",
 			Name: "lookup_invoice", Tool: searchTool("billing_lookup_invoice", "Look up an invoice and its payment status.")},
@@ -38,21 +40,21 @@ func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
 	}{
 		{"invoice ID", "Is invoice inv_7 paid?", []string{"billing_lookup_invoice"}},
 		{"invoice with namespace", "Look up or retrieve an invoice by invoice ID using billing tools, " +
-			"including invoice ID, payment status, and amount.", []string{"billing_lookup_invoice"}},
-		{"customer invoices", "List invoices for a customer.", []string{"billing_list_invoices"}},
+			"including invoice ID, payment status, and amount.", []string{"billing_lookup_invoice", "billing_list_invoices"}},
+		{"customer invoices", "List invoices for a customer.", []string{"billing_list_invoices", "crm_list_orders"}},
 		{"customer invoices with ID in result", "Billing tool to list invoices for a customer using customer ID " +
-			"and return invoice IDs.", []string{"billing_list_invoices"}},
+			"and return invoice IDs.", []string{"billing_list_invoices", "billing_lookup_invoice", "crm_list_orders"}},
 		{"orders and delivery", "Find/list orders for a customer using customer ID, then retrieve shipment tracking " +
-			"estimated delivery date for shipped order by order ID or tracking details.", []string{"crm_list_orders", "shipping_eta"}},
+			"estimated delivery date for shipped order by order ID or tracking details.", []string{"crm_list_orders", "billing_list_invoices", "shipping_eta"}},
 		{"orders and shipping status", "Find/list orders belonging to a customer by customer ID, including order IDs " +
 			"and shipping status; also get estimated delivery date for a shipped order using its order ID.",
-			[]string{"crm_list_orders", "shipping_eta"}},
+			[]string{"crm_list_orders", "shipping_eta", "billing_list_invoices", "billing_lookup_invoice"}},
 		{"short multi-tool query", "orders and delivery", []string{"crm_list_orders", "shipping_eta"}},
 		{"whole namespace", "billing tools", []string{"billing_lookup_invoice", "billing_list_invoices"}},
 		{"unrelated word and filler", "the voice tools", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := keywordSearch(context.Background(), &responses.ToolSearchRequest{Query: tc.query, Candidates: candidates})
+			got, err := search(context.Background(), &responses.ToolSearchRequest{Query: tc.query, Candidates: candidates})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +67,7 @@ func TestKeywordSearchSelectsMatchingCandidates(t *testing.T) {
 				}
 			}
 			if !reflect.DeepEqual(got, want) {
-				t.Errorf("keywordSearch(%q) = %v, want %v", tc.query, got, want)
+				t.Errorf("search(%q) = %v, want %v", tc.query, got, want)
 			}
 		})
 	}

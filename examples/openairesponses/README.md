@@ -190,10 +190,13 @@ function in `tools/main.go`.
 The program only configures the model, the tools, and the deferral policy:
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+    "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+)
 
 search := responses.WithHostedToolSearch() // -mode server
-// search := responses.WithClientToolSearch(keywordSearch) // -mode client
+// search := responses.WithClientToolSearch(toolsearch.NewKeyword()) // -mode client
 agent := llmagent.New(
     "responses-tool-search-agent",
     llmagent.WithModel(responses.New(modelName, search)),
@@ -213,15 +216,10 @@ The `crm` and `billing` ToolSets are sent as namespaces. They are application
 and becomes the namespace description. `lookup_customer` and `current_time`
 are callable from the first request. In server mode, the API searches the deferred definitions
 and loads the matching ones inside the same response, so only the loaded
-tool calls are printed. In client mode, the deferred definitions are not sent.
-`keywordSearch` matches whole words in the namespace name, tool name, and
-tool description. It gives tool-name matches extra weight and returns
-the entries of candidates scoring close to the best match. The handler has
-signature `func(context.Context, *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error)`.
-It reads descriptions through `entry.Tool.Declaration()` and returns the
-selected entries unchanged. A request for a
-single invoice selects `billing.lookup_invoice`. A request for orders and
-delivery can select both `crm.list_orders` and `shipping_eta`. The example
+tool calls are printed. In client mode, the built-in handler searches the
+request's deferred candidates locally and returns up to five matching tools.
+A request for a single invoice can select `billing.lookup_invoice`. A request
+for orders and delivery can select both `crm.list_orders` and `shipping_eta`. The example
 prints the selected IDs in the `tool_search` result, then shows each tool call:
 
 ```text
@@ -261,7 +259,7 @@ Support boundaries and fallback semantics:
 - In client mode, a handler error ends the run before ordinary functions in
   the same response execute. Resume the same session with `model.Message{}`
   and `agent.WithResume(true)` before sending another user message. The
-  example's `keywordSearch` returns an empty result when nothing matches, so
+  built-in keyword handler returns an empty result when nothing matches, so
   the model can continue.
 - Client search runs through `LLMAgent` and `Runner`. Graph LLM nodes report an
   error for a client search.
