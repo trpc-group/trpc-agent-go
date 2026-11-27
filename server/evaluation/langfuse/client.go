@@ -59,14 +59,15 @@ type datasetRunItemCreateRequest struct {
 }
 
 type scoreCreateRequest struct {
-	Name         string         `json:"name"`
-	TraceID      string         `json:"traceId,omitempty"`
-	DatasetRunID string         `json:"datasetRunId,omitempty"`
-	Value        float64        `json:"value"`
-	DataType     string         `json:"dataType"`
-	Environment  string         `json:"environment,omitempty"`
-	Comment      string         `json:"comment,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
+	Name          string         `json:"name"`
+	TraceID       string         `json:"traceId,omitempty"`
+	ObservationID string         `json:"observationId,omitempty"`
+	DatasetRunID  string         `json:"datasetRunId,omitempty"`
+	Value         float64        `json:"value"`
+	DataType      string         `json:"dataType"`
+	Environment   string         `json:"environment,omitempty"`
+	Comment       string         `json:"comment,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 type identifierResponse struct {

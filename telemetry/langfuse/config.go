@@ -56,6 +56,13 @@ func WithInsecure() Option {
 	}
 }
 
+// WithIngestionVersion selects the Langfuse OTLP ingestion format. Set "4" for
+// Langfuse v4. The default empty value retains the server's legacy ingestion
+// behavior. Start rejects other values.
+func WithIngestionVersion(version string) Option {
+	return func(cfg *config) { cfg.ingestionVersion = version }
+}
+
 // WithObservationLeafValueMaxBytes configures the max byte length for each leaf
 // value in Langfuse observation JSON payloads (and plain string observation values).
 //
@@ -71,6 +78,7 @@ func WithObservationLeafValueMaxBytes(maxBytes int) Option {
 
 // config holds Langfuse configuration options.
 type config struct {
+	ingestionVersion             string
 	secretKey                    string
 	publicKey                    string
 	host                         string
