@@ -109,6 +109,25 @@ func TestConstantNamingConvention(t *testing.T) {
 	assert.Equal(t, "langfuse.session.id", traceSessionID)
 }
 
+func TestUsageDetailsNormalizedPreservesUncachedTotal(t *testing.T) {
+	for _, accounting := range []string{
+		"",
+		"unknown",
+		semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
+		semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive,
+	} {
+		t.Run(accounting, func(t *testing.T) {
+			for _, usage := range []usageDetails{
+				{Total: 42},
+				{Input: 100, Output: 50, Total: 151},
+				{Input: 100, Output: 50},
+			} {
+				assert.Equal(t, usage, usage.normalized(accounting))
+			}
+		})
+	}
+}
+
 func TestUsageDetailsNormalized(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -123,7 +142,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 		},
 		{
 			name:  "inclusive cached input",
-			usage: usageDetails{Input: 100, Output: 50, InputCached: 30},
+			usage: usageDetails{Input: 100, Output: 50, Total: 999, InputCached: 30},
 			want:  usageDetails{Input: 70, Output: 50, InputCached: 30},
 		},
 		{
@@ -141,6 +160,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              1774,
 				Output:             5,
+				Total:              999,
 				InputCacheCreation: 1771,
 			},
 			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive,
@@ -155,6 +175,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              3211,
 				Output:             28,
+				Total:              999,
 				InputCached:        3170,
 				InputCacheCreation: 38,
 			},
@@ -171,6 +192,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              3193,
 				Output:             24,
+				Total:              999,
 				InputCached:        3167,
 				InputCacheRead:     3167,
 				InputCacheCreation: 23,
@@ -188,6 +210,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              20,
 				Output:             10,
+				Total:              999,
 				InputCacheCreation: 80,
 			},
 			accounting: semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive,
@@ -202,6 +225,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              20,
 				Output:             10,
+				Total:              999,
 				InputCached:        70,
 				InputCacheCreation: 10,
 			},
@@ -218,6 +242,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              20,
 				Output:             10,
+				Total:              999,
 				InputCached:        70,
 				InputCacheRead:     70,
 				InputCacheCreation: 10,
@@ -235,6 +260,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:          20,
 				Output:         10,
+				Total:          999,
 				InputCached:    80,
 				InputCacheRead: 80,
 			},
@@ -249,6 +275,7 @@ func TestUsageDetailsNormalized(t *testing.T) {
 			usage: usageDetails{
 				Input:              20,
 				Output:             10,
+				Total:              999,
 				InputCacheCreation: 80,
 			},
 			want: usageDetails{

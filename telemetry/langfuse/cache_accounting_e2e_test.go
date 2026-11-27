@@ -388,7 +388,7 @@ func TestRunnerToLangfuse_StreamingCacheRemoval(t *testing.T) {
 	for ev := range events {
 		require.Nil(t, ev.Error)
 	}
-	require.Equal(t, map[string]int64{"input": 100, "output": 11},
+	require.Equal(t, map[string]int64{"input": 100, "output": 11, "total": 111},
 		extractChatUsageDetails(t, recorder.Ended(), "cache-usage-stream"))
 }
 

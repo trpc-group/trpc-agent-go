@@ -66,6 +66,7 @@ const (
 type usageDetails struct {
 	Input              int64 `json:"input,omitempty"`
 	Output             int64 `json:"output,omitempty"`
+	Total              int64 `json:"total,omitempty"`
 	InputCached        int64 `json:"input_cached,omitempty"`
 	InputCacheRead     int64 `json:"input_cache_read,omitempty"`
 	InputCacheCreation int64 `json:"input_cache_creation,omitempty"`
@@ -77,6 +78,8 @@ func (u *usageDetails) empty() bool {
 }
 
 // normalized returns mutually exclusive usage buckets as required by Langfuse.
+// Provider total semantics differ once cache usage is split into separate
+// buckets, so omit total in that case and let Langfuse derive it.
 //
 // When cache_accounting is explicitly provided on the span:
 //   - "inclusive" (OpenAI Chat Completions, OpenAI Responses API, Gemini):
@@ -89,6 +92,9 @@ func (u *usageDetails) empty() bool {
 // When cache_accounting is absent or unknown, it preserves the legacy cache
 // bucket heuristic for backward compatibility.
 func (u usageDetails) normalized(accounting string) usageDetails {
+	if u.InputCached != 0 || u.InputCacheRead != 0 || u.InputCacheCreation != 0 {
+		u.Total = 0
+	}
 	switch accounting {
 	case semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive:
 		if u.InputCacheRead != 0 {
