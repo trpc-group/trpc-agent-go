@@ -86,7 +86,7 @@ type A2AAgent struct {
 	a2aClientURL string
 
 	// anonymousCookieInitLocks serializes first anonymous-cookie acquisition
-	// within this A2AAgent instance. Session services that implement
+	// within this A2AAgent instance. Session services that provide an available
 	// session.StateInitializationService additionally coordinate separate agent
 	// instances or processes that share the same backing store.
 	anonymousCookieInitMu       sync.Mutex
@@ -224,7 +224,7 @@ func isolateCoordinatedAnonymousCookieSessions(
 	persistentSession *session.Session,
 	service session.Service,
 ) (*session.Session, *session.Session) {
-	if _, ok := service.(session.StateInitializationService); !ok ||
+	if _, ok := availableStateInitializationService(service); !ok ||
 		!hasPersistentSessionKey(persistentSession) {
 		// Without a stable persistent key, coordination cannot be used and the
 		// existing fallback must keep sharing transient session state.
