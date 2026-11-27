@@ -1186,10 +1186,13 @@ mcpToolSet := mcp.NewMCPToolSet(
         Transport: "stdio",
         Command:   "python",
         Args:      []string{"-m", "my_mcp_server"},
+        Env:       map[string]string{"API_KEY": "your-api-key"},
         Timeout:   10 * time.Second,
     },
 )
 ```
+
+`Env` is applied only to the child process environment and is not added to `Args`.
 
 #### 2. SSE Transport
 

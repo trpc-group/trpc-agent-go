@@ -1,0 +1,610 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package acp
+
+import (
+	"context"
+	"fmt"
+	"sync/atomic"
+	"testing"
+
+	acpsdk "github.com/coder/acp-go-sdk"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+func newTestTurnState(reasoningEnabled bool) *turnState {
+	var nextID atomic.Uint64
+	return newTurnState(reasoningEnabled, newToolCallIDMapper(func() acpsdk.ToolCallId {
+		return acpsdk.ToolCallId(fmt.Sprintf("tool-%d", nextID.Add(1)))
+	}))
+}
+
+func TestPromptToMessagePreservesMixedContentOrder(t *testing.T) {
+	mimeType := "text/plain"
+	message, err := promptToMessage([]acpsdk.ContentBlock{
+		acpsdk.TextBlock("explain "),
+		{
+			ResourceLink: &acpsdk.ContentBlockResourceLink{
+				Name:     "README.md",
+				Uri:      "file:///workspace/README.md",
+				MimeType: &mimeType,
+				Type:     "resource_link",
+			},
+		},
+		acpsdk.TextBlock("briefly"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, model.RoleUser, message.Role)
+	assert.Empty(t, message.Content)
+	require.Len(t, message.ContentParts, 3)
+	assert.Equal(t, model.ContentTypeText, message.ContentParts[0].Type)
+	require.NotNil(t, message.ContentParts[0].Text)
+	assert.Equal(t, "explain ", *message.ContentParts[0].Text)
+	assert.Equal(t, model.ContentTypeFile, message.ContentParts[1].Type)
+	require.NotNil(t, message.ContentParts[1].File)
+	assert.Equal(t, "README.md", message.ContentParts[1].File.Name)
+	assert.Equal(t, "file:///workspace/README.md", message.ContentParts[1].File.URL)
+	assert.Equal(t, mimeType, message.ContentParts[1].File.MimeType)
+	assert.Equal(t, model.ContentTypeText, message.ContentParts[2].Type)
+	require.NotNil(t, message.ContentParts[2].Text)
+	assert.Equal(t, "briefly", *message.ContentParts[2].Text)
+}
+
+func TestPromptToMessageKeepsPlainTextContent(t *testing.T) {
+	message, err := promptToMessage([]acpsdk.ContentBlock{
+		acpsdk.TextBlock("explain "),
+		acpsdk.TextBlock("briefly"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, model.RoleUser, message.Role)
+	assert.Equal(t, "explain briefly", message.Content)
+	assert.Empty(t, message.ContentParts)
+}
+
+func TestPromptToMessageRejectsUnadvertisedContent(t *testing.T) {
+	tests := []struct {
+		name  string
+		block acpsdk.ContentBlock
+		err   string
+	}{
+		{
+			name:  "image",
+			block: acpsdk.ImageBlock("aGVsbG8=", "image/png"),
+			err:   "image content is not supported",
+		},
+		{
+			name:  "audio",
+			block: acpsdk.AudioBlock("aGVsbG8=", "audio/wav"),
+			err:   "audio content is not supported",
+		},
+		{
+			name: "embedded resource",
+			block: acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+				TextResourceContents: &acpsdk.TextResourceContents{
+					Uri:  "file:///workspace/README.md",
+					Text: "contents",
+				},
+			}),
+			err: "embedded resource content is not supported",
+		},
+		{
+			name: "empty",
+			err:  "empty content block",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := promptToMessage([]acpsdk.ContentBlock{test.block})
+			assert.ErrorContains(t, err, test.err)
+		})
+	}
+}
+
+func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
+	state := newTestTurnState(true)
+	finishReason := "length"
+	events := []*event.Event{
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Content:          "hell",
+						ReasoningContent: "think",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID: "response",
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Content:          "hello",
+						ReasoningContent: "thinking",
+						ToolCalls: []model.ToolCall{{
+							ID: "call-1",
+							Function: model.FunctionDefinitionParam{
+								Name:      "search",
+								Arguments: []byte(`{"query":"ACP"}`),
+							},
+						}},
+					},
+					FinishReason: &finishReason,
+				}},
+				Usage: &model.Usage{
+					PromptTokens:     3,
+					CompletionTokens: 5,
+					TotalTokens:      8,
+				},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call-1",
+						Content: "result",
+					},
+				}},
+			},
+		},
+	}
+
+	var updates []acpsdk.SessionUpdate
+	for _, evt := range events {
+		translated, err := state.translate(context.Background(), evt)
+		require.NoError(t, err)
+		updates = append(updates, translated...)
+	}
+	require.Len(t, updates, 6)
+	assert.Equal(t, "think", updates[0].AgentThoughtChunk.Content.Text.Text)
+	assert.Equal(t, "hell", updates[1].AgentMessageChunk.Content.Text.Text)
+	assert.Equal(t, "ing", updates[2].AgentThoughtChunk.Content.Text.Text)
+	assert.Equal(t, "o", updates[3].AgentMessageChunk.Content.Text.Text)
+	require.NotNil(t, updates[4].ToolCall)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[4].ToolCall.ToolCallId)
+	require.NotNil(t, updates[5].ToolCallUpdate)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[5].ToolCallUpdate.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallStatusCompleted, *updates[5].ToolCallUpdate.Status)
+
+	response := state.response()
+	assert.Equal(t, acpsdk.StopReasonMaxTokens, response.StopReason)
+	require.NotNil(t, response.Usage)
+	assert.Equal(t, 8, response.Usage.TotalTokens)
+}
+
+func TestTurnStateAccumulatesUsageAcrossModelCalls(t *testing.T) {
+	state := newTestTurnState(false)
+	for _, response := range []*model.Response{
+		{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 1,
+				TotalTokens:      2,
+			},
+		},
+		{
+			Usage: &model.Usage{
+				PromptTokens:     2,
+				CompletionTokens: 3,
+				TotalTokens:      5,
+			},
+		},
+		{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     3,
+				CompletionTokens: 1,
+				TotalTokens:      4,
+			},
+		},
+		{
+			Usage: &model.Usage{
+				PromptTokens:     4,
+				CompletionTokens: 1,
+				TotalTokens:      5,
+			},
+		},
+	} {
+		_, err := state.translate(context.Background(), &event.Event{
+			Response: response,
+		})
+		require.NoError(t, err)
+	}
+
+	response := state.response()
+	require.NotNil(t, response.Usage)
+	assert.Equal(t, 6, response.Usage.InputTokens)
+	assert.Equal(t, 4, response.Usage.OutputTokens)
+	assert.Equal(t, 10, response.Usage.TotalTokens)
+}
+
+func TestTurnStateSeparatesCompletedResponsesWithoutIDs(t *testing.T) {
+	state := newTestTurnState(false)
+	for _, text := range []string{"first", "second"} {
+		updates, err := state.translate(context.Background(), &event.Event{
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{Content: text},
+				}},
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, updates, 1)
+		assert.Equal(t, text, updates[0].AgentMessageChunk.Content.Text.Text)
+	}
+}
+
+func TestTurnStateSkipsNonAssistantContent(t *testing.T) {
+	tests := []struct {
+		name      string
+		role      model.Role
+		streaming bool
+	}{
+		{name: "user message", role: model.RoleUser},
+		{name: "user delta", role: model.RoleUser, streaming: true},
+		{name: "system", role: model.RoleSystem},
+		{name: "tool", role: model.RoleTool},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newTestTurnState(true)
+			message := model.Message{
+				Role:             test.role,
+				Content:          "internal",
+				ReasoningContent: "internal reasoning",
+			}
+			choice := model.Choice{}
+			if test.streaming {
+				choice.Delta = message
+			} else {
+				choice.Message = message
+			}
+			updates, err := state.translate(context.Background(), &event.Event{
+				InvocationID: "invocation",
+				Response: &model.Response{
+					ID:      "response",
+					Choices: []model.Choice{choice},
+				},
+			})
+			require.NoError(t, err)
+			assert.Empty(t, updates)
+		})
+	}
+}
+
+func TestTurnStateUsesExplicitRoleForEmptyDeltas(t *testing.T) {
+	state := newTestTurnState(false)
+	events := []*event.Event{
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "hello ",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "world"},
+				}},
+			},
+		},
+	}
+	for index, evt := range events {
+		updates, err := state.translate(context.Background(), evt)
+		require.NoError(t, err)
+		require.Len(t, updates, 1)
+		want := []string{"hello ", "world"}[index]
+		assert.Equal(t, want, updates[0].AgentMessageChunk.Content.Text.Text)
+	}
+}
+
+func TestTurnStateAssociatesIDLessFinalResponseWithStream(t *testing.T) {
+	state := newTestTurnState(true)
+	events := []*event.Event{
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Content:          "answer",
+						ReasoningContent: "thought",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Content:          "answer",
+						ReasoningContent: "thought",
+					},
+				}},
+			},
+		},
+	}
+
+	var updates []acpsdk.SessionUpdate
+	for _, evt := range events {
+		translated, err := state.translate(context.Background(), evt)
+		require.NoError(t, err)
+		updates = append(updates, translated...)
+	}
+	require.Len(t, updates, 2)
+	assert.Equal(t, "thought", updates[0].AgentThoughtChunk.Content.Text.Text)
+	assert.Equal(t, "answer", updates[1].AgentMessageChunk.Content.Text.Text)
+}
+
+func TestTurnStateHandlesErrorsAndEmptyEvents(t *testing.T) {
+	state := newTestTurnState(false)
+	for _, evt := range []*event.Event{nil, {}} {
+		updates, err := state.translate(context.Background(), evt)
+		require.NoError(t, err)
+		assert.Empty(t, updates)
+	}
+
+	wantErr := &model.ResponseError{Message: "model failed"}
+	_, err := state.translate(context.Background(), &event.Event{
+		Response: &model.Response{
+			Done:  true,
+			Error: wantErr,
+		},
+	})
+	assert.ErrorIs(t, err, wantErr)
+}
+
+func TestTurnStateUpdatesToolCalls(t *testing.T) {
+	state := newTestTurnState(false)
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Arguments: []byte(`{"query":"ACP"}`),
+		},
+	}
+
+	updates := state.translateToolCalls(context.Background(), []model.ToolCall{{}, toolCall})
+	require.Len(t, updates, 1)
+	assert.Equal(t, "Tool call", updates[0].ToolCall.Title)
+
+	assert.Empty(t, state.translateToolCalls(context.Background(), []model.ToolCall{toolCall}))
+	toolCall.Function.Name = "search"
+	toolCall.Function.Arguments = []byte("incomplete JSON")
+	updates = state.translateToolCalls(context.Background(), []model.ToolCall{toolCall})
+	require.Len(t, updates, 1)
+	require.NotNil(t, updates[0].ToolCallUpdate)
+	assert.Equal(t, "search", *updates[0].ToolCallUpdate.Title)
+}
+
+func TestTurnStateReassignsReusedProviderToolCallID(t *testing.T) {
+	tests := []struct {
+		name       string
+		secondName string
+		secondArgs string
+	}{
+		{
+			name:       "different tool call",
+			secondName: "read",
+			secondArgs: `{"path":"README.md"}`,
+		},
+		{
+			name:       "identical tool call",
+			secondName: "search",
+			secondArgs: `{"query":"ACP"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newTestTurnState(false)
+			providerID := "auto_call_0"
+			events := []*event.Event{
+				{
+					InvocationID: "invocation",
+					Response: &model.Response{
+						ID: "response-1",
+						Choices: []model.Choice{{
+							Message: model.Message{
+								ToolCalls: []model.ToolCall{{
+									ID: providerID,
+									Function: model.FunctionDefinitionParam{
+										Name:      "search",
+										Arguments: []byte(`{"query":"ACP"}`),
+									},
+								}},
+							},
+						}},
+					},
+				},
+				{
+					InvocationID: "invocation",
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{
+								Role:    model.RoleTool,
+								ToolID:  providerID,
+								Content: "first result",
+							},
+						}},
+					},
+				},
+				{
+					InvocationID: "invocation",
+					Response: &model.Response{
+						ID: "response-2",
+						Choices: []model.Choice{{
+							Message: model.Message{
+								ToolCalls: []model.ToolCall{{
+									ID: providerID,
+									Function: model.FunctionDefinitionParam{
+										Name:      test.secondName,
+										Arguments: []byte(test.secondArgs),
+									},
+								}},
+							},
+						}},
+					},
+				},
+				{
+					InvocationID: "invocation",
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{
+								Role:    model.RoleTool,
+								ToolID:  providerID,
+								Content: "second result",
+							},
+						}},
+					},
+				},
+			}
+
+			var updates []acpsdk.SessionUpdate
+			for _, evt := range events {
+				translated, err := state.translate(context.Background(), evt)
+				require.NoError(t, err)
+				updates = append(updates, translated...)
+			}
+			require.Len(t, updates, 4)
+			assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[0].ToolCall.ToolCallId)
+			assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[1].ToolCallUpdate.ToolCallId)
+			assert.Equal(t, acpsdk.ToolCallId("tool-2"), updates[2].ToolCall.ToolCallId)
+			assert.Equal(t, acpsdk.ToolCallId("tool-2"), updates[3].ToolCallUpdate.ToolCallId)
+		})
+	}
+}
+
+func TestTurnStateKeepsToolCallIDUntilTerminalResult(t *testing.T) {
+	state := newTestTurnState(false)
+	providerID := "auto_call_0"
+	events := []*event.Event{
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID: "response-1",
+				Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							ID: providerID,
+							Function: model.FunctionDefinitionParam{
+								Name: "search",
+							},
+						}},
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "partial-result",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  providerID,
+						Content: "partial",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  providerID,
+						Content: "complete",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID: "response-2",
+				Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							ID: providerID,
+							Function: model.FunctionDefinitionParam{
+								Name: "search",
+							},
+						}},
+					},
+				}},
+			},
+		},
+	}
+
+	var updates []acpsdk.SessionUpdate
+	for _, evt := range events {
+		translated, err := state.translate(context.Background(), evt)
+		require.NoError(t, err)
+		updates = append(updates, translated...)
+	}
+	require.Len(t, updates, 4)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[0].ToolCall.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[1].ToolCallUpdate.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallStatusInProgress, *updates[1].ToolCallUpdate.Status)
+	assert.Equal(t, acpsdk.ToolCallId("tool-1"), updates[2].ToolCallUpdate.ToolCallId)
+	assert.Equal(t, acpsdk.ToolCallStatusCompleted, *updates[2].ToolCallUpdate.Status)
+	assert.Equal(t, acpsdk.ToolCallId("tool-2"), updates[3].ToolCall.ToolCallId)
+}
+
+func TestTurnStateMapsFinishReasons(t *testing.T) {
+	tests := []struct {
+		reason string
+		want   acpsdk.StopReason
+	}{
+		{reason: "length", want: acpsdk.StopReasonMaxTokens},
+		{reason: "max_tokens", want: acpsdk.StopReasonMaxTokens},
+		{reason: "MAX_TOKENS", want: acpsdk.StopReasonMaxTokens},
+		{reason: "content_filter", want: acpsdk.StopReasonRefusal},
+		{reason: "SAFETY", want: acpsdk.StopReasonRefusal},
+		{reason: "guardrail_intervened", want: acpsdk.StopReasonRefusal},
+		{reason: "refusal", want: acpsdk.StopReasonRefusal},
+		{reason: "cancelled", want: acpsdk.StopReasonCancelled},
+		{reason: "canceled", want: acpsdk.StopReasonCancelled},
+		{reason: "stop", want: acpsdk.StopReasonEndTurn},
+	}
+	for _, test := range tests {
+		t.Run(test.reason, func(t *testing.T) {
+			state := newTestTurnState(false)
+			state.applyFinishReason(nil)
+			state.applyFinishReason(&test.reason)
+			assert.Equal(t, test.want, state.response().StopReason)
+		})
+	}
+}

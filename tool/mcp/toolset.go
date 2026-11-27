@@ -270,6 +270,7 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 			ServerParams: mcp.StdioServerParameters{
 				Command: m.config.Command,
 				Args:    m.config.Args,
+				Env:     m.config.Env,
 			},
 			Timeout: m.config.Timeout,
 		}
