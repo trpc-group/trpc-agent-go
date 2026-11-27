@@ -23,10 +23,13 @@ import (
 	"time"
 	"unicode"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -36,18 +39,24 @@ import (
 
 func main() {
 	modelName := flag.String("model", "gpt-5.4", "OpenAI model name; tool search needs a model that supports it")
-	mode := flag.String("mode", "server", "Tool search mode: server (hosted) or client (client-executed)")
+	mode := flag.String("mode", "server", "Tool search mode: server (hosted), client (keyword), or semantic (embeddings)")
 	streaming := flag.Bool("streaming", true, "Enable streaming responses")
 	flag.Parse()
 
 	var search responses.Option
 	switch *mode {
+	case "semantic":
+		handler, err := toolsearch.NewSemantic(openaiembedder.New())
+		if err != nil {
+			log.Fatal(err)
+		}
+		search = responses.WithClientToolSearch(handler)
 	case "server":
 		search = responses.WithHostedToolSearch()
 	case "client":
 		search = responses.WithClientToolSearch(keywordSearch)
 	default:
-		log.Fatalf("unsupported -mode %q: use server or client", *mode)
+		log.Fatalf("unsupported -mode %q: use server, client, or semantic", *mode)
 	}
 
 	// The SDK reads OPENAI_API_KEY and OPENAI_BASE_URL.
@@ -80,7 +89,7 @@ func main() {
 
 	sessionID := fmt.Sprintf("toolsearch-%d", time.Now().UnixNano())
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Printf("OpenAI Responses tool search (%s mode). Type /exit to quit.\n", *mode)
+	fmt.Printf("OpenAI Responses tool search (%s mode). Type /resume to retry a pending turn or /exit to quit.\n", *mode)
 	for {
 		fmt.Print("You: ")
 		if !scanner.Scan() {
@@ -93,7 +102,13 @@ func main() {
 		if text == "" {
 			continue
 		}
-		ch, err := r.Run(context.Background(), "demo-user", sessionID, model.NewUserMessage(text))
+		message := model.NewUserMessage(text)
+		var opts []agent.RunOption
+		if text == "/resume" {
+			message = model.Message{}
+			opts = append(opts, agent.WithResume(true))
+		}
+		ch, err := r.Run(context.Background(), "demo-user", sessionID, message, opts...)
 		if err != nil {
 			log.Printf("run: %v", err)
 			continue
