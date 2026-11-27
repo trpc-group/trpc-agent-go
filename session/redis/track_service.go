@@ -76,7 +76,19 @@ func (s *Service) GetTrackEvents(
 	if err != nil {
 		return nil, fmt.Errorf("check session exists: %w", err)
 	}
-	if s.compatEnabled() && zsetExists {
+	usesZSet := s.compatEnabled() && zsetExists
+	if opt.TrackCursor != nil {
+		if hashidxExists && !usesZSet {
+			if opt.EventNum != 0 || !opt.EventTime.IsZero() || opt.EventPage != nil {
+				return nil, fmt.Errorf("%w: cursor cannot be combined with event filters", session.ErrTrackCursorInvalid)
+			}
+			return s.hashidxClient.ReadTrackCursor(ctx, key, track, *opt.TrackCursor)
+		}
+		if *opt.TrackCursor != "" {
+			return nil, fmt.Errorf("%w: track storage is no longer available", session.ErrTrackCursorInvalid)
+		}
+	}
+	if usesZSet {
 		return s.getZSetTrackEvents(ctx, key, track, opt)
 	}
 	if hashidxExists {
