@@ -176,9 +176,26 @@ func (m *Model) GenerateContent(
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
 	}
+	prepared, projected, err := m.prepareProviderHistory(request.Messages)
+	if err != nil {
+		return nil, err
+	}
+	if projected {
+		requestCopy := *request
+		requestCopy.Messages = prepared
+		request = &requestCopy
+	}
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
-	chatRequest := m.convertMessages(request.Messages)
+	var chatRequest []*genai.Content
+	if projected {
+		chatRequest, err = m.convertProviderHistory(request.Messages)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		chatRequest = m.convertMessages(request.Messages)
+	}
 	if len(chatRequest) == 0 {
 		return nil, errors.New("gemini: no content after message conversion")
 	}
@@ -190,6 +207,11 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if projected && m.chatRequestCallback != nil {
+		if err := validateProviderHistoryNumbers(chatRequest); err != nil {
+			return nil, err
+		}
+	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
@@ -474,7 +496,12 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 					}
 				}
 				if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
+					// Gemini may omit args for a parameterless call. Represent it
+					// as an empty object so the framework can replay the tool round.
+					args := []byte("{}")
+					if part.FunctionCall.Args != nil {
+						args, _ = json.Marshal(part.FunctionCall.Args)
+					}
 					// Vertex AI does not always populate FunctionCall.ID.
 					// Without a non-empty ID, SanitizeMessagesWithTools treats the
 					// corresponding tool result as orphaned and downgrades it to a
@@ -803,16 +830,10 @@ func (m *Model) convertMessageContent(
 	// by name and position in the contents array; no explicit ID is required.
 	// See: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling
 	if msg.Role == model.RoleTool {
-		var result map[string]any
-		if err := json.Unmarshal([]byte(msg.Content), &result); err != nil {
-			// Non-JSON content (e.g. error strings) — wrap in a plain map so
-			// the FunctionResponse.Response field is always a valid JSON object.
-			result = map[string]any{"output": msg.Content}
-		}
 		part := &genai.Part{
 			FunctionResponse: &genai.FunctionResponse{
 				Name:     msg.ToolName,
-				Response: result,
+				Response: encodeToolResult(msg.Content),
 			},
 		}
 		return []*genai.Content{genai.NewContentFromParts([]*genai.Part{part}, genai.RoleUser)}
@@ -1025,11 +1046,12 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.Image == nil {
 			return nil
 		}
+		mimeType := mediaMIMEType(part.Image.Format, "image")
 		if part.Image.URL != "" {
-			return genai.NewPartFromURI(part.Image.URL, part.Image.Format)
+			return genai.NewPartFromURI(part.Image.URL, mimeType)
 		}
 		if len(part.Image.Data) != 0 {
-			return genai.NewPartFromBytes(part.Image.Data, part.Image.Format)
+			return genai.NewPartFromBytes(part.Image.Data, mimeType)
 		}
 	case model.ContentTypeAudio:
 		if part.Audio == nil {
@@ -1076,6 +1098,9 @@ func mediaMIMEType(format, mediaType string) string {
 	format = strings.TrimSpace(format)
 	if format == "" || strings.Contains(format, "/") {
 		return format
+	}
+	if mediaType == "image" && strings.EqualFold(format, "jpg") {
+		return "image/jpeg"
 	}
 	return mediaType + "/" + format
 }

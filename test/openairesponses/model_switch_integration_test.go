@@ -143,7 +143,9 @@ func (f *switchFixture) run(t *testing.T, sessionID, name string, message model.
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	opts = append(opts, agent.WithModelName(name))
+	if name != "" {
+		opts = append(opts, agent.WithModelName(name))
+	}
 	events, err := f.runner.Run(ctx, "user", sessionID, message, opts...)
 	require.NoError(t, err)
 	var failure string
