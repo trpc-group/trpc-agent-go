@@ -144,3 +144,16 @@ func decodeTrackIndex(t *testing.T, state StateMap) []Track {
 	require.NoError(t, json.Unmarshal(raw, &tracks))
 	return tracks
 }
+
+func TestTrackCursorIsOptInAndNotSerialized(t *testing.T) {
+	var opts Options
+	require.Nil(t, opts.TrackCursor)
+	WithTrackCursor("")(&opts)
+	require.NotNil(t, opts.TrackCursor)
+	require.Empty(t, *opts.TrackCursor)
+	WithTrackCursor("opaque-storage-position")(&opts)
+	require.Equal(t, "opaque-storage-position", *opts.TrackCursor)
+	raw, err := json.Marshal(TrackEvents{Track: "agui", Cursor: *opts.TrackCursor})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"track":"agui","events":null}`, string(raw))
+}

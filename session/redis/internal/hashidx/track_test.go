@@ -441,3 +441,91 @@ func TestListTracksForSession_UnmarshalError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal session meta")
 }
+
+func TestClient_TrackEventsEqualTimestampOrder(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "ties"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	timestamp := time.Unix(1700000000, 0)
+	for i := 1; i <= 1105; i++ {
+		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{Track: "alpha", Timestamp: timestamp, Payload: json.RawMessage(fmt.Sprint(i))}, nil))
+	}
+	for _, limit := range []int{0, 1, 7, 100, 110} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			events, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, limit, time.Time{})
+			require.NoError(t, err)
+			count := 1105
+			if limit > 0 && limit < count {
+				count = limit
+			}
+			require.Len(t, events["alpha"], count)
+			for i, evt := range events["alpha"] {
+				require.Equal(t, fmt.Sprint(1106-count+i), string(evt.Payload))
+			}
+		})
+	}
+}
+
+func TestClient_TrackEventsBoundaryScoreOrder(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "boundary"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	timestamp := time.Unix(1700000000, 0)
+	// Seed the existing storage format, including IDs beyond Lua's exact integer range.
+	ids := []string{"9", "10", "99", "100", "9007199254740992", "9007199254740993", "9007199254740994"}
+	for i, id := range ids {
+		ts := timestamp
+		if i == 0 {
+			ts = ts.Add(-time.Second)
+		}
+		if i == len(ids)-1 {
+			ts = ts.Add(time.Second)
+		}
+		payload, err := json.Marshal(session.TrackEvent{Track: "alpha", Timestamp: ts, Payload: json.RawMessage(fmt.Sprintf("%q", id))})
+		require.NoError(t, err)
+		require.NoError(t, rdb.HSet(ctx, c.keys.TrackDataKey(key, "alpha"), id, payload).Err())
+		require.NoError(t, rdb.ZAdd(ctx, c.keys.TrackTimeIndexKey(key, "alpha"), redis.Z{Score: float64(ts.UnixNano()), Member: id}).Err())
+	}
+	for _, limit := range []int{0, 1, 3, 5} {
+		got, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, limit, timestamp)
+		require.NoError(t, err)
+		want := ids[1:]
+		if limit > 0 && limit < len(want) {
+			want = want[len(want)-limit:]
+		}
+		require.Len(t, got["alpha"], len(want))
+		for i, evt := range got["alpha"] {
+			require.JSONEq(t, fmt.Sprintf("%q", want[i]), string(evt.Payload))
+		}
+	}
+}
+
+func TestTrackCursorAppendBeyondFloatPrecision(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "large-sequence"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, c.keys.TrackDataKey(key, "track"), "_seq", "9007199254740991").Err())
+	opts := &session.Options{}
+	session.WithTrackCursor("")(opts)
+	snapshot, err := c.ReadTrackCursor(ctx, key, "track", opts)
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{Track: "track", Timestamp: time.Unix(1700000000, 0), Payload: json.RawMessage(fmt.Sprint(i))}, nil))
+	}
+	session.WithTrackCursor(snapshot.Cursor)(opts)
+	page, err := c.ReadTrackCursor(ctx, key, "track", opts)
+	require.NoError(t, err)
+	require.Len(t, page.Events, 3)
+	for i, evt := range page.Events {
+		require.Equal(t, fmt.Sprint(i), string(evt.Payload))
+	}
+}
