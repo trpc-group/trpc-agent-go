@@ -37,7 +37,10 @@ func TestKeywordToolSearchLimit(t *testing.T) {
 		{"positive", []KeywordOption{WithKeywordMaxResults(2)}, 2},
 		{"zero", []KeywordOption{WithKeywordMaxResults(0)}, 5},
 		{"negative", []KeywordOption{WithKeywordMaxResults(-1)}, 5},
-		{"last wins", []KeywordOption{WithKeywordMaxResults(1), WithKeywordMaxResults(0)}, 5},
+		{"zero preserves positive limit", []KeywordOption{WithKeywordMaxResults(3), WithKeywordMaxResults(0)}, 3},
+		{"negative preserves positive limit", []KeywordOption{WithKeywordMaxResults(3), WithKeywordMaxResults(-1)}, 3},
+		{"positive after zero", []KeywordOption{WithKeywordMaxResults(0), WithKeywordMaxResults(3)}, 3},
+		{"last positive wins", []KeywordOption{WithKeywordMaxResults(3), WithKeywordMaxResults(2)}, 2},
 		{"larger than catalog", []KeywordOption{WithKeywordMaxResults(10)}, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

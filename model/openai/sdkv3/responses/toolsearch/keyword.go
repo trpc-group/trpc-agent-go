@@ -28,12 +28,12 @@ type keywordSearchOptions struct {
 }
 
 // WithKeywordMaxResults limits the number of tools returned by keyword search.
-// Non-positive values use the default of 5. The last option wins.
+// The default is 5. Non-positive values are ignored, and the last positive
+// value wins.
 func WithKeywordMaxResults(limit int) KeywordOption {
 	return func(o *keywordSearchOptions) {
-		o.maxResults = limit
-		if limit <= 0 {
-			o.maxResults = defaultKeywordMaxResults
+		if limit > 0 {
+			o.maxResults = limit
 		}
 	}
 }
