@@ -16,21 +16,23 @@
 
 ```mermaid
 flowchart TD
-    Req["用户请求进入 Runner"] --> BA["BeforeAgent（Plugin -> Agent）"]
-    BA -- "CustomResponse：直接短路" --> Done["输出响应事件并结束"]
-    BA --> BM["BeforeModel（Plugin -> Agent）"]
-    BM -- "CustomResponse：跳过模型调用" --> AM["AfterModel（Plugin -> Agent）"]
+    Req["用户请求进入 Runner"] --> BA["BeforeAgent (Plugin -> Agent)"]
+    BA -. "CustomResponse" .-> Done["直接返回响应并结束"]
+    BA --> BM["BeforeModel (Plugin -> Agent)"]
+    BM -. "CustomResponse" .-> AM["AfterModel (Plugin -> Agent)"]
     BM --> LLM["LLM 推理"]
     LLM --> AM
-    AM -- "触发工具调用" --> BT["BeforeTool（Plugin -> Agent）"]
-    BT -- "CustomResult：跳过工具与 AfterTool" --> TRM["ToolResultMessages（可选消息转换）"]
+    AM -- "调用工具" --> BT["BeforeTool (Plugin -> Agent)"]
+    BT -. "CustomResult" .-> TRM["ToolResultMessages (可选)"]
     BT --> Tool["Tool 执行"]
-    Tool --> AT["AfterTool（Plugin -> Agent）"]
+    Tool --> AT["AfterTool (Plugin -> Agent)"]
     AT --> TRM
-    TRM -- "进入下一轮推理（除非 SkipSummarization）" --> BM
-    AM -- "最终回复" --> AA["AfterAgent（Plugin -> Agent）"]
-    AA --> TR["AG-UI 边界：BeforeTranslate -> 翻译 -> AfterTranslate"]
+    TRM -- "继续下一轮" --> BM
+    AM -- "最终回复" --> AA["AfterAgent (Plugin -> Agent)"]
+    AA --> TR["AG-UI: BeforeTranslate -> 翻译 -> AfterTranslate"]
 ```
+
+虚线表示 `Before*` 返回非空 `CustomResponse`/`CustomResult` 时的短路路径；若 `AfterTool` 设置了 `SkipSummarization: true`，则在工具响应后结束本轮，不再回到 `BeforeModel`。
 
 ### 回调返回值语义
 

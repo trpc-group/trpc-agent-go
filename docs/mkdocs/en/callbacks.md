@@ -30,20 +30,25 @@ returns what it wants to adjust, replace, or stop.
 ```mermaid
 flowchart TD
     Req["User input enters Runner"] --> BA["BeforeAgent (Plugin -> Agent)"]
-    BA -- "CustomResponse: short-circuit" --> Done["Emit response & finish"]
+    BA -. "CustomResponse" .-> Done["Emit response & finish"]
     BA --> BM["BeforeModel (Plugin -> Agent)"]
-    BM -- "CustomResponse: skip LLM call" --> AM["AfterModel (Plugin -> Agent)"]
+    BM -. "CustomResponse" .-> AM["AfterModel (Plugin -> Agent)"]
     BM --> LLM["LLM inference"]
     LLM --> AM
-    AM -- "Tool calls requested" --> BT["BeforeTool (Plugin -> Agent)"]
-    BT -- "CustomResult: skip tool & AfterTool" --> TRM["ToolResultMessages (optional)"]
+    AM -- "Tool calls" --> BT["BeforeTool (Plugin -> Agent)"]
+    BT -. "CustomResult" .-> TRM["ToolResultMessages (optional)"]
     BT --> Tool["Tool execution"]
     Tool --> AT["AfterTool (Plugin -> Agent)"]
     AT --> TRM
-    TRM -- "Next turn (unless SkipSummarization)" --> BM
+    TRM -- "Next turn" --> BM
     AM -- "Final response" --> AA["AfterAgent (Plugin -> Agent)"]
-    AA --> TR["AG-UI boundary: BeforeTranslate -> Translate -> AfterTranslate"]
+    AA --> TR["AG-UI: BeforeTranslate -> Translate -> AfterTranslate"]
 ```
+
+Dashed arrows show short-circuit paths when a `Before*` callback returns a
+non-nil `CustomResponse` or `CustomResult`; if `AfterTool` sets
+`SkipSummarization: true`, the turn ends after the tool response instead of
+looping back to `BeforeModel`.
 
 ### What a Callback Returns
 
