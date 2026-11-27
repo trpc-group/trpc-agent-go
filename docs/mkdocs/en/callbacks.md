@@ -12,6 +12,9 @@ The framework keeps control of streaming channels, concurrent tool execution,
 panic recovery, and telemetry; each callback simply inspects the inputs and
 returns what it wants to adjust, replace, or stop.
 
+For context replacement, cancellation propagation, and the AfterTool lifecycle,
+see [Cancellation and context propagation](cancellation.md).
+
 !!! note "Callbacks vs. Plugins"
     - **Callbacks** are attached to a specific agent (for example via
       `llmagent.WithAgentCallbacks`, `WithModelCallbacks`, or

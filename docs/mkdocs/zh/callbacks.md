@@ -4,6 +4,8 @@
 
 回调（Callbacks）正是在这些边界上提供的声明式 `Before` / `After` 钩子：框架继续掌控流式通道、并发工具调度、panic 恢复与可观测性，回调只需查看输入并返回想要做的调整、替换或终止信号即可。
 
+回调替换上下文、保留取消传播的写法及 AfterTool 生命周期，见[取消机制与上下文传播](cancellation.md)。
+
 !!! note "Callbacks 与 Plugins 的区别"
     - **Callbacks（回调）** 绑定到单个 Agent（例如通过 `llmagent.WithAgentCallbacks`、`WithModelCallbacks`、`WithToolCallbacks`）。
     - **Plugins（插件）** 把一组回调打包后通过 `runner.WithPlugins(...)` 在 Runner 上一次注册、全局生效。在每个 Hook 点上，**插件的全局回调先于 Agent 的局部回调执行**。详见 [插件（Plugins）](./plugin.md)。

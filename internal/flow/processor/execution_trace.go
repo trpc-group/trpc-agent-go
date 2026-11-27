@@ -34,6 +34,36 @@ func recordExecutionTraceToolResults(
 		return
 	}
 	tools := executionTraceToolsFromResults(results, finalEvent)
+	recordExecutionTraceTools(ctx, invocation, tools)
+}
+
+// recordExecutionTraceToolResultsWithoutOutput preserves execution metadata
+// when no approved message rewrite is available. Neither arguments nor tool
+// output (including error text) are copied into the trace on this path.
+func recordExecutionTraceToolResultsWithoutOutput(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	results []toolResult,
+) {
+	if invocation == nil || !invocation.RunOptions.ExecutionTraceEnabled {
+		return
+	}
+	tools := executionTraceToolsFromResults(results, nil)
+	for i := range tools {
+		tools[i].Arguments = nil
+		tools[i].Result = nil
+		if tools[i].Error != "" {
+			tools[i].Error = "tool failed (output omitted)"
+		}
+	}
+	recordExecutionTraceTools(ctx, invocation, tools)
+}
+
+func recordExecutionTraceTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	tools []atrace.Tool,
+) {
 	if len(tools) == 0 {
 		return
 	}

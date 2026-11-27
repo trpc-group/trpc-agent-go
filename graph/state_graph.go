@@ -2292,12 +2292,22 @@ func generateModelStream(
 	request *model.Request,
 	span oteltrace.Span,
 ) (modelResponseStream, error) {
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return modelResponseStream{}, err
+	}
 	if request != nil && providerdata.MessagesHaveData(request.Messages) {
 		if err := providerdata.ValidateHistory(request.Messages, llmModel); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			return modelResponseStream{}, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return modelResponseStream{}, err
 	}
 	// Generate content.
 	if iterModel, ok := llmModel.(model.IterModel); ok {
@@ -2331,6 +2341,9 @@ func runModelStream(
 	request *model.Request,
 	beforeGenerate func(context.Context),
 ) (context.Context, modelResponseStream, error) {
+	if err := ctx.Err(); err != nil {
+		return ctx, modelResponseStream{}, err
+	}
 	ctx, span, startedSpan := startNodeSpanForInvocation(ctx, invocation, "run_model")
 	if startedSpan {
 		defer span.End()
@@ -4436,6 +4449,10 @@ func runToolWithEventContexts(
 	toolCallIndex int,
 	skipArgumentRepair ...bool,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
+	if err := ctx.Err(); err != nil {
+		inv := invocationFromContextOrFallback(ctx, nil)
+		return ctx, inv, ctx, inv, nil, toolCall.Function.Arguments, err
+	}
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	repairToolCallArguments(ctx, &toolCall, skipArgumentRepair)
 	decl := t.Declaration()
@@ -4488,15 +4505,14 @@ func runToolWithEventContexts(
 	if err != nil {
 		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
 	}
-	result, toolErr := callToolWithRetry(
-		ctx,
-		toolCall,
-		callableTool,
-		retryPolicy,
-		startInvocation,
-		state,
-		toolCallIndex,
+	result, started, toolErr := callToolWithRetry(
+		ctx, toolCall, callableTool, retryPolicy, startInvocation, state, toolCallIndex,
 	)
+	// Cancellation before the first attempt is an admission failure. Once a
+	// tool has run, preserve after callbacks even when it returns cancellation.
+	if toolCallCanceledBeforeStart(started, toolErr) {
+		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, toolErr
+	}
 	completeInvocation := startInvocation
 
 	ctx, customResult, err = runAfterToolPluginCallbacks(
@@ -4555,6 +4571,13 @@ func runToolWithEventContexts(
 	return startCtx, startInvocation, ctx, completeInvocation, result, toolCall.Function.Arguments, nil
 }
 
+// toolCallCanceledBeforeStart distinguishes admission rejection from a tool
+// returning the same cancellation error after an attempt has already run.
+func toolCallCanceledBeforeStart(started bool, err error) bool {
+	return !started && (errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded))
+}
+
 func agentToolGraphRuntimeContext(
 	invocation *agent.Invocation,
 	state State,
@@ -4586,6 +4609,8 @@ func agentToolGraphRuntimeContext(
 	}, nil
 }
 
+// callToolWithRetry reports whether any tool-call attempt started, even if
+// cancellation subsequently stops execution or retries.
 func callToolWithRetry(
 	ctx context.Context,
 	toolCall model.ToolCall,
@@ -4594,7 +4619,10 @@ func callToolWithRetry(
 	invocation *agent.Invocation,
 	state State,
 	toolCallIndex int,
-) (any, error) {
+) (any, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	runtimeTool, ok := itool.ResolveSemantic(callableTool).(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {
@@ -4606,10 +4634,15 @@ func callToolWithRetry(
 			toolCallIndex,
 		)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
+	started := false
 	call := func(ctx context.Context, arguments []byte) (any, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		started = true
 		if ok && graphRuntime.ParentInvocation != nil &&
 			graphRuntime.State != nil &&
 			graphRuntime.ParentNodeID != "" &&
@@ -4619,7 +4652,8 @@ func callToolWithRetry(
 		return callableTool.Call(ctx, arguments)
 	}
 	if retryPolicy == nil {
-		return call(ctx, toolCall.Function.Arguments)
+		result, err := call(ctx, toolCall.Function.Arguments)
+		return result, started, err
 	}
 	runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
 		ToolName:   toolCall.Function.Name,
@@ -4634,7 +4668,7 @@ func callToolWithRetry(
 			return IsInterruptError(err)
 		},
 	})
-	return runResult.Result, runResult.Error
+	return runResult.Result, started, runResult.Error
 }
 
 func checkToolPermission(
