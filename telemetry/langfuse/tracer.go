@@ -14,8 +14,11 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
@@ -28,6 +31,10 @@ import (
 )
 
 // Start starts telemetry with Langfuse integration using the function option pattern.
+// Concurrent or nested Start lifetimes are not supported: the returned cleanup
+// restores the process-wide gen_ai.system value captured at Start time, so
+// overlapping Start/cleanup pairs can restore a stale value. Callers must
+// serialize Start sessions (cleanup before the next Start).
 func Start(ctx context.Context, opts ...Option) (clean func(context.Context) error, err error) {
 	// Start with default config from environment
 	config := newConfigFromEnv()
@@ -57,10 +64,14 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 		otelOpts = append(otelOpts, otlptracehttp.WithInsecure())
 	}
 
-	return start(ctx, otelOpts...)
+	return start(ctx, config, otelOpts...)
 }
 
-func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+	if cfg == nil {
+		cfg = &config{}
+	}
+
 	p := atrace.TracerProvider
 	_, ok := p.(noop.TracerProvider)
 	var provider *sdktrace.TracerProvider
@@ -76,11 +87,19 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	if err != nil {
 		return nil, err
 	}
-	processor := newSpanProcessor(exp)
+	var spanExp sdktrace.SpanExporter = exp
+	if cfg.hooks != nil && cfg.hooks.attributeRewriter != nil {
+		spanExp = &attributeRewritingExporter{next: exp, rewrite: cfg.hooks.attributeRewriter}
+	}
+	processor := newSpanProcessor(spanExp, resolveBaggageFilter(cfg))
 	if provider == nil {
 		res, err := newResource(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
+		}
+		res, err = overlayIdentityResource(ctx, res, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to overlay identity resource: %w", err)
 		}
 		provider = sdktrace.NewTracerProvider(
 			sdktrace.WithSampler(sdktrace.AlwaysSample()),
@@ -92,11 +111,20 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 		provider.RegisterSpanProcessor(processor)
 	}
 
+	instrumentName := itelemetry.InstrumentName
+	if cfg.instrumentName != "" {
+		instrumentName = cfg.instrumentName
+	}
+	previousGenAISystem := itelemetry.GenAISystem()
+	itelemetry.SetGenAISystem(cfg.genAISystem)
 	atrace.Tracer = provider.Tracer(
-		itelemetry.InstrumentName,
+		instrumentName,
 		trace.WithInstrumentationVersion(identity.InstrumentationVersion()),
 	)
-	return provider.Shutdown, nil
+	return func(ctx context.Context) error {
+		defer itelemetry.SetGenAISystem(previousGenAISystem)
+		return provider.Shutdown(ctx)
+	}, nil
 }
 
 func newResource(ctx context.Context) (*resource.Resource, error) {
@@ -111,8 +139,60 @@ func newResource(ctx context.Context) (*resource.Resource, error) {
 	return resource.Merge(resource.Default(), detected)
 }
 
+func overlayIdentityResource(ctx context.Context, base *resource.Resource, cfg *config) (*resource.Resource, error) {
+	attrs := identityResourceAttrs(cfg)
+	if len(attrs) == 0 {
+		return base, nil
+	}
+	overlay, err := resource.New(ctx, resource.WithAttributes(attrs...))
+	if err != nil {
+		return nil, err
+	}
+	return resource.Merge(base, overlay)
+}
+
+func identityResourceAttrs(cfg *config) []attribute.KeyValue {
+	if cfg == nil {
+		return nil
+	}
+	var attrs []attribute.KeyValue
+	if cfg.serviceName != "" {
+		attrs = append(attrs, semconv.ServiceName(cfg.serviceName))
+	}
+	if cfg.serviceNamespace != "" {
+		attrs = append(attrs, semconv.ServiceNamespace(cfg.serviceNamespace))
+	}
+	if cfg.serviceVersion != "" {
+		attrs = append(attrs, semconv.ServiceVersion(cfg.serviceVersion))
+	}
+	return attrs
+}
+
 // encodeAuth encodes the public and secret keys for basic authentication.
 func encodeAuth(pk, sk string) string {
 	auth := pk + ":" + sk
 	return base64.StdEncoding.EncodeToString([]byte(auth))
+}
+
+func resolveBaggageFilter(cfg *config) BaggageAttributeFilter {
+	if cfg != nil && cfg.hooks != nil && cfg.hooks.baggageFilter != nil {
+		return cfg.hooks.baggageFilter
+	}
+	if cfg == nil || cfg.hooks == nil || len(cfg.hooks.extraBaggageKeys) == 0 {
+		return defaultLangfuseTraceAttributeFilter
+	}
+	extras := make(map[string]struct{}, len(cfg.hooks.extraBaggageKeys))
+	for _, k := range cfg.hooks.extraBaggageKeys {
+		if k == "" {
+			continue
+		}
+		extras[k] = struct{}{}
+	}
+	return func(member baggage.Member) bool {
+		if defaultLangfuseTraceAttributeFilter(member) {
+			return true
+		}
+		_, ok := extras[member.Key()]
+		return ok
+	}
 }
