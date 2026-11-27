@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -189,7 +190,6 @@ func TestSemanticToolSearchOptions(t *testing.T) {
 		name string
 		opt  toolsearch.SemanticOption
 	}{
-		{"non-positive limit", toolsearch.WithSemanticMaxResults(0)},
 		{"too low", toolsearch.WithSemanticMinScore(-1.1)},
 		{"too high", toolsearch.WithSemanticMinScore(1.1)},
 		{"NaN", toolsearch.WithSemanticMinScore(math.NaN())},
@@ -199,6 +199,42 @@ func TestSemanticToolSearchOptions(t *testing.T) {
 			handler, err := toolsearch.NewSemantic(embeddings, tc.opt)
 			require.Error(t, err)
 			require.Nil(t, handler)
+		})
+	}
+}
+
+func TestSemanticToolSearchLimit(t *testing.T) {
+	embeddings := &semanticTestEmbedder{embed: func(context.Context, string) ([]float64, error) {
+		return []float64{1, 0}, nil
+	}}
+	request := &responses.ToolSearchRequest{Query: "find tools"}
+	for i := range 7 {
+		request.Candidates = append(request.Candidates, semanticEntry(fmt.Sprintf("action_%d", i), ""))
+	}
+	for _, tc := range []struct {
+		name   string
+		limits []int
+		want   int
+	}{
+		{"default", nil, 5},
+		{"zero", []int{0}, 5},
+		{"negative", []int{-1}, 5},
+		{"zero preserves positive limit", []int{3, 0}, 3},
+		{"negative preserves positive limit", []int{3, -1}, 3},
+		{"positive after zero", []int{0, 3}, 3},
+		{"last positive wins", []int{3, 2}, 2},
+		{"larger than catalog", []int{10}, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var opts []toolsearch.SemanticOption
+			for _, limit := range tc.limits {
+				opts = append(opts, toolsearch.WithSemanticMaxResults(limit))
+			}
+			handler, err := toolsearch.NewSemantic(embeddings, opts...)
+			require.NoError(t, err)
+			got, err := handler(context.Background(), request)
+			require.NoError(t, err)
+			require.Equal(t, request.Candidates[:tc.want], got)
 		})
 	}
 }

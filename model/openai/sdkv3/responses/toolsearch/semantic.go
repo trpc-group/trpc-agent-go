@@ -40,9 +40,14 @@ type semanticOptions struct {
 }
 
 // WithSemanticMaxResults sets the maximum number of entries returned per search.
-// The limit must be positive and defaults to 5.
+// The default is 5. Non-positive values are ignored, and the last positive
+// value wins.
 func WithSemanticMaxResults(limit int) SemanticOption {
-	return func(o *semanticOptions) { o.maxResults = limit }
+	return func(o *semanticOptions) {
+		if limit > 0 {
+			o.maxResults = limit
+		}
+	}
 }
 
 // WithSemanticMinScore sets the inclusive minimum cosine similarity.
@@ -63,8 +68,8 @@ func WithSemanticMinScore(score float64) SemanticOption {
 // embedding model changes. Concurrent misses can embed the same candidate.
 // The handler honors cancellation and returns embedding errors.
 //
-// NewSemantic returns an error for a nil embedder or invalid configuration.
-// Nil options are ignored, and the last option for a setting wins.
+// NewSemantic returns an error for a nil embedder or an invalid minimum score.
+// Options are applied in order, and nil options are ignored.
 func NewSemantic(e embedder.Embedder, opts ...SemanticOption) (responses.ToolSearchHandler, error) {
 	if e == nil {
 		return nil, errors.New("semantic tool search: nil embedder")
@@ -78,10 +83,7 @@ func NewSemantic(e embedder.Embedder, opts ...SemanticOption) (responses.ToolSea
 			opt(&options)
 		}
 	}
-	switch {
-	case options.maxResults <= 0:
-		return nil, errors.New("semantic tool search: max results must be positive")
-	case math.IsNaN(options.minScore) || options.minScore < -1 || options.minScore > 1:
+	if math.IsNaN(options.minScore) || options.minScore < -1 || options.minScore > 1 {
 		return nil, errors.New("semantic tool search: min score must be within [-1, 1]")
 	}
 	s := &semanticSearch{
