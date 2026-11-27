@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -610,7 +611,11 @@ func (g *workflowGateway) checkToolPermission(
 		Metadata:    tool.MetadataOf(candidate),
 	}
 	if checker, ok := candidate.(tool.PermissionChecker); ok {
-		decision, err := checker.CheckPermission(ctx, req)
+		snapshot, err := itool.SnapshotPermissionRequest(req)
+		if err != nil {
+			return nil, err
+		}
+		decision, err := checker.CheckPermission(ctx, snapshot)
 		result, err := normalizeWorkflowToolPermissionResult(req, decision, err)
 		if result != nil || err != nil {
 			return result, err
@@ -619,7 +624,11 @@ func (g *workflowGateway) checkToolPermission(
 	if g == nil || g.parent == nil || g.parent.RunOptions.ToolPermissionPolicy == nil {
 		return nil, nil
 	}
-	decision, err := g.parent.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	snapshot, err := itool.SnapshotPermissionRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	decision, err := g.parent.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, snapshot)
 	return normalizeWorkflowToolPermissionResult(req, decision, err)
 }
 

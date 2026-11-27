@@ -1011,6 +1011,7 @@ func (r *runner) appendMessagesAsSessionEvents(
 			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: current}}},
 		)
 		agent.InjectIntoEvent(invocation, evt)
+		messageorigin.MarkRunnerInput(ctx, evt, msg, pending.currentTurn)
 		evt = r.applyEventPlugins(ctx, invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return err
@@ -1047,6 +1048,7 @@ func (r *runner) appendIncomingMessage(
 		&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 	)
 	agent.InjectIntoEvent(invocation, evt)
+	messageorigin.MarkRunnerInput(ctx, evt, message, true)
 	evt = r.applyEventPlugins(ctx, invocation, evt)
 	return r.sessionService.AppendEvent(ctx, sess, evt)
 }
@@ -1952,15 +1954,23 @@ func (r *runner) applyEventPluginsNoSpan(
 	if invocation == nil || invocation.Plugins == nil {
 		return e
 	}
+	// Input provenance belongs to the input boundary, not the event plugin.
+	// Capture it before hooks can replace or mutate the event. Unknown input
+	// must also remain unknown rather than becoming host authorization.
+	isInput := e.IsUserMessage()
+	source := messageorigin.InputSource(e)
 	updated, err := invocation.Plugins.OnEvent(ctx, invocation, e)
 	if err != nil {
 		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
-		return e
+		updated = e
 	}
 	if updated == nil {
-		return e
+		updated = e
 	}
 	backfillEventMetadata(updated, e)
+	if isInput && messageorigin.InputSource(updated) != source {
+		messageorigin.MarkInput(updated, source)
+	}
 	return updated
 }
 

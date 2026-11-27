@@ -21,9 +21,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	taskrunruntime "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type fakeController struct {
@@ -858,6 +861,38 @@ func TestToolsRejectCrossOwnerAccess(t *testing.T) {
 
 	_, err = tools.wait.Call(otherCtx, args)
 	require.ErrorIs(t, err, taskrunruntime.ErrRunNotFound)
+}
+
+func TestToolsSpawnMarksDelegationWithoutParentPolicy(t *testing.T) {
+	controller := newFakeController()
+	tools := NewTools(controller)
+	ctx := newInvocationContext("user", "session", nil)
+	_, err := tools.spawn.Call(ctx, []byte(`{"task":"review"}`))
+	require.NoError(t, err)
+	require.Empty(t, controller.spawned.RunOptions)
+	require.NotNil(t, controller.spawned.RunContext)
+	childCtx := controller.spawned.RunContext(context.Background())
+	require.Empty(t, messageorigin.InheritedUserInputs(childCtx))
+	evt := event.New("child", "user")
+	messageorigin.MarkRunnerInput(childCtx, evt, model.NewUserMessage("review"), true)
+	require.Equal(t, messageorigin.Agent, messageorigin.InputSource(evt))
+}
+
+func TestToolsDoNotSpawnWhenDelegationCaptureFails(t *testing.T) {
+	controller := newFakeController()
+	tools := NewTools(controller)
+	ctx := newInvocationContext("user", "session", nil)
+	inv, ok := agent.InvocationFromContext(ctx)
+	require.True(t, ok)
+	inv.RunOptions.ToolPermissionPolicy = tool.PermissionPolicyFunc(func(context.Context, *tool.PermissionRequest) (tool.PermissionDecision, error) {
+		return tool.AllowPermission(), nil
+	})
+	ctx, cancel := context.WithCancel(ctx)
+	flush.Attach(ctx, inv, make(chan *flush.FlushRequest))
+	cancel()
+	_, err := tools.spawn.Call(ctx, []byte(`{"task":"review"}`))
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, controller.spawned.Task)
 }
 
 func TestCurrentContextRequiresUserAndSession(t *testing.T) {
