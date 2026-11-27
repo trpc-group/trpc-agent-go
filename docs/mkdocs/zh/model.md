@@ -2409,8 +2409,15 @@ agent := llmagent.New(
 )
 ```
 
-客户端搜索配置的 handler 返回 `[]responses.ToolSearchEntry`。下面的 handler 在发票查询时，
-加载 billing namespace 中的候选：
+在客户端模式下，可以按模型可见的工具名、命名空间和工具说明检索本次请求的延迟工具。内置关键词搜索默认最多返回 5 个匹配项。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/openai/sdkv3/responses/toolsearch"
+
+llm := responses.New("gpt-5.4", responses.WithClientToolSearch(toolsearch.NewKeyword()))
+```
+
+需要自定义检索时，可以传入返回 `[]responses.ToolSearchEntry` 的 handler。下面的例子在查询发票时选中 billing 分组中的候选工具。
 
 ```go
 import (
