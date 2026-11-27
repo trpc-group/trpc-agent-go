@@ -42,6 +42,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summarystate"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarydiag"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytoken"
@@ -2888,33 +2889,11 @@ func (f *Flow) callLLM(
 			finalizationMessage,
 		),
 	)
-	ctx, tailoringObserver := imodelrequest.ObserveTokenTailoring(
+	ctx, tailoringObserver := observeTokenTailoring(
 		ctx,
-		func(record imodelrequest.TokenTailoringRecord) {
-			summaryview.InvalidateBinding(invocation)
-			summaryfork.Invalidate(invocation)
-			if tokenTailoringCollapsedHistory(record) {
-				log.WarnfContext(
-					ctx,
-					"Model request token tailoring collapsed history: "+
-						"provider=%s, max_input_tokens=%d, messages=%d->%d",
-					record.Provider,
-					record.MaxInputTokens,
-					record.BeforeMessages,
-					record.AfterMessages,
-				)
-				return
-			}
-			log.DebugfContext(
-				ctx,
-				"Model request token tailoring applied: provider=%s, "+
-					"max_input_tokens=%d, messages=%d->%d",
-				record.Provider,
-				record.MaxInputTokens,
-				record.BeforeMessages,
-				record.AfterMessages,
-			)
-		},
+		invocation,
+		llmRequest,
+		finalizationMessage,
 	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
@@ -2945,6 +2924,63 @@ func (f *Flow) callLLM(
 		seq = withResponseSeqFinalizer(seq, reportInjection)
 	}
 	return ctx, seq, true, nil
+}
+
+func observeTokenTailoring(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	finalizationMessage *callLimitFinalizationMessage,
+) (context.Context, *imodelrequest.TokenTailoringObserver) {
+	return imodelrequest.ObserveTokenTailoring(
+		ctx,
+		func(change imodelrequest.TokenTailoringChange) {
+			record := change.Record
+			if summarystate.ApplyRequestTransform(
+				invocation,
+				change,
+				llmRequest,
+				func() *model.Request {
+					return requestWithoutCallLimitFinalizationMessage(
+						llmRequest,
+						finalizationMessage,
+					)
+				},
+			) {
+				log.DebugfContext(
+					ctx,
+					"Model request token tailoring preserved history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			if tokenTailoringCollapsedHistory(record) {
+				log.WarnfContext(
+					ctx,
+					"Model request token tailoring collapsed history: "+
+						"provider=%s, max_input_tokens=%d, messages=%d->%d",
+					record.Provider,
+					record.MaxInputTokens,
+					record.BeforeMessages,
+					record.AfterMessages,
+				)
+				return
+			}
+			log.DebugfContext(
+				ctx,
+				"Model request token tailoring applied: provider=%s, "+
+					"max_input_tokens=%d, messages=%d->%d",
+				record.Provider,
+				record.MaxInputTokens,
+				record.BeforeMessages,
+				record.AfterMessages,
+			)
+		},
+	)
 }
 
 func tokenTailoringCollapsedHistory(

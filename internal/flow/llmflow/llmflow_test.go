@@ -361,6 +361,11 @@ func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
 		"llmflow.token_tailoring.after_messages",
 		4,
 	))
+	require.True(t, flowHasAttr(
+		tailoringAttrs,
+		"llmflow.token_tailoring.provenance",
+		"unknown",
+	))
 	emptyTailoringAttrs := tokenTailoringAttrs(nil)
 	require.Len(t, emptyTailoringAttrs, 2)
 	require.True(t, flowHasAttr(
@@ -1066,6 +1071,161 @@ func TestCallLLM_TokenTailoringInvalidatesSummarySnapshots(t *testing.T) {
 		ContentRequestLength: len(req.Messages),
 		Items: []summaryview.Item{{
 			Message:      req.Messages[1],
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
+}
+
+func TestCallLLM_UnknownSameSizeTailoringInvalidatesSummarySnapshots(t *testing.T) {
+	callModel := &unknownSameSizeTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		model.NewUserMessage("history"),
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      req.Messages[1],
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
+}
+
+func TestCallLLM_PreservedTailoringRebasesSummarySnapshots(t *testing.T) {
+	callModel := &preservingTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	history := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+		}},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		history,
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      history,
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Equal(t, " ", view.Items[0].Message.Content)
+	fork, ok := summaryfork.Request(inv)
+	require.True(t, ok)
+	require.Equal(t, req.Messages, fork.Messages)
+}
+
+func TestCallLLM_PreservedTailoringRebaseFailureInvalidatesFork(t *testing.T) {
+	callModel := &preservingTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	history := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+		}},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		history,
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      model.NewUserMessage("not in request"),
+			RequestIndex: 1,
+		}},
+	})
+
+	_, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		callModel,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	view, ok := summaryview.Snapshot(inv)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	_, ok = summaryfork.Request(inv)
+	require.False(t, ok)
+}
+
+func TestCallLLM_UnsafeTailoringCannotBeRevivedByPreservedChange(t *testing.T) {
+	callModel := &unsafeThenPreservingTailoringModel{}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(callModel))
+	history := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+		}},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable"),
+		history,
+	}}
+	summaryview.AttachProjection(inv, &summaryview.View{
+		ContentRequestLength: len(req.Messages),
+		Items: []summaryview.Item{{
+			Message:      history,
 			RequestIndex: 1,
 		}},
 	})
@@ -2547,6 +2707,117 @@ func (m *tailoringModel) GenerateContent(
 	}
 	close(respChan)
 	return respChan, nil
+}
+
+type unknownSameSizeTailoringModel struct{}
+
+func (m *unknownSameSizeTailoringModel) Info() model.Info {
+	return model.Info{Name: "unknown-same-size-tailoring-model"}
+}
+
+func (m *unknownSameSizeTailoringModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	beforeMessages := len(req.Messages)
+	req.Messages[1].Content = "rewritten history"
+	imodelrequest.RecordTokenTailoring(
+		ctx,
+		imodelrequest.TokenTailoringRecord{
+			Provider:       "unknownSameSizeTailoringModel",
+			MaxInputTokens: 100,
+			BeforeMessages: beforeMessages,
+			AfterMessages:  len(req.Messages),
+		},
+	)
+	return completedModelResponse(), nil
+}
+
+type preservingTailoringModel struct{}
+
+func (m *preservingTailoringModel) Info() model.Info {
+	return model.Info{Name: "preserving-tailoring-model"}
+}
+
+func (m *preservingTailoringModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	before := append([]model.Message(nil), req.Messages...)
+	req.Messages[1].Content = " "
+	imodelrequest.RecordTokenTailoringChange(
+		ctx,
+		imodelrequest.TokenTailoringChange{
+			Record: imodelrequest.TokenTailoringRecord{
+				Provider:       "preservingTailoringModel",
+				MaxInputTokens: 100,
+				BeforeMessages: len(before),
+				AfterMessages:  len(req.Messages),
+				Provenance: imodelrequest.
+					TokenTailoringProvenancePreserved,
+			},
+			Preserved: &imodelrequest.PreservedTransform{
+				Before: before,
+				After:  req.Messages,
+			},
+		},
+	)
+	return completedModelResponse(), nil
+}
+
+type unsafeThenPreservingTailoringModel struct{}
+
+func (m *unsafeThenPreservingTailoringModel) Info() model.Info {
+	return model.Info{Name: "unsafe-then-preserving-tailoring-model"}
+}
+
+func (m *unsafeThenPreservingTailoringModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	req.Messages[0].Content = "rewritten stable"
+	imodelrequest.RecordTokenTailoring(
+		ctx,
+		imodelrequest.TokenTailoringRecord{
+			Provider:       "unsafeThenPreservingTailoringModel",
+			MaxInputTokens: 100,
+			BeforeMessages: len(req.Messages),
+			AfterMessages:  len(req.Messages),
+		},
+	)
+
+	before := append([]model.Message(nil), req.Messages...)
+	req.Messages[1].Content = " "
+	imodelrequest.RecordTokenTailoringChange(
+		ctx,
+		imodelrequest.TokenTailoringChange{
+			Record: imodelrequest.TokenTailoringRecord{
+				Provider:       "unsafeThenPreservingTailoringModel",
+				MaxInputTokens: 100,
+				BeforeMessages: len(before),
+				AfterMessages:  len(req.Messages),
+				Provenance: imodelrequest.
+					TokenTailoringProvenancePreserved,
+			},
+			Preserved: &imodelrequest.PreservedTransform{
+				Before: before,
+				After:  req.Messages,
+			},
+		},
+	)
+	return completedModelResponse(), nil
+}
+
+func completedModelResponse() <-chan *model.Response {
+	respChan := make(chan *model.Response, 1)
+	respChan <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("ok"),
+		}},
+	}
+	close(respChan)
+	return respChan
 }
 
 type lazyTailoringModel struct{}

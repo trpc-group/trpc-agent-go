@@ -2031,6 +2031,15 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+When automatic session summaries are enabled (asynchronous summaries, intra-run
+synchronous summaries, or cache-safe forking), the framework also tracks whether
+provider-side request preparation preserved the model-visible request history.
+One-to-one empty-content placeholder normalization (`""` -> `" "` on messages
+with existing payload and no native `ProviderData`) is rebased onto the summary
+view and fork snapshot. Any transform that removes, reorders, or rewrites
+message content invalidates those snapshots so a post-LLM summary cannot advance
+from history that differs from the request sent to the model.
+
 **Advanced Configuration (Custom Budget Parameters)**:
 
 If the default token allocation strategy does not meet your needs, you can customize the budget parameters using `WithTokenTailoringConfig`. **Note: It is recommended to keep the default values unless you have specific requirements.**

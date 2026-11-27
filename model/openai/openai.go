@@ -437,6 +437,7 @@ type Model struct {
 	optimizeForCache          bool // Optimize message structure for prompt caching
 	omitFileContentParts      bool
 	preserveToolsWhenDisabled bool
+	hasOpenAIOptions          bool
 }
 
 // New creates a new OpenAI-like model.
@@ -525,6 +526,7 @@ func New(name string, opts ...Option) *Model {
 		optimizeForCache:           o.OptimizeForCache,
 		omitFileContentParts:       o.OmitFileContentParts,
 		preserveToolsWhenDisabled:  o.preserveToolsWhenDisabled,
+		hasOpenAIOptions:           len(o.OpenAIOptions) > 0,
 	}
 }
 
@@ -594,6 +596,17 @@ func (m *Model) runChatRequestCallback(
 ) {
 	if m.chatRequestCallback == nil {
 		return
+	}
+	if chatRequest != nil {
+		finishObservation := modeltailoring.ObserveSerializedMessages(
+			ctx,
+			"openai.Model",
+			"messages",
+			func() ([]byte, error) {
+				return chatRequest.MarshalJSON()
+			},
+		)
+		defer finishObservation()
 	}
 	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
 	m.chatRequestCallback(ctx, chatRequest)
@@ -676,7 +689,71 @@ func (m *Model) prepareChatRequest(
 		request,
 		imodelrequest.ToolsDisabled(ctx) && !m.preserveToolsWhenDisabled,
 	)
+	modeltailoring.ObserveExtraFieldMessageOverrides(
+		ctx,
+		"openai.Model",
+		request,
+		"messages",
+		true,
+		m.extraFields,
+		request.ExtraFields,
+	)
 	return chatRequest, opts, nil
+}
+
+// appendOutboundMessagesObserver attaches an innermost SDK middleware when
+// client-level OpenAIOptions are configured and a token-tailoring observer is
+// attached, so outbound message mutations applied by SDK options (such as
+// WithJSONSet, WithJSONDel, WithRequestBody, or custom middlewares) are
+// observed against the final HTTP request body before transmission.
+func (m *Model) appendOutboundMessagesObserver(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	opts []openaiopt.RequestOption,
+) []openaiopt.RequestOption {
+	if !m.hasOpenAIOptions ||
+		chatRequest == nil ||
+		!imodelrequest.HasTokenTailoringObserver(ctx) {
+		return opts
+	}
+	checkOutbound := modeltailoring.ObserveOutboundSerializedMessages(
+		ctx,
+		"openai.Model",
+		"messages",
+		func() ([]byte, error) {
+			return chatRequest.MarshalJSON()
+		},
+	)
+	if checkOutbound == nil {
+		return opts
+	}
+	return append(opts, openaiopt.WithMiddleware(
+		func(
+			req *http.Request,
+			next openaiopt.MiddlewareNext,
+		) (*http.Response, error) {
+			raw, err := readAndRestoreRequestBody(req)
+			checkOutbound(raw, err)
+			if err != nil {
+				return nil, err
+			}
+			return next(req)
+		},
+	))
+}
+
+func readAndRestoreRequestBody(req *http.Request) ([]byte, error) {
+	if req == nil || req.Body == nil {
+		return nil, nil
+	}
+	body := req.Body
+	raw, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil {
+		return nil, err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+	return raw, nil
 }
 
 func validateLogprobsConfig(request *model.Request) error {
@@ -707,6 +784,7 @@ func (m *Model) GenerateContent(
 		opts = m.enforceDisabledTools(chatRequest, opts)
 	}
 	m.runChatRequestJSONCallback(ctx, chatRequest)
+	opts = m.appendOutboundMessagesObserver(ctx, chatRequest, opts)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
@@ -758,6 +836,7 @@ func (m *Model) GenerateContentIter(
 			callOpts = m.enforceDisabledTools(chatRequest, opts)
 		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
+		callOpts = m.appendOutboundMessagesObserver(ctx, chatRequest, callOpts)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
@@ -803,7 +882,7 @@ func (m *Model) optimizeMessagesForCache(messages []model.Message) []model.Messa
 // It uses the token tailoring strategy defined in imodel package.
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
 	// Early return if token tailoring is disabled or no messages to process.
-	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+	if request == nil || !m.enableTokenTailoring || len(request.Messages) == 0 {
 		return
 	}
 

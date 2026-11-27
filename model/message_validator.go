@@ -9,7 +9,9 @@
 
 package model
 
-const nonEmptyContentPlaceholder = " "
+import "trpc.group/trpc-go/trpc-agent-go/model/internal/wirenorm"
+
+const nonEmptyContentPlaceholder = wirenorm.EmptyContentPlaceholder
 
 type roleGroupKind uint8
 
@@ -101,10 +103,13 @@ func ensureNonEmptyContent(messages []Message) []Message {
 			continue
 		}
 
-		hasPayload := len(msg.ContentParts) > 0 ||
-			len(msg.ToolCalls) > 0 ||
-			msg.ReasoningContent != ""
-		if !hasPayload {
+		if !wirenorm.NeedsPlaceholder(
+			msg.Content,
+			msg.ProviderData != nil,
+			len(msg.ContentParts) > 0,
+			len(msg.ToolCalls) > 0,
+			msg.ReasoningContent != "",
+		) {
 			continue
 		}
 

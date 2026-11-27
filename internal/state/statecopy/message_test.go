@@ -21,6 +21,7 @@ func TestMessagesAreIsolated(t *testing.T) {
 	zero := Message(model.Message{})
 	require.Nil(t, zero.ContentParts)
 	require.Nil(t, zero.ToolCalls)
+	require.Nil(t, zero.ProviderData)
 
 	text := "text"
 	index := 1
@@ -46,6 +47,11 @@ func TestMessagesAreIsolated(t *testing.T) {
 				"nested": map[string]any{"value": "original"},
 			},
 		}},
+		ProviderData: &model.ProviderData{
+			Protocol: "openai_responses",
+			Model:    "gpt-5",
+			Payload:  []byte(`{"id":"orig"}`),
+		},
 	}}
 
 	cloned := Messages(original)
@@ -59,6 +65,7 @@ func TestMessagesAreIsolated(t *testing.T) {
 	*cloned[0].ToolCalls[0].Index = 2
 	cloned[0].ToolCalls[0].ExtraFields["nested"].(map[string]any)["value"] =
 		"mutated"
+	cloned[0].ProviderData.Payload[0] = 'X'
 
 	require.Equal(t, "text", *original[0].ContentParts[0].Text)
 	require.Equal(t, "image", string(original[0].ContentParts[1].Image.Data))
@@ -75,4 +82,5 @@ func TestMessagesAreIsolated(t *testing.T) {
 	require.Equal(t, "original",
 		original[0].ToolCalls[0].ExtraFields["nested"].(map[string]any)["value"],
 	)
+	require.Equal(t, `{"id":"orig"}`, string(original[0].ProviderData.Payload))
 }

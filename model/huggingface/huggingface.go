@@ -128,6 +128,15 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert request: %w", err)
 	}
+	modeltailoring.ObserveExtraFieldMessageOverrides(
+		ctx,
+		"huggingface.Model",
+		request,
+		"messages",
+		false,
+		m.extraFields,
+		hfRequest.ExtraFields,
+	)
 
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
@@ -153,6 +162,17 @@ func (m *Model) runChatRequestCallback(
 ) {
 	if m.chatRequestCallback == nil {
 		return
+	}
+	if hfRequest != nil {
+		finishObservation := modeltailoring.ObserveSerializedMessages(
+			ctx,
+			"huggingface.Model",
+			"messages",
+			func() ([]byte, error) {
+				return m.marshalRequestForContext(ctx, hfRequest)
+			},
+		)
+		defer finishObservation()
 	}
 	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
 	m.chatRequestCallback(ctx, hfRequest)

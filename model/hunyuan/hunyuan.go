@@ -198,6 +198,17 @@ func (m *Model) runChatRequestCallback(
 	if m.chatRequestCallback == nil {
 		return
 	}
+	if chatRequest != nil {
+		finishObservation := modeltailoring.ObserveSerializedMessages(
+			ctx,
+			"hunyuan.Model",
+			"Messages",
+			func() ([]byte, error) {
+				return json.Marshal(chatRequest)
+			},
+		)
+		defer finishObservation()
+	}
 	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
 	m.chatRequestCallback(ctx, chatRequest)
 }

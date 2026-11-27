@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10290,6 +10291,401 @@ func TestOptimizeForCache_DefaultDisabled_NonOpenAI(t *testing.T) {
 		m.optimizeForCache,
 		"cache optimization should be disabled by default",
 	)
+}
+
+func TestPrepareChatRequestDoesNotInvalidateOnCacheReorderingWithoutTailoring(t *testing.T) {
+	m := New(
+		"gpt-4o",
+		WithAPIKey("test-key"),
+		WithEnableTokenTailoring(false),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("system-1"),
+		model.NewUserMessage("u1"),
+		model.NewAssistantMessage("a1"),
+		model.NewToolMessage("call_1", "search", "result"),
+		model.NewSystemMessage("system-2"),
+		model.NewUserMessage("u2"),
+	}}
+	ctx, observer := imodelrequest.ObserveTokenTailoring(
+		context.Background(),
+		nil,
+	)
+
+	_, _, err := m.prepareChatRequest(ctx, req)
+	require.NoError(t, err)
+	require.Empty(t, observer.Snapshot())
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Equal(t, model.RoleSystem, req.Messages[1].Role)
+}
+
+type wrappedTailoringStrategy struct {
+	inner model.TailoringStrategy
+}
+
+func (w *wrappedTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return w.inner.TailorMessages(ctx, messages, maxTokens)
+}
+
+func TestPrepareChatRequestClassifiesNormalizationAsPreserved(t *testing.T) {
+	strategies := []struct {
+		name     string
+		strategy model.TailoringStrategy
+	}{
+		{name: "built-in default", strategy: nil},
+		{
+			name: "wrapped strategy decorator",
+			strategy: &wrappedTailoringStrategy{
+				inner: model.NewMiddleOutStrategy(model.NewSimpleTokenCounter()),
+			},
+		},
+	}
+
+	for _, tt := range strategies {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []Option{
+				WithAPIKey("test-key"),
+				WithEnableTokenTailoring(true),
+				WithMaxInputTokens(10_000),
+			}
+			if tt.strategy != nil {
+				opts = append(opts, WithTailoringStrategy(tt.strategy))
+			}
+			m := New("gpt-4o", opts...)
+			req := &model.Request{Messages: []model.Message{
+				model.NewSystemMessage("system"),
+				model.NewUserMessage("old question"),
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call_1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "search",
+							Arguments: []byte(`{"q":"x"}`),
+						},
+						ExtraFields: map[string]any{"score": float64(1)},
+					}},
+				},
+				model.NewToolMessage("call_1", "search", "result"),
+				model.NewUserMessage("current question"),
+			}}
+			var changes []imodelrequest.TokenTailoringChange
+			ctx, _ := imodelrequest.ObserveTokenTailoring(
+				context.Background(),
+				func(change imodelrequest.TokenTailoringChange) {
+					changes = append(changes, change)
+				},
+			)
+
+			_, _, err := m.prepareChatRequest(ctx, req)
+			require.NoError(t, err)
+			require.Len(t, changes, 1)
+			require.Equal(
+				t,
+				imodelrequest.TokenTailoringProvenancePreserved,
+				changes[0].Record.Provenance,
+			)
+			require.NotNil(t, changes[0].Preserved)
+			require.Empty(t, changes[0].Preserved.Before[2].Content)
+			require.Equal(t, " ", changes[0].Preserved.After[2].Content)
+		})
+	}
+}
+
+func TestRunChatRequestCallbackObservesMessageEdits(t *testing.T) {
+	t.Run("removing messages records reduced change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.Messages = req.Messages[len(req.Messages)-2:]
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage("sys"),
+				openai.UserMessage("u1"),
+				openai.AssistantMessage("a1"),
+				openai.UserMessage("u2"),
+				openai.UserMessage("u3"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, 5, records[0].BeforeMessages)
+		require.Equal(t, 2, records[0].AfterMessages)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceReduced, records[0].Provenance)
+	})
+
+	t.Run("same-size message rewrite records unknown change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.Messages[0] = openai.UserMessage("rewritten")
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceUnknown, records[0].Provenance)
+	})
+
+	t.Run("read-only callback records no change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				_ = len(req.Messages)
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		require.Empty(t, observer.Snapshot())
+	})
+
+	t.Run("SetExtraFields overriding messages records reduced change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				keep := []openai.ChatCompletionMessageParamUnion{
+					req.Messages[0],
+					req.Messages[len(req.Messages)-1],
+				}
+				req.SetExtraFields(map[string]any{"messages": keep})
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage("sys"),
+				openai.UserMessage("u1"),
+				openai.AssistantMessage("a1"),
+				openai.UserMessage("u2"),
+				openai.UserMessage("u3"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, 5, records[0].BeforeMessages)
+		require.Equal(t, 2, records[0].AfterMessages)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceReduced, records[0].Provenance)
+	})
+
+	t.Run("SetExtraFields overriding non-message fields records no change", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.SetExtraFields(map[string]any{
+					"metadata": map[string]any{"trace_id": "abc"},
+				})
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		require.Empty(t, observer.Snapshot())
+	})
+
+	t.Run("SetExtraFields with unmarshalable override fails closed", func(t *testing.T) {
+		m := New(
+			"gpt-4o",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(
+				_ context.Context,
+				req *openai.ChatCompletionNewParams,
+			) {
+				req.SetExtraFields(map[string]any{
+					"messages": func() {},
+				})
+			}),
+		)
+		chatReq := &openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.UserMessage("original"),
+			},
+		}
+		ctx, observer := imodelrequest.ObserveTokenTailoring(
+			context.Background(),
+			nil,
+		)
+		m.runChatRequestCallback(ctx, chatReq)
+		records := observer.Snapshot()
+		require.Len(t, records, 1)
+		require.Equal(t, imodelrequest.TokenTailoringProvenanceUnknown, records[0].Provenance)
+	})
+}
+
+func TestReadAndRestoreRequestBody(t *testing.T) {
+	raw, err := readAndRestoreRequestBody(nil)
+	require.NoError(t, err)
+	require.Nil(t, raw)
+
+	req, err := http.NewRequest(http.MethodPost, "http://example.com", nil)
+	require.NoError(t, err)
+	raw, err = readAndRestoreRequestBody(req)
+	require.NoError(t, err)
+	require.Nil(t, raw)
+
+	req, err = http.NewRequest(
+		http.MethodPost,
+		"http://example.com",
+		strings.NewReader(`{"messages":[]}`),
+	)
+	require.NoError(t, err)
+	raw, err = readAndRestoreRequestBody(req)
+	require.NoError(t, err)
+	require.Equal(t, `{"messages":[]}`, string(raw))
+	restored, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, `{"messages":[]}`, string(restored))
+
+	readErr := errors.New("source body read failed")
+	req, err = http.NewRequest(
+		http.MethodPost,
+		"http://example.com",
+		&failingPayloadReader{
+			payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
+			err:     readErr,
+		},
+	)
+	require.NoError(t, err)
+	raw, err = readAndRestoreRequestBody(req)
+	require.ErrorIs(t, err, readErr)
+	require.Nil(t, raw)
+}
+
+type failingPayloadReader struct {
+	payload []byte
+	sent    bool
+	err     error
+}
+
+func (r *failingPayloadReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		n := copy(p, r.payload)
+		return n, nil
+	}
+	return 0, r.err
+}
+
+func TestGenerateContent_WithRequestBodyReadErrorPropagates(t *testing.T) {
+	for _, withObserver := range []bool{false, true} {
+		t.Run(fmt.Sprintf("observer=%v", withObserver), func(t *testing.T) {
+			var serverHits atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				if _, err := io.ReadAll(r.Body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				serverHits.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"resp-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+			}))
+			defer server.Close()
+
+			sourceErr := errors.New("source body read failed")
+			reader := &failingPayloadReader{
+				payload: []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`),
+				err:     sourceErr,
+			}
+			m := New(
+				"gpt-4o",
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+				WithOpenAIOptions(
+					openaiopt.WithMaxRetries(0),
+					openaiopt.WithRequestBody("application/json", reader),
+				),
+			)
+			ctx := context.Background()
+			var observer *imodelrequest.TokenTailoringObserver
+			if withObserver {
+				ctx, observer = imodelrequest.ObserveTokenTailoring(ctx, nil)
+			}
+			ch, err := m.GenerateContent(ctx, &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+			})
+			require.NoError(t, err)
+			var gotErr *model.ResponseError
+			for resp := range ch {
+				if resp != nil && resp.Error != nil {
+					gotErr = resp.Error
+				}
+			}
+			require.NotNil(t, gotErr)
+			require.Contains(t, gotErr.Message, sourceErr.Error())
+			require.Zero(t, serverHits.Load())
+			if withObserver {
+				records := observer.Snapshot()
+				require.Len(t, records, 1)
+				require.Equal(
+					t,
+					imodelrequest.TokenTailoringProvenanceUnknown,
+					records[0].Provenance,
+				)
+			}
+		})
+	}
 }
 
 // TestOptimizeMessagesForCache tests the optimizeMessagesForCache function.
