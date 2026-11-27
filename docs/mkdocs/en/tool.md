@@ -2984,6 +2984,15 @@ limits their combined active calls. When `MaxConcurrency` is non-positive,
 there is no overall limit: positive group limits still apply, and tools
 outside those groups have no limit from this configuration.
 
+For `LLMAgent`, configured capacity is reserved before starting a per-call
+worker and copying its invocation/session state. Pending calls remain queued
+as indexes, and a busy group does not block admission from other groups.
+Capacity is held until that worker has delivered its result. Cancellation
+stops admitting queued calls and waits for admitted workers to exit; tools
+must still honor their context. This does not limit the total number of calls
+or the bytes in their inputs and collected results. With no positive overall
+limit, calls outside configured groups remain unrestricted.
+
 Each `LLMAgent.Run` and each invocation of a Graph Tools node gets independent
 capacity. Concurrent runs of the same Agent do not consume one another's
 limits. For example, if `subagent` has `Limit: 3`, two concurrent runs of the

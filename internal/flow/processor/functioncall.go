@@ -1798,9 +1798,9 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	return mergedEvent, toolResults, err
 }
 
-// startParallelToolCalls dispatches one worker per call and closes the result
-// channel after every worker exits. Callers drain the channel before waiting
-// for the group error.
+// startParallelToolCalls reserves capacity before creating per-call workers and
+// session views. Dispatch and result collection run concurrently, so a bounded
+// result channel cannot block admission before the caller starts draining it.
 func (p *FunctionCallResponseProcessor) startParallelToolCalls(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -1810,46 +1810,137 @@ func (p *FunctionCallResponseProcessor) startParallelToolCalls(
 	eventChan chan<- *event.Event,
 	perToolCallResultEvents bool,
 ) (<-chan toolResult, func() error) {
-	resultChan := make(chan toolResult, len(toolCalls))
+	resultChan := make(chan toolResult, 1)
 	g, gctx := errgroup.WithContext(ctx)
 	parallelInvocation := invocation
 	if perToolCallResultEvents && invocation != nil {
-		// Snapshot the shared session before workers start. Per-worker clones
-		// then read this immutable baseline instead of racing with result
-		// events persisted by faster siblings.
+		// Results may be persisted while later calls are still queued. Keep a
+		// single immutable baseline so every worker sees the same initial state.
 		parallelInvocation = newParallelInvocationView(invocation)
 	}
-	for i, toolCall := range toolCalls {
-		i, toolCall := i, toolCall
-		g.Go(func() error {
-			runCtx := agent.CloneContext(gctx)
-			runInv := parallelInvocation
-			if parallelInvocation != nil {
-				runInv = newParallelInvocationView(parallelInvocation)
-				if runCtx == nil {
-					runCtx = context.Background()
-				}
-				runCtx = agent.NewInvocationContext(runCtx, runInv)
-			}
-			return p.runParallelToolCall(
-				runCtx,
-				runInv,
-				llmResponse,
-				tools,
-				eventChan,
-				resultChan,
-				perToolCallResultEvents,
-				i,
-				toolCall,
-			)
-		})
-	}
+	limiter := toolcall.LimiterFromContext(ctx)
+	g.Go(func() error {
+		return p.dispatchParallelToolCalls(gctx, limiter, parallelInvocation,
+			toolCalls, tools, func(index int, release func()) {
+				g.Go(func() error {
+					defer release()
+					if err := gctx.Err(); err != nil {
+						return err
+					}
+					runCtx := agent.CloneContext(gctx)
+					runInv := parallelInvocation
+					if parallelInvocation != nil {
+						runInv = newParallelInvocationView(parallelInvocation)
+						if runCtx == nil {
+							runCtx = context.Background()
+						}
+						runCtx = agent.NewInvocationContext(runCtx, runInv)
+					}
+					return p.runParallelToolCall(runCtx, runInv, llmResponse,
+						tools, eventChan, resultChan, perToolCallResultEvents,
+						index, toolCalls[index], true)
+				})
+			})
+	})
 	waitDone := make(chan error, 1)
 	go func() {
 		waitDone <- g.Wait()
 		close(resultChan)
 	}()
 	return resultChan, func() error { return <-waitDone }
+}
+
+type parallelToolQueue struct {
+	indexes []int
+	next    int
+}
+
+// dispatchParallelToolCalls queues indexes rather than goroutines. A busy group
+// does not prevent other groups from using available overall capacity. Scanning
+// is proportional to configured groups, not to the number of distinct names a
+// model may return. The dispatch callback takes ownership of each reservation.
+func (p *FunctionCallResponseProcessor) dispatchParallelToolCalls(
+	ctx context.Context,
+	limiter *toolcall.Limiter,
+	invocation *agent.Invocation,
+	calls []model.ToolCall,
+	tools map[string]tool.Tool,
+	dispatch func(int, func()),
+) error {
+	queues := make([]parallelToolQueue, 0)
+	queueByGroup := make(map[int]int)
+	names := make([]string, len(calls))
+	for i, call := range calls {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := parallelToolQueueName(call, tools, invocation)
+		names[i] = name
+		key := limiter.QueueKey(name)
+		q, ok := queueByGroup[key]
+		if !ok {
+			q = len(queues)
+			queueByGroup[key] = q
+			queues = append(queues, parallelToolQueue{})
+		}
+		queues[q].indexes = append(queues[q].indexes, i)
+	}
+	remaining := len(calls)
+	for remaining > 0 {
+		changed := limiter.Changed()
+		progress := false
+		for i := range queues {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			q := &queues[i]
+			if q.next == len(q.indexes) {
+				continue
+			}
+			index := q.indexes[q.next]
+			release, ok := limiter.TryAcquire(names[index])
+			if !ok {
+				continue
+			}
+			q.next++
+			remaining--
+			progress = true
+			dispatch(index, release)
+		}
+		if !progress {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-changed:
+			}
+		}
+	}
+	return nil
+}
+
+// parallelToolQueueName mirrors compatibility remapping without executing tool
+// filters or callbacks. Custom declarations and sub-agent accessors can panic;
+// leave those failures to the worker's existing panic-to-result handling.
+func parallelToolQueueName(
+	call model.ToolCall,
+	tools map[string]tool.Tool,
+	invocation *agent.Invocation,
+) (name string) {
+	name = call.Function.Name
+	defer func() {
+		if recover() != nil {
+			name = call.Function.Name
+		}
+	}()
+	if _, exists := tools[name]; !exists {
+		if mapped := findCompatibleTool(name, tools, invocation); mapped != nil {
+			target := mapped.Declaration().Name
+			if convertToolArguments(invocation, name, call.Function.Arguments, target) != nil {
+				name = target
+			}
+		}
+	}
+	return name
 }
 
 // firstNonNilErr returns the first non-nil error from its arguments, in
@@ -1882,6 +1973,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	preserveResultOnCancellation bool,
 	index int,
 	tc model.ToolCall,
+	capacityReserved bool,
 ) (rerr error) {
 	tools = executionToolsForCall(ctx, tc, tools)
 	toolArgs := tc.Function.Arguments
@@ -1889,11 +1981,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
+	// Callbacks may replace ctx without inheriting the batch cancellation.
+	// Delivery must still stop when the collector stops, except in per-call
+	// mode where the collector intentionally drains results after cancellation.
+	sendCtx := ctx
+	if preserveResultOnCancellation {
+		sendCtx = context.WithoutCancel(sendCtx)
+	}
 	sendResult := func(result toolResult) {
-		sendCtx := ctx
-		if preserveResultOnCancellation {
-			sendCtx = context.WithoutCancel(sendCtx)
-		}
 		p.sendToolResult(sendCtx, resultChan, result)
 	}
 	// Recover from panics to avoid breaking sibling goroutines. Panics are
@@ -1938,13 +2033,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	startTime := time.Now()
 	ctx = withNativeProviderDataToolCallArgs(ctx, llmResponseHasNativeProviderData(llmResponse))
 	// Execute the tool (streamable or callable) with callbacks.
-	execution, err := p.executeToolCall(
+	execution, err := p.executeToolCallWithReservation(
 		ctx,
 		invocation,
 		tc,
 		tools,
 		index,
 		eventChan,
+		capacityReserved,
 	)
 	ctx = execution.ctx
 	choices := execution.choices
@@ -2763,6 +2859,18 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	index int,
 	eventChan chan<- *event.Event,
 ) (toolCallExecution, error) {
+	return p.executeToolCallWithReservation(ctx, invocation, toolCall, tools, index, eventChan, false)
+}
+
+func (p *FunctionCallResponseProcessor) executeToolCallWithReservation(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	tools map[string]tool.Tool,
+	index int,
+	eventChan chan<- *event.Event,
+	capacityReserved bool,
+) (toolCallExecution, error) {
 	execution := toolCallExecution{
 		ctx:          ctx,
 		modifiedArgs: toolCall.Function.Arguments,
@@ -2773,7 +2881,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	if err != nil || tl == nil {
 		return execution, err
 	}
-	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil {
+	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil && !capacityReserved {
 		release, err := limiter.Acquire(
 			ctx,
 			toolCall.Function.Name,

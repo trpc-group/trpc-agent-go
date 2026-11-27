@@ -197,3 +197,134 @@ func TestLimiterContextScope(t *testing.T) {
 	child := WithLimiter(parent, nil)
 	require.Nil(t, LimiterFromContext(child))
 }
+
+func TestLimiterTryAcquireAndReleaseNotifications(t *testing.T) {
+	l := NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 2,
+		Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"a", "b"}, Limit: 1}}})
+	require.Equal(t, l.QueueKey("a"), l.QueueKey("b"))
+	require.NotEqual(t, l.QueueKey("a"), l.QueueKey("other"))
+	notice := l.Changed()
+	releaseA, ok := l.TryAcquire("a")
+	require.True(t, ok)
+	_, ok = l.TryAcquire("b")
+	require.False(t, ok)
+	releaseOther, ok := l.TryAcquire("other")
+	require.True(t, ok)
+	_, ok = l.TryAcquire("another")
+	require.False(t, ok)
+	releaseA()
+	releaseA()
+	select {
+	case <-notice:
+	default:
+		t.Fatal("release did not notify a scheduler")
+	}
+	secondNotice := l.Changed()
+	select {
+	case <-secondNotice:
+		t.Fatal("new subscription inherited an earlier notification")
+	default:
+	}
+	releaseB, ok := l.TryAcquire("b")
+	require.True(t, ok)
+	releaseB()
+	releaseOther()
+}
+
+func TestLimiterTryAcquireRollsBackGroup(t *testing.T) {
+	l := NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 1,
+		Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"grouped"}, Limit: 1}}})
+	release, err := l.Acquire(context.Background(), "other")
+	require.NoError(t, err)
+	notice := l.Changed()
+	_, ok := l.TryAcquire("grouped")
+	require.False(t, ok)
+	select {
+	case <-notice:
+		t.Fatal("failed probe must not repeatedly wake its own dispatcher")
+	default:
+	}
+	release()
+	<-notice
+	release, ok = l.TryAcquire("grouped")
+	require.True(t, ok, "failed overall acquisition leaked the group permit")
+	release()
+}
+
+type acquireObservedContext struct {
+	context.Context
+	doneCalls chan struct{}
+}
+
+func (c acquireObservedContext) Done() <-chan struct{} {
+	c.doneCalls <- struct{}{}
+	return c.Context.Done()
+}
+
+func TestLimiterCanceledAcquireNotifiesDispatcher(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		config  tool.ConcurrencyConfig
+		holder  string
+		waiting string
+		stages  int
+	}{
+		{name: "group", config: tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"grouped"}, Limit: 1}},
+		}, holder: "grouped", waiting: "grouped", stages: 1},
+		{name: "overall", config: tool.ConcurrencyConfig{MaxConcurrency: 1}, holder: "other", waiting: "other", stages: 1},
+		{name: "group_then_overall", config: tool.ConcurrencyConfig{
+			MaxConcurrency: 1,
+			Groups:         []tool.ConcurrencyGroup{{ToolNames: []string{"grouped"}, Limit: 1}},
+		}, holder: "other", waiting: "grouped", stages: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewLimiter(tc.config)
+			release, err := l.Acquire(context.Background(), tc.holder)
+			require.NoError(t, err)
+			defer release()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			observed := acquireObservedContext{Context: ctx, doneCalls: make(chan struct{}, tc.stages)}
+			done := make(chan error, 1)
+			go func() {
+				releaseWaiting, err := l.Acquire(observed, tc.waiting)
+				if releaseWaiting != nil {
+					releaseWaiting()
+				}
+				done <- err
+			}()
+			for i := 0; i < tc.stages; i++ {
+				select {
+				case <-observed.doneCalls:
+				case <-time.After(time.Second):
+					t.Fatal("acquisition did not reach the expected semaphore")
+				}
+			}
+			notice := l.Changed()
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+			// A canceled semaphore acquisition may roll back a granted permit
+			// internally. Always wake the dispatcher to recheck capacity, even
+			// when no explicit release function was returned to the caller.
+			select {
+			case <-notice:
+			default:
+				t.Fatal("canceled acquisition did not wake the dispatcher")
+			}
+			release()
+			releaseWaiting, ok := l.TryAcquire(tc.waiting)
+			require.True(t, ok, "canceled acquisition leaked capacity")
+			releaseWaiting()
+		})
+	}
+}
+
+func TestNilLimiterDispatchHelpers(t *testing.T) {
+	var l *Limiter
+	require.Zero(t, l.QueueKey("any"))
+	require.Nil(t, l.Changed())
+	release, ok := l.TryAcquire("any")
+	require.True(t, ok)
+	release()
+}
