@@ -57,19 +57,23 @@ func TestExecuteSingleToolCall_ToolResultContentEvent(t *testing.T) {
 			require.NoError(t, json.Unmarshal(completed.StateDelta[MetadataKeyTool], &metadata))
 			require.Equal(t, ToolExecutionPhaseComplete, metadata.Phase)
 			require.NotNil(t, completed.Response)
+			if IsInterruptError(tt.err) {
+				require.ErrorIs(t, err, tt.err)
+				require.Equal(t, ObjectTypeGraphNodeExecution, completed.Object)
+				require.Nil(t, completed.Error)
+				require.Empty(t, completed.Choices)
+				require.Empty(t, metadata.Error)
+				require.JSONEq(t, mustJSON(t, result), metadata.Output)
+				return
+			}
 			require.Len(t, completed.Choices, 1)
 			eventMessage := completed.Choices[0].Message
 			if tt.err != nil {
 				require.ErrorIs(t, err, tt.err)
 				require.Empty(t, eventMessage.ContentParts)
-				if tt.name == "interrupt" {
-					require.Nil(t, completed.Error, "interrupts remain pause events")
-					require.JSONEq(t, mustJSON(t, result), eventMessage.Content)
-				} else {
-					require.NotNil(t, completed.Error)
-					require.Equal(t, "tool result call failed: read failed", completed.Error.Message)
-					require.Empty(t, eventMessage.Content)
-				}
+				require.NotNil(t, completed.Error)
+				require.Equal(t, "tool result call failed: read failed", completed.Error.Message)
+				require.Empty(t, eventMessage.Content)
 				return
 			}
 			require.NoError(t, err)

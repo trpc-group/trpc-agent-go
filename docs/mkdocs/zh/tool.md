@@ -501,8 +501,10 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 LLMAgent 的默认工具调用流程和 Graph ToolsNode 会自动生成工具结果消息，无需配置
 `ToolResultMessages` 回调。
 
-Graph 工具返回 `InterruptError` 时，调用暂停等待恢复，`complete` 事件将可序列化的
-暂停载荷以 JSON 写入 `Message.Content`。
+Graph 工具返回 `InterruptError` 时，`complete` 事件的 `Object` 是
+`graph.node.execution`。可序列化的暂停载荷可从
+`StateDelta[graph.MetadataKeyTool]` 中的元数据 `Output` 字段读取。调用恢复成功后，
+框架通过 `tool.response` 发送实际结果。
 
 [Responses API](https://developers.openai.com/api/docs/guides/function-calling#formatting-results)
 支持在工具结果中返回图片，需配合支持此能力的适配器版本和模型服务。
