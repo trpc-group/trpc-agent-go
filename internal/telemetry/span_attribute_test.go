@@ -248,7 +248,7 @@ func TestBuildResponseAttributes_DropSkipsAttribute(t *testing.T) {
 	rsp := &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hi"}}},
 	}
-	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType)
+	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType, nil)
 	if _, ok := attrStringValue(attrs, semconvtrace.KeyGenAIOutputMessagesOTel); ok {
 		t.Fatal("expected otel output messages attribute to be skipped")
 	}

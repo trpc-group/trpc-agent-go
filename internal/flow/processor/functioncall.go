@@ -1984,8 +1984,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
+	// Publication belongs to the worker lifetime. A callback can replace the
+	// execution context without cancelling delivery of an already-built result
+	// or keeping publication alive after the worker is cancelled.
+	resultCtx := ctx
 	sendResult := func(result toolResult) {
-		sendCtx := ctx
+		sendCtx := resultCtx
 		if preserveResultOnCancellation {
 			sendCtx = context.WithoutCancel(sendCtx)
 		}

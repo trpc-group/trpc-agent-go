@@ -712,6 +712,11 @@ func TestMapUsageCacheWriteTokensAndAliases(t *testing.T) {
 			require.Equal(t, tt.wantCached, usage.PromptTokensDetails.CachedTokens)
 			require.Equal(t, tt.wantCacheRead, usage.PromptTokensDetails.CacheReadTokens)
 			require.Equal(t, tt.wantCacheCreation, usage.PromptTokensDetails.CacheCreationTokens)
+			wantAccounting := model.PromptCacheAccountingUnspecified
+			if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				wantAccounting = model.PromptCacheAccountingInclusive
+			}
+			require.Equal(t, wantAccounting, usage.PromptCacheAccounting)
 		})
 	}
 }
