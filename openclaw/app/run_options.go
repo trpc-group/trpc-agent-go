@@ -69,6 +69,9 @@ const (
 	sandboxNetworkRestricted = "restricted"
 	sandboxNetworkEnabled    = "enabled"
 
+	sandboxReadModeGranted = "granted"
+	sandboxReadModeHost    = "host"
+
 	sandboxShellEnvInheritAll  = "all"
 	sandboxShellEnvInheritCore = "core"
 	sandboxShellEnvInheritNone = "none"
@@ -1488,6 +1491,7 @@ type sandboxCodeExecutorConfig struct {
 	Backend        string                 `yaml:"backend,omitempty"`
 	Profile        string                 `yaml:"profile,omitempty"`
 	Network        string                 `yaml:"network,omitempty"`
+	ReadMode       string                 `yaml:"read_mode,omitempty"`
 	DefaultTimeout string                 `yaml:"default_timeout,omitempty"`
 	OutputMaxBytes *int                   `yaml:"output_max_bytes,omitempty"`
 	ShellEnv       *sandboxShellEnvConfig `yaml:"shell_env,omitempty"`
@@ -1512,6 +1516,7 @@ type sandboxCodeExecutorOptions struct {
 	Backend        string
 	Profile        string
 	Network        string
+	ReadMode       string
 	DefaultTimeout time.Duration
 	OutputMaxBytes int
 	ShellEnv       sandboxShellEnvOptions
@@ -2798,6 +2803,7 @@ func convertSandboxCodeExecutorConfig(
 		Backend:        sandboxBackendAuto,
 		Profile:        sandboxProfileWorkspaceWrite,
 		Network:        sandboxNetworkRestricted,
+		ReadMode:       sandboxReadModeGranted,
 		DefaultTimeout: defaultSandboxCodeExecutorTimeout,
 		OutputMaxBytes: defaultSandboxCodeExecutorOutputMaxBytes,
 		ShellEnv: sandboxShellEnvOptions{
@@ -2844,6 +2850,18 @@ func convertSandboxCodeExecutorConfig(
 			return sandboxCodeExecutorOptions{}, fmt.Errorf(
 				"sandbox.network %q: want restricted|enabled",
 				cfg.Network,
+			)
+		}
+	}
+	readMode := strings.ToLower(strings.TrimSpace(cfg.ReadMode))
+	if readMode != "" {
+		switch readMode {
+		case sandboxReadModeGranted, sandboxReadModeHost:
+			out.ReadMode = readMode
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.read_mode %q: want granted|host",
+				cfg.ReadMode,
 			)
 		}
 	}

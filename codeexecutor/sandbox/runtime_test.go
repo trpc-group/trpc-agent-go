@@ -574,8 +574,8 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 	if got := external.Describe(); got.Isolation != "external" || !got.NetworkAllowed || got.ReadOnlyMount {
 		t.Fatalf("external capabilities = %#v", got)
 	}
-	if caps := backendCapabilities(rt.backend, rt.profile); !caps.Stdin || !caps.PerCommandGrants {
-		t.Fatalf("backend capabilities = %#v", caps)
+	if caps := rt.Describe(); caps.Isolation != "os-sandbox" || !caps.ReadOnlyMount || caps.NetworkAllowed {
+		t.Fatalf("managed capabilities = %#v", caps)
 	}
 	if got := sanitizeID("!!!"); len(got) != 16 {
 		t.Fatalf("hashed sanitizeID length = %d, want 16", len(got))
@@ -937,9 +937,6 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 	if ok, err := rt.matchRule(ws, "work/a.txt", filepath.Join(ws.Path, "work", "a.txt"), fileSystemRule{}); err != nil || ok {
 		t.Fatalf("empty path rule match = %v, %v; want false nil", ok, err)
 	}
-	if _, ok := specialRel(specialPath("missing")); ok {
-		t.Fatalf("unknown special path unexpectedly resolved")
-	}
 	if got := pathSpecificity("./work/a/b"); got != 3 {
 		t.Fatalf("path specificity = %d, want 3", got)
 	}
@@ -1098,7 +1095,7 @@ func TestFilesystemHelperBranches(t *testing.T) {
 	}
 
 	copiedFile := filepath.Join(t.TempDir(), "nested", "copy.txt")
-	if err := copyPath(child, copiedFile); err != nil {
+	if err := copyPathWithValidator(child, copiedFile, func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	data, truncated, err := readFileLimited(copiedFile, 4)
@@ -1110,7 +1107,7 @@ func TestFilesystemHelperBranches(t *testing.T) {
 	}
 
 	copiedDir := filepath.Join(t.TempDir(), "dir-copy")
-	if err := copyPath(root, copiedDir); err != nil {
+	if err := copyPathWithValidator(root, copiedDir, func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(copiedDir, "child", "input.txt"))
@@ -1178,19 +1175,19 @@ func TestFilesystemErrorBranches(t *testing.T) {
 	}
 
 	restrictive := PermissionProfile{typ: profileManaged}
-	err = rt.stageWorkspaceRelativePath(ws, restrictive, "work/source.txt", "work/copy.txt")
+	err = rt.stageWorkspaceRelativePath(context.Background(), ws, restrictive, "work/source.txt", "work/copy.txt")
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath read error = %v, want ErrPathDenied", err)
 	}
-	err = rt.stageWorkspaceRelativePath(ws, ReadOnlyProfile(), "work/source.txt", "work/copy.txt")
+	err = rt.stageWorkspaceRelativePath(context.Background(), ws, ReadOnlyProfile(), "work/source.txt", "work/copy.txt")
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath write error = %v, want ErrPathDenied", err)
 	}
-	err = rt.stageWorkspaceRelativePath(ws, DangerFullAccessProfile(), "../escape.txt", "work/copy.txt")
+	err = rt.stageWorkspaceRelativePath(context.Background(), ws, DangerFullAccessProfile(), "../escape.txt", "work/copy.txt")
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath source escape = %v, want ErrPathDenied", err)
 	}
-	err = rt.stageWorkspaceRelativePath(ws, DangerFullAccessProfile(), "work/source.txt", "../escape.txt")
+	err = rt.stageWorkspaceRelativePath(context.Background(), ws, DangerFullAccessProfile(), "work/source.txt", "../escape.txt")
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("stageWorkspaceRelativePath destination escape = %v, want ErrPathDenied", err)
 	}
@@ -1339,9 +1336,6 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 		t.Fatalf("missing root resolved=%q changed=%v err=%v, want no target", resolved, changed, err)
 	}
 
-	if err := copyPath(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt")); err == nil {
-		t.Fatalf("copyPath unexpectedly succeeded for missing source")
-	}
 	if err := copyPathWithValidator(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
 		return nil
 	}); err == nil {
@@ -1371,8 +1365,8 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	if err := os.WriteFile(fileParent, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyPath(source, filepath.Join(fileParent, "copy.txt")); err == nil {
-		t.Fatalf("copyPath unexpectedly succeeded with file as destination parent")
+	if err := copyPathWithValidator(source, filepath.Join(fileParent, "copy.txt"), func(string) error { return nil }); err == nil {
+		t.Fatalf("copyPathWithValidator unexpectedly succeeded with file as destination parent")
 	}
 	srcDir := filepath.Join(outside, "srcdir")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
@@ -1385,8 +1379,8 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	if err := os.WriteFile(dstFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyPath(srcDir, dstFile); err == nil {
-		t.Fatalf("copyPath unexpectedly copied directory over file")
+	if err := copyPathWithValidator(srcDir, dstFile, func(string) error { return nil }); err == nil {
+		t.Fatalf("copyPathWithValidator unexpectedly copied directory over file")
 	}
 	if err := copyPathWithValidator(source, filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
 		return deniedf(ErrPathDenied, "write", "copy.txt", "blocked")
@@ -1403,18 +1397,6 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 		t.Fatalf("copyPathWithValidator source symlink error = %v, want ErrPathDenied", err)
 	}
 
-	if err := copyFile(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt"), 0o600); err == nil {
-		t.Fatalf("copyFile unexpectedly succeeded for missing source")
-	}
-	if err := copyFile(source, filepath.Join(fileParent, "copy.txt"), 0o600); err == nil {
-		t.Fatalf("copyFile unexpectedly succeeded with file as destination parent")
-	}
-	if err := copyFile(source, srcDir, 0o600); err == nil {
-		t.Fatalf("copyFile unexpectedly opened directory destination")
-	}
-	if err := copyFile(srcDir, filepath.Join(t.TempDir(), "dir-as-file"), 0o600); err == nil {
-		t.Fatalf("copyFile unexpectedly copied directory source")
-	}
 	if err := copyFileWithValidator(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt"), 0o600, func(string) error {
 		return nil
 	}); err == nil {

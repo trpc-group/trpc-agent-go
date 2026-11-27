@@ -310,6 +310,7 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 			"      workspace_root: /tmp/openclaw-sandbox\n"+
 			"      profile: read_only\n"+
 			"      network: enabled\n"+
+			"      read_mode: granted\n"+
 			"      default_timeout: 45s\n"+
 			"      output_max_bytes: 2048\n"+
 			"      shell_env:\n"+
@@ -325,6 +326,7 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 			WorkspaceRoot:  "/tmp/openclaw-sandbox",
 			Profile:        sandboxProfileReadOnly,
 			Network:        sandboxNetworkEnabled,
+			ReadMode:       sandboxReadModeGranted,
 			DefaultTimeout: 45 * time.Second,
 			OutputMaxBytes: 2048,
 			ShellEnv: sandboxShellEnvOptions{
@@ -349,6 +351,14 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 		{Value: "", Label: "inherit"},
 		{Value: codeExecutorTypeSandbox, Label: codeExecutorTypeSandbox},
 	}, typeField.Options)
+	readModeField := findAdminRuntimeConfigField(t, status, "tools.code_executor.sandbox.read_mode")
+	require.Equal(t, sandboxReadModeGranted, readModeField.RuntimeValue)
+	require.Equal(t, sandboxReadModeGranted, readModeField.ConfiguredValue)
+	require.Equal(t, []admin.RuntimeConfigOption{
+		{Value: sandboxReadModeGranted, Label: sandboxReadModeGranted},
+		{Value: sandboxReadModeHost, Label: sandboxReadModeHost},
+	}, readModeField.Options)
+	require.False(t, readModeField.PendingRestart)
 	require.Equal(
 		t,
 		"45s",
@@ -406,12 +416,28 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 	require.Equal(t, sandboxProfileReadOnly, field.RuntimeValue)
 	require.True(t, field.PendingRestart)
 
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.read_mode",
+		sandboxReadModeHost,
+	))
+	status, err = provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	readModeField = findAdminRuntimeConfigField(t, status, "tools.code_executor.sandbox.read_mode")
+	require.Equal(t, sandboxReadModeHost, readModeField.ConfiguredValue)
+	require.Equal(t, sandboxReadModeGranted, readModeField.RuntimeValue)
+	require.True(t, readModeField.PendingRestart)
+	require.NoError(t, provider.ResetRuntimeConfigValue("tools.code_executor.sandbox.read_mode"))
+
 	require.NoError(t, provider.ResetRuntimeConfigValue(
 		"tools.code_executor.sandbox.profile",
 	))
 	data, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	require.NotContains(t, string(data), "profile:")
+	require.NotContains(t, string(data), "read_mode:")
+	parsedOpts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, sandboxReadModeGranted, parsedOpts.CodeExecutor.Sandbox.ReadMode)
 }
 
 func TestAdminRuntimeConfigProvider_HidesSandboxFieldsForInheritedExecutor(
@@ -507,6 +533,10 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 		sandboxNetworkEnabled,
 	))
 	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.read_mode",
+		sandboxReadModeHost,
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
 		"tools.code_executor.sandbox.default_timeout",
 		"45s",
 	))
@@ -534,6 +564,7 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	require.Contains(t, text, "sandbox:")
 	require.Contains(t, text, "profile: read_only")
 	require.Contains(t, text, "network: enabled")
+	require.Contains(t, text, "read_mode: host")
 	require.Contains(t, text, "default_timeout: 45s")
 	require.Contains(t, text, "output_max_bytes: 2048")
 	require.Contains(t, text, "shell_env:")
@@ -550,6 +581,7 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	require.Equal(t, codeExecutorTypeSandbox, parsedOpts.CodeExecutor.Type)
 	require.Equal(t, sandboxProfileReadOnly, parsedOpts.CodeExecutor.Sandbox.Profile)
 	require.Equal(t, sandboxNetworkEnabled, parsedOpts.CodeExecutor.Sandbox.Network)
+	require.Equal(t, sandboxReadModeHost, parsedOpts.CodeExecutor.Sandbox.ReadMode)
 	require.Equal(t, 45*time.Second, parsedOpts.CodeExecutor.Sandbox.DefaultTimeout)
 	require.Equal(t, 2048, parsedOpts.CodeExecutor.Sandbox.OutputMaxBytes)
 	require.Equal(
@@ -804,6 +836,10 @@ func TestAdminRuntimeConfigProvider_ErrorPaths(t *testing.T) {
 	require.Error(t, provider.SaveRuntimeConfigValue(
 		"tools.code_executor.sandbox.network",
 		"egress-only",
+	))
+	require.Error(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.read_mode",
+		"everything",
 	))
 
 	badPath := writeAdminRuntimeConfigTestFile(
