@@ -537,8 +537,34 @@ func TestShouldAttemptSessionReconnect(t *testing.T) {
 			errorMsg:    "error: session not found on server",
 			shouldRetry: true,
 		},
+		{
+			name:        "streamable HTTP 404 from trpc-mcp-go",
+			errorMsg:    "tool call request failed: HTTP request failed: status code 404",
+			shouldRetry: true,
+		},
+		{
+			name:        "SSE HTTP 404 with capitalized body",
+			errorMsg:    "HTTP request failed: status code 404, body: Session not found\n",
+			shouldRetry: true,
+		},
+		{
+			name:        "HTTP status code colon 404",
+			errorMsg:    "unexpected status code: 404, body: Session not found",
+			shouldRetry: true,
+		},
+		{
+			name:        "capitalized session not found",
+			errorMsg:    "Session not found or expired",
+			shouldRetry: true,
+		},
 
 		// Should NOT trigger reconnection (conservative approach)
+		{
+			name:        "HTTP 500 error",
+			errorMsg:    "HTTP request failed: status code 500",
+			shouldRetry: false,
+			description: "Non-404 HTTP status errors should not trigger reconnection",
+		},
 		{
 			name:        "DNS resolution failure",
 			errorMsg:    "no such host",

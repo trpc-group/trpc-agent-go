@@ -39,7 +39,14 @@ var sessionReconnectErrorPatterns = []string{
 	"EOF",                    // End of file (stream closed)
 	"broken pipe",            // Broken connection
 	"HTTP 404",               // Session not found on server
-	"session not found",      // Explicit session not found error
+	"status code 404",        // trpc-mcp-go streamable/SSE HTTP 404 error
+	"status code: 404",       // trpc-mcp-go SSE Connect HTTP 404 error
+}
+
+// sessionReconnectCaseInsensitivePatterns matches session errors whose casing
+// varies across MCP servers (for example "Session not found or expired").
+var sessionReconnectCaseInsensitivePatterns = []string{
+	"session not found",
 }
 
 const processAlreadyFinishedText = "process already finished"
@@ -570,6 +577,13 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 	// Check for connection/session errors that indicate reconnection should be attempted.
 	for _, pattern := range sessionReconnectErrorPatterns {
 		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+
+	lowerErr := strings.ToLower(errStr)
+	for _, pattern := range sessionReconnectCaseInsensitivePatterns {
+		if strings.Contains(lowerErr, pattern) {
 			return true
 		}
 	}
