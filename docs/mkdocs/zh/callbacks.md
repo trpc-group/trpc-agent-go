@@ -1,22 +1,18 @@
 # 回调（Callbacks）
 
-回调（Callbacks）允许你在 Agent 运行、模型推理、工具调用以及 AG-UI 事件翻译的关键生命周期节点上，以结构化方式进行**观测、改写、短路或中止**。
+一次 Agent 运行会依次经过几个固定边界：Agent 启动与结束、LLM 推理、工具调用，以及（使用 AG-UI 时的）事件翻译。实际业务里经常需要在这些边界上加入日志、追踪、鉴权、配额限制、缓存短路、参数规范化或内容风控——但既不希望修改框架内核，也不想把每个模型和工具都手动包一层装饰器。
 
-!!! tip "Callbacks 与 Plugins 的区别"
-    - **Callbacks（回调）** 是 **Agent 局部配置**，通过 `llmagent.WithAgentCallbacks`、`WithModelCallbacks`、`WithToolCallbacks` 绑定到单个 Agent。
-    - **Plugins（插件）** 是 **Runner 全局作用域**的回调打包机制，通过 `runner.WithPlugins(...)` 一次注册、全局生效。在每个 Hook 点上，**先执行插件的全局回调，再执行 Agent 的局部回调**。详见 [插件（Plugins）](./plugin.md)。
+回调（Callbacks）正是在这些边界上提供的声明式 `Before` / `After` 钩子：框架继续掌控流式通道、并发工具调度、panic 恢复与可观测性，回调只需查看输入并返回想要做的调整、替换或终止信号即可。
+
+!!! note "Callbacks 与 Plugins 的区别"
+    - **Callbacks（回调）** 绑定到单个 Agent（例如通过 `llmagent.WithAgentCallbacks`、`WithModelCallbacks`、`WithToolCallbacks`）。
+    - **Plugins（插件）** 把一组回调打包后通过 `runner.WithPlugins(...)` 在 Runner 上一次注册、全局生效。在每个 Hook 点上，**插件的全局回调先于 Agent 的局部回调执行**。详见 [插件（Plugins）](./plugin.md)。
 
 ---
 
-## 一眼看懂核心设计
+## 工作原理
 
-理解整个回调系统，只需要抓住 **3 个核心心智模型**：
-
-1. **在哪执行** —— 洋葱式生命周期与短路路径。
-2. **能做什么** —— 结构化回调统一的 4 种返回意图。
-3. **如何叠加** —— 2 个执行控制开关 + 1 套“只读稀疏补丁”结果累积模型。
-
-### 1. 执行生命周期
+### 执行生命周期
 
 ```mermaid
 flowchart TD
@@ -36,31 +32,31 @@ flowchart TD
     AA --> TR["AG-UI 边界：BeforeTranslate -> 翻译 -> AfterTranslate"]
 ```
 
-### 2. 回调的 4 种标准意图
+### 回调返回值语义
 
-全部结构化回调（`Before/After` × `Agent/Model/Tool`）都通过 `(result, error)` 表达以下 4 种意图之一：
+所有结构化回调（`Before/After` × `Agent/Model/Tool`）都通过 `(result, error)` 表达以下 4 种行为之一：
 
-| 意图 | 返回值写法 | 默认链路行为 |
+| 行为 | 返回值写法 | 默认链路表现 |
 | --- | --- | --- |
-| **观测 / 透传** | `nil, nil`（或空结构体 `&Result{}`） | 继续执行下一个回调 |
-| **透传上下文 / 改写输入** | 设置 `Context`、`ModifiedArguments`，或原地修改 `args.Request` | 继续执行，并将字段向后累积 |
-| **拦截短路 / 替换输出** | 设置非空 `CustomResponse` 或 `CustomResult` | 立即停止链路（除非开启 `WithContinueOnResponse(true)`） |
-| **报错 / 终止运行** | 返回普通 `err` 或 `agent.NewStopError(...)` | 立即停止链路（除非开启 `WithContinueOnError(true)`） |
+| **仅观测 / 透传** | `nil, nil`（或空结构体 `&Result{}`） | 继续执行下一个回调 |
+| **更新上下文或输入** | 设置 `Context`、`ModifiedArguments`，或原地修改 `args.Request` | 继续执行，并将修改向后传递 |
+| **短路或替换输出** | 设置非空 `CustomResponse` 或 `CustomResult` | 立即停止链路（除非开启 `WithContinueOnResponse(true)`） |
+| **报错或终止 Agent** | 返回普通 `err` 或 `agent.NewStopError(...)` | 立即停止链路（除非开启 `WithContinueOnError(true)`） |
 
 ---
 
-## 执行控制与多回调组合
+## 多回调执行与结果合并
 
-全部 **6 条结构化回调链**（`BeforeAgent`、`AfterAgent`、`BeforeModel`、`AfterModel`、`BeforeTool`、`AfterTool`）共用完全一致的执行控制选项与结果累积语义。
+全部 **6 条结构化回调链**（`BeforeAgent`、`AfterAgent`、`BeforeModel`、`AfterModel`、`BeforeTool`、`AfterTool`）共用同一套执行控制选项与结果合并规则。
 
 !!! note "TranslateCallbacks 属于独立链路"
-    用于 AG-UI 事件翻译的 `TranslateCallbacks` 不参与多回调结果累积，也不提供 `WithContinueOn*` 选项：一旦返回错误或非空自定义事件即立即停止。详见 [TranslateCallbacks](#translatecallbacks)。
+    AG-UI 事件翻译使用的 `TranslateCallbacks` 不做跨回调结果合并，也不提供 `WithContinueOn*` 选项——遇到第一个错误或非空自定义事件即立即停止。详见 [TranslateCallbacks](#translatecallbacks)。
 
-### 执行控制选项
+### 执行控制
 
 回调按注册顺序依次执行。默认情况下，一旦回调返回**错误**或非空的 **`CustomResponse`/`CustomResult`**，链路立即停止；仅设置 `Context`、`ModifiedArguments` 或 `SkipSummarization` 不会停止链路。
 
-三类回调构造函数（`agent.NewCallbacks`、`model.NewCallbacks`、`tool.NewCallbacks`）提供相同的两个控制选项：
+`agent.NewCallbacks`、`model.NewCallbacks` 和 `tool.NewCallbacks` 支持相同的两个控制选项：
 
 ```go
 callbacks := model.NewCallbacks(
@@ -74,38 +70,40 @@ callbacks := model.NewCallbacks(
 | **默认** | `false` | `false` | 遇到第一个错误或第一个 `CustomResponse`/`CustomResult` 时立即停止。 |
 | **错误后继续** | `true` | `false` | 出错后继续执行（保留**第一个**错误）；遇到 `CustomResponse`/`CustomResult` 仍立即停止。 |
 | **响应后继续** | `false` | `true` | 返回覆盖结果后继续执行（采用**最后一个**非空覆盖）；遇到错误仍立即停止。 |
-| **两者皆继续** | `true` | `true` | 执行全部回调，最终同时返回已累积的结果与第一个错误（如有）。 |
+| **两者皆继续** | `true` | `true` | 执行全部回调，最终同时返回合并后的结果与第一个错误（如有）。 |
 
 如果单个回调同时返回了错误和自定义响应/结果，错误判断优先（在默认 `continueOnError == false` 时直接按错误停止）。
 
-### 多回调结果累积（只读稀疏补丁模型）
+### 多回调结果如何合并
 
-除非因回调错误而默认早停，否则每次回调返回的非 `nil` 结果都会被视为一份**只读稀疏补丁（sparse patch）**，合并到框架自持的累积器中。后续回调返回 `nil`、空结构体 `&Result{}`、旧签名 `(nil, nil)` 透传，或只设置其他字段时，**不会抹掉**前面已累积的字段：
+实际项目中，一条回调链往往串联着多个互不感知的独立职责——比如一个回调注入追踪或超时 `Context`，另一个回调改写工具参数，第三个只做日志记录。正因为回调之间彼此独立，后一个回调里未填写的字段表达的是**“我不动这个字段”**，而不是**“把前面的值清空”**。
+
+因此，除非链路因回调错误而默认早停，框架会把每次回调返回的非 `nil` 结果作为只读增量合并进累积器中。后续回调返回 `nil`、空结构体 `&Result{}` 或旧签名 `(nil, nil)` 透传时，都不会覆盖前面已设置的字段：
 
 ```mermaid
 flowchart LR
     CB1["CB1: {ModifiedArguments: Berlin}"] --> A1["acc = {ModifiedArgs: Berlin}"]
     A1 --> CB2["CB2: {Context: ctxWithTrace}"]
     CB2 --> A2["acc = {ModifiedArgs: Berlin, Context: ctxWithTrace}"]
-    A2 --> CB3["CB3: 旧签名透传 &{}"]
-    CB3 --> A3["最终 acc 同时保留 ModifiedArgs 与 Context"]
+    A2 --> CB3["CB3: 日志观测 / 旧签名 &{}"]
+    CB3 --> A3["最终结果同时保留 ModifiedArgs 与 Context"]
 ```
 
-各字段严格遵循 3 类合并规则：
+不同字段的语义不同，合并时遵循 3 条规则：
 
-| 合并规则 | 适用字段 | 合并行为 |
+| 字段类别 | 涉及字段 | 合并规则与原因 |
 | --- | --- | --- |
-| **独立覆盖（最近非空胜出）** | `Context`（全 6 条链）<br>`ModifiedArguments`（`BeforeTool`） | 保留最近一次非空值，并同步传给后续回调（更新 `ctx` / `args.Arguments`）。建议从回调输入的 `ctx` 派生新上下文以保留取消传播、截止时间和值；`context.Background()` 或 `context.WithoutCancel(ctx)` 会主动解除取消传播。 |
-| **成组覆盖（绑定为整体）** | `CustomResponse`（`Agent`/`Model`）<br>`CustomResult` + `SkipStateDelta`（`BeforeTool`）<br>`CustomResult` + `SkipResultFormatter` + `SkipStateDelta`（`AfterTool`） | **仅当**后续回调返回非空 `CustomResponse` 或 `CustomResult` 时整组替换。在 `WithContinueOnResponse(true)` 下，返回空结构体或旧签名透传不会清空前序覆盖及其配套标志。 |
-| **单调累加（逻辑 OR）** | `SkipSummarization`（`AfterTool`） | 跨回调按逻辑或（OR）累积，遇到 `CustomResult` 早停时同样生效。 |
+| **独立演进的管道状态** | `Context`（全 6 条链）<br>`ModifiedArguments`（`BeforeTool`） | **最近非空胜出**，并同步传给后续回调（更新 `ctx` / `args.Arguments`），让不同回调可以在前序结果上各自演进。建议从回调输入的 `ctx` 派生新上下文以保留取消传播、截止时间和上下文值；`context.Background()` 或 `context.WithoutCancel(ctx)` 会主动解除取消传播。 |
+| **替换结果及其配套标志** | `CustomResponse`（`Agent`/`Model`）<br>`CustomResult` + `SkipStateDelta`（`BeforeTool`）<br>`CustomResult` + `SkipResultFormatter` + `SkipStateDelta`（`AfterTool`） | **成组整体替换**，仅当后续回调返回非空 `CustomResponse` 或 `CustomResult` 时才替换。`SkipStateDelta` 和 `SkipResultFormatter` 描述的是眼前这份 `CustomResult` 的处理方式，必须与对应结果绑定在一起——在 `WithContinueOnResponse(true)` 下，空结构体透传会保留前序结果和标志，而新的 `CustomResult` 会连同标志一起替换。 |
+| **提前结束轮次信号** | `SkipSummarization`（`AfterTool`） | **逻辑或（OR）**跨回调累积（遇到 `CustomResult` 早停时同样生效）。只要链上任一回调判定无需再做总结型 LLM 调用，后续未设置该字段的观测回调不应将其翻回 `false`。 |
 
-关于结构体所有权隔离、错误早停返回边界以及并行工具结果发布等底层契约，见 [进阶契约与边界说明](#advanced-contracts)。
+关于结构体所有权隔离、错误早停返回边界与并行工具结果发布等底层细节，参见 [行为细节与边界](#behavior-details)。
 
 ---
 
-## 各阶段回调参考
+## 回调类型参考
 
-以下各节均遵循上述统一的控制流与累积模型，仅列出该阶段独有的参数结构、字段说明与接入方式（按洋葱生命周期由外向内排列）。
+以下各节均遵循上述统一的控制与合并规则，仅列出各阶段独有的类型定义、字段说明与接入方式。
 
 ### AgentCallbacks
 
@@ -136,12 +134,8 @@ type BeforeAgentCallbackStructured func(ctx context.Context, args *agent.BeforeA
 type AfterAgentCallbackStructured  func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error)
 ```
 
-**阶段要点：**
-
-- `BeforeAgent` 可直接访问 `args.Invocation`，适合做入口鉴权、配额校验或短路返回固定响应。
-- `AfterAgent` 通过 `args.FullResponseEvent` 获取最终输出事件，适合审计、后处理或响应替换。
-
-**示例与绑定：**
+- `BeforeAgent` 可直接访问 `args.Invocation`，适合入口鉴权、配额校验或短路返回固定响应。
+- `AfterAgent` 通过 `args.FullResponseEvent` 获取最终响应事件，适合审计、后处理或替换输出。
 
 ```go
 agentCallbacks := agent.NewCallbacks().
@@ -179,7 +173,7 @@ llmAgent := llmagent.New(
 
 ### ModelCallbacks
 
-在每次 LLM 推理请求发送前与收到响应后触发。
+在每次 LLM 请求发送前与收到响应后触发。
 
 ```go
 type BeforeModelArgs struct {
@@ -206,12 +200,8 @@ type BeforeModelCallbackStructured func(ctx context.Context, args *model.BeforeM
 type AfterModelCallbackStructured  func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error)
 ```
 
-**阶段要点：**
-
-- `BeforeModel` 可原地改写 `args.Request`（如动态注入消息、改写参数），也可返回 `CustomResponse` 跳过真实推理（如缓存命中、命令拦截）。
-- `AfterModel` 同时提供原始 `args.Request` 与 `args.Response`，便于脱敏还原、内容风控与响应重写。
-
-**示例与绑定：**
+- `BeforeModel` 可原地修改 `args.Request`（如注入消息、调整推理参数），也可返回 `CustomResponse` 跳过真实模型调用。
+- `AfterModel` 同时提供原始 `args.Request` 与 `args.Response`，便于内容还原、风控或响应重写。
 
 ```go
 modelCallbacks := model.NewCallbacks().
@@ -247,7 +237,7 @@ llmAgent := llmagent.New(
 
 ### ToolCallbacks
 
-在每次工具调用前、调用后，以及将工具结果转换为回传模型的消息时触发。
+在每次工具调用前、调用后触发，并可选提供将最终工具结果转为模型消息的钩子。
 
 ```go
 type BeforeToolArgs struct {
@@ -288,18 +278,14 @@ type BeforeToolCallbackStructured func(ctx context.Context, args *tool.BeforeToo
 type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error)
 ```
 
-**阶段要点：**
-
-- **修改参数**：要让工具真正使用新参数，必须返回 `BeforeToolResult.ModifiedArguments`（框架会同步用于工具执行、`TraceToolCall` 可观测属性以及图事件 `emitToolStartEvent`/`emitToolCompleteEvent`）。仅修改 `args.Arguments` 只影响同一回调链中的后续回调。
-- **结果处理标志（`SkipResultFormatter`、`SkipStateDelta`）**：均依附于非空 `CustomResult`，当 `CustomResult == nil` 时会被忽略：
-  - `SkipResultFormatter`：绕过工具自身的 result formatter，改用默认转换（`model.ToolResultContent` 保留结构化内容，其余按 JSON 序列化），适用于返回协议或错误信封而非工具声明输出类型的场景。
-  - `SkipStateDelta`：阻止非空 `CustomResult` 触发工具的 state-delta provider，适用于替换结果并非工具成功输出的场景。
-- **跳过总结（`SkipSummarization`）**：在 `tool.response` 后直接结束本轮，跳过额外的总结型 LLM 调用；它**不会**把 `tool.response` 变成最终 assistant 消息，消费侧仍应以 `runner.completion`（`event.IsRunnerCompletion()`）作为真正的终止信号。
+- **修改参数**：要让工具真正使用修改后的参数，需要返回 `BeforeToolResult.ModifiedArguments`（框架会同步到工具执行、`TraceToolCall` 可观测属性以及图事件 `emitToolStartEvent`/`emitToolCompleteEvent`）。仅给 `args.Arguments` 重新赋值只影响同一回调链中的后续回调。
+- **结果处理标志（`SkipResultFormatter`、`SkipStateDelta`）**：仅在 `CustomResult != nil` 时生效，否则忽略：
+  - `SkipResultFormatter`：绕过工具配置的 result formatter，改用默认转换（`model.ToolResultContent` 保留结构化内容，其余值按 JSON 序列化），适用于返回协议或错误信封而非工具声明输出类型的场景。
+  - `SkipStateDelta`：阻止非空 `CustomResult` 触发工具的 state-delta provider，适用于替换结果并非工具正常输出的场景。
+- **跳过总结（`SkipSummarization`）**：在 `tool.response` 后直接结束本轮，跳过额外的总结型 LLM 调用；它**不会**把 `tool.response` 变成最终 assistant 消息，消费侧仍应以 `runner.completion`（`event.IsRunnerCompletion()`）作为终止信号。
 
 !!! warning "工具鉴权与 Session 历史"
-    `BeforeTool` 仅在模型**实际发起工具调用**时触发。如果工具结果写入了 Session 历史且同一会话内权限可能变化，模型可能直接复用历史答案而跳过工具调用。此类场景需在 Prompt 构建阶段同步做好历史隔离或过滤（参考 Session 文档「权限变更与历史隔离」）。
-
-**示例与绑定：**
+    `BeforeTool` 仅在模型**实际发起工具调用**时触发。如果工具结果写入了 Session 历史且同一会话内权限可能变化，模型可能直接复用历史答案而跳过工具调用。此类场景需要在 Prompt 构建阶段同步做好历史隔离或过滤（参考 Session 文档「权限变更与历史隔离」）。
 
 ```go
 toolCallbacks := tool.NewCallbacks().
@@ -408,7 +394,7 @@ type AfterTranslateCallback  func(ctx context.Context, evt aguievents.Event) (ag
 ```
 
 - 返回非空自定义事件时，替换翻译输入（`Before`）或翻译输出（`After`）。
-- **仅支持短路**：遇到错误或第一个非空自定义事件即立即停止，不提供 `WithContinueOn*` 选项；如需叠加多项修改，请在单个回调中完成。
+- 遇到错误或第一个非空自定义事件即立即停止，不提供 `WithContinueOn*` 选项；如需叠加多项修改，请在单个回调中完成。
 
 ```go
 translateCallbacks := translator.NewCallbacks().
@@ -426,11 +412,11 @@ translateCallbacks := translator.NewCallbacks().
 
 ---
 
-## 常见实战模式
+## 常见用法
 
 ### 在回调中停止 Agent
 
-当需要因配额校验、风控拦截或人工中断而终止执行时，在回调中返回 `agent.NewStopError`。Flow 会将其转为 `stop_agent_error` 事件（消费侧可通过 `event.Error.Type == agent.ErrorTypeStopAgentError` 识别）并停止循环：
+需要因配额校验、风控拦截或人工中断而终止执行时，在回调中返回 `agent.NewStopError`。Flow 会将其转为 `stop_agent_error` 事件（消费侧可通过 `event.Error.Type == agent.ErrorTypeStopAgentError` 识别）并停止循环：
 
 ```go
 agentCallbacks := agent.NewCallbacks().
@@ -468,7 +454,7 @@ if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 
 ### Invocation State：在回调间共享状态
 
-`Invocation` 提供线程安全、懒初始化、按单次调用隔离的键值存储，用于在 `Before`/`After` 回调及中间件间传递状态：
+`Invocation` 提供线程安全、懒初始化、按单次调用隔离的键值存储，用于在 `Before`/`After` 回调或中间件间共享状态：
 
 ```go
 func (inv *Invocation) SetState(key string, value any)
@@ -476,7 +462,7 @@ func (inv *Invocation) GetState(key string) (any, bool)
 func (inv *Invocation) DeleteState(key string)
 ```
 
-**推荐键名规范**（避免键冲突，尤其是并发工具调用场景）：
+建议使用带前缀的键名避免冲突，尤其是在并发工具调用场景下：
 
 | 作用域 | 键名格式 | 示例 |
 | --- | --- | --- |
@@ -485,7 +471,7 @@ func (inv *Invocation) DeleteState(key string)
 | Tool 回调（并发安全） | `"tool:<toolName>:<toolCallID>:<key>"` | `"tool:calculator:call_abc123:start_time"` |
 | 中间件 / 自定义逻辑 | `"middleware:<key>"` / `"custom:<key>"` | `"middleware:request_id"` |
 
-**示例：支持并发的 Tool 回调计时**（Agent 与 Model 计时写法相同，只需改用 `"agent:..."` 或 `"model:..."` 键名）：
+并发安全的 Tool 回调计时示例（Agent 与 Model 计时写法相同，只需改用 `"agent:..."` 或 `"model:..."` 键名）：
 
 ```go
 toolCallbacks := tool.NewCallbacks().
@@ -516,12 +502,12 @@ toolCallbacks := tool.NewCallbacks().
     })
 ```
 
-完整可运行实战示例：
+完整可运行示例：
 
 - 计时与 OpenTelemetry 集成：[examples/callbacks/timer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/timer)
 - 基于 Invocation State 的鉴权与审计日志：[examples/callbacks/auth](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/auth)
 
-### Mock 短路与可复用链式注册
+### Mock 与可复用回调链
 
 在测试或降级场景中，通过 `BeforeTool` 直接返回 Mock 结果并跳过真实工具执行：
 
@@ -537,26 +523,26 @@ toolCallbacks := tool.NewCallbacks().
     })
 ```
 
-所有 `Register*` 方法均返回接收者本身，支持链式构造可复用的回调集合（`NewCallbacks().RegisterBefore*(...).RegisterAfter*(...)`）；如果需要跨所有 Agent 统一生效，建议打包为 [插件（Plugin）](./plugin.md)。
+所有 `Register*` 方法均返回接收者本身，支持链式构造可复用的回调集合（`NewCallbacks().RegisterBefore*(...).RegisterAfter*(...)`）；如果希望跨所有 Agent 统一生效，建议打包为 [插件（Plugin）](./plugin.md)。
 
 ---
 
-## 进阶契约与边界说明（Advanced Contracts）
+## 行为细节与边界（Behavior Details）
 
-以下底层契约适用于全部 6 条结构化回调链（`Before/After` × `Agent/Model/Tool`）：
+以下边界约定适用于全部 6 条结构化回调链（`Before/After` × `Agent/Model/Tool`）：
 
-- **所有权与隔离**：框架在调用下一个回调前，会将已采纳结果的顶层字段复制到独立累积器中，**绝不就地修改**回调方持有的结果结构体（包括 `agent` 保留 graph completion capture 标记的场景）。因此回调方复用或清空结构体不会抹掉已累积字段；但其中引用的响应对象（`*model.Response`）与参数缓冲区（`[]byte`）仍共享引用，不做深拷贝。
+- **所有权与隔离**：由于 Go 回调返回的是结构体指针，直接在链上修改或复用指针容易造成框架与调用方互相污染。框架在调用下一个回调前会将已采纳结果的顶层字段复制到独立累积器中，**绝不就地修改**回调方持有的结果结构体（包括 `agent` 保留 graph completion capture 标记的场景）；回调方复用或清空已返回的结构体也不会抹掉先前已累积的字段。注意其中引用的响应对象（`*model.Response`）与参数缓冲区（`[]byte`）仍共享引用，不做深拷贝。
 - **错误早停返回边界**：
   - 默认遇到错误停止（`continueOnError == false`）时：`Agent` 与 `Model` 回调链返回 `(nil, err)`；`Tool` 回调链返回出错回调的原始 `(result, err)`，不合并先前字段。
   - 启用 `WithContinueOnError(true)` 后：6 条链均返回已累积结果与第一个错误。
 - **并行工具结果发布**：并行工具在默认合并结果模式下，回调替换后的 `Context` 用于控制工具执行，而结果发布遵循 worker 生命周期——仅取消回调替换的上下文不会丢弃缓存结果，主动解除取消传播（`context.Background()` / `context.WithoutCancel(ctx)`）也不会让结果发布在 worker 取消后继续阻塞等待。
-- **旧签名回调兼容**：已废弃的旧签名回调仍可通过自动包装器注册。当旧回调返回 `(nil, nil)` 时，包装器返回空结构体，在新的稀疏补丁累积模型下作为透传处理，不会清空前序已累积的字段（包括 `WithContinueOnResponse(true)` 下的前序覆盖）。
+- **旧签名回调兼容**：已废弃的旧签名回调仍可通过自动包装器注册。当旧回调返回 `(nil, nil)` 时，包装器返回空结构体，按透传处理，不会清空前序已累积的字段（包括 `WithContinueOnResponse(true)` 下的前序覆盖）。
 
 ---
 
-## 运行完整示例
+## 运行示例
 
-以上核心用法均可在 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go) 中直接运行观察：
+以上用法均可在 [`examples/callbacks/main.go`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks/main.go) 中直接运行观察：
 
 ```bash
 cd examples/callbacks
