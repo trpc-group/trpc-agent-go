@@ -224,27 +224,28 @@ func (c *Callbacks) handleCallbackError(err error, firstErr *error) (shouldStop 
 	return false
 }
 
-// processCallbackResult processes callback result and updates context.
+// processCallbackResult merges a before agent callback result into acc and updates ctx.
 // Returns whether to stop execution immediately.
 func (c *Callbacks) processCallbackResult(
 	result *BeforeAgentResult,
 	ctx *context.Context,
-	lastResult **BeforeAgentResult,
+	acc *BeforeAgentResult,
+	hasResult *bool,
 ) (shouldStop bool) {
 	if result == nil {
 		return false
 	}
+	*hasResult = true
 	if result.Context != nil {
-		result.Context = PreserveGraphCompletionCapture(*ctx, result.Context)
-		*ctx = result.Context
+		preserved := PreserveGraphCompletionCapture(*ctx, result.Context)
+		*ctx = preserved
+		acc.Context = preserved
 	}
 	if result.CustomResponse != nil {
-		*lastResult = result
+		acc.CustomResponse = result.CustomResponse
 		if !c.continueOnResponse {
 			return true
 		}
-	} else {
-		*lastResult = result
 	}
 	return false
 }
@@ -288,32 +289,38 @@ func (c *Callbacks) runBeforeAgentCallback(
 
 // finalizeBeforeAgentResult determines the final return value for before agent callbacks.
 func (c *Callbacks) finalizeBeforeAgentResult(
-	lastResult *BeforeAgentResult,
+	acc BeforeAgentResult,
+	hasResult bool,
 	firstErr error,
 ) (*BeforeAgentResult, error) {
-	if lastResult != nil && lastResult.CustomResponse != nil {
-		if c.continueOnError && firstErr != nil {
-			return lastResult, firstErr
-		}
-		return lastResult, nil
-	}
 	if c.continueOnError && firstErr != nil {
-		return lastResult, firstErr
+		if !hasResult {
+			return nil, firstErr
+		}
+		out := acc
+		return &out, firstErr
 	}
-	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return lastResult, nil
+	out := acc
+	return &out, nil
 }
 
 // RunBeforeAgent runs all before agent callbacks in order.
 // This method uses the new structured callback interface.
-// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
+// Unless execution stops on a callback error, non-nil Context (preserving
+// graph completion capture) and CustomResponse values are accumulated across
+// callbacks so later empty, legacy, or partial results preserve earlier
+// values. Callback-owned result structs are never mutated and their top-level
+// fields are copied into the returned result; referenced payloads are not
+// deep-copied.
 func (c *Callbacks) RunBeforeAgent(
 	ctx context.Context,
 	args *BeforeAgentArgs,
 ) (*BeforeAgentResult, error) {
-	var lastResult *BeforeAgentResult
+	var acc BeforeAgentResult
+	var hasResult bool
 	var firstErr error
 
 	for _, cb := range c.BeforeAgent {
@@ -323,60 +330,62 @@ func (c *Callbacks) RunBeforeAgent(
 			return nil, err
 		}
 
-		if c.processCallbackResult(result, &ctx, &lastResult) {
+		if c.processCallbackResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return &out, firstErr
 			}
-			return result, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeBeforeAgentResult(lastResult, firstErr)
+	return c.finalizeBeforeAgentResult(acc, hasResult, firstErr)
 }
 
-// processAfterCallbackResult processes after callback result and updates context.
+// processAfterCallbackResult merges an after agent callback result into acc and updates ctx.
 // Returns whether to stop execution immediately.
 func (c *Callbacks) processAfterCallbackResult(
 	result *AfterAgentResult,
 	ctx *context.Context,
-	lastResult **AfterAgentResult,
+	acc *AfterAgentResult,
+	hasResult *bool,
 ) (shouldStop bool) {
 	if result == nil {
 		return false
 	}
+	*hasResult = true
 	if result.Context != nil {
-		result.Context = PreserveGraphCompletionCapture(*ctx, result.Context)
-		*ctx = result.Context
+		preserved := PreserveGraphCompletionCapture(*ctx, result.Context)
+		*ctx = preserved
+		acc.Context = preserved
 	}
 	if result.CustomResponse != nil {
-		*lastResult = result
+		acc.CustomResponse = result.CustomResponse
 		if !c.continueOnResponse {
 			return true
 		}
-	} else {
-		*lastResult = result
 	}
 	return false
 }
 
 // finalizeAfterAgentResult determines the final return value for after agent callbacks.
 func (c *Callbacks) finalizeAfterAgentResult(
-	lastResult *AfterAgentResult,
+	acc AfterAgentResult,
+	hasResult bool,
 	firstErr error,
 ) (*AfterAgentResult, error) {
-	if lastResult != nil && lastResult.CustomResponse != nil {
-		if c.continueOnError && firstErr != nil {
-			return lastResult, firstErr
-		}
-		return lastResult, nil
-	}
 	if c.continueOnError && firstErr != nil {
-		return lastResult, firstErr
+		if !hasResult {
+			return nil, firstErr
+		}
+		out := acc
+		return &out, firstErr
 	}
-	if lastResult != nil && lastResult.Context == nil && lastResult.CustomResponse == nil {
+	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return lastResult, nil
+	out := acc
+	return &out, nil
 }
 
 func (c *Callbacks) runAfterAgentCallback(
@@ -394,12 +403,18 @@ func (c *Callbacks) runAfterAgentCallback(
 
 // RunAfterAgent runs all after agent callbacks in order.
 // This method uses the new structured callback interface.
-// If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
+// Unless execution stops on a callback error, non-nil Context (preserving
+// graph completion capture) and CustomResponse values are accumulated across
+// callbacks so later empty, legacy, or partial results preserve earlier
+// values. Callback-owned result structs are never mutated and their top-level
+// fields are copied into the returned result; referenced payloads are not
+// deep-copied.
 func (c *Callbacks) RunAfterAgent(
 	ctx context.Context,
 	args *AfterAgentArgs,
 ) (*AfterAgentResult, error) {
-	var lastResult *AfterAgentResult
+	var acc AfterAgentResult
+	var hasResult bool
 	var firstErr error
 
 	for _, cb := range c.AfterAgent {
@@ -409,13 +424,14 @@ func (c *Callbacks) RunAfterAgent(
 			return nil, err
 		}
 
-		if c.processAfterCallbackResult(result, &ctx, &lastResult) {
+		if c.processAfterCallbackResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return &out, firstErr
 			}
-			return result, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeAfterAgentResult(lastResult, firstErr)
+	return c.finalizeAfterAgentResult(acc, hasResult, firstErr)
 }
