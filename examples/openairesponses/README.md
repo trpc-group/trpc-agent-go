@@ -248,7 +248,7 @@ embedder uses `text-embedding-3-small`. The handler sends each query and
 uncached candidate metadata to the embedding API, which adds requests and can
 incur charges. Candidate vectors are cached for the life of the example
 process. See the [semantic handler documentation](../../model/openai/sdkv3/responses/README.md#semantic-search-handler)
-for ranking and cache options or use a custom handler with `WithClientToolSearch`.
+for ranking options or use a custom handler with `WithClientToolSearch`.
 
 Support boundaries and fallback semantics:
 

@@ -44,16 +44,16 @@ func main() {
 
 	var search responses.Option
 	switch *mode {
-	case "server":
-		search = responses.WithHostedToolSearch()
-	case "client":
-		search = responses.WithClientToolSearch(keywordSearch)
 	case "semantic":
 		handler, err := toolsearch.NewSemantic(openaiembedder.New())
 		if err != nil {
 			log.Fatal(err)
 		}
 		search = responses.WithClientToolSearch(handler)
+	case "server":
+		search = responses.WithHostedToolSearch()
+	case "client":
+		search = responses.WithClientToolSearch(keywordSearch)
 	default:
 		log.Fatalf("unsupported -mode %q: use server, client, or semantic", *mode)
 	}

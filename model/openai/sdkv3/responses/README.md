@@ -367,14 +367,13 @@ on ties. The default result limit is 5 and the default minimum score is
 values for your embedder and tool catalog. It returns entries from the
 current request so each match keeps its current execution binding.
 
-Each search with a nonblank query and usable candidates embeds the query once
-and calls the embedder again for each uncached candidate text. A remote
-embedder receives the query and tool metadata, including model-visible names,
+Each search with a nonblank query and usable candidates embeds the query and
+any uncached candidate text. A remote embedder receives the query and tool
+metadata, including model-visible names,
 namespaces, descriptions, and top-level parameter details. Cold searches can
 add latency and embedding charges. Concurrent searches can repeat a cache
-miss. Reuse the handler across runs to retain its in-memory candidate vectors.
-The default cache limit is 1024 vectors. Set `WithSemanticCacheSize(0)` to
-disable the cache, or create a new handler to clear it or change embedders.
+miss. Reuse the handler across runs to retain its bounded in-memory cache of
+candidate vectors. Create a new handler to clear the cache or change embedders.
 
 An empty result loads no tools. Embedding failures follow the client search
 error and resume path described above. Supply your own `ToolSearchHandler`

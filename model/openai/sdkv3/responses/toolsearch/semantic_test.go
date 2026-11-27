@@ -178,7 +178,6 @@ func TestSemanticToolSearchOptions(t *testing.T) {
 		{"too high", toolsearch.WithSemanticMinScore(1.1)},
 		{"NaN", toolsearch.WithSemanticMinScore(math.NaN())},
 		{"infinity", toolsearch.WithSemanticMinScore(math.Inf(1))},
-		{"negative capacity", toolsearch.WithSemanticCacheSize(-1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			handler, err := toolsearch.NewSemantic(embeddings, tc.opt)
@@ -241,41 +240,12 @@ func TestSemanticToolSearchCachesContentAndReturnsCurrentEntries(t *testing.T) {
 	require.Equal(t, 4, embeddings.queryCalls(query))
 }
 
-func TestSemanticToolSearchCacheCapacity(t *testing.T) {
-	const query = "find records"
-	for _, tc := range []struct {
-		name          string
-		size          int
-		wantCandidate int
-	}{
-		{name: "disabled", size: 0, wantCandidate: 5},
-		{name: "one entry", size: 1, wantCandidate: 3},
-		{name: "two entries", size: 2, wantCandidate: 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			embeddings := &semanticTestEmbedder{embed: func(context.Context, string) ([]float64, error) {
-				return []float64{1, 0}, nil
-			}}
-			handler, err := toolsearch.NewSemantic(embeddings, toolsearch.WithSemanticCacheSize(tc.size))
-			require.NoError(t, err)
-			a, b := semanticEntry("find_org", ""), semanticEntry("find_customer", "")
-			for _, entry := range []responses.ToolSearchEntry{a, a, b, b, a} {
-				got, err := handler(context.Background(), &responses.ToolSearchRequest{Query: query, Candidates: []responses.ToolSearchEntry{entry}})
-				require.NoError(t, err)
-				require.Equal(t, []responses.ToolSearchEntry{entry}, got)
-			}
-			require.Equal(t, 5, embeddings.queryCalls(query))
-			require.Len(t, embeddings.candidateTexts(query), tc.wantCandidate)
-		})
-	}
-}
-
 func TestSemanticToolSearchConcurrentRuns(t *testing.T) {
 	const query = "find records"
 	embeddings := &semanticTestEmbedder{embed: func(context.Context, string) ([]float64, error) {
 		return []float64{1, 0}, nil
 	}}
-	handler, err := toolsearch.NewSemantic(embeddings, toolsearch.WithSemanticCacheSize(2))
+	handler, err := toolsearch.NewSemantic(embeddings)
 	require.NoError(t, err)
 
 	// Populate both candidate vectors, then share the handler between runs with
@@ -304,8 +274,7 @@ func TestSemanticToolSearchConcurrentRuns(t *testing.T) {
 	require.Equal(t, runs+1, embeddings.queryCalls(query))
 	require.Len(t, embeddings.candidateTexts(query), len(seed))
 
-	// A shared cache with concurrent misses must stay valid through insertions
-	// and evictions as other searches are in progress.
+	// Concurrent searches can fill the shared cache with new candidate vectors.
 	for i, name := range []string{"billing", "crm", "shipping", "orders", "support", "documents"} {
 		wg.Add(1)
 		go func(i int, name string) {

@@ -28,7 +28,7 @@ import (
 const (
 	defaultSemanticMinScore   = 0.4
 	defaultSemanticMaxResults = 5
-	defaultSemanticCacheSize  = 1024
+	semanticCacheCapacity     = 1024
 )
 
 // SemanticOption configures NewSemantic.
@@ -37,7 +37,6 @@ type SemanticOption func(*semanticOptions)
 type semanticOptions struct {
 	maxResults int
 	minScore   float64
-	cacheSize  int
 }
 
 // WithSemanticMaxResults sets the maximum number of entries returned per search.
@@ -50,13 +49,6 @@ func WithSemanticMaxResults(limit int) SemanticOption {
 // The score must be within [-1, 1] and defaults to 0.4.
 func WithSemanticMinScore(score float64) SemanticOption {
 	return func(o *semanticOptions) { o.minScore = score }
-}
-
-// WithSemanticCacheSize limits the number of candidate vectors kept in memory
-// by one handler. The size defaults to 1024. Zero disables caching, and a
-// negative size is invalid.
-func WithSemanticCacheSize(size int) SemanticOption {
-	return func(o *semanticOptions) { o.cacheSize = size }
 }
 
 // NewSemantic returns a client search handler that ranks the current request's
@@ -80,7 +72,6 @@ func NewSemantic(e embedder.Embedder, opts ...SemanticOption) (responses.ToolSea
 	options := semanticOptions{
 		maxResults: defaultSemanticMaxResults,
 		minScore:   defaultSemanticMinScore,
-		cacheSize:  defaultSemanticCacheSize,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -92,12 +83,11 @@ func NewSemantic(e embedder.Embedder, opts ...SemanticOption) (responses.ToolSea
 		return nil, errors.New("semantic tool search: max results must be positive")
 	case math.IsNaN(options.minScore) || options.minScore < -1 || options.minScore > 1:
 		return nil, errors.New("semantic tool search: min score must be within [-1, 1]")
-	case options.cacheSize < 0:
-		return nil, errors.New("semantic tool search: cache size must be non-negative")
 	}
-	s := &semanticSearch{embedder: e, options: options}
-	if options.cacheSize > 0 {
-		s.vectors = make(map[[sha256.Size]byte][]float64)
+	s := &semanticSearch{
+		embedder: e,
+		options:  options,
+		vectors:  make(map[[sha256.Size]byte][]float64),
 	}
 	return s.search, nil
 }
@@ -225,15 +215,12 @@ func semanticText(entry responses.ToolSearchEntry, decl *tool.Declaration) strin
 }
 
 func (s *semanticSearch) candidateVector(ctx context.Context, text string, dimensions int) ([]float64, error) {
-	var key [sha256.Size]byte
-	if s.vectors != nil {
-		key = sha256.Sum256([]byte(text))
-		s.mu.Lock()
-		v := s.vectors[key]
-		s.mu.Unlock()
-		if len(v) == dimensions {
-			return v, nil
-		}
+	key := sha256.Sum256([]byte(text))
+	s.mu.Lock()
+	cached := s.vectors[key]
+	s.mu.Unlock()
+	if len(cached) == dimensions {
+		return cached, nil
 	}
 	v, err := s.embed(ctx, text)
 	if err != nil {
@@ -242,16 +229,13 @@ func (s *semanticSearch) candidateVector(ctx context.Context, text string, dimen
 	if len(v) != dimensions {
 		return nil, errors.New("semantic tool search: embedding dimensions differ")
 	}
-	if s.vectors == nil {
-		return v, nil
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing := s.vectors[key]
 	if len(existing) == dimensions {
 		return existing, nil
 	}
-	if existing == nil && len(s.vectors) >= s.options.cacheSize {
+	if existing == nil && len(s.vectors) >= semanticCacheCapacity {
 		for old := range s.vectors {
 			delete(s.vectors, old)
 			break
