@@ -592,7 +592,7 @@ func (m *Model) completionUsageToModelUsage(usage *genai.GenerateContentResponse
 	if usage == nil {
 		return nil
 	}
-	return &model.Usage{
+	u := &model.Usage{
 		PromptTokens:     int(usage.PromptTokenCount),
 		CompletionTokens: int(usage.CandidatesTokenCount),
 		TotalTokens:      int(usage.TotalTokenCount),
@@ -603,6 +603,11 @@ func (m *Model) completionUsageToModelUsage(usage *genai.GenerateContentResponse
 			ReasoningTokens: int(usage.ThoughtsTokenCount),
 		},
 	}
+	// Gemini promptTokenCount includes cachedContentTokenCount.
+	if u.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		u.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+	}
+	return u
 }
 
 // applyTokenTailoring performs best-effort token tailoring if configured.

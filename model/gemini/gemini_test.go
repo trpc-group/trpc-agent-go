@@ -933,6 +933,10 @@ func TestModel_buildFinalResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildFinalResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil && tt.want.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				tt.want.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}
@@ -1048,6 +1052,10 @@ func TestModel_buildChunkResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildChunkResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil && tt.want.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				tt.want.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}

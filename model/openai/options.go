@@ -225,6 +225,9 @@ func WithChatRequestJSONCallback(fn ChatRequestJSONCallbackFunc) Option {
 
 // WithChatResponseCallback sets the function to be called after receiving a chat response.
 // Used for non-streaming responses.
+// If the callback changes prompt or cache token counts, the resulting model.Usage
+// leaves PromptCacheAccounting unspecified so consumers use their legacy fallback.
+// Changes only to output counts or other response fields preserve provider accounting.
 func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatResponseCallback = fn
@@ -432,6 +435,9 @@ func WithContextWindow(tokens int) Option {
 type AccumulateChunkUsage func(u model.Usage, delta model.Usage) model.Usage
 
 // WithAccumulateChunkTokenUsage sets the function to be called to accumulate chunk token usage.
+// The returned PromptCacheAccounting is preserved for subsequent calls and the
+// final response. An empty or unknown mode keeps the legacy telemetry fallback;
+// the adapter does not infer a mode for custom accumulated usage.
 func WithAccumulateChunkTokenUsage(a AccumulateChunkUsage) Option {
 	return func(opts *options) {
 		opts.accumulateChunkUsage = a

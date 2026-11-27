@@ -163,6 +163,8 @@ type ChatTraceState struct {
 	requestCommitted   bool
 	cachedPolicy       *SpanAttributePolicy
 	totalTokensWritten bool
+	usageWritten       bool
+	promptCacheTokens  model.PromptTokensDetails
 }
 
 // traceChunkAttributes contains per-response chunk trace inputs.
@@ -221,7 +223,7 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 	if attributes.TimeToFirstToken > 0 {
 		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
 	}
-	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType, s)...)
 	attrs = s.appendTotalTokenReset(attrs, attributes.Response)
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
@@ -688,8 +690,65 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	return attrs
 }
 
+// appendUsageAttributes writes usage snapshots, clearing previously emitted
+// cache attributes when their counters become zero. Chunks without token counts
+// (including timing-only usage) preserve an earlier snapshot on a stateful span.
+func appendUsageAttributes(attrs []attribute.KeyValue, usage *model.Usage, state *ChatTraceState) []attribute.KeyValue {
+	if usage == nil {
+		return attrs
+	}
+	hasTokens := hasUsageTokenCounts(usage)
+	if state != nil && state.usageWritten && !hasTokens {
+		return attrs
+	}
+	attrs = append(attrs,
+		attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, usage.PromptTokens),
+		attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, usage.CompletionTokens),
+	)
+	if usage.TotalTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, usage.TotalTokens))
+	}
+	var previous model.PromptTokensDetails
+	if state != nil {
+		previous = state.promptCacheTokens
+		if hasTokens {
+			state.usageWritten = true
+			state.promptCacheTokens = usage.PromptTokensDetails
+		}
+	}
+	cache := usage.PromptTokensDetails
+	if cache.CachedTokens != 0 || previous.CachedTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, cache.CachedTokens))
+	}
+	if cache.CacheReadTokens != 0 || previous.CacheReadTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cache.CacheReadTokens))
+	}
+	if cache.CacheCreationTokens != 0 || previous.CacheCreationTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cache.CacheCreationTokens))
+	}
+	if cache != (model.PromptTokensDetails{}) || previous != (model.PromptTokensDetails{}) {
+		accounting := ""
+		if cache != (model.PromptTokensDetails{}) {
+			switch usage.PromptCacheAccounting {
+			case model.PromptCacheAccountingInclusive, model.PromptCacheAccountingExclusive:
+				accounting = string(usage.PromptCacheAccounting)
+			}
+		}
+		// Empty explicitly clears a prior declaration when usage is replaced by
+		// custom code or no longer contains cache tokens.
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIUsageInputTokensCacheAccounting, accounting))
+	}
+	return attrs
+}
+
+func hasUsageTokenCounts(usage *model.Usage) bool {
+	return usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 ||
+		usage.PromptTokensDetails != (model.PromptTokensDetails{}) ||
+		usage.CompletionTokensDetails != (model.CompletionTokensDetails{})
+}
+
 // buildResponseAttributes builds response-related attributes.
-func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []attribute.KeyValue {
+func buildResponseAttributes(rsp *model.Response, errorTypeFallback string, state *ChatTraceState) []attribute.KeyValue {
 	if rsp == nil {
 		return nil
 	}
@@ -704,29 +763,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		attrs = append(attrs, responseErrorAttributes(e, errorTypeFallback)...)
 	}
 
-	// Add usage attributes
-	if rsp.Usage != nil {
-		attrs = append(attrs,
-			attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
-			attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
-		)
-		if rsp.Usage.TotalTokens != 0 {
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, rsp.Usage.TotalTokens))
-		}
-		// Prompt cache tokens (if provided by the model provider)
-		if cached := rsp.Usage.PromptTokensDetails.CachedTokens; cached != 0 {
-			// OpenAI: cached_tokens
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, cached))
-		}
-		if cacheRead := rsp.Usage.PromptTokensDetails.CacheReadTokens; cacheRead != 0 {
-			// Anthropic: cache_read_tokens
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cacheRead))
-		}
-		if cacheCreation := rsp.Usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
-			// Anthropic: cache_creation_tokens
-			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
-		}
-	}
+	attrs = appendUsageAttributes(attrs, rsp.Usage, state)
 
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {

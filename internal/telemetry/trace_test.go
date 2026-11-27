@@ -1056,7 +1056,7 @@ func TestBuildResponseAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			attrs := buildResponseAttributes(tt.rsp, semconvtrace.ValueDefaultErrorType)
+			attrs := buildResponseAttributes(tt.rsp, semconvtrace.ValueDefaultErrorType, nil)
 			if tt.rsp == nil {
 				require.Nil(t, attrs)
 			} else {
@@ -1308,7 +1308,7 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 		Model:   "gpt-4",
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "test"}}},
 	}
-	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType)
+	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType, nil)
 	require.NotNil(t, attrs)
 
 	// Verify LLM response attribute is set
