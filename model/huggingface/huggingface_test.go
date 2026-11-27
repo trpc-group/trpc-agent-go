@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -4198,5 +4199,336 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 			assert.Equal(t, int64(1), callCount,
 				"callback must not be called more than once")
 		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type trackingReadCloser struct {
+	io.ReadCloser
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (t *trackingReadCloser) Close() error {
+	t.closeOnce.Do(func() {
+		close(t.closed)
+	})
+	return t.ReadCloser.Close()
+}
+
+func TestModel_GenerateContent_StreamingContextCancelDoesNotBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 3; i++ {
+			fmt.Fprintf(w,
+				`data: {"id":"s","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"chunk-%d"}}]}`+"\n\n",
+				i,
+			)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	bodyClosed := make(chan struct{})
+	baseTransport := server.Client().Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			resp, err := baseTransport.RoundTrip(r)
+			if err != nil {
+				return nil, err
+			}
+			resp.Body = &trackingReadCloser{
+				ReadCloser: resp.Body,
+				closed:     bodyClosed,
+			}
+			return resp, nil
+		}),
+	}
+
+	var chunkCount int
+	var secondChunkOnce sync.Once
+	secondChunkReady := make(chan struct{})
+	streamCompleteErrCh := make(chan error, 1)
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithHTTPClient(httpClient),
+		WithChannelBufferSize(1),
+		WithChatChunkCallback(func(_ context.Context, _ *ChatCompletionRequest, _ *ChatCompletionChunk) {
+			chunkCount++
+			if chunkCount == 2 {
+				secondChunkOnce.Do(func() {
+					close(secondChunkReady)
+				})
+			}
+		}),
+		WithChatStreamCompleteCallback(func(_ context.Context, _ *ChatCompletionRequest, streamErr error) {
+			streamCompleteErrCh <- streamErr
+		}),
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, err := m.GenerateContent(ctx, &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-secondChunkReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for second chunk")
+	}
+
+	// Cancel without draining ch; the goroutine must unblock, close resp.Body, and close ch.
+	cancel()
+
+	select {
+	case <-bodyClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for streaming response body to close")
+	}
+
+	select {
+	case streamErr := <-streamCompleteErrCh:
+		require.ErrorIs(t, streamErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream complete callback")
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(drained)
+	}()
+
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for response channel to close")
+	}
+}
+
+func TestModel_HandleNonStreamingRequest_ContextCancelDoesNotBlock(t *testing.T) {
+	t.Run("error_path", func(t *testing.T) {
+		m, err := New("test-model", WithAPIKey("test-key"), WithBaseURL("http://127.0.0.1:1"))
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		responseChan := make(chan *model.Response)
+		done := make(chan struct{})
+		go func() {
+			m.handleNonStreamingRequest(ctx, &model.Request{}, &ChatCompletionRequest{Model: "test-model"}, responseChan)
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handleNonStreamingRequest blocked on cancelled error send")
+		}
+		_, ok := <-responseChan
+		assert.False(t, ok)
+	})
+
+	t.Run("success_path", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"n","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
+		}))
+		defer server.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		m, err := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithBaseURL(server.URL),
+			WithChatResponseCallback(func(_ context.Context, _ *ChatCompletionRequest, _ *ChatCompletionResponse) {
+				cancel()
+			}),
+		)
+		require.NoError(t, err)
+
+		responseChan := make(chan *model.Response)
+		done := make(chan struct{})
+		go func() {
+			m.handleNonStreamingRequest(ctx, &model.Request{}, &ChatCompletionRequest{Model: "test-model"}, responseChan)
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handleNonStreamingRequest blocked on cancelled success send")
+		}
+		_, ok := <-responseChan
+		assert.False(t, ok)
+	})
+}
+
+func collectResponsesWithTimeout(
+	t *testing.T,
+	ch <-chan *model.Response,
+	timeout time.Duration,
+) []*model.Response {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var responses []*model.Response
+	for {
+		select {
+		case resp, ok := <-ch:
+			if !ok {
+				return responses
+			}
+			responses = append(responses, resp)
+		case <-timer.C:
+			t.Fatal("timed out waiting for response channel to close")
+		}
+	}
+}
+
+func TestModel_GenerateContent_NonStreamingCanceledInResponseCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"n","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithChatResponseCallback(func(_ context.Context, _ *ChatCompletionRequest, _ *ChatCompletionResponse) {
+			cancel()
+		}),
+	)
+	require.NoError(t, err)
+
+	// Uses the default buffered responseChan (size 256); cancellation before
+	// send must still suppress the normal success response.
+	ch, err := m.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+
+	responses := collectResponsesWithTimeout(t, ch, 2*time.Second)
+	assert.Empty(t, responses)
+}
+
+func TestModel_GenerateContent_StreamingCanceledInChunkCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 2; i++ {
+			fmt.Fprintf(w,
+				`data: {"id":"s","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"chunk-%d"}}]}`+"\n\n",
+				i,
+			)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	streamCompleteErrCh := make(chan error, 1)
+	m, err := New(
+		"test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithChatChunkCallback(func(_ context.Context, _ *ChatCompletionRequest, _ *ChatCompletionChunk) {
+			cancel()
+		}),
+		WithChatStreamCompleteCallback(func(_ context.Context, _ *ChatCompletionRequest, streamErr error) {
+			streamCompleteErrCh <- streamErr
+		}),
+	)
+	require.NoError(t, err)
+
+	ch, err := m.GenerateContent(ctx, &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+
+	responses := collectResponsesWithTimeout(t, ch, 2*time.Second)
+	assert.Empty(t, responses)
+
+	select {
+	case streamErr := <-streamCompleteErrCh:
+		require.ErrorIs(t, streamErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream complete callback")
+	}
+}
+
+func TestSendResponse_BlockingSendSucceeds(t *testing.T) {
+	ch := make(chan *model.Response, 1)
+	prefill := &model.Response{ID: "prefill"}
+	ch <- prefill
+
+	want := &model.Response{ID: "second"}
+	started := make(chan struct{})
+	sent := make(chan bool, 1)
+	go func() {
+		close(started)
+		sent <- sendResponse(context.Background(), ch, want)
+	}()
+
+	<-started
+	select {
+	case ok := <-sent:
+		t.Fatalf("sendResponse returned early (%v) while channel was full", ok)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	require.Same(t, prefill, <-ch)
+
+	select {
+	case ok := <-sent:
+		assert.True(t, ok)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocking sendResponse")
+	}
+
+	select {
+	case got := <-ch:
+		assert.Same(t, want, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out reading second response")
 	}
 }
