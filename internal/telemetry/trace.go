@@ -224,7 +224,9 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
 	}
 	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType, s)...)
-	attrs = s.appendTotalTokenReset(attrs, attributes.Response)
+	if attributes.Response != nil {
+		attrs = s.appendTotalTokenReset(attrs, attributes.Response.Usage)
+	}
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
 	}
@@ -234,21 +236,17 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 	}
 }
 
-// appendTotalTokenReset tracks totals emitted by buildResponseAttributes and
+// appendTotalTokenReset tracks totals emitted by appendUsageAttributes and
 // clears a stale total when a newer token-bearing snapshot supplies zero.
-func (s *ChatTraceState) appendTotalTokenReset(attrs []attribute.KeyValue, rsp *model.Response) []attribute.KeyValue {
-	if s == nil || rsp == nil || rsp.Usage == nil {
+func (s *ChatTraceState) appendTotalTokenReset(attrs []attribute.KeyValue, usage *model.Usage) []attribute.KeyValue {
+	if s == nil || usage == nil {
 		return attrs
 	}
-	usage := rsp.Usage
 	if usage.TotalTokens != 0 {
 		s.totalTokensWritten = true
 		return attrs
 	}
-	hasTokens := usage.PromptTokens != 0 || usage.CompletionTokens != 0 ||
-		usage.PromptTokensDetails != (model.PromptTokensDetails{}) ||
-		usage.CompletionTokensDetails != (model.CompletionTokensDetails{})
-	if s.totalTokensWritten && hasTokens {
+	if s.totalTokensWritten && hasUsageTokenCounts(usage) {
 		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, 0))
 	}
 	return attrs
@@ -581,6 +579,19 @@ func NewSummarizeTaskType(name string) string {
 // TraceChat traces the invocation of an LLM call.
 func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	traceChatWithState(span, attributes, nil)
+}
+
+// TraceRejectedChatResponse records token usage and the model's finish reason
+// without recording the rejected response payload.
+func (s *ChatTraceState) TraceRejectedChatResponse(span trace.Span, usage *model.Usage, finishReason string) {
+	if !span.IsRecording() {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		attribute.StringSlice(semconvtrace.KeyGenAIResponseFinishReasons, []string{finishReason}),
+	}
+	attrs = appendUsageAttributes(attrs, usage, s)
+	span.SetAttributes(s.appendTotalTokenReset(attrs, usage)...)
 }
 
 func traceChatWithState(span trace.Span, attributes *TraceChatAttributes, state *ChatTraceState) {
