@@ -616,23 +616,37 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 	return nil
 }
 
+// metadataBatchSize is the page size used when GetMetadata reads every
+// matching document.
+const metadataBatchSize = 5000
+
 // getAllMetadata retrieves all metadata in batches.
+//
+// It pages with search_after on the document ID field rather than from/size:
+// Elasticsearch rejects from+size beyond index.max_result_window (10,000 by
+// default), so offset paging failed once more than 10,000 documents matched.
 func (vs *VectorStore) getAllMetadata(ctx context.Context, config *vectorstore.GetMetadataConfig) (map[string]vectorstore.DocumentMetadata, error) {
 	result := make(map[string]vectorstore.DocumentMetadata)
-	const batchSize = 5000
 
-	for offset := 0; ; offset += batchSize {
-		batch, err := vs.queryMetadataBatch(ctx, batchSize, offset, config.IDs, config.Filter)
+	var searchAfter []types.FieldValue
+	for {
+		metadataQuery := types.NewSearchRequestBody()
+		size := metadataBatchSize
+		metadataQuery.Size = &size
+		metadataQuery.SearchAfter = searchAfter
+
+		hits, err := vs.searchMetadata(ctx, metadataQuery, config.IDs, config.Filter, result)
 		if err != nil {
 			return nil, err
 		}
-
-		for docID, metadata := range batch {
-			result[docID] = metadata
-		}
-
-		if len(batch) < batchSize {
+		// Decide on the raw hit count: documents skipped while building
+		// metadata must not end the scan early.
+		if len(hits) < metadataBatchSize {
 			break
+		}
+		searchAfter = hits[len(hits)-1].Sort
+		if len(searchAfter) == 0 {
+			return nil, errors.New("elasticsearch search metadata: hit has no sort values")
 		}
 	}
 
@@ -650,6 +664,27 @@ func (vs *VectorStore) queryMetadataBatch(
 	metadataQuery := types.NewSearchRequestBody()
 	metadataQuery.Size = &limit
 	metadataQuery.From = &offset
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	if _, err := vs.searchMetadata(ctx, metadataQuery, docIDs, filters, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// searchMetadata runs a metadata query sorted by the document ID field, adds
+// the documents it can build to result, and returns the raw hits. Sorting by
+// a unique field keeps pages deterministic and provides search_after values.
+func (vs *VectorStore) searchMetadata(
+	ctx context.Context,
+	metadataQuery *types.SearchRequestBody,
+	docIDs []string,
+	filters map[string]any,
+	result map[string]vectorstore.DocumentMetadata,
+) ([]types.Hit, error) {
+	metadataQuery.Sort = []types.SortCombinations{
+		map[string]any{vs.option.idFieldName: map[string]any{"order": "asc"}},
+	}
 
 	finalQuery, err := vs.buildFilterQuery(&vectorstore.SearchFilter{
 		IDs:      docIDs,
@@ -672,7 +707,6 @@ func (vs *VectorStore) queryMetadataBatch(
 		return nil, fmt.Errorf("elasticsearch unmarshal metadata response: %w", err)
 	}
 
-	result := make(map[string]vectorstore.DocumentMetadata)
 	for _, hit := range response.Hits.Hits {
 		if hit.Id_ == nil || len(hit.Source_) == 0 {
 			continue
@@ -695,5 +729,5 @@ func (vs *VectorStore) queryMetadataBatch(
 		}
 	}
 
-	return result, nil
+	return response.Hits.Hits, nil
 }
