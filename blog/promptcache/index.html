@@ -4593,6 +4593,61 @@
 <li><code>input_cache_creation</code></li>
 <li><code>output</code></li>
 </ul>
+<p>These Langfuse buckets are mutually exclusive. Providers count prompt tokens
+differently: OpenAI-compatible APIs (Chat Completions and Responses) and Gemini
+include cached and cache-write tokens in <code>prompt_tokens</code>, while Anthropic and
+Bedrock exclude them. Model adapters declare this on the usage they return, and
+LLM spans carry it as <code>gen_ai.usage.input_tokens.cache_accounting</code>
+(<code>inclusive</code> or <code>exclusive</code>, written whenever cache counters are present).
+The Langfuse exporter uses it to derive the uncached <code>input</code> bucket, so a
+write-only OpenAI turn such as <code>prompt_tokens=1774, cache_write_tokens=1771</code>
+exports <code>input=3, input_cache_creation=1771</code> instead of counting the cache
+writes twice. Usage built without an explicit declaration has an empty accounting
+attribute and keeps the previous heuristic normalization.</p>
+<p>Custom model adapters and callbacks can declare the counting convention through
+the exported <code>model.Usage.PromptCacheAccounting</code> field:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
+<span class="normal"><a href="#__codelineno-17-2">2</a></span>
+<span class="normal"><a href="#__codelineno-17-3">3</a></span>
+<span class="normal"><a href="#__codelineno-17-4">4</a></span>
+<span class="normal"><a href="#__codelineno-17-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">usage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Usage</span><span class="p">{</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="nx">PromptTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">PromptTokensDetails</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">PromptTokensDetails</span><span class="p">{</span><span class="nx">CacheCreationTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">80</span><span class="p">},</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">    </span><span class="nx">PromptCacheAccounting</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">PromptCacheAccountingInclusive</span><span class="p">,</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Use <code>model.PromptCacheAccountingExclusive</code> when <code>PromptTokens</code> excludes cache
+reads and writes. The empty string (<code>model.PromptCacheAccountingUnspecified</code>)
+means the producer has not supplied this information; it implies neither
+convention. Empty and unrecognized values keep Langfuse's legacy behavior:
+if cache-read or cache-creation counts are nonzero, keep <code>PromptTokens</code> and
+discard the duplicate <code>CachedTokens</code> bucket; otherwise subtract <code>CachedTokens</code>
+from <code>PromptTokens</code>, with a minimum of zero. A declaration has no effect when
+there are no prompt cache counts.</p>
+<p>The field is excluded from JSON (<code>json:"-"</code>). Decoding into an existing <code>Usage</code>
+preserves its declaration, even when JSON changes the prompt counts. For a full
+replacement, decode into a fresh value and assign it, or explicitly set
+<code>PromptCacheAccounting</code> to <code>model.PromptCacheAccountingUnspecified</code> before decoding.
+Output-only edits can retain the declaration. For example, replacing a complete
+usage object from JSON can be written as:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
+<span class="normal"><a href="#__codelineno-18-2">2</a></span>
+<span class="normal"><a href="#__codelineno-18-3">3</a></span>
+<span class="normal"><a href="#__codelineno-18-4">4</a></span>
+<span class="normal"><a href="#__codelineno-18-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">replacement</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Usage</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Unmarshal</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">replacement</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a><span class="p">}</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a><span class="o">*</span><span class="nx">usage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">replacement</span><span class="w"> </span><span class="c1">// usage is the existing *model.Usage being replaced.</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>Usage</code> uses standard JSON decoding, including when anonymously embedded in a
+wrapper with other fields. The new field participates in Go value equality;
+expected values should include the accounting mode when comparing complete
+usage values. Use keyed struct literals, since adding the field changes the
+number of fields required by positional literals.</p>
+<p>Streaming spans clear previous cache counters and accounting when a later token-bearing usage snapshot
+removes them. Chunks without token counts, including timing-only usage, preserve
+the preceding snapshot.</p>
 <h4 id="troubleshooting-streaming-usage">Troubleshooting Streaming Usage</h4>
 <p>For streaming requests, OpenAI-compatible providers commonly send usage in a
 final usage-only chunk. tRPC-Agent-Go consumes that chunk and attaches the
@@ -4615,23 +4670,23 @@ confirm that the final usage chunk reaches the client, but adding another
 <code>stream_options.include_usage</code> field does not restore details discarded by a
 custom accumulator.</p>
 <p>A simple aggregate view is:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a>total_prompt_tokens = sum(usage.prompt_tokens)
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>total_cached_tokens = sum(usage.prompt_tokens_details.cached_tokens)
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a>requests_with_cache = count(cached_tokens &gt; 0)
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>overall_hit_rate = total_cached_tokens / total_prompt_tokens
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
+<span class="normal"><a href="#__codelineno-19-2">2</a></span>
+<span class="normal"><a href="#__codelineno-19-3">3</a></span>
+<span class="normal"><a href="#__codelineno-19-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a>total_prompt_tokens = sum(usage.prompt_tokens)
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>total_cached_tokens = sum(usage.prompt_tokens_details.cached_tokens)
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a>requests_with_cache = count(cached_tokens &gt; 0)
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a>overall_hit_rate = total_cached_tokens / total_prompt_tokens
 </span></code></pre></div></td></tr></table></div>
 <p>Cost savings should be estimated with the actual provider pricing and billing rules.</p>
 <h2 id="6-experiment-results-and-reproduction">6. Experiment Results and Reproduction</h2>
 <p>The main repository notes that benchmark suites have moved to <a href="https://github.com/trpc-group/trpc-agent-go-benchmark">trpc-agent-go-benchmark</a>. Suites such as <code>anthropic_skills</code> and <code>summary</code> cover token usage, Prompt Cache, and summary behavior. For a lightweight mechanism demo, <code>examples/promptcache/openai</code> in the main repository is easier to run. To observe current-time context specifically, see <code>examples/promptcache/timeprocessor</code>.</p>
 <p>The following provider-neutral sample run illustrates how to compare requests with and without <code>prompt_cache_key</code>:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
-<span class="normal"><a href="#__codelineno-18-2">2</a></span>
-<span class="normal"><a href="#__codelineno-18-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>case                 requests  requests_with_cache  prompt_tokens  cached_tokens  overall_cache_rate
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>without cache key    6         4                    13012          8000           61.48%
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a>with cache key       6         5                    13918          10112          72.65%
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
+<span class="normal"><a href="#__codelineno-20-2">2</a></span>
+<span class="normal"><a href="#__codelineno-20-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a>case                 requests  requests_with_cache  prompt_tokens  cached_tokens  overall_cache_rate
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a>without cache key    6         4                    13012          8000           61.48%
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a>with cache key       6         5                    13918          10112          72.65%
 </span></code></pre></div></td></tr></table></div>
 <p>The conclusion is not that "a key always improves by this amount." The useful observations are:</p>
 <p>First, Prompt Cache can hit without <code>prompt_cache_key</code>. Stable prefixes are still the foundation.</p>
@@ -4646,34 +4701,34 @@ custom accumulator.</p>
 <li>Aggregate total prompt tokens, total cached tokens, hit requests, and overall hit rate.</li>
 </ul>
 <p>Per-turn sample without <code>prompt_cache_key</code>:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
-<span class="normal"><a href="#__codelineno-19-2">2</a></span>
-<span class="normal"><a href="#__codelineno-19-3">3</a></span>
-<span class="normal"><a href="#__codelineno-19-4">4</a></span>
-<span class="normal"><a href="#__codelineno-19-5">5</a></span>
-<span class="normal"><a href="#__codelineno-19-6">6</a></span>
-<span class="normal"><a href="#__codelineno-19-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>1     1592           0              0.00%     cache warmup
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a>2     2077           0              0.00%     calculator tool
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a>3     2167           1984           91.56%    time tool
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a>4     2105           1792           85.13%    normal QA
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a>5     2574           2048           79.56%    calculator tool
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a>6     2497           2176           87.14%    normal QA
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
+<span class="normal"><a href="#__codelineno-21-2">2</a></span>
+<span class="normal"><a href="#__codelineno-21-3">3</a></span>
+<span class="normal"><a href="#__codelineno-21-4">4</a></span>
+<span class="normal"><a href="#__codelineno-21-5">5</a></span>
+<span class="normal"><a href="#__codelineno-21-6">6</a></span>
+<span class="normal"><a href="#__codelineno-21-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a>1     1592           0              0.00%     cache warmup
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a>2     2077           0              0.00%     calculator tool
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a>3     2167           1984           91.56%    time tool
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a>4     2105           1792           85.13%    normal QA
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a>5     2574           2048           79.56%    calculator tool
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a>6     2497           2176           87.14%    normal QA
 </span></code></pre></div></td></tr></table></div>
 <p>Per-turn sample with a stable <code>prompt_cache_key</code>:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
-<span class="normal"><a href="#__codelineno-20-2">2</a></span>
-<span class="normal"><a href="#__codelineno-20-3">3</a></span>
-<span class="normal"><a href="#__codelineno-20-4">4</a></span>
-<span class="normal"><a href="#__codelineno-20-5">5</a></span>
-<span class="normal"><a href="#__codelineno-20-6">6</a></span>
-<span class="normal"><a href="#__codelineno-20-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a>1     1592           0              0.00%     cache warmup
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a>2     2239           1152           51.45%    calculator tool
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a>3     2329           2112           90.68%    time tool
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a>4     2267           2048           90.34%    normal QA
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a>5     2784           2240           80.46%    calculator tool
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a>6     2707           2560           94.57%    normal QA
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1">1</a></span>
+<span class="normal"><a href="#__codelineno-22-2">2</a></span>
+<span class="normal"><a href="#__codelineno-22-3">3</a></span>
+<span class="normal"><a href="#__codelineno-22-4">4</a></span>
+<span class="normal"><a href="#__codelineno-22-5">5</a></span>
+<span class="normal"><a href="#__codelineno-22-6">6</a></span>
+<span class="normal"><a href="#__codelineno-22-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a>1     1592           0              0.00%     cache warmup
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a>2     2239           1152           51.45%    calculator tool
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a>3     2329           2112           90.68%    time tool
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a>4     2267           2048           90.34%    normal QA
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a>5     2784           2240           80.46%    calculator tool
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a>6     2707           2560           94.57%    normal QA
 </span></code></pre></div></td></tr></table></div>
 <p>This is still only an example run, not an SLA. Model output length and history may differ between runs, so prompt token counts may not match exactly. Prompt Cache is a best-effort provider capability affected by routing, retention time, request frequency, cache threshold, and exact prefix stability.</p>
 <h2 id="7-practice-checklist">7. Practice Checklist</h2>
@@ -4793,7 +4848,7 @@ custom accumulator.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 25, 2026 09:38:47 UTC">2026-11-25 09:38:47</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="November 27, 2026 02:03:25 UTC">2026-11-27 02:03:25</span>
   </span>
 
     

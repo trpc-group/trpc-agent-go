@@ -4608,6 +4608,55 @@
 <li><code>input_cache_creation</code></li>
 <li><code>output</code></li>
 </ul>
+<p>这些 Langfuse 分桶互不重叠。不同服务方对输入 token 的计数口径不同：
+OpenAI-compatible API（Chat Completions 与 Responses）和 Gemini 的
+<code>prompt_tokens</code> 包含缓存读取与缓存写入 token，Anthropic 和 Bedrock 则不包含。
+模型适配器会在返回的 usage 上声明该口径，LLM span 通过
+<code>gen_ai.usage.input_tokens.cache_accounting</code>（<code>inclusive</code> 或 <code>exclusive</code>，
+只要存在缓存计数就会写入）携带该信息。Langfuse exporter 据此计算未缓存的
+<code>input</code> 分桶，因此 <code>prompt_tokens=1774, cache_write_tokens=1771</code> 这类仅有缓存
+写入的 OpenAI 请求会导出 <code>input=3, input_cache_creation=1771</code>，而不会重复计算
+缓存写入。未显式声明口径的 usage，其口径属性为空，沿用原有的启发式归一化。</p>
+<p>自定义模型适配器和 callback 可以通过公开字段
+<code>model.Usage.PromptCacheAccounting</code> 声明计数口径：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
+<span class="normal"><a href="#__codelineno-17-2">2</a></span>
+<span class="normal"><a href="#__codelineno-17-3">3</a></span>
+<span class="normal"><a href="#__codelineno-17-4">4</a></span>
+<span class="normal"><a href="#__codelineno-17-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">usage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Usage</span><span class="p">{</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="nx">PromptTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">PromptTokensDetails</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">PromptTokensDetails</span><span class="p">{</span><span class="nx">CacheCreationTokens</span><span class="p">:</span><span class="w"> </span><span class="mi">80</span><span class="p">},</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">    </span><span class="nx">PromptCacheAccounting</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">PromptCacheAccountingInclusive</span><span class="p">,</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果 <code>PromptTokens</code> 不包含缓存读取和写入计数，使用
+<code>model.PromptCacheAccountingExclusive</code>。空字符串
+（<code>model.PromptCacheAccountingUnspecified</code>）表示生产者未提供这项信息，
+不能据此认定包含或不包含缓存。空字符串和未知值沿用 Langfuse 的旧规则：
+存在非零的缓存读取或创建计数时，保留 <code>PromptTokens</code>，忽略重复的
+<code>CachedTokens</code> 分桶；否则从 <code>PromptTokens</code> 中扣除 <code>CachedTokens</code>，结果最低为零。
+没有缓存计数时，口径声明不影响处理结果。</p>
+<p>该字段不参与 JSON 序列化和解码（<code>json:"-"</code>）。向已有 <code>Usage</code> 解码 JSON 时，
+即使输入计数发生变化，也会保留已有口径。完整替换应先解码到新值再赋值，
+或者在解码前显式将 <code>PromptCacheAccounting</code> 重置为
+<code>model.PromptCacheAccountingUnspecified</code>。仅修改输出计数时可以保留口径。
+例如，通过 JSON 完整替换 usage 对象可以写为：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
+<span class="normal"><a href="#__codelineno-18-2">2</a></span>
+<span class="normal"><a href="#__codelineno-18-3">3</a></span>
+<span class="normal"><a href="#__codelineno-18-4">4</a></span>
+<span class="normal"><a href="#__codelineno-18-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">replacement</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Usage</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">Unmarshal</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">replacement</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a><span class="p">}</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a><span class="o">*</span><span class="nx">usage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">replacement</span><span class="w"> </span><span class="c1">// usage is the existing *model.Usage being replaced.</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>Usage</code> 使用标准 JSON 解码行为，匿名嵌入到具有其他字段的包装结构体时也如此。
+新增字段参与 Go 值比较；比较完整 usage 时，预期值应包含相应口径。
+构造结构体时应使用带字段名的字面量，因为新增字段会改变位置式字面量所需的字段数量。</p>
+<p>流式 span 在后续包含 token 计数的 usage 快照移除缓存时，会同步清除
+此前的缓存计数与口径。没有 token 计数的 chunk（包括仅含 timing 的 usage）
+保留前一个快照。</p>
 <h4 id="usage">流式 Usage 排障</h4>
 <p>在流式请求中，OpenAI-compatible 服务通常会在最后发送一个只包含 usage
 的 chunk。tRPC-Agent-Go 会消费该 chunk，并把累计结果放入最终
@@ -4624,23 +4673,23 @@
 仍可通过检查服务方请求和原始响应确认最终 usage chunk 是否到达客户端，但重复
 添加 <code>stream_options.include_usage</code> 无法恢复已经被自定义聚合器丢弃的明细。</p>
 <p>一个简单的统计口径是：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a>total_prompt_tokens = sum(usage.prompt_tokens)
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>total_cached_tokens = sum(usage.prompt_tokens_details.cached_tokens)
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a>requests_with_cache = count(cached_tokens &gt; 0)
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>overall_hit_rate = total_cached_tokens / total_prompt_tokens
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
+<span class="normal"><a href="#__codelineno-19-2">2</a></span>
+<span class="normal"><a href="#__codelineno-19-3">3</a></span>
+<span class="normal"><a href="#__codelineno-19-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a>total_prompt_tokens = sum(usage.prompt_tokens)
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>total_cached_tokens = sum(usage.prompt_tokens_details.cached_tokens)
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a>requests_with_cache = count(cached_tokens &gt; 0)
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a>overall_hit_rate = total_cached_tokens / total_prompt_tokens
 </span></code></pre></div></td></tr></table></div>
 <p>如果要估算成本节省，应使用服务方当前价格表和计费规则。不要把某个 provider 的缓存门槛、TTL 或折扣写成所有 OpenAI-compatible 服务的统一行为。</p>
 <h2 id="_3">六、实验结果与复现方式</h2>
 <p>tRPC-Agent-Go 主仓库中的 benchmark 说明已经把 benchmark suites 迁移到独立的 <a href="https://github.com/trpc-group/trpc-agent-go-benchmark">trpc-agent-go-benchmark</a> 仓库，其中 <code>anthropic_skills</code>、<code>summary</code> 等 suite 覆盖了 token usage、prompt cache、summary 等评测方向。对本文这类机制说明，主仓库的 <code>examples/promptcache/openai</code> 示例更适合作为轻量复现实验；如果要单独观察当前时间上下文对 Prompt Cache 的影响，可以参考 <code>examples/promptcache/timeprocessor</code>，它对比了 baseline、date-only、full-datetime 和 precise-tool 四种模式。</p>
 <p>下面是一组 provider-neutral 的示例运行结果，用来说明是否传入 <code>prompt_cache_key</code> 的观测方式：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
-<span class="normal"><a href="#__codelineno-18-2">2</a></span>
-<span class="normal"><a href="#__codelineno-18-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>case                 requests  requests_with_cache  prompt_tokens  cached_tokens  overall_cache_rate
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>without cache key    6         4                    13012          8000           61.48%
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a>with cache key       6         5                    13918          10112          72.65%
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
+<span class="normal"><a href="#__codelineno-20-2">2</a></span>
+<span class="normal"><a href="#__codelineno-20-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a>case                 requests  requests_with_cache  prompt_tokens  cached_tokens  overall_cache_rate
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a>without cache key    6         4                    13012          8000           61.48%
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a>with cache key       6         5                    13918          10112          72.65%
 </span></code></pre></div></td></tr></table></div>
 <p>这组结果最重要的不是“带 key 一定提升多少”，而是三点：</p>
 <p>第一，不传 <code>prompt_cache_key</code> 也可以命中 Prompt Cache。OpenAI-compatible API 的核心仍然是 prefix cache routing：只要前缀足够稳定，服务端就有机会按 prefix 自动复用。</p>
@@ -4656,34 +4705,34 @@
 </ul>
 <p>下面的 per-turn 表格主要用于诊断每轮请求的变化。</p>
 <p>不传 <code>prompt_cache_key</code> 的单次运行结果：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
-<span class="normal"><a href="#__codelineno-19-2">2</a></span>
-<span class="normal"><a href="#__codelineno-19-3">3</a></span>
-<span class="normal"><a href="#__codelineno-19-4">4</a></span>
-<span class="normal"><a href="#__codelineno-19-5">5</a></span>
-<span class="normal"><a href="#__codelineno-19-6">6</a></span>
-<span class="normal"><a href="#__codelineno-19-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>1     1592           0              0.00%     cache warmup
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a>2     2077           0              0.00%     calculator tool
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a>3     2167           1984           91.56%    time tool
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a>4     2105           1792           85.13%    normal QA
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a>5     2574           2048           79.56%    calculator tool
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a>6     2497           2176           87.14%    normal QA
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
+<span class="normal"><a href="#__codelineno-21-2">2</a></span>
+<span class="normal"><a href="#__codelineno-21-3">3</a></span>
+<span class="normal"><a href="#__codelineno-21-4">4</a></span>
+<span class="normal"><a href="#__codelineno-21-5">5</a></span>
+<span class="normal"><a href="#__codelineno-21-6">6</a></span>
+<span class="normal"><a href="#__codelineno-21-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a>1     1592           0              0.00%     cache warmup
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a>2     2077           0              0.00%     calculator tool
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a>3     2167           1984           91.56%    time tool
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a>4     2105           1792           85.13%    normal QA
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a>5     2574           2048           79.56%    calculator tool
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a>6     2497           2176           87.14%    normal QA
 </span></code></pre></div></td></tr></table></div>
 <p>传入固定 <code>prompt_cache_key</code> 的单次运行结果：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
-<span class="normal"><a href="#__codelineno-20-2">2</a></span>
-<span class="normal"><a href="#__codelineno-20-3">3</a></span>
-<span class="normal"><a href="#__codelineno-20-4">4</a></span>
-<span class="normal"><a href="#__codelineno-20-5">5</a></span>
-<span class="normal"><a href="#__codelineno-20-6">6</a></span>
-<span class="normal"><a href="#__codelineno-20-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a>1     1592           0              0.00%     cache warmup
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a>2     2239           1152           51.45%    calculator tool
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a>3     2329           2112           90.68%    time tool
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a>4     2267           2048           90.34%    normal QA
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a>5     2784           2240           80.46%    calculator tool
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a>6     2707           2560           94.57%    normal QA
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1">1</a></span>
+<span class="normal"><a href="#__codelineno-22-2">2</a></span>
+<span class="normal"><a href="#__codelineno-22-3">3</a></span>
+<span class="normal"><a href="#__codelineno-22-4">4</a></span>
+<span class="normal"><a href="#__codelineno-22-5">5</a></span>
+<span class="normal"><a href="#__codelineno-22-6">6</a></span>
+<span class="normal"><a href="#__codelineno-22-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a>1     1592           0              0.00%     cache warmup
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a>2     2239           1152           51.45%    calculator tool
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a>3     2329           2112           90.68%    time tool
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a>4     2267           2048           90.34%    normal QA
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a>5     2784           2240           80.46%    calculator tool
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a>6     2707           2560           94.57%    normal QA
 </span></code></pre></div></td></tr></table></div>
 <p>这仍然只是示例运行结果，不是 SLA。两组运行的模型输出长度和历史上下文会略有差异，因此 prompt tokens 不完全相同；Prompt Cache 本身也是 best-effort 能力，命中率会受服务端路由、缓存保留时间、请求频率、prompt 是否超过门槛、前缀是否完全一致等因素影响。示例程序会打印估算节省，但实际计费应以服务方当前价格和缓存计费规则为准。</p>
 <h2 id="_4">七、实践清单</h2>
@@ -4802,7 +4851,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月25日 09:38:47 UTC">2026-11-25 09:38:47</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年11月27日 02:03:25 UTC">2026-11-27 02:03:25</span>
   </span>
 
     
