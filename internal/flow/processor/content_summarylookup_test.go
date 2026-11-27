@@ -18,6 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryinject"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -151,6 +154,18 @@ func TestGetSessionSummaryTextMatchesBaseLookup(t *testing.T) {
 			},
 		},
 		{
+			name:      "prefix child falls back to the parent summary",
+			mode:      BranchFilterModePrefix,
+			filterKey: "test-agent/child-2",
+			summaries: populated,
+		},
+		{
+			name:      "subtree child does not fall back to the parent summary",
+			mode:      BranchFilterModeSubtree,
+			filterKey: "test-agent/child-2",
+			summaries: populated,
+		},
+		{
 			name:      "prefix empty filter does not aggregate",
 			mode:      BranchFilterModePrefix,
 			filterKey: "",
@@ -202,9 +217,9 @@ func TestGetSessionSummaryTextMatchesBaseLookup(t *testing.T) {
 	}
 }
 
-// baseSessionSummaryLookup is the pre-diagnostics selection oracle. Keep it
-// aligned with bcd0a567 getSessionSummaryText: exact key, then prefix
-// aggregate, otherwise empty.
+// baseSessionSummaryLookup is the selection oracle: exact key, then prefix
+// aggregate, then (prefix mode only) the nearest non-root ancestor, otherwise
+// empty.
 func baseSessionSummaryLookup(
 	mode, filterKey string,
 	summaries map[string]*session.Summary,
@@ -222,7 +237,20 @@ func baseSessionSummaryLookup(
 		return sum.Summary, summaryHistoryCutoffFromBoundary(sum.CutoffBoundary())
 	}
 	if mode == BranchFilterModePrefix && filter != "" {
-		return baseAggregatePrefixSummaries(summaries, filter)
+		if text, cutoff := baseAggregatePrefixSummaries(summaries, filter); text != "" {
+			return text, cutoff
+		}
+		parts := strings.Split(filter, "/")
+		for i := len(parts) - 1; i > 0; i-- {
+			key := strings.Join(parts[:i], "/")
+			if key == "" {
+				break
+			}
+			sum := summaries[key]
+			if sum != nil && sum.Summary != "" {
+				return sum.Summary, summaryHistoryCutoffFromBoundary(sum.CutoffBoundary())
+			}
+		}
 	}
 	return "", summaryHistoryCutoff{}
 }
@@ -251,4 +279,136 @@ func baseAggregatePrefixSummaries(
 	}
 	boundary, _ := session.SummaryPrefixBoundary(summaries, prefix)
 	return strings.Join(parts, "\n\n"), summaryHistoryCutoffFromBoundary(boundary)
+}
+
+func TestLookUpSessionSummaryUsesNearestAncestor(t *testing.T) {
+	at := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	parentBoundary := session.NewSummaryBoundaryWithEventID("root", at, "evt-root")
+	tests := []struct {
+		name           string
+		filterKey      string
+		summaries      map[string]*session.Summary
+		wantText       string
+		wantResult     string
+		wantCutoff     summaryHistoryCutoff
+		wantCandidates int
+	}{
+		{
+			name:      "empty own summary falls back to the parent with its boundary",
+			filterKey: "root/child",
+			summaries: map[string]*session.Summary{
+				"root":       {Summary: "root-summary", UpdatedAt: at, Boundary: parentBoundary},
+				"root/child": {Summary: ""},
+			},
+			wantText:       "root-summary",
+			wantResult:     summaryinject.LookupResultAncestor,
+			wantCutoff:     summaryHistoryCutoff{at: at, lastEventID: "evt-root"},
+			wantCandidates: 1,
+		},
+		{
+			name:      "nearest ancestor wins over a farther one",
+			filterKey: "root/mid/child",
+			summaries: map[string]*session.Summary{
+				"root":     {Summary: "root-summary", UpdatedAt: at},
+				"root/mid": {Summary: "mid-summary", UpdatedAt: at},
+			},
+			wantText:       "mid-summary",
+			wantResult:     summaryinject.LookupResultAncestor,
+			wantCutoff:     summaryHistoryCutoff{at: at},
+			wantCandidates: 1,
+		},
+		{
+			name:      "empty ancestor summary is skipped",
+			filterKey: "root/mid/child",
+			summaries: map[string]*session.Summary{
+				"root":     {Summary: "root-summary", UpdatedAt: at},
+				"root/mid": {Summary: ""},
+			},
+			wantText:       "root-summary",
+			wantResult:     summaryinject.LookupResultAncestor,
+			wantCutoff:     summaryHistoryCutoff{at: at},
+			wantCandidates: 1,
+		},
+		{
+			name:      "descendant summary wins over an ancestor",
+			filterKey: "root/child",
+			summaries: map[string]*session.Summary{
+				"root":            {Summary: "root-summary", UpdatedAt: at},
+				"root/child/leaf": {Summary: "leaf-summary", UpdatedAt: at},
+			},
+			wantText:       "leaf-summary",
+			wantResult:     summaryinject.LookupResultPrefix,
+			wantCutoff:     summaryHistoryCutoff{at: at},
+			wantCandidates: 1,
+		},
+		{
+			name:      "full-session summary is not an ancestor",
+			filterKey: "root/child",
+			summaries: map[string]*session.Summary{
+				"": {Summary: "full-summary", UpdatedAt: at},
+			},
+			wantResult: summaryinject.LookupResultNone,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(&session.Session{Summaries: tt.summaries}),
+				agent.WithInvocationEventFilterKey(tt.filterKey),
+			)
+			p := NewContentRequestProcessor(WithBranchFilterMode(BranchFilterModePrefix))
+
+			text, cutoff, diagnostics := p.lookUpSessionSummary(inv)
+			require.Equal(t, tt.wantText, text)
+			require.Equal(t, tt.wantCutoff, cutoff)
+			require.Equal(t, tt.wantResult, diagnostics.result)
+			require.Equal(t, tt.wantCandidates, diagnostics.matchingCandidates)
+		})
+	}
+}
+
+// TestChildBranchHistoryUsesParentSummaryBoundary covers a child agent forked
+// with HistoryScopeParentBranch after the parent branch was summarized.
+func TestChildBranchHistoryUsesParentSummaryBoundary(t *testing.T) {
+	cutoff := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	userEvent := func(filterKey, content string, at time.Time) event.Event {
+		return event.Event{
+			FilterKey: filterKey,
+			Timestamp: at,
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role:    model.RoleUser,
+				Content: content,
+			}}}},
+		}
+	}
+	sess := &session.Session{
+		Events: []event.Event{
+			userEvent("parent", "covered by summary", cutoff.Add(-time.Minute)),
+			userEvent("parent", "after boundary", cutoff.Add(time.Minute)),
+			userEvent("parent/child-1", "child task", cutoff.Add(2*time.Minute)),
+		},
+		Summaries: map[string]*session.Summary{
+			"parent": {
+				Summary:   "parent summary",
+				UpdatedAt: cutoff.Add(time.Minute),
+				Boundary:  session.NewSummaryBoundary("parent", cutoff),
+			},
+		},
+	}
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent/child-1"),
+	)
+
+	text, summaryCutoff := p.getSessionSummaryText(inv)
+	require.Equal(t, "parent summary", text)
+	require.True(t, summaryCutoff.CutoffTime().Equal(cutoff))
+
+	messages := p.getIncrementMessagesAfterCutoff(inv, nil, summaryCutoff)
+	contents := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		contents = append(contents, msg.Content)
+	}
+	require.Equal(t, []string{"after boundary", "child task"}, contents)
 }
