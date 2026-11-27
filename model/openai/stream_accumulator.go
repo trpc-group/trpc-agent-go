@@ -14,12 +14,17 @@ import (
 
 	openaigo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/respjson"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // chatStreamAccumulator keeps the SDK accumulator's structural behavior while
 // avoiding its quadratic string concatenation for streamed text fields.
 type chatStreamAccumulator struct {
 	acc openaigo.ChatCompletionAccumulator
+
+	// The SDK usage type cannot retain a custom accumulator's accounting mode.
+	promptCacheAccounting model.PromptCacheAccounting
 
 	choices []*chatStreamChoiceAccumulator
 
@@ -42,6 +47,11 @@ type chatStreamToolCallAccumulator struct {
 func (a *chatStreamAccumulator) addChunk(chunk openaigo.ChatCompletionChunk) bool {
 	sdkChunk := a.sdkChunk(chunk)
 	for index, choice := range chunk.Choices {
+		// The SDK overwrites finish reasons even on usage-only tail chunks.
+		// Preserve the last non-empty reason in the copy sent to the SDK.
+		if choice.FinishReason == "" && choice.Index >= 0 && choice.Index < int64(len(a.acc.Choices)) {
+			sdkChunk.Choices[index].FinishReason = a.acc.Choices[choice.Index].FinishReason
+		}
 		if choice.Delta.JSON.Content.Valid() {
 			sdkChunk.Choices[index].Delta.JSON.Content = respjson.NewField("true")
 		}

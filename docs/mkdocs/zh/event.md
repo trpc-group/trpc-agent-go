@@ -205,13 +205,13 @@ type Usage struct {
 }
 
 type PromptTokensDetails struct {
-    // 提示词中的缓存 token 数量.
+    // 提示词中命中缓存读取的 token 数量.
     CachedTokens int `json:"cached_tokens"`
 
-    // 创建缓存使用的 token 数量（Anthropic）.
+    // 写入/创建缓存的输入 token 数量（如 OpenAI/兼容端点的 cache_write_tokens / cache_creation_tokens、Anthropic/Bedrock 缓存写入等）.
     CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
 
-    // 从缓存读取的 token 数量（Anthropic）.
+    // 从显式缓存读取的 token 数量（如 Anthropic/Bedrock 或网关上报的 cache_read_tokens）.
     CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 }
 

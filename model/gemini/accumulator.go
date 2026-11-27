@@ -49,14 +49,49 @@ func (a *Accumulator) Accumulate(resp *model.Response) {
 		}
 	}
 	if resp.Usage != nil {
-		a.Usage.PromptTokens += resp.Usage.PromptTokens
-		a.Usage.CompletionTokens += resp.Usage.CompletionTokens
-		a.Usage.TotalTokens += resp.Usage.TotalTokens
+		mergeUsageSnapshot(&a.Usage, resp.Usage)
+	}
+}
+
+// mergeUsageSnapshot updates dst with non-zero request-level token counts from
+// src. Gemini streams report cumulative request-level UsageMetadata snapshots
+// (which can repeat identical counts across chunks or omit usage on trailing
+// chunks), so latest non-zero snapshot fields replace prior values instead of
+// being summed.
+func mergeUsageSnapshot(dst, src *model.Usage) {
+	if src == nil {
+		return
+	}
+	if src.PromptTokens != 0 {
+		dst.PromptTokens = src.PromptTokens
+	}
+	if src.CompletionTokens != 0 {
+		dst.CompletionTokens = src.CompletionTokens
+	}
+	if src.TotalTokens != 0 {
+		dst.TotalTokens = src.TotalTokens
+	}
+	if src.PromptTokensDetails.CachedTokens != 0 {
+		dst.PromptTokensDetails.CachedTokens = src.PromptTokensDetails.CachedTokens
+	}
+	if src.PromptTokensDetails.CacheCreationTokens != 0 {
+		dst.PromptTokensDetails.CacheCreationTokens = src.PromptTokensDetails.CacheCreationTokens
+	}
+	if src.PromptTokensDetails.CacheReadTokens != 0 {
+		dst.PromptTokensDetails.CacheReadTokens = src.PromptTokensDetails.CacheReadTokens
+	}
+	if src.CompletionTokensDetails.ReasoningTokens != 0 {
+		dst.CompletionTokensDetails.ReasoningTokens = src.CompletionTokensDetails.ReasoningTokens
 	}
 }
 
 // BuildResponse builds up the final a model.Response.
 func (a *Accumulator) BuildResponse() *model.Response {
+	// Gemini promptTokenCount includes cachedContentTokenCount.
+	a.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+	if a.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		a.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+	}
 	now := time.Now()
 	return &model.Response{
 		Object:    model.ObjectTypeChatCompletion,

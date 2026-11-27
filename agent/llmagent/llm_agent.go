@@ -265,7 +265,13 @@ func New(name string, opts ...Option) *LLMAgent {
 		// Explicitly configured via WithDefaultTransferMessage.
 		processor.SetDefaultTransferMessage(*options.DefaultTransferMessage)
 	}
-	responseProcessors = append(responseProcessors, toolcallProcessor)
+	// Provider action results must be recorded before the response's
+	// ordinary tool results.
+	responseProcessors = append(
+		responseProcessors,
+		processor.NewProviderActionResponseProcessor(),
+		toolcallProcessor,
+	)
 
 	// Always install the transfer processor so dynamic sub-agent updates
 	// (for example, via SubAgentSetter) can enable transfer_to_agent later.
@@ -564,12 +570,9 @@ func appendPostToolProcessor(
 	}
 
 	var postToolOpts []processor.PostToolOption
-	hasToolSurface := hasPotentialToolSurface(a, options)
-	postToolOpts = append(
-		postToolOpts,
-		processor.WithPostToolPromptBeforeResult(hasToolSurface),
-		processor.WithPostToolPromptCreateSystemMessage(hasToolSurface),
-	)
+	if !hasPotentialToolSurface(a, options) {
+		postToolOpts = append(postToolOpts, processor.WithPostToolPromptForModelTools())
+	}
 	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,

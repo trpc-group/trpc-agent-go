@@ -117,6 +117,7 @@ func TestProcessStreamingResponses_TraceRejectedTruncatedToolCall(t *testing.T) 
 			inv := agent.NewInvocation()
 			response := truncatedToolCallResponse(tt.reason)
 			response.Usage.PromptTokensDetails.CachedTokens = 3
+			response.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
 			if tt.noUsage {
 				response.Usage = nil
 			}
@@ -160,6 +161,7 @@ func TestProcessStreamingResponses_TraceRejectedTruncatedToolCall(t *testing.T) 
 						attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, 22),
 						attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, 33),
 						attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, 3),
+						attribute.String(semconvtrace.KeyGenAIUsageInputTokensCacheAccounting, string(model.PromptCacheAccountingInclusive)),
 					)
 				}
 			}
@@ -169,6 +171,48 @@ func TestProcessStreamingResponses_TraceRejectedTruncatedToolCall(t *testing.T) 
 			require.ElementsMatch(t, want, ended[0].Attributes())
 		})
 	}
+}
+
+func TestProcessStreamingResponses_TraceRejectedTruncatedToolCallReplacesUsage(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("truncated-call-test").Start(context.Background(), "chat")
+
+	partial := &model.Response{
+		IsPartial: true,
+		Usage: &model.Usage{
+			PromptTokens:          10,
+			TotalTokens:           22,
+			PromptCacheAccounting: model.PromptCacheAccountingExclusive,
+			PromptTokensDetails:   model.PromptTokensDetails{CacheReadTokens: 8, CacheCreationTokens: 4},
+		},
+	}
+	rejected := truncatedToolCallResponse(model.FinishReasonLength)
+	rejected.Usage.TotalTokens = 0
+	seq := func(yield func(*model.Response) bool) {
+		if yield(partial) {
+			yield(rejected)
+		}
+	}
+	events := make(chan *event.Event, 10)
+	flow := New(nil, nil, Options{})
+	request := &model.Request{GenerationConfig: model.GenerationConfig{Stream: true}}
+	lastEvent, err := flow.processStreamingResponses(ctx, agent.NewInvocation(), nil, request, seq, events, span, true)
+	span.End()
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.NotNil(t, lastEvent.Response.Error)
+	require.Len(t, recorder.Ended(), 1)
+	require.Subset(t, recorder.Ended()[0].Attributes(), []attribute.KeyValue{
+		attribute.StringSlice(semconvtrace.KeyGenAIResponseFinishReasons, []string{model.FinishReasonLength}),
+		attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, 11),
+		attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, 22),
+		attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, 0),
+		attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, 0),
+		attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, 0),
+		attribute.String(semconvtrace.KeyGenAIUsageInputTokensCacheAccounting, ""),
+	})
 }
 
 func TestProcessStreamingResponses_RejectsAnthropicOutputLimit(t *testing.T) {

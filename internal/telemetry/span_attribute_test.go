@@ -248,7 +248,7 @@ func TestBuildResponseAttributes_DropSkipsAttribute(t *testing.T) {
 	rsp := &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "hi"}}},
 	}
-	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType)
+	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType, nil)
 	if _, ok := attrStringValue(attrs, semconvtrace.KeyGenAIOutputMessagesOTel); ok {
 		t.Fatal("expected otel output messages attribute to be skipped")
 	}
@@ -323,6 +323,43 @@ func TestTraceWorkflow_DropRequest(t *testing.T) {
 	TraceWorkflow(span, &Workflow{Name: "wf", Request: map[string]string{"k": "v"}})
 	if _, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIWorkflowRequest); ok {
 		t.Fatal("expected workflow request to be dropped")
+	}
+}
+
+func TestTraceWorkflow_RecordsFilteredResponse(t *testing.T) {
+	t.Cleanup(InstallSpanAttributePolicy(SpanAttributePolicy{}))
+	span := newRecordingSpan()
+	TraceWorkflow(span, &Workflow{
+		Response: "original",
+		FilterResponse: func(response any) any {
+			if response != "original" {
+				t.Fatalf("unexpected filter input %v", response)
+			}
+			return "filtered"
+		},
+	})
+	if got, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIWorkflowResponse); !ok || got != `"filtered"` {
+		t.Fatalf("expected filtered workflow response, got %q (present %t)", got, ok)
+	}
+}
+
+func TestTraceWorkflow_DropResponseSkipsMarshal(t *testing.T) {
+	t.Cleanup(InstallSpanAttributePolicy(AppendAttributeRule(SpanAttributePolicy{}, AttributeRule{
+		Operation: OperationWorkflow,
+		Key:       semconvtrace.KeyGenAIWorkflowResponse,
+		Action:    AttributeDrop,
+	})))
+
+	span := newRecordingSpan()
+	TraceWorkflow(span, &Workflow{
+		Response: "result",
+		FilterResponse: func(any) any {
+			t.Fatal("dropped workflow response was inspected")
+			return nil
+		},
+	})
+	if _, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIWorkflowResponse); ok {
+		t.Fatal("dropped workflow response was recorded")
 	}
 }
 

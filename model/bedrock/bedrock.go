@@ -324,6 +324,7 @@ func (m *Model) processStreamEvents(
 							CacheReadTokens:     int(aws.ToInt32(ev.Value.Usage.CacheReadInputTokens)),
 						},
 					}
+					markExclusivePromptCacheAccounting(usage)
 				}
 			}
 		}
@@ -448,6 +449,7 @@ func (m *Model) buildNonStreamingResponse(output *bedrockruntime.ConverseOutput)
 				CacheReadTokens:     int(aws.ToInt32(output.Usage.CacheReadInputTokens)),
 			},
 		}
+		markExclusivePromptCacheAccounting(response.Usage)
 	}
 
 	return response
@@ -1019,5 +1021,17 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 	select {
 	case responseChan <- errorResponse:
 	case <-ctx.Done():
+	}
+}
+
+// markExclusivePromptCacheAccounting declares that Bedrock Converse
+// inputTokens exclude cache-read and cache-write tokens.
+func markExclusivePromptCacheAccounting(usage *model.Usage) {
+	if usage == nil {
+		return
+	}
+	usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+	if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		usage.PromptCacheAccounting = model.PromptCacheAccountingExclusive
 	}
 }

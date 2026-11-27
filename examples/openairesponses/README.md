@@ -8,10 +8,15 @@ This independent module shows how to use the OpenAI Responses adapter with
 - `chat` is a multi-turn conversation without tools.
 - `tools` registers a local calculator and keeps one in-memory session across
   user messages.
+- `imagetool` uses `ToolResultMessages` to return a local image directly to
+  the main model in a native function output.
+- `toolsearch` defers support tools behind native tool search, in hosted
+  (`-mode server`) or client-executed (`-mode client`) mode. See
+  [Tool search](#tool-search).
 
 Every request sends the full client-managed conversation. The adapter defaults
-to `store=false`, and both programs set that explicitly. In ordinary Runner
-use, application code does not read or edit `Message.ProviderData`.
+to `store=false`. In ordinary Runner use, application code does not read or edit
+`Message.ProviderData`.
 
 ## Prerequisites
 
@@ -35,11 +40,12 @@ The OpenAI SDK reads the API key and base URL from the environment.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-model` | Model name passed to `responses.New`. | `gpt-5` |
+| `-model` | Model name passed to `responses.New`. | `gpt-5`; `gpt-5.4` for `toolsearch` |
 | `-streaming` | Stream assistant text. | `true` |
+| `-mode` | `toolsearch` only: `server` for hosted search, `client` for client-executed search. | `server` |
 
-`go run ./chat -help` and `go run ./tools -help` print those flags and do not
-call the API.
+`go run ./chat -help`, `go run ./tools -help`, and `go run ./toolsearch -help`
+print those flags and do not call the API.
 
 ## Run
 
@@ -58,6 +64,12 @@ go run ./tools
 
 # Non-streaming calculator with an explicit model.
 go run ./tools -model gpt-5 -streaming=false
+
+# Hosted tool search, streaming.
+go run ./toolsearch -mode server
+
+# Client-executed tool search, non-streaming.
+go run ./toolsearch -mode client -streaming=false
 ```
 
 Type `/exit` to quit. An empty line is ignored.
@@ -116,6 +128,31 @@ Assistant: Hello.
 You: /exit
 ```
 
+## ReadImage tool
+
+Use a model and gateway that accept image blocks in Responses function outputs:
+
+```bash
+go run ./imagetool -model your-vision-model -image /path/to/image.png \
+  -prompt "Read the visible text and describe the image."
+```
+
+The example instructs the model to call `read_image` with image ID `sample`.
+The tool resolves that ID to the configured file. On a successful call,
+`ToolResultMessages` places the raw bytes in `RoleTool.ContentParts`. The
+adapter includes the image in the next request as an `input_image` block in
+`function_call_output.output`, paired with the original call ID.
+
+This example uses non-streaming responses. Use PNG, JPEG, static GIF, or WebP
+images supported by your provider; the example checks the MIME type and limits
+the file to 10 MiB. The result's byte field is excluded from default
+JSON text. Replace the local lookup with your application's image-ID resolver
+or authenticated download as needed; pass raw bytes rather than encoding them
+again. For an existing image URL or data URL, use `Message.AddImageURL` instead.
+
+The [tool image documentation](../../model/openai/sdkv3/responses/README.md#images-returned-by-local-tools)
+describes ordering, text compatibility, and history behavior.
+
 ## Core API
 
 ```go
@@ -138,6 +175,99 @@ r := runner.NewRunner(
 
 `chat` is the same shape without `WithTools`. `calculatorTool` is the local
 function in `tools/main.go`.
+
+## Tool search
+
+`toolsearch` registers a support assistant with these tools:
+
+| Tool | Registration | Exposure |
+| --- | --- | --- |
+| `current_time` | `WithTools` | Eager |
+| `shipping_eta` | `WithTools` | Deferred by `deferred.Tool` |
+| `crm` ToolSet: `lookup_customer`, `list_orders` | `WithToolSets` | Only `list_orders` deferred |
+| `billing` ToolSet: `lookup_invoice`, `list_invoices` | `WithToolSets` | Whole ToolSet deferred |
+
+The program only configures the model, the tools, and the deferral policy:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/deferred"
+
+search := responses.WithHostedToolSearch() // -mode server
+// search := responses.WithClientToolSearch(keywordSearch) // -mode client
+agent := llmagent.New(
+    "responses-tool-search-agent",
+    llmagent.WithModel(responses.New(modelName, search)),
+    llmagent.WithTools([]tool.Tool{currentTimeTool(), deferred.Tool(shippingETATool())}),
+    llmagent.WithToolSets([]tool.ToolSet{
+        deferred.ToolSet(crmToolSet(), deferred.WithFilter(tool.NewIncludeToolNamesFilter("list_orders"))),
+        deferred.ToolSet(billingToolSet()),
+    }),
+)
+```
+
+Without options, `deferred.Tool` and `deferred.ToolSet` defer every wrapped
+tool. Use `deferred.WithFilter` for selective deferral.
+
+The `crm` and `billing` ToolSets are sent as namespaces. They are application
+`staticToolSet` values: their `description` field is returned by `Description()`
+and becomes the namespace description. `lookup_customer` and `current_time`
+are callable from the first request. In server mode, the API searches the deferred definitions
+and loads the matching ones inside the same response, so only the loaded
+tool calls are printed. In client mode, the deferred definitions are not sent.
+`keywordSearch` matches whole words in the namespace name, tool name, and
+tool description. It gives tool-name matches extra weight and returns
+the entries of candidates scoring close to the best match. The handler has
+signature `func(context.Context, *responses.ToolSearchRequest) ([]responses.ToolSearchEntry, error)`.
+It reads descriptions through `entry.Tool.Declaration()` and returns the
+selected entries unchanged. A request for a
+single invoice selects `billing.lookup_invoice`. A request for orders and
+delivery can select both `crm.list_orders` and `shipping_eta`. The example
+prints the selected IDs in the `tool_search` result, then shows each tool call:
+
+```text
+OpenAI Responses tool search (client mode). Type /exit to quit.
+You: Is invoice inv_7 paid?
+Tool result: tool_search (ID: call_search): {"loaded_tools":["billing_lookup_invoice"]}
+Tool call: billing_lookup_invoice (ID: call_invoice)
+  Args: {"invoice_id":"inv_7"}
+Tool result: billing_lookup_invoice (ID: call_invoice): {"invoice_id":"inv_7","status":"paid","amount":120}
+Assistant: Invoice inv_7 is paid; the amount was 120.
+You: /exit
+```
+
+The transcript is illustrative; queries, loaded tools, and wording vary by
+model. The tool data is fixed sample data.
+
+Support boundaries and fallback semantics:
+
+- Tool search needs a model that supports it; the OpenAI guide lists `gpt-5.4`
+  and later. Other models reject the request; the example has no fallback.
+- Deferral is exposure only. Deferred tools are still registered, filtered,
+  and executed by the agent. With Chat Completions or without a tool search
+  option, the same agent sends every tool up front.
+- A loaded definition stays loaded while its search output remains in the
+  session history. Returned executable objects are borrowed for the current
+  Run, and the application owns their cleanup. Registered tools in this example
+  remain available for later Runs. A later Run that calls a replacement or
+  external tool receives a tool error asking the model to search again. Its
+  handler can then return a fresh object.
+- Client handlers can copy a candidate and set `entry.Tool = sandboxTool`, or
+  return a new `responses.ToolSearchEntry{Tool: catalogTool}` for an external
+  tool. Candidates' `Name` values are already wire names. A new entry can omit
+  `Name` to use the tool's declaration name. Client search is available even
+  without registered deferred tools.
+  `Run.ToolFilter` also checks returned replacement and external objects, and
+  normal execution permissions and tool callbacks apply.
+- In client mode, a handler error ends the run before ordinary functions in
+  the same response execute. Resume the same session with `model.Message{}`
+  and `agent.WithResume(true)` before sending another user message. The
+  example's `keywordSearch` returns an empty result when nothing matches, so
+  the model can continue.
+- Client search runs through `LLMAgent` and `Runner`. Graph LLM nodes report an
+  error for a client search.
+
+The full contract is in the
+[adapter README](../../model/openai/sdkv3/responses/README.md#tool-search).
 
 ## Notes
 
@@ -163,8 +293,13 @@ function in `tools/main.go`.
   not carry a recovery guarantee. Summary replacement, compaction, and
   behavior for other agents are specified in the adapter contract.
 - This module does not demonstrate server-managed `previous_response_id` or
-  `conversation` continuation, background responses, hosted tools, tool search,
-  or approval flows.
+  `conversation` continuation, background responses, hosted tools other than
+  tool search, or approval flows.
+- Between completed turns, selecting another Responses model replays the saved
+  native input. Selecting the built-in Chat Completions model sends the visible
+  conversation and pairs each tool result with its call by ID. When this
+  Runner resumes a pending native tool call with `agent.WithResume(true)`,
+  it requires the producing protocol and configured model.
 - History, callbacks, model switching, compatibility, recovery, versioning,
   and release limits are defined in the
   [adapter README](../../model/openai/sdkv3/responses/README.md).

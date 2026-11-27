@@ -626,3 +626,30 @@ func Test_rearrangeAsyncFuncRespHist_FiltersMixedResponseEventAcrossRounds(t *te
 	assert.Len(t, out[3].Response.Choices, 1)
 	assert.Equal(t, "second result", out[3].Response.Choices[0].Message.Content)
 }
+
+func TestLatestToolResultWithNestedWork(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, resultRun := range []string{"call-run", "resume-run"} {
+			call := toolTranscriptTestEvent("call-run", "parent", testCallMessage(t, native, "", "member"), "")
+			task := toolTranscriptTestEvent(resultRun, "child", model.NewUserMessage("private member task"), "")
+			task.Author = "user"
+			task.ParentInvocationID = "parent"
+			reply := toolTranscriptTestEvent(resultRun, "child", model.NewAssistantMessage("private intermediate reply"), "")
+			reply.ParentInvocationID = "parent"
+			result := toolTranscriptTestEvent(resultRun, "parent", model.NewToolMessage("member", "lookup", "final member result"), model.ObjectTypeToolResponse)
+			if resultRun == "resume-run" {
+				task.ParentInvocationID, reply.ParentInvocationID, result.InvocationID = "resume-parent", "resume-parent", "resume-parent"
+			}
+			events := []event.Event{call, task, reply, result}
+			p := NewContentRequestProcessor()
+			got := p.rearrangeAsyncFuncRespHist(p.rearrangeLatestFuncResp(events))
+			if native {
+				require.Equal(t, events, got, "native=%t resultRun=%s", native, resultRun)
+				continue
+			}
+			require.Len(t, got, 2, "native=%t resultRun=%s", native, resultRun)
+			require.Equal(t, call, got[0])
+			require.Equal(t, result.Choices, got[1].Choices)
+		}
+	}
+}

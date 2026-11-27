@@ -369,7 +369,7 @@ tRPC-Agent-Go defines provider-agnostic usage fields in the `model` package:
 - `model.Usage.PromptTokensDetails.CacheReadTokens`
 - `model.Usage.PromptTokensDetails.CacheCreationTokens`
 
-For OpenAI-compatible APIs, `CachedTokens` is the main field. `CacheReadTokens` and `CacheCreationTokens` primarily serve explicit cache mechanisms such as Anthropic Prompt Caching.
+For OpenAI-compatible APIs, `CachedTokens` tracks cache read hits, while provider-reported cache-write fields (`cache_write_tokens`, `cache_creation_tokens`, or `cache_creation_input_tokens` in `prompt_tokens_details`, with top-level `usage` fallback) map by priority to `CacheCreationTokens` (shared with Anthropic and Bedrock cache writes). `CacheReadTokens` primarily serves Anthropic, Bedrock, and gateways that report `prompt_tokens_details.cache_read_tokens`.
 
 Telemetry also splits token types:
 
@@ -378,6 +378,63 @@ Telemetry also splits token types:
 - `input_cache_read`
 - `input_cache_creation`
 - `output`
+
+These Langfuse buckets are mutually exclusive. Providers count prompt tokens
+differently: OpenAI-compatible APIs (Chat Completions and Responses) and Gemini
+include cached and cache-write tokens in `prompt_tokens`, while Anthropic and
+Bedrock exclude them. Model adapters declare this on the usage they return, and
+LLM spans carry it as `gen_ai.usage.input_tokens.cache_accounting`
+(`inclusive` or `exclusive`, written whenever cache counters are present).
+The Langfuse exporter uses it to derive the uncached `input` bucket, so a
+write-only OpenAI turn such as `prompt_tokens=1774, cache_write_tokens=1771`
+exports `input=3, input_cache_creation=1771` instead of counting the cache
+writes twice. Usage built without an explicit declaration has an empty accounting
+attribute and keeps the previous heuristic normalization.
+
+Custom model adapters and callbacks can declare the counting convention through
+the exported `model.Usage.PromptCacheAccounting` field:
+
+```go
+usage := &model.Usage{
+    PromptTokens: 100,
+    PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 80},
+    PromptCacheAccounting: model.PromptCacheAccountingInclusive,
+}
+```
+
+Use `model.PromptCacheAccountingExclusive` when `PromptTokens` excludes cache
+reads and writes. The empty string (`model.PromptCacheAccountingUnspecified`)
+means the producer has not supplied this information; it implies neither
+convention. Empty and unrecognized values keep Langfuse's legacy behavior:
+if cache-read or cache-creation counts are nonzero, keep `PromptTokens` and
+discard the duplicate `CachedTokens` bucket; otherwise subtract `CachedTokens`
+from `PromptTokens`, with a minimum of zero. A declaration has no effect when
+there are no prompt cache counts.
+
+The field is excluded from JSON (`json:"-"`). Decoding into an existing `Usage`
+preserves its declaration, even when JSON changes the prompt counts. For a full
+replacement, decode into a fresh value and assign it, or explicitly set
+`PromptCacheAccounting` to `model.PromptCacheAccountingUnspecified` before decoding.
+Output-only edits can retain the declaration. For example, replacing a complete
+usage object from JSON can be written as:
+
+```go
+var replacement model.Usage
+if err := json.Unmarshal(data, &replacement); err != nil {
+    return err
+}
+*usage = replacement // usage is the existing *model.Usage being replaced.
+```
+
+`Usage` uses standard JSON decoding, including when anonymously embedded in a
+wrapper with other fields. The new field participates in Go value equality;
+expected values should include the accounting mode when comparing complete
+usage values. Use keyed struct literals, since adding the field changes the
+number of fields required by positional literals.
+
+Streaming spans clear previous cache counters and accounting when a later token-bearing usage snapshot
+removes them. Chunks without token counts, including timing-only usage, preserve
+the preceding snapshot.
 
 #### Troubleshooting Streaming Usage
 

@@ -433,9 +433,10 @@ type Model struct {
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 
-	accumulateChunkUsage AccumulateChunkUsage
-	optimizeForCache     bool // Optimize message structure for prompt caching
-	omitFileContentParts bool
+	accumulateChunkUsage      AccumulateChunkUsage
+	optimizeForCache          bool // Optimize message structure for prompt caching
+	omitFileContentParts      bool
+	preserveToolsWhenDisabled bool
 }
 
 // New creates a new OpenAI-like model.
@@ -523,6 +524,7 @@ func New(name string, opts ...Option) *Model {
 		accumulateChunkUsage:       o.accumulateChunkUsage,
 		optimizeForCache:           o.OptimizeForCache,
 		omitFileContentParts:       o.OmitFileContentParts,
+		preserveToolsWhenDisabled:  o.preserveToolsWhenDisabled,
 	}
 }
 
@@ -566,6 +568,16 @@ func baseURLMatchesHost(raw string, hosts ...string) bool {
 		}
 	}
 	return false
+}
+
+// PreservesToolsWhenDisabled reports whether the flow should retain tool
+// definitions when disabling tool calls. The definitions remain visible to
+// callbacks, token budgeting, and telemetry; GenerateContent enforces "none".
+// Model wrappers must forward this capability to retain this optimization.
+// When enabled, this model still enforces "none" and retains tools from its own
+// configuration and callbacks even if a wrapper does not forward the capability.
+func (m *Model) PreservesToolsWhenDisabled() bool {
+	return m.preserveToolsWhenDisabled
 }
 
 // Info implements the model.Model interface.
@@ -645,6 +657,15 @@ func (m *Model) prepareChatRequest(
 	if err := validateLogprobsConfig(request); err != nil {
 		return nil, nil, err
 	}
+	prepared, changed, err := m.prepareProviderHistory(request.Messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	if changed {
+		copyRequest := *request
+		copyRequest.Messages = prepared
+		request = &copyRequest
+	}
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)
@@ -653,7 +674,7 @@ func (m *Model) prepareChatRequest(
 	m.applyTokenTailoring(ctx, request)
 	chatRequest, opts := m.buildChatRequestWithToolControl(
 		request,
-		imodelrequest.ToolsDisabled(ctx),
+		imodelrequest.ToolsDisabled(ctx) && !m.preserveToolsWhenDisabled,
 	)
 	return chatRequest, opts, nil
 }
@@ -683,7 +704,7 @@ func (m *Model) GenerateContent(
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
 	if imodelrequest.ToolsDisabled(ctx) {
-		disableChatRequestTools(chatRequest)
+		opts = m.enforceDisabledTools(chatRequest, opts)
 	}
 	m.runChatRequestJSONCallback(ctx, chatRequest)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
@@ -708,6 +729,17 @@ func (m *Model) GenerateContent(
 	return responseChan, nil
 }
 
+// markInclusivePromptCacheAccounting declares that Chat Completions
+// prompt_tokens include cached and cache-write tokens on a provider response.
+func markInclusivePromptCacheAccounting(resp *model.Response) {
+	if resp != nil && resp.Usage != nil {
+		resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+		if resp.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+			resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+		}
+	}
+}
+
 // GenerateContentIter implements the model.IterModel interface.
 func (m *Model) GenerateContentIter(
 	ctx context.Context,
@@ -721,8 +753,9 @@ func (m *Model) GenerateContentIter(
 		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
+		callOpts := opts
 		if imodelrequest.ToolsDisabled(ctx) {
-			disableChatRequestTools(chatRequest)
+			callOpts = m.enforceDisabledTools(chatRequest, opts)
 		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
@@ -733,10 +766,10 @@ func (m *Model) GenerateContentIter(
 			return yield(resp)
 		}
 		if request.Stream {
-			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, callOpts...)
 			return
 		}
-		m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
+		m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, callOpts...)
 	}, nil
 }
 
@@ -1054,6 +1087,27 @@ func appendToolControlDeleteOptions(
 		opts = append(opts, openaiopt.WithJSONDel(key))
 	}
 	return opts
+}
+
+func (m *Model) enforceDisabledTools(
+	request *openai.ChatCompletionNewParams,
+	opts []openaiopt.RequestOption,
+) []openaiopt.RequestOption {
+	if !m.preserveToolsWhenDisabled {
+		disableChatRequestTools(request)
+		return opts
+	}
+	request.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+		OfAuto: openai.String("none"),
+	}
+	request.FunctionCall = openai.ChatCompletionNewParamsFunctionCallUnion{}
+	request.Functions = nil
+	// Apply the controls after client options, ExtraFields, and callback metadata.
+	return append(opts,
+		openaiopt.WithJSONDel("function_call"),
+		openaiopt.WithJSONDel("functions"),
+		openaiopt.WithJSONSet("tool_choice", "none"),
+	)
 }
 
 func disableChatRequestTools(request *openai.ChatCompletionNewParams) {
@@ -1818,7 +1872,9 @@ func (m *Model) handleStreamingResponseWithEmitter(
 
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 
-		if !emit(m.createPartialResponse(chunk)) {
+		response := m.createPartialResponse(chunk)
+		markInclusivePromptCacheAccounting(response)
+		if !emit(response) {
 			if err := ctx.Err(); err != nil {
 				m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, err)
 			}
@@ -1829,7 +1885,17 @@ func (m *Model) handleStreamingResponseWithEmitter(
 	// Call the stream complete callback before the final response is emitted.
 	m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, stream.Err())
 
-	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
+	finalEmit := func(resp *model.Response) bool {
+		if resp != nil && resp.Usage != nil && m.accumulateChunkUsage != nil {
+			// A custom accumulator owns the final counts and their accounting,
+			// including an empty or unrecognized declaration.
+			resp.Usage.PromptCacheAccounting = acc.promptCacheAccounting
+		} else {
+			markInclusivePromptCacheAccounting(resp)
+		}
+		return emit(resp)
+	}
+	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), finalEmit)
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -1924,9 +1990,7 @@ func hasAccumulatorPayloadBeyondReasoning(
 		}
 	}
 
-	return chunk.Usage.CompletionTokens > 0 ||
-		chunk.Usage.PromptTokens > 0 ||
-		chunk.Usage.TotalTokens > 0
+	return hasUsageTokens(completionUsageToModelUsage(chunk.Usage))
 }
 
 // toolCallIndexState tracks provider indices separately from accumulator indices
@@ -2202,7 +2266,9 @@ func (m *Model) accumulateChunk(
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
+			usage.PromptCacheAccounting = acc.promptCacheAccounting
 			usage = m.accumulateChunkUsage(usage, chunkUsage)
+			acc.promptCacheAccounting = usage.PromptCacheAccounting
 			acc.acc.Usage = modelUsageToCompletionUsage(usage)
 		}
 	}
@@ -2503,11 +2569,11 @@ func (m *Model) shouldSkipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
 	}
 
 	// Tool calls are only meaningful when the array is non-empty.
-	if delta.JSON.ToolCalls.Valid() {
-		return len(delta.ToolCalls) == 0
+	if delta.JSON.ToolCalls.Valid() && len(delta.ToolCalls) > 0 {
+		return false
 	}
 
-	if chunk.Usage.CompletionTokens > 0 || chunk.Usage.PromptTokens > 0 || chunk.Usage.TotalTokens > 0 {
+	if hasUsageTokens(completionUsageToModelUsage(chunk.Usage)) {
 		return false
 	}
 
@@ -2772,7 +2838,7 @@ func (m *Model) createFinalResponse(
 	// This is consistent with the non-streaming createResponseFromCompletion
 	// path and prevents the Langfuse exporter from seeing zero-valued usage
 	// attributes that get filtered out by usageDetails.empty().
-	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
+	if hasUsageTokens(usage) {
 		finalResponse.Usage = &usage
 	}
 
@@ -2865,8 +2931,18 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		return
 	}
 	// Call response callback on successful completion.
+	// Snapshot effective counts by value: SDK extra-field maps can be mutated
+	// in place, and a callback that changes prompt/cache counts may also change
+	// their accounting convention.
+	usageBeforeCallback := completionUsageToModelUsage(chatCompletion.Usage)
 	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
-	emit(m.createResponseFromCompletion(chatCompletion))
+	response := m.createResponseFromCompletion(chatCompletion)
+	if response.Usage != nil &&
+		response.Usage.PromptTokens == usageBeforeCallback.PromptTokens &&
+		response.Usage.PromptTokensDetails == usageBeforeCallback.PromptTokensDetails {
+		markInclusivePromptCacheAccounting(response)
+	}
+	emit(response)
 }
 
 // createResponseFromCompletion converts a provider response into a model.Response.
@@ -2933,8 +3009,8 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	// streaming createFinalResponse path. This prevents the Langfuse exporter
 	// from seeing zero-valued usage attributes that get filtered out by
 	// usageDetails.empty().
-	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 || chatCompletion.Usage.TotalTokens > 0 {
-		usage := completionUsageToModelUsage(chatCompletion.Usage)
+	usage := completionUsageToModelUsage(chatCompletion.Usage)
+	if hasUsageTokens(usage) {
 		response.Usage = &usage
 	}
 

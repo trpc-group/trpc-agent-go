@@ -115,9 +115,19 @@ func (m *hedgeModel) Info() model.Info {
 	}
 }
 
+// SupportsProviderHistory reports whether all routing candidates can replay protocol.
+func (m *hedgeModel) SupportsProviderHistory(protocol string) bool {
+	return providerdata.CandidatesSupportHistory(m.candidates, protocol)
+}
+
 // ProjectProviderData forwards native message projection to a candidate model.
 func (m *hedgeModel) ProjectProviderData(data *model.ProviderData) (model.Message, error) {
 	return providerdata.ProjectFromCandidates(m.candidates, data)
+}
+
+// ProjectProviderDataWithRequest forwards native projection with request tools.
+func (m *hedgeModel) ProjectProviderDataWithRequest(request *model.Request, data *model.ProviderData) (model.Message, error) {
+	return providerdata.ProjectFromCandidatesWithRequest(m.candidates, request, data)
 }
 
 // InputTokenBudget returns the smallest advertised candidate budget so every

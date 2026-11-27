@@ -183,7 +183,7 @@ type AfterToolArgs struct {
 type AfterToolResult struct {
     Context             context.Context  // 可选，用于后续操作的上下文
     CustomResult        any              // 非空时替换原始结果
-    SkipResultFormatter bool             // 对 CustomResult 使用默认 JSON 序列化
+    SkipResultFormatter bool             // 对 CustomResult 使用默认结果转换
     SkipStateDelta      bool             // 跳过 CustomResult 的 state-delta provider
     SkipSummarization   bool             // 为 true 时在 tool.response 后结束本轮
 }
@@ -206,7 +206,8 @@ type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterTool
 - BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
 - `BeforeToolArgs` 和 `AfterToolArgs` 中提供了 `ToolCallID`
 - `AfterToolResult.SkipResultFormatter` 会让非空 `CustomResult` 跳过工具配置的 result
-  formatter，并使用默认 JSON 序列化。适用于替换结果是协议或错误 envelope、而不是工具
+  formatter，并使用默认结果转换：`model.ToolResultContent` 保留为结构化内容，其他值使用
+  JSON。适用于替换结果是协议或错误 envelope、而不是工具
   声明输出类型的正常值时
 - `BeforeToolResult.SkipStateDelta` 和 `AfterToolResult.SkipStateDelta` 会阻止非空
   `CustomResult` 触发工具的 state-delta provider，适用于替换结果并非工具成功输出的场景

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -308,6 +309,91 @@ func TestRunCodeTimeout_ClientTimeoutDuringStreamIsTransportTimeout(t *testing.T
 	}
 	if sbx.connection.HTTPClient.Timeout != phaseBudget {
 		t.Fatalf("client timeout = %s, want it unchanged", sbx.connection.HTTPClient.Timeout)
+	}
+}
+
+func TestRunCodeTimeout_TransportDeadlineWithoutClientTimeoutText(t *testing.T) {
+	tests := []struct {
+		name       string
+		beforeBody bool
+		wrapped    bool
+		statusCode int
+		body       string
+		wantStdout int
+	}{
+		{
+			name:       "headers",
+			beforeBody: true,
+		},
+		{
+			name:       "stream",
+			statusCode: http.StatusOK,
+			body:       "{\"type\":\"stdout\",\"text\":\"partial\\n\",\"timestamp\":1}\n",
+			wantStdout: 1,
+		},
+		{
+			name:       "wrapped stream error",
+			wrapped:    true,
+			statusCode: http.StatusOK,
+			body:       "{\"type\":\"stdout\",\"text\":\"partial\\n\",\"timestamp\":1}\n",
+			wantStdout: 1,
+		},
+		{
+			name:       "error body",
+			statusCode: http.StatusBadRequest,
+			body:       "partial error",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newExecuteHandler(t, executeImmediate)
+			sbx := newTimeoutSandbox(t, h, timeoutOther)
+			transportErr := context.DeadlineExceeded
+			if tt.wrapped {
+				transportErr = &net.OpError{Op: "read", Net: "tcp", Err: transportErr}
+			}
+			sbx.connection.HTTPClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				// A transport deadline need not include net/http's Client.Timeout text.
+				if tt.beforeBody {
+					return nil, transportErr
+				}
+				body := io.MultiReader(strings.NewReader(tt.body), iotest.ErrReader(transportErr))
+				return &http.Response{
+					StatusCode: tt.statusCode,
+					Body:       io.NopCloser(body),
+					Header:     make(http.Header),
+				}, nil
+			})
+			caller, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var stdout int
+			_, err := sbx.RunCode(caller, "print(1)", &RunCodeOpts{
+				Timeout:        -time.Second,
+				RequestTimeout: -time.Second,
+				OnStdout:       func(OutputMessage) { stdout++ },
+			})
+			want, reject := clientTimeoutBodyText, clientTimeoutHeaderText
+			if tt.beforeBody {
+				want, reject = reject, want
+			}
+			assertClientTransportTimeout(t, err, want, reject)
+			if !errors.Is(err, transportErr) {
+				t.Fatalf("error = %v, want the original transport error in the chain", err)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want the transport deadline in the chain", err)
+			}
+			if caller.Err() != nil {
+				t.Fatalf("caller context was canceled: %v", caller.Err())
+			}
+			if stdout != tt.wantStdout {
+				t.Fatalf("stdout callbacks = %d, want %d", stdout, tt.wantStdout)
+			}
+			var sandboxErr *SandboxError
+			if errors.As(err, &sandboxErr) {
+				t.Fatalf("incomplete body returned HTTP mapping: %v", err)
+			}
+		})
 	}
 }
 
@@ -935,9 +1021,6 @@ func assertClientTransportTimeout(t *testing.T, err error, want, reject string) 
 	var netErr net.Error
 	if !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Fatalf("error = %v, want the transport timeout in the chain", err)
-	}
-	if !strings.Contains(err.Error(), "Client.Timeout") {
-		t.Fatalf("error = %v, want the original client timeout text", err)
 	}
 }
 

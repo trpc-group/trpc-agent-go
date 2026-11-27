@@ -184,7 +184,7 @@ type AfterToolArgs struct {
 type AfterToolResult struct {
     Context             context.Context  // Optional context for subsequent operations
     CustomResult        any              // If non-nil, replaces the original result
-    SkipResultFormatter bool             // Use default JSON for CustomResult
+    SkipResultFormatter bool             // Use default result conversion for CustomResult
     SkipStateDelta      bool             // Skip state-delta provider for CustomResult
     SkipSummarization   bool             // If true, end the turn after tool.response
 }
@@ -207,7 +207,8 @@ Key points:
 - If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
 - `ToolCallID` is available in `BeforeToolArgs` and `AfterToolArgs`.
 - `AfterToolResult.SkipResultFormatter` keeps a non-nil `CustomResult` out of
-  the tool's configured result formatter and uses default JSON serialization.
+  the tool's configured result formatter and uses default result conversion:
+  `model.ToolResultContent` is preserved as structured content; other values use JSON.
   This is useful when the replacement is a protocol or error envelope rather
   than a value of the tool's declared output type.
 - `BeforeToolResult.SkipStateDelta` and `AfterToolResult.SkipStateDelta` keep

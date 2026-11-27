@@ -9760,6 +9760,36 @@ func TestChatStreamAccumulator_ClearsScratchRawJSON(t *testing.T) {
 	assert.Nil(t, acc.scratchToolCalls[0])
 }
 
+func TestChatStreamAccumulator_PreservesFinishReasonsByChoiceIndex(t *testing.T) {
+	m := New("test-model")
+	acc := chatStreamAccumulator{}
+	var reasoningBuf bytes.Buffer
+	first := parseChunkWithExtraFields(t, `{"id":"finish-reasons","choices":[
+		{"index":2,"delta":{"content":"truncated"},"finish_reason":"length"},
+		{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}
+	]}`)
+	m.accumulateChunk(first, &acc, &reasoningBuf)
+	tail := parseChunkWithExtraFields(t, `{"id":"finish-reasons","choices":[
+		{"index":2,"delta":{},"finish_reason":null},
+		{"index":3,"delta":{},"finish_reason":null},
+		{"index":0,"delta":{},"finish_reason":"content_filter"}
+	],"usage":{"prompt_tokens_details":{"cached_tokens":64}}}`)
+	m.accumulateChunk(tail, &acc, &reasoningBuf)
+
+	final := m.createFinalResponse(acc.acc, false, nil, "")
+	require.Len(t, final.Choices, 4)
+	require.NotNil(t, final.Choices[2].FinishReason)
+	assert.Equal(t, "length", *final.Choices[2].FinishReason)
+	require.NotNil(t, final.Choices[0].FinishReason)
+	assert.Equal(t, "content_filter", *final.Choices[0].FinishReason)
+	assert.Nil(t, final.Choices[3].FinishReason)
+	require.NotNil(t, final.Usage)
+	assert.Equal(t, 64, final.Usage.PromptTokensDetails.CachedTokens)
+	// Callbacks must still see the original provider chunk.
+	assert.Empty(t, tail.Choices[0].FinishReason)
+	assert.Empty(t, tail.Choices[1].FinishReason)
+}
+
 func TestChatStreamAccumulator_ScratchSlicesShrinkAndRegrow(t *testing.T) {
 	acc := chatStreamAccumulator{}
 

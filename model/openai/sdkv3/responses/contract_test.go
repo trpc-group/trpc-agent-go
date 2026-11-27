@@ -366,6 +366,30 @@ func TestContentPartsMapToInputContent(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
+func TestLegacyToolCallReplaysEmptyArgumentsAsObject(t *testing.T) {
+	for _, tc := range []struct{ name, arguments string }{
+		{"empty", ""},
+		{"whitespace", " \t\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assistant := model.NewAssistantMessage("")
+			assistant.ToolCalls = []model.ToolCall{{
+				ID: "call_1", Type: functionToolType,
+				Function: model.FunctionDefinitionParam{Name: "get_time", Arguments: []byte(tc.arguments)},
+			}}
+			req := &model.Request{Messages: []model.Message{
+				assistant, model.NewToolMessage("call_1", "get_time", "09:30"),
+			}}
+			got := captureRequest(t, req)
+			requireJSONField(t, `[
+				{"type":"function_call","call_id":"call_1","name":"get_time","arguments":"{}"},
+				{"type":"function_call_output","call_id":"call_1","output":"09:30"}
+			]`, got.body["input"])
+			require.Equal(t, []byte(tc.arguments), req.Messages[0].ToolCalls[0].Function.Arguments)
+		})
+	}
+}
+
 func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 	srv, calls := rejectingServer(t)
 	m := New("gpt-5", WithAPIKey("test"), WithBaseURL(srv.URL))
@@ -386,7 +410,6 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 		return msg
 	}
 	nativeCall := `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"}]`
-	image := model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.test/a.png"}}
 	for _, tc := range []struct {
 		name     string
 		messages func(t *testing.T) []model.Message
@@ -398,37 +421,35 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 		{name: "tool result without call_id", messages: func(*testing.T) []model.Message {
 			return []model.Message{model.NewToolMessage(" ", "f", "x")}
 		}, want: "tool result at message 0 has an empty call_id"},
-		{name: "tool result with an image", messages: func(*testing.T) []model.Message {
-			result := model.NewToolMessage("c", "f", "")
-			result.ContentParts = []model.ContentPart{image}
-			return []model.Message{call("c", "f", "{}"), result}
-		}, want: "tool messages only support text content"},
 		{name: "call without name", messages: func(*testing.T) []model.Message {
 			return []model.Message{call("c", " ", "{}")}
 		}, want: `function call "c" has an empty name`},
 		{name: "call with non-object arguments", messages: func(*testing.T) []model.Message {
 			return []model.Message{call("c", "f", "[1]")}
 		}, want: `function call "c" has invalid JSON arguments`},
+		{name: "call with explicit null arguments", messages: func(*testing.T) []model.Message {
+			return []model.Message{call("c", "f", "null")}
+		}, want: `function call "c" has invalid JSON arguments`},
+		{name: "call with truncated arguments", messages: func(*testing.T) []model.Message {
+			return []model.Message{call("c", "f", "{")}
+		}, want: `function call "c" has invalid JSON arguments`},
 		{name: "replay on a user message", messages: func(t *testing.T) []model.Message {
 			msg := native(t, "gpt-5", nativeCall)
 			msg.Role = model.RoleUser
 			return []model.Message{msg}
-		}, want: "provider data is only valid on assistant messages"},
-		{name: "replay of another model", messages: func(t *testing.T) []model.Message {
-			return []model.Message{native(t, "gpt-4.1", nativeCall)}
-		}, want: "invalid provider data at message 0"},
+		}, want: "provider data is only valid on assistant messages and tool messages"},
 		{name: "replay object", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `{"type":"message"}`)}
 		}, want: "provider data payload must be an item array"},
 		{name: "replay scalar item", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[1]`)}
-		}, want: "decode item 0"},
+		}, want: "item 0: decode:"},
 		{name: "replay item without id", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[{"type":"reasoning","summary":[]}]`)}
 		}, want: "reasoning item has an empty id"},
 		{name: "replay item in progress", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[{"type":"reasoning","id":"rs","status":"in_progress","summary":[]}]`)}
-		}, want: `has status "in_progress", want completed`},
+		}, want: `items at message 0: item 0: reasoning item "rs" has status "in_progress", want completed`},
 		{name: "replay message of another role", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5",
 				`[{"type":"message","id":"m","status":"completed","role":"user","content":[]}]`)}
@@ -442,6 +463,9 @@ func TestInvalidHistoryFailsBeforeHTTP(t *testing.T) {
 		}, want: "has an empty name"},
 		{name: "replay call with non-object arguments", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[{"type":"function_call","call_id":"c","name":"f","arguments":"[]"}]`)}
+		}, want: "has invalid JSON arguments"},
+		{name: "native replay with empty arguments", messages: func(t *testing.T) []model.Message {
+			return []model.Message{native(t, "gpt-5", `[{"type":"function_call","call_id":"c","name":"f","arguments":""}]`)}
 		}, want: "has invalid JSON arguments"},
 		{name: "replay tool output item", messages: func(t *testing.T) []model.Message {
 			return []model.Message{native(t, "gpt-5", `[{"type":"function_call_output","call_id":"c","output":"x"}]`)}

@@ -138,3 +138,87 @@ MongoDB 使用以下集合：
 MONGODB_INTEGRATION_URI='mongodb://user:pass@host:27017/?replicaSet=rs0' \
   go test -tags=integration -count=1 ./...
 ```
+
+## 过期清理查询开销
+
+每个集合通过一次聚合识别过期会话组。查询匹配未删除记录，并增加覆盖
+`app_name` 全部字符串取值的条件，使 MongoDB 可以使用已有的 partial
+`cleanup` 索引 `(app_name, user_id, session_id, updated_at)`。
+本后端写入的应用名均为字符串。聚合仍按会话求最大的 `updated_at`，仅清理
+不晚于 TTL 截止时间的组；存在更新记录时保留全部历史，Track 仍覆盖会话内所有 track。
+
+此优化不新增索引、不迁移数据，也不强制 hint。已有索引和外部管理的数据库
+可以继续使用，缺少索引只影响性能，不影响清理结果。索引计划可以跳过软删除
+历史；MongoDB 7.0 可以使用覆盖查询，6.0 仍可能读取活跃文档来判断
+`deleted_at: null`。活跃历史占多数时，索引遍历加回表可能比原来的全表扫描更慢，尤其是在 6.0 上。
+应在实际数据库版本上核对执行计划、文档和索引扫描数以及耗时。
+
+每批最多删除 500 个过期组，遍历结束后提交剩余不足一批的组；后续失败不影响
+已经完成的批次。事件与 Track 依次清理，各自拥有 30 秒预算（合计最多 60 秒），
+父 context 取消或服务关闭会停止清理。软/硬删除模式和 TTL 值保持不变。
+每个实例仍每轮执行全量分组；检查与删除也没有和并发追加构成原子操作。
+本优化不引入水位、租约或基于会话状态 TTL 的级联删除。
+
+在 `session/mongodb` 目录下，对本地测试副本集运行可选基准：
+
+```bash
+MONGODB_INTEGRATION_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -tags=integration -run '^$' \
+  -bench '^BenchmarkIntegrationCleanupIdentification$' -benchtime=3x -count=3
+```
+
+数据包含 1 KiB 负载，覆盖软删除历史多、近期历史多、短活跃会话、全部过期及
+长会话场景。原聚合和索引聚合都会完整消费并校验结果。计时不含数据准备、
+删除和结果校验；10ms 延迟仅注入在 Aggregate 调用前，不含 getMore。
+本地基准不代表线上延迟。
+
+## 事件排序索引升级
+
+新服务初始化时新增 `idx_session_events_ordered_lookup` 非唯一 partial 索引，
+字段为 `(app_name, user_id, session_id, created_at, _id)`，条件为
+`{deleted_at: null}`。集合前缀同样应用于索引名称。该索引支持正序事件读取及
+倒序分页，避免额外排序。旧 lookup 索引保留，以支持滚动升级与回滚；
+历史文档及旧版本写入无需转换。
+
+初始化建索引会增加启动时间和数据库负载。大集合建议在部署前完成索引创建；
+使用 `WithSkipDBInit(true)` 时请手工管理索引（按实际集合前缀调整名称）：
+
+```javascript
+db.session_events.createIndex(
+  {app_name: 1, user_id: 1, session_id: 1, created_at: 1, _id: 1},
+  {name: "idx_session_events_ordered_lookup",
+   partialFilterExpression: {deleted_at: null}}
+)
+```
+
+未创建该索引不影响读取正确性，但可能需要阻塞排序。同时保留两个索引会增加
+存储和写入开销。仅增加索引不会限制上下文窗口实际加载的事件数量。
+
+## 上下文窗口读取开销
+
+单个会话设置正数事件上限时，MongoDB 按倒序分批读取最新事件。首批文档数
+最多为事件上限与 128 中的较小值，后续每批最多 128 条文档，包括跳过空
+payload 和向前查找用户消息的情况。获得窗口及所需用户消息后关闭游标，
+返回顺序和过滤规则保持不变。窗口内没有用户消息时，仍会向前查找最近的
+用户消息；整个历史没有用户消息时仍会扫描全部历史。空 payload 不占事件名额。
+
+时间过滤使用事件 payload 的时间戳，它可能与文档 `created_at` 不同。
+候选窗口最早一条事件满足时间条件时，可以直接使用该窗口；否则回退到原有
+完整历史过滤，以兼容时间戳乱序时从首个匹配事件开始截取的行为。无限制读取
+和多会话读取仍使用原有路径，分页行为不变。排序索引用于避免阻塞排序；
+读取不强制指定 hint，因此继续支持外部管理索引的部署。
+
+有界读取只校验实际遍历的 payload，包括查找用户消息时经过的较旧事件。
+与此前完整历史的上下文读取不同，尚未遍历的历史 payload 即使包含非法 JSON，
+本次读取也可能成功。实际遍历到非法 JSON 时仍返回错误；回退到完整历史读取
+时仍会解码全部历史。有界读取不保证校验整个会话历史的完整性。
+
+可选的真实模型测试会验证三轮对话、窗口截取及重建服务后的历史重载。
+该测试只发送合成提示词，默认跳过，需显式启用：
+
+```bash
+# 在环境中配置 OPENAI_API_KEY、OPENAI_BASE_URL 和 MODEL_NAME。
+cd test
+MONGODB_LIVE_MODEL_TEST=1 MONGO_TEST_URI='mongodb://localhost:27017/?replicaSet=rs0' \
+  go test -run '^TestMongoDBHistoryLiveModel$' -count=1 -v .
+```

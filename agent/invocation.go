@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -201,6 +202,9 @@ type Invocation struct {
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
 	state   map[string]any
 	stateMu sync.RWMutex
+
+	// Views share the workspace cache for this invocation.
+	workspaceRegistries atomic.Pointer[invocationWorkspaceRegistries]
 
 	// MaxLLMCalls is an optional upper bound on the number of LLM calls
 	// allowed for this invocation. When the value is:
@@ -1676,6 +1680,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		llmCallCount:            inv.llmCallCount,
 		toolIterationCount:      inv.toolIterationCount,
 	}
+	view.workspaceRegistries.Store(inv.workspaceRegistryState())
 	for _, opt := range invocationOpts {
 		opt(view)
 	}

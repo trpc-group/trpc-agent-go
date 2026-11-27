@@ -119,6 +119,20 @@ type TimingInfo struct {
 	ReasoningDuration time.Duration `json:"reasoning_duration,omitempty"`
 }
 
+// PromptCacheAccounting describes whether prompt token counts include cache tokens.
+type PromptCacheAccounting string
+
+const (
+	// PromptCacheAccountingUnspecified means the producer has not declared whether
+	// prompt tokens include cache reads and writes. Its value is the empty string;
+	// it does not imply either inclusive or exclusive accounting.
+	PromptCacheAccountingUnspecified PromptCacheAccounting = ""
+	// PromptCacheAccountingInclusive means prompt tokens include cache reads and writes.
+	PromptCacheAccountingInclusive PromptCacheAccounting = "inclusive"
+	// PromptCacheAccountingExclusive means prompt tokens exclude cache reads and writes.
+	PromptCacheAccountingExclusive PromptCacheAccounting = "exclusive"
+)
+
 // Usage represents token usage information.
 type Usage struct {
 	// PromptTokens is the number of tokens in the prompt.
@@ -138,15 +152,32 @@ type Usage struct {
 
 	// TimingInfo contains detailed timing information for token generation.
 	TimingInfo *TimingInfo `json:"timing_info,omitempty"`
+
+	// PromptCacheAccounting declares whether PromptTokens includes the cache
+	// read and creation counts in PromptTokensDetails.
+	// An empty string means the producer has not provided this information;
+	// it does not imply either inclusive or exclusive accounting. Consumers
+	// should retain their existing fallback for empty or unrecognized values.
+	// The declaration is irrelevant when there are no prompt cache counts.
+	// It is excluded from JSON: decoding into an existing Usage preserves it.
+	// For a full replacement, decode into a fresh Usage or explicitly reset it
+	// to PromptCacheAccountingUnspecified before decoding.
+	PromptCacheAccounting PromptCacheAccounting `json:"-"`
 }
 
 // PromptTokensDetails is the details of the prompt tokens.
 type PromptTokensDetails struct {
-	// CachedTokens is the number of cached tokens in the prompt.
+	// CachedTokens is the number of cached tokens read from prompt cache
+	// (OpenAI-compatible cached_tokens, Gemini cachedContentTokenCount, and a
+	// compatibility alias for Anthropic/Bedrock cache reads).
 	CachedTokens int `json:"cached_tokens"`
-	// CacheCreationTokens is the number of tokens used to create the cache (Anthropic).
+	// CacheCreationTokens is the number of prompt tokens written to cache
+	// (e.g., OpenAI/compatible cache_write_tokens or cache_creation_tokens,
+	// Anthropic cache_creation_input_tokens, Bedrock cacheWriteInputTokens).
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
-	// CacheReadTokens is the number of tokens read from cache (Anthropic).
+	// CacheReadTokens is the number of prompt tokens read from an explicit
+	// provider cache (e.g., Anthropic cache_read_input_tokens, Bedrock
+	// cacheReadInputTokens, or gateway cache_read_tokens).
 	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 }
 
@@ -228,13 +259,10 @@ func (rsp *Response) Clone() *Response {
 		clone.Choices[i].Delta.ProviderData = choice.Delta.ProviderData.clone()
 	}
 	if rsp.Usage != nil {
-		clone.Usage = &Usage{
-			PromptTokens:            rsp.Usage.PromptTokens,
-			CompletionTokens:        rsp.Usage.CompletionTokens,
-			TotalTokens:             rsp.Usage.TotalTokens,
-			PromptTokensDetails:     rsp.Usage.PromptTokensDetails,
-			CompletionTokensDetails: rsp.Usage.CompletionTokensDetails,
-		}
+		// Copy the whole value, including prompt cache accounting, then deep copy pointers.
+		usage := *rsp.Usage
+		usage.TimingInfo = nil
+		clone.Usage = &usage
 		// Deep copy TimingInfo if present
 		if rsp.Usage.TimingInfo != nil {
 			clone.Usage.TimingInfo = &TimingInfo{

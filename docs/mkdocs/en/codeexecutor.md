@@ -198,6 +198,14 @@ still use `/execute`; this migration covers program execution only.
 - A non-positive `RunProgramSpec.Timeout` uses 30 seconds. The timeout covers
   directory preparation and the command. `WithExecutionTimeout` applies to
   code cells, not workspace programs.
+- `WithMaxProgramTimeout` optionally caps each program timeout after its
+  default is resolved. It applies to direct calls, Engine callers and
+  `workspace_exec`; zero or negative values leave the timeout uncapped.
+  For example, `e2b.WithMaxProgramTimeout(10*time.Second)` limits a model's
+  `timeout_sec: 60` to 10 seconds and preserves `timeout_sec: 5` as 5 seconds.
+  Omitted tool timeouts retain the tool's 5-minute default before capping.
+  The cap does not affect `ExecuteCode`, workspace file operations or sandbox
+  lifetime. Configure `WithExecutionTimeout` separately for code cells.
 - Stdout and stderr preserve their exact bytes, including trailing newlines
   and text matching the former output sentinels. Capture is not truncated.
 - A normal non-zero exit is returned in `RunResult.ExitCode` with a nil error.
@@ -236,6 +244,61 @@ account through `WithHeaders` using Basic authentication, for example
 `Authorization` header takes precedence. Credentialless loopback debug follows
 the local server's account. Kernel-local environment changes are not inherited
 by native processes; check HOME/PATH when migrating custom templates.
+
+### E2B workspace persistence
+
+`WithWorkspacePersistence` defaults to `WorkspacePersistencePerTurn`. Agent
+tools share the workspace within an invocation and acquire a fresh directory
+on the next invocation, including when the `LLMAgent` is reused.
+Parallel tool calls using `Invocation.View()` share the original invocation's
+directory. A child invocation created with `Invocation.Clone()` gets its own
+directory, even within the same user turn. Configure
+`WorkspacePersistencePerSession` to keep the directory for the same session
+across turns while the sandbox remains alive. Both modes use directories
+inside the executor's sandbox and share its Code Interpreter kernel.
+
+### E2B sandbox recreation
+
+`WithAutoRecreate` is off by default. Enable it for sandboxes created by the
+executor.
+
+```go
+executor, err := e2b.New(
+    e2b.WithTemplate("code-interpreter-v1"),
+    e2b.WithAutoRecreate(true),
+)
+```
+
+Enabling this option with `WithSandboxID` returns a constructor error.
+Sandboxes paused with `Pause` are also excluded from automatic recreation.
+
+When execution fails with an error that may indicate sandbox loss, the
+executor checks the management API. It creates a replacement with the
+original configuration only if the API confirms the instance is missing or
+terminal. The current call still returns an error without replaying the
+operation. Once the executor switches to the new instance, the error asks the
+agent to check the files and runtime environment it needs before continuing.
+If a later call completes recovery before dispatch, it returns the same notice
+before submitting its operation. A subsequent call can use the new instance.
+
+The executor does not restore sandbox-local files, processes, or interpreter
+state. Files saved to persistent storage may still be available when the
+replacement mounts the same storage. The framework reinitializes managed
+workspaces on the replacement. If you manage workspaces directly, operations
+such as `RunProgram` return `codeexecutor.ErrWorkspaceStale` for an old handle.
+Call `CreateWorkspace` again and stage any required inputs.
+An operation that triggers recovery can return both `ErrWorkspaceStale` and
+`ErrWorkspaceRetryUnsafe` because it may already have produced side effects.
+With recreation enabled, a failed operation that may have reached the sandbox
+is unsafe to retry even when sandbox loss is unconfirmed, for example after a
+broken response stream. The framework's tool retry policy also respects this.
+Retry automatically only if `codeexecutor.IsWorkspaceRetrySafe(err)` returns true.
+
+Calling `Sandbox()` or using the returned instance directly does not trigger
+recreation. If recreation fails, `Sandbox()` may still return the old
+instance, and a later executor operation can retry creation. Compare
+`SandboxID()` before and after the operation. A different, non-empty ID
+indicates a replacement that you can fetch with `Sandbox()`.
 
 ## Workspace Layout
 

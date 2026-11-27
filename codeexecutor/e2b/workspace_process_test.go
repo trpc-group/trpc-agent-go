@@ -27,9 +27,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	process "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/envdprocess/spec/processconnect"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 type workspaceProcessInput struct {
@@ -129,6 +134,97 @@ func sendWorkspaceResult(stream *connect.ServerStream[process.StartResponse], st
 	}})
 }
 
+func TestWorkspaceExecE2BPersistenceAcrossTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		persistence WorkspacePersistenceMode
+		recreate    bool
+		init        bool
+		creates     int
+	}{
+		{name: "default per turn", creates: 2},
+		{name: "per turn with sandbox recreation and init", recreate: true, init: true, creates: 2},
+		{name: "per session with sandbox recreation and init", persistence: WorkspacePersistencePerSession, recreate: true, init: true, creates: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			t.Cleanup(srv.close)
+			opts := []Option{WithAutoRecreate(tc.recreate)}
+			if tc.persistence == WorkspacePersistencePerSession {
+				opts = append(opts, WithWorkspacePersistence(tc.persistence))
+			}
+			var executor codeexecutor.CodeExecutor = newMockedExecutor(t, srv, opts...)
+			var initialized []string
+			if tc.init {
+				wrapped, err := codeexecutor.NewWorkspaceInitExecutor(executor, func(_ context.Context, env codeexecutor.WorkspaceInitEnv) error {
+					initialized = append(initialized, env.Workspace.Path)
+					return nil
+				})
+				require.NoError(t, err)
+				executor = wrapped
+			}
+			a := llmagent.New("e2b",
+				llmagent.WithCodeExecutor(executor),
+				llmagent.WithWorkspacePreparersDisabled(true),
+				llmagent.WithWorkspaceExecAllowedCommands("true"),
+			)
+			sess := &session.Session{AppName: "app", UserID: "user", ID: "same-session"}
+			for i := 0; i < 2; i++ {
+				inv := agent.NewInvocation()
+				inv.Session = sess
+				// A view created before the first tool call must share its workspace.
+				for _, current := range []*agent.Invocation{inv, inv.View()} {
+					ctx := agent.NewInvocationContext(context.Background(), current)
+					tools, _ := a.InvocationToolSurface(ctx, current)
+					var execTool tool.CallableTool
+					for _, candidate := range tools {
+						if candidate.Declaration().Name == "workspace_exec" {
+							execTool = candidate.(tool.CallableTool)
+							break
+						}
+					}
+					require.NotNil(t, execTool)
+					_, err := execTool.Call(ctx, []byte("{\"command\":\"true\"}"))
+					require.NoError(t, err)
+				}
+			}
+
+			srv.mu.Lock()
+			creates := srv.execCalls
+			srv.mu.Unlock()
+			require.Equal(t, tc.creates, creates, "the only interpreter calls create workspaces")
+			srv.process.mu.Lock()
+			requests := append([]*process.StartRequest(nil), srv.process.requests...)
+			srv.process.mu.Unlock()
+			require.Len(t, requests, 4)
+			// RunProgram passes WORKSPACE_DIR to each native process.
+			workspace := func(req *process.StartRequest) string {
+				t.Helper()
+				prefix := codeexecutor.WorkspaceEnvDirKey + "="
+				for _, arg := range req.GetProcess().GetArgs() {
+					if strings.HasPrefix(arg, prefix) {
+						return strings.TrimPrefix(arg, prefix)
+					}
+				}
+				t.Fatal("native process has no workspace directory")
+				return ""
+			}
+			first, second := workspace(requests[0]), workspace(requests[2])
+			require.Equal(t, first, workspace(requests[1]))
+			require.Equal(t, second, workspace(requests[3]))
+			if tc.persistence == WorkspacePersistencePerSession {
+				require.Equal(t, first, second)
+				require.Equal(t, []string{first}, initialized)
+			} else {
+				require.NotEqual(t, first, second)
+				if tc.init {
+					require.Equal(t, []string{first, second}, initialized)
+				}
+			}
+		})
+	}
+}
+
 func TestRunProgramNativeOutputAndStdin(t *testing.T) {
 	srv := newMockE2BServer(t, func(string) string {
 		t.Error("RunProgram must not use /execute")
@@ -181,6 +277,136 @@ func TestRunProgramDefaultTimeout(t *testing.T) {
 			assert.False(t, srv.process.requests[0].GetStdin())
 		})
 	}
+}
+
+func TestRunProgramMaxTimeout(t *testing.T) {
+	for _, engine := range []bool{false, true} {
+		for _, tc := range []struct {
+			name string
+			max  time.Duration
+			raw  time.Duration
+			want time.Duration
+		}{
+			{"disabled", 0, time.Minute, time.Minute},
+			{"negative", -time.Second, time.Minute, time.Minute},
+			{"shorter", 10 * time.Second, 5 * time.Second, 5 * time.Second},
+			{"equal", 10 * time.Second, 10 * time.Second, 10 * time.Second},
+			{"longer", 10 * time.Second, time.Minute, 10 * time.Second},
+			{"default_capped", 10 * time.Second, 0, 10 * time.Second},
+			{"negative_request", 10 * time.Second, -time.Second, 10 * time.Second},
+			{"default_preserved", time.Minute, 0, 30 * time.Second},
+		} {
+			t.Run(fmt.Sprintf("engine=%t/%s", engine, tc.name), func(t *testing.T) {
+				srv := newMockE2BServer(t, nil)
+				defer srv.close()
+				c := newMockedExecutor(t, srv,
+					WithMaxProgramTimeout(tc.max),
+					WithExecutionTimeout(time.Nanosecond),
+				)
+				var runner codeexecutor.ProgramRunner = c
+				if engine {
+					runner = c.Engine().Runner()
+				}
+				result, err := runner.RunProgram(context.Background(),
+					codeexecutor.Workspace{Path: "/tmp/ws"},
+					codeexecutor.RunProgramSpec{Cmd: "true", Timeout: tc.raw})
+				require.NoError(t, err)
+				assert.False(t, result.TimedOut)
+				srv.process.mu.Lock()
+				defer srv.process.mu.Unlock()
+				require.Len(t, srv.process.headers, 1)
+				ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				assert.InDelta(t, tc.want.Milliseconds(), ms, 1000)
+			})
+		}
+	}
+}
+
+func TestWorkspaceExecMaxProgramTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		max  time.Duration
+		args string
+		want time.Duration
+	}{
+		{"longer", 10 * time.Second, `{"command":"true","timeout_sec":60}`, 10 * time.Second},
+		{"shorter", 10 * time.Second, `{"command":"true","timeout_sec":5}`, 5 * time.Second},
+		{"omitted", 10 * time.Second, `{"command":"true"}`, 10 * time.Second},
+		{"default_preserved", 10 * time.Minute, `{"command":"true"}`, 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(tc.max))
+			_, err := workspaceexec.NewExecTool(c).Call(context.Background(), []byte(tc.args))
+			require.NoError(t, err)
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, 1)
+			ms, err := strconv.Atoi(srv.process.headers[0].Get("Connect-Timeout-Ms"))
+			require.NoError(t, err)
+			assert.InDelta(t, tc.want.Milliseconds(), ms, 1000)
+		})
+	}
+}
+
+func TestMaxProgramTimeoutDoesNotLimitWorkspaceMetadata(t *testing.T) {
+	for _, exitCode := range []int32{0, 1} {
+		t.Run(fmt.Sprintf("commit_exit=%d", exitCode), func(t *testing.T) {
+			srv := newMockE2BServer(t, nil)
+			defer srv.close()
+			srv.process.exitCode = exitCode
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(10*time.Second))
+			ctx := context.Background()
+			ws := codeexecutor.Workspace{ID: "metadata", Path: "/tmp/ws"}
+			err := c.StageInputs(ctx, ws, []codeexecutor.InputSpec{{
+				From: "host://" + t.TempDir(), To: "work/inputs",
+			}})
+			metadataCalls := 1
+			if exitCode == 0 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "metadata commit failed")
+				metadataCalls++
+			}
+			_, err = c.Engine().Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+				Cmd: "true", Timeout: time.Minute,
+			})
+			require.NoError(t, err)
+
+			srv.process.mu.Lock()
+			defer srv.process.mu.Unlock()
+			require.Len(t, srv.process.headers, metadataCalls+1)
+			assert.Contains(t, strings.Join(srv.process.requests[0].Process.Args, " "), "mv -f")
+			if metadataCalls == 2 {
+				assert.Contains(t, strings.Join(srv.process.requests[1].Process.Args, " "), "rm -f")
+			}
+			for i, header := range srv.process.headers {
+				ms, err := strconv.Atoi(header.Get("Connect-Timeout-Ms"))
+				require.NoError(t, err)
+				want := 60 * time.Second
+				if i == metadataCalls {
+					want = 10 * time.Second
+				}
+				assert.InDelta(t, want.Milliseconds(), ms, 1000)
+			}
+		})
+	}
+}
+
+func TestMaxProgramTimeoutDoesNotLimitInterpreter(t *testing.T) {
+	srv := newMockE2BServer(t, func(string) string {
+		return ndjsonLines(stdoutMsg("interpreter output"))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithMaxProgramTimeout(time.Nanosecond))
+	result, err := c.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{Code: "print('interpreter output')", Language: "python"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "interpreter output")
+	assert.Equal(t, 1, srv.execCalls)
 }
 
 // Execute the request's bootstrap locally to test actual argv, environment,
@@ -252,8 +478,17 @@ func TestRunProgramInvalidArguments(t *testing.T) {
 }
 
 func TestRunProgramCancellationAndTimeout(t *testing.T) {
-	for _, caller := range []bool{false, true} {
-		t.Run(fmt.Sprintf("caller=%t", caller), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		caller bool
+		max    time.Duration
+	}{
+		{"program", false, 0},
+		{"caller", true, 0},
+		{"program_capped", false, 100 * time.Millisecond},
+		{"caller_capped", true, 5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			srv := newMockE2BServer(t, nil)
 			defer srv.close()
 			rpc := srv.rpc
@@ -276,18 +511,21 @@ func TestRunProgramCancellationAndTimeout(t *testing.T) {
 			}
 			killed := make(chan struct{}, 1)
 			srv.process.signal = func(*process.SendSignalRequest) { killed <- struct{}{} }
-			c := newMockedExecutor(t, srv)
+			c := newMockedExecutor(t, srv, WithMaxProgramTimeout(tc.max))
 			ctx := context.Background()
 			timeout := 100 * time.Millisecond
-			if caller {
+			if tc.caller {
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithTimeout(ctx, timeout)
 				defer cancel()
 				timeout = time.Minute
 			}
+			if tc.max > 0 {
+				timeout = time.Minute
+			}
 			result, err := c.RunProgram(ctx, codeexecutor.Workspace{Path: "/tmp/ws"},
 				codeexecutor.RunProgramSpec{Cmd: "sleep", Args: []string{"60"}, Timeout: timeout})
-			if caller {
+			if tc.caller {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				assert.False(t, result.TimedOut)
 				select {

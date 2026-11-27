@@ -90,6 +90,8 @@ type Workflow struct {
 	Request  any
 	Response any
 	Error    error
+	// FilterResponse prepares the response only when the span attribute policy requires its contents.
+	FilterResponse func(any) any
 }
 
 // NewWorkflowSpanName creates a new workflow span name.
@@ -153,11 +155,16 @@ func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
 // installed span attribute policy pointer remains unchanged. Invocation and
 // response attributes remain chunk-scoped because they are cheap and may be
 // completed as streaming processing advances.
+// Once a total token count is written, a later token-bearing usage snapshot can
+// clear it to zero. Nil, empty, and timing-only usage preserve the previous total.
 //
 // ChatTraceState is not goroutine-safe and must not be shared across chat spans.
 type ChatTraceState struct {
-	requestCommitted bool
-	cachedPolicy     *SpanAttributePolicy
+	requestCommitted   bool
+	cachedPolicy       *SpanAttributePolicy
+	totalTokensWritten bool
+	usageWritten       bool
+	promptCacheTokens  model.PromptTokensDetails
 }
 
 // traceChunkAttributes contains per-response chunk trace inputs.
@@ -216,7 +223,10 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 	if attributes.TimeToFirstToken > 0 {
 		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
 	}
-	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType, s)...)
+	if attributes.Response != nil {
+		attrs = s.appendTotalTokenReset(attrs, attributes.Response.Usage)
+	}
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
 	}
@@ -224,6 +234,22 @@ func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttri
 	if attributes.Response != nil && attributes.Response.Error != nil {
 		span.SetStatus(codes.Error, attributes.Response.Error.Message)
 	}
+}
+
+// appendTotalTokenReset tracks totals emitted by appendUsageAttributes and
+// clears a stale total when a newer token-bearing snapshot supplies zero.
+func (s *ChatTraceState) appendTotalTokenReset(attrs []attribute.KeyValue, usage *model.Usage) []attribute.KeyValue {
+	if s == nil || usage == nil {
+		return attrs
+	}
+	if usage.TotalTokens != 0 {
+		s.totalTokensWritten = true
+		return attrs
+	}
+	if s.totalTokensWritten && hasUsageTokenCounts(usage) {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, 0))
+	}
+	return attrs
 }
 
 // TraceChat is the single entry point for stateful streaming chat traces.
@@ -258,7 +284,11 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	}
 	if workflow.Response != nil {
 		setStringAttribute(span, OperationWorkflow, semconvtrace.KeyGenAIWorkflowResponse, "<not json serializable>", func() ([]byte, error) {
-			return json.Marshal(workflow.Response)
+			response := workflow.Response
+			if workflow.FilterResponse != nil {
+				response = workflow.FilterResponse(response)
+			}
+			return json.Marshal(response)
 		})
 	}
 	if workflow.Error != nil {
@@ -553,14 +583,15 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 
 // TraceRejectedChatResponse records token usage and the model's finish reason
 // without recording the rejected response payload.
-func TraceRejectedChatResponse(span trace.Span, usage *model.Usage, finishReason string) {
+func (s *ChatTraceState) TraceRejectedChatResponse(span trace.Span, usage *model.Usage, finishReason string) {
 	if !span.IsRecording() {
 		return
 	}
 	attrs := []attribute.KeyValue{
 		attribute.StringSlice(semconvtrace.KeyGenAIResponseFinishReasons, []string{finishReason}),
 	}
-	span.SetAttributes(appendResponseUsageAttributes(attrs, usage)...)
+	attrs = appendUsageAttributes(attrs, usage, s)
+	span.SetAttributes(s.appendTotalTokenReset(attrs, usage)...)
 }
 
 func traceChatWithState(span trace.Span, attributes *TraceChatAttributes, state *ChatTraceState) {
@@ -670,8 +701,65 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	return attrs
 }
 
+// appendUsageAttributes writes usage snapshots, clearing previously emitted
+// cache attributes when their counters become zero. Chunks without token counts
+// (including timing-only usage) preserve an earlier snapshot on a stateful span.
+func appendUsageAttributes(attrs []attribute.KeyValue, usage *model.Usage, state *ChatTraceState) []attribute.KeyValue {
+	if usage == nil {
+		return attrs
+	}
+	hasTokens := hasUsageTokenCounts(usage)
+	if state != nil && state.usageWritten && !hasTokens {
+		return attrs
+	}
+	attrs = append(attrs,
+		attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, usage.PromptTokens),
+		attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, usage.CompletionTokens),
+	)
+	if usage.TotalTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, usage.TotalTokens))
+	}
+	var previous model.PromptTokensDetails
+	if state != nil {
+		previous = state.promptCacheTokens
+		if hasTokens {
+			state.usageWritten = true
+			state.promptCacheTokens = usage.PromptTokensDetails
+		}
+	}
+	cache := usage.PromptTokensDetails
+	if cache.CachedTokens != 0 || previous.CachedTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, cache.CachedTokens))
+	}
+	if cache.CacheReadTokens != 0 || previous.CacheReadTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cache.CacheReadTokens))
+	}
+	if cache.CacheCreationTokens != 0 || previous.CacheCreationTokens != 0 {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cache.CacheCreationTokens))
+	}
+	if cache != (model.PromptTokensDetails{}) || previous != (model.PromptTokensDetails{}) {
+		accounting := ""
+		if cache != (model.PromptTokensDetails{}) {
+			switch usage.PromptCacheAccounting {
+			case model.PromptCacheAccountingInclusive, model.PromptCacheAccountingExclusive:
+				accounting = string(usage.PromptCacheAccounting)
+			}
+		}
+		// Empty explicitly clears a prior declaration when usage is replaced by
+		// custom code or no longer contains cache tokens.
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIUsageInputTokensCacheAccounting, accounting))
+	}
+	return attrs
+}
+
+func hasUsageTokenCounts(usage *model.Usage) bool {
+	return usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 ||
+		usage.PromptTokensDetails != (model.PromptTokensDetails{}) ||
+		usage.CompletionTokensDetails != (model.CompletionTokensDetails{})
+}
+
 // buildResponseAttributes builds response-related attributes.
-func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []attribute.KeyValue {
+func buildResponseAttributes(rsp *model.Response, errorTypeFallback string, state *ChatTraceState) []attribute.KeyValue {
 	if rsp == nil {
 		return nil
 	}
@@ -686,7 +774,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		attrs = append(attrs, responseErrorAttributes(e, errorTypeFallback)...)
 	}
 
-	attrs = appendResponseUsageAttributes(attrs, rsp.Usage)
+	attrs = appendUsageAttributes(attrs, rsp.Usage, state)
 
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {
@@ -714,29 +802,6 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		return json.Marshal(rsp)
 	})
 
-	return attrs
-}
-
-func appendResponseUsageAttributes(attrs []attribute.KeyValue, usage *model.Usage) []attribute.KeyValue {
-	if usage == nil {
-		return attrs
-	}
-	attrs = append(attrs,
-		attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, usage.PromptTokens),
-		attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, usage.CompletionTokens),
-	)
-	if usage.TotalTokens != 0 {
-		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, usage.TotalTokens))
-	}
-	if cached := usage.PromptTokensDetails.CachedTokens; cached != 0 {
-		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCached, cached))
-	}
-	if cacheRead := usage.PromptTokensDetails.CacheReadTokens; cacheRead != 0 {
-		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheRead, cacheRead))
-	}
-	if cacheCreation := usage.PromptTokensDetails.CacheCreationTokens; cacheCreation != 0 {
-		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageInputTokensCacheCreation, cacheCreation))
-	}
 	return attrs
 }
 

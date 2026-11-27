@@ -824,7 +824,8 @@ func TestModel_buildFinalResponse(t *testing.T) {
 					UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
 						PromptTokenCount:        1,
 						CandidatesTokenCount:    1,
-						TotalTokenCount:         2,
+						TotalTokenCount:         9,
+						ThoughtsTokenCount:      7,
 						CachedContentTokenCount: 1,
 					},
 				},
@@ -861,10 +862,13 @@ func TestModel_buildFinalResponse(t *testing.T) {
 				},
 				Usage: &model.Usage{
 					PromptTokens:     1,
-					TotalTokens:      2,
+					TotalTokens:      9,
 					CompletionTokens: 1,
 					PromptTokensDetails: model.PromptTokensDetails{
 						CachedTokens: 1,
+					},
+					CompletionTokensDetails: model.CompletionTokensDetails{
+						ReasoningTokens: 7,
 					},
 				},
 			},
@@ -929,6 +933,10 @@ func TestModel_buildFinalResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildFinalResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil && tt.want.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				tt.want.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}
@@ -1044,6 +1052,10 @@ func TestModel_buildChunkResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response := tt.fields.m.buildChunkResponse(tt.args.chatCompletion)
+			// Gemini usage with cache counters declares inclusive accounting.
+			if tt.want != nil && tt.want.Usage != nil && tt.want.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+				tt.want.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+			}
 			assert.Equal(t, tt.want, response)
 		})
 	}
@@ -1880,6 +1892,104 @@ func TestModel_GenerateContentStreaming(t *testing.T) {
 		})
 	}
 	ctrl.Finish()
+}
+
+func TestModel_GenerateContentStreamingUsesLatestUsageSnapshot(t *testing.T) {
+	now := time.Now()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	chunkWithCache := &genai.GenerateContentResponse{
+		ResponseID:   "stream-cache-1",
+		CreateTime:   now,
+		ModelVersion: "gemini-2.5-pro",
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: "hello "}},
+			},
+		}},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        100,
+			CandidatesTokenCount:    4,
+			TotalTokenCount:         111,
+			CachedContentTokenCount: 80,
+			ThoughtsTokenCount:      7,
+		},
+	}
+	chunkWithRepeatedCache := &genai.GenerateContentResponse{
+		ResponseID:   "stream-cache-2",
+		CreateTime:   now,
+		ModelVersion: "gemini-2.5-pro",
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: "world"}},
+			},
+			FinishReason: genai.FinishReasonStop,
+		}},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        100,
+			CandidatesTokenCount:    10,
+			TotalTokenCount:         120,
+			CachedContentTokenCount: 80,
+			ThoughtsTokenCount:      10,
+		},
+	}
+	chunkWithoutUsage := &genai.GenerateContentResponse{
+		ResponseID:    "stream-cache-3",
+		CreateTime:    now,
+		ModelVersion:  "gemini-2.5-pro",
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{},
+	}
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).Times(1)
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{chunkWithCache, chunkWithRepeatedCache, chunkWithoutUsage})).
+		Times(1)
+
+	var callbackFinal *model.Response
+	m := &Model{
+		name:   "gemini-2.5-pro",
+		client: mockClient,
+		chatStreamCompleteCallback: func(
+			_ context.Context,
+			_ []*genai.Content,
+			_ *genai.GenerateContentConfig,
+			chatResponse *model.Response,
+		) {
+			callbackFinal = chatResponse
+		},
+	}
+
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	assert.NoError(t, err)
+
+	var final *model.Response
+	for resp := range ch {
+		if resp.Done {
+			final = resp
+		}
+	}
+	if assert.NotNil(t, final) && assert.NotNil(t, final.Usage) {
+		assert.Equal(t, "hello world", final.Choices[0].Message.Content)
+		assert.Equal(t, 100, final.Usage.PromptTokens)
+		assert.Equal(t, 10, final.Usage.CompletionTokens)
+		assert.Equal(t, 120, final.Usage.TotalTokens)
+		assert.Equal(t, 80, final.Usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 10, final.Usage.CompletionTokensDetails.ReasoningTokens)
+	}
+	if assert.NotNil(t, callbackFinal) && assert.NotNil(t, callbackFinal.Usage) {
+		assert.Equal(t, 100, callbackFinal.Usage.PromptTokens)
+		assert.Equal(t, 10, callbackFinal.Usage.CompletionTokens)
+		assert.Equal(t, 120, callbackFinal.Usage.TotalTokens)
+		assert.Equal(t, 80, callbackFinal.Usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 10, callbackFinal.Usage.CompletionTokensDetails.ReasoningTokens)
+	}
 }
 
 func seqFromSlice[T any](items []T) iter.Seq2[T, error] {
