@@ -278,6 +278,30 @@ server, err := agui.New(
 
 For the complete example, see [examples/agui/server/follow](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/follow). For the frontend, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
+### Continuation positions
+
+MySQL and in-memory sessions support `session.WithTrackCursor` on
+`GetTrackEvents`. Follow mode requests this capability for both its initial
+snapshot and later polls. The returned `TrackEvents.Cursor` identifies a
+persisted append position, so distinct events with equal timestamps or identical
+payloads are forwarded separately. This metadata is not serialized into the
+snapshot or SSE payload. Calls without the option keep their existing behavior.
+
+The cursor is bound to the backend, session incarnation and track. A deleted or
+recreated session, or a MySQL cursor whose anchor has expired or been removed,
+causes a follow error; start a new snapshot instead of reusing that cursor.
+Normal retention policies still apply. MySQL relies on session writes taking
+the session-row lock before inserting track rows; raw SQL writers must not
+bypass that ordering contract.
+
+Existing `GetSessionHook` policies run once around cursor reads. Key rewriting
+and post-read filtering are supported. A hook that supplies a synthetic snapshot
+without reading storage cannot provide a continuation position and fails
+explicitly. Hooks must preserve the requested cursor when replacing options.
+Wrappers must forward the option and preserve the returned cursor
+metadata. Other backends and wrappers without cursor support retain their
+legacy time-based follow behavior and do not gain the equal-time guarantee.
+
 ## Best-Effort History Loading
 
 By default, messages snapshots strictly validate pairing relationships between persisted AG-UI events. For example, `TEXT_MESSAGE_CONTENT` must be preceded by `TEXT_MESSAGE_START` for the same message, and `TOOL_CALL_RESULT` must match a tool call whose argument stream has completed. If historical data contains missing, out-of-order, or duplicate events, the snapshot route tries to return the `MESSAGES_SNAPSHOT` restored before the failure point, and then returns `RUN_ERROR`.

@@ -35,8 +35,9 @@ type stateWithTTL struct {
 
 // sessionWithTTL wraps session with expiration time.
 type sessionWithTTL struct {
-	session   *session.Session
-	expiredAt time.Time
+	session         *session.Session
+	expiredAt       time.Time
+	trackGeneration string
 }
 
 var (
@@ -356,6 +357,11 @@ func (s *SessionService) GetSession(
 }
 
 func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *session.Options) (*session.Session, error) {
+	return s.getSessionView(ctx, key, opt, nil)
+}
+
+func (s *SessionService) getSessionView(ctx context.Context, key session.Key, opt *session.Options,
+	prepare func(*sessionWithTTL, *session.Session) error) (*session.Session, error) {
 	if err := session.ValidateGetSessionOptions(opt, false); err != nil {
 		return nil, err
 	}
@@ -381,6 +387,11 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 	}
 
 	copiedSess := sess.Clone()
+	if prepare != nil {
+		if err := prepare(sessWithTTL, copiedSess); err != nil {
+			return nil, err
+		}
+	}
 
 	// apply filtering options if provided
 	copiedSess.ApplyEventFiltering(
@@ -898,6 +909,21 @@ func (s *SessionService) GetTrackEvents(
 	track session.Track,
 	opts ...session.Option,
 ) (*session.TrackEvents, error) {
+	options := &session.Options{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	if options.TrackCursor != nil {
+		if options.EventNum != 0 || !options.EventTime.IsZero() || options.EventPage != nil {
+			return nil, fmt.Errorf("%w: cursor cannot be combined with event filters", session.ErrTrackCursorInvalid)
+		}
+		events, next, err := s.readTrackEvents(ctx, key, track, *options.TrackCursor)
+		if err != nil {
+			return nil, err
+		}
+		events.Cursor = &next
+		return events, nil
+	}
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
