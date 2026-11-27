@@ -13,6 +13,16 @@
 
 所有回调将按照注册顺序依次执行，且一旦有回调返回非 `nil` 值，回调链路将立即停止。如果需要叠加多个回调效果，请在单一回调中实现相应的逻辑。
 
+### 多回调结果累积规则
+
+在全部 6 条结构化回调链（`BeforeModel`、`AfterModel`、`BeforeTool`、`AfterTool`、`BeforeAgent`、`AfterAgent`）中，除非执行因回调错误而默认提前停止，否则每次回调返回的非 `nil` 结果都会作为只读稀疏补丁累积到最终返回结果中：
+
+- **独立覆盖字段（最近非空胜出）**：`Context`（全部 6 条链）与 `ModifiedArguments`（`BeforeTool`）在后续回调返回 `nil`、空结构体、旧签名回调或仅设置其他字段时，会保留最近一次非空值；后续显式提供的新值则覆盖它。推荐从回调输入的 `ctx` 派生新上下文以保留取消传播、截止时间和上下文值；`context.Background()` 或 `context.WithoutCancel(ctx)` 会主动解除取消传播。
+- **成组覆盖字段**：`CustomResponse`（`Model`/`Agent`）、`CustomResult` + `SkipStateDelta`（`BeforeTool`）以及 `CustomResult` + `SkipResultFormatter` + `SkipStateDelta`（`AfterTool`）仅在后续回调返回非空的 `CustomResponse` 或 `CustomResult` 时整组替换；在启用 `WithContinueOnResponse(true)` 后，后续回调返回空结构体或旧签名透传不会清空先前的自定义响应/结果。
+- **单调布尔标志**：`AfterTool` 中的 `SkipSummarization` 按逻辑或（OR）跨回调累积，遇到 `CustomResult` 提前停止时同样生效。
+- **所有权与错误早停边界**：框架在调用下一个回调前将已接受结果的顶层字段复制到独立累积器中，绝不就地修改回调方持有的结果结构体（因此复用或清空结构体不会抹掉已累积的字段；其中引用的响应对象和参数缓冲区不会被深拷贝）。默认遇到错误停止（`continueOnError == false`）时，`Model` 与 `Agent` 回调链返回 `(nil, err)`，`Tool` 回调链返回出错回调的原始 `(result, err)` 而不合并先前字段；启用 `WithContinueOnError(true)` 后，回调链会同时返回已累积的结果与第一个错误。
+- **并行工具结果发布**：并行工具在默认合并结果模式下使用替换后的上下文执行工具，结果发布则遵循 worker 的生命周期——仅取消回调替换的上下文不会丢弃缓存结果，解除该上下文的取消传播也不会让结果发布在 worker 取消后继续等待。
+
 ---
 
 ## ModelCallbacks

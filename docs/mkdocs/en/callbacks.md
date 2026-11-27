@@ -14,6 +14,43 @@ The callback system comes in four categories:
 Each category provides a Before and an After callback. A Before callback can
 short-circuit the default execution by returning a non-nil custom response.
 
+### Multi-Callback Result Accumulation
+
+Across all structured callback chains (`BeforeModel`, `AfterModel`,
+`BeforeTool`, `AfterTool`, `BeforeAgent`, and `AfterAgent`), unless execution
+stops on a callback error, each non-nil callback result is treated as a
+read-only sparse patch accumulated into the chain's returned result:
+
+- **Independent last-non-nil-wins fields**: `Context` (all six chains) and
+  `ModifiedArguments` (`BeforeTool`) retain the latest non-nil value when later
+  callbacks return `nil`, an empty struct, a legacy callback result, or
+  unrelated fields. Derive replacement contexts from the callback input to
+  preserve cancellation, deadlines, and values; `context.Background()` or
+  `context.WithoutCancel(ctx)` deliberately detaches cancellation.
+- **Coupled override bundles**: `CustomResponse` (`Model`/`Agent`),
+  `CustomResult` + `SkipStateDelta` (`BeforeTool`), and `CustomResult` +
+  `SkipResultFormatter` + `SkipStateDelta` (`AfterTool`) are replaced as a unit
+  only when a later callback returns a non-nil `CustomResponse` or
+  `CustomResult`. Under `WithContinueOnResponse(true)`, returning an empty
+  struct or legacy pass-through does not clear an earlier override.
+- **Monotonic flags**: `SkipSummarization` (`AfterTool`) is combined with
+  logical OR across callbacks, including when execution stops early on a
+  `CustomResult`.
+- **Ownership and error-stop boundaries**: Top-level fields are copied into the
+  framework's accumulator before invoking the next callback, and callback-owned
+  result structs are never mutated (reusing or clearing a struct does not erase
+  accumulated fields; referenced response objects and argument buffers are not
+  deep-copied). On a default callback-error stop (`continueOnError == false`),
+  `Model` and `Agent` chains return `(nil, err)`, while `Tool` chains return
+  the failing callback's raw `(result, err)` without merging earlier fields.
+  With `WithContinueOnError(true)`, the chain returns the accumulated result
+  alongside the first error.
+- **Parallel tool publication**: In the default merged-result mode for parallel
+  tools, the replacement context controls tool execution while result
+  publication follows the worker's lifetime—cancelling only the callback's
+  replacement context does not discard a cached result, and detaching that
+  context does not keep publication waiting after the worker is cancelled.
+
 ---
 
 ## ModelCallbacks

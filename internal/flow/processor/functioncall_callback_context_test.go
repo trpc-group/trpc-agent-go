@@ -121,3 +121,57 @@ func TestParallelToolResults_WorkerCancellationStopsPublication(t *testing.T) {
 	}
 	require.Zero(t, calls.Load())
 }
+
+func TestBeforeToolChain_PreservesContextAndModifiedArgumentsEndToEnd(t *testing.T) {
+	type contextKey struct{}
+	var seenValue any
+	var seenArgs []byte
+
+	callbacks := tool.NewCallbacks().RegisterBeforeTool(func(
+		_ context.Context, _ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(`{"city":"Berlin"}`),
+		}, nil
+	}).RegisterBeforeTool(func(
+		ctx context.Context, args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		require.Equal(t, `{"city":"Berlin"}`, string(args.Arguments))
+		return &tool.BeforeToolResult{
+			Context: context.WithValue(ctx, contextKey{}, "enriched"),
+		}, nil
+	}).RegisterBeforeTool(func(
+		ctx context.Context, _ string, _ *tool.Declaration, jsonArgs *[]byte,
+	) (any, error) {
+		require.Equal(t, "enriched", ctx.Value(contextKey{}))
+		require.Equal(t, `{"city":"Berlin"}`, string(*jsonArgs))
+		return nil, nil
+	})
+
+	tools := map[string]tool.Tool{
+		"lookup": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "lookup"},
+			callFn: func(ctx context.Context, args []byte) (any, error) {
+				seenValue = ctx.Value(contextKey{})
+				seenArgs = append([]byte(nil), args...)
+				return "ok", nil
+			},
+		},
+	}
+	calls := []model.ToolCall{
+		{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "lookup",
+				Arguments: []byte(`{"city":"Paris"}`),
+			},
+		},
+	}
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := agent.NewInvocation(agent.WithInvocationAgent(&mockAgentWithTools{name: "tester"}))
+	evt, err := p.handleFunctionCalls(context.Background(), inv, newToolCallResponseWithCalls(calls), tools, nil)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.Equal(t, "enriched", seenValue)
+	require.Equal(t, `{"city":"Berlin"}`, string(seenArgs))
+}
