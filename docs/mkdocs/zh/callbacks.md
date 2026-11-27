@@ -11,7 +11,7 @@
 
 每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果提前返回，跳过默认执行。
 
-所有回调将按照注册顺序依次执行，且一旦有回调返回非 `nil` 值，回调链路将立即停止。如果需要叠加多个回调效果，请在单一回调中实现相应的逻辑。
+所有回调将按照注册顺序依次执行。默认情况下，一旦回调返回错误或非 `nil` 的 `CustomResponse`/`CustomResult`，回调链路将立即停止；可通过 `WithContinueOnError(true)` 和 `WithContinueOnResponse(true)` 分别控制出错或返回自定义结果后是否继续执行。仅设置 `Context`、`ModifiedArguments` 或 `SkipSummarization` 等字段的结果不会停止链路，而是按下文累积规则合并。
 
 ### 多回调结果累积规则
 
