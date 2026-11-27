@@ -255,6 +255,15 @@ func WithPreSummaryHook(h PreSummaryHook) Option {
 	}
 }
 
+// WithInputOverflowHook sets the decision hook for a complete batch that cannot
+// fit the estimated summary input budget. A non-nil decision authorizes its Text
+// without another token-budget check. A nil hook preserves the default behavior.
+func WithInputOverflowHook(h InputOverflowHook) Option {
+	return func(s *sessionSummarizer) {
+		s.inputOverflowHook = h
+	}
+}
+
 // WithPostSummaryHook sets a post-summary hook to modify the summary before
 // returning. The hook observes the provisional boundary for the summarized
 // source. A successful or non-aborting hook keeps that exact boundary, replacing
@@ -275,8 +284,9 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	}
 }
 
-// WithSummaryHookAbortOnError decides whether to abort when a hook returns an error.
-// Default false: ignore hook errors and use original text/summary; true: return error.
+// WithSummaryHookAbortOnError decides whether to abort on pre/post-summary hook errors.
+// Default false: ignore those errors and use original text/summary; true: return error.
+// InputOverflowHook errors always abort independently of this option.
 func WithSummaryHookAbortOnError(abort bool) Option {
 	return func(s *sessionSummarizer) {
 		s.hookAbortOnError = abort
