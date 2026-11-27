@@ -1,0 +1,258 @@
+{
+  "task_id": "task-a755b98bdf78-1783781368358518000",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "service.go",
+      "line": 9,
+      "title": "Potential secret appears in added code",
+      "evidence": "const adminToken = \"[REDACTED]\"",
+      "recommendation": "Replace the literal with a secret manager or environment lookup.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "secret-leak",
+      "status": "finding"
+    },
+    {
+      "severity": "high",
+      "category": "lifecycle",
+      "file": "service.go",
+      "line": 14,
+      "title": "Derived context is not canceled",
+      "evidence": "ctx, cancel := context.WithTimeout(r.Context(), time.Second)",
+      "recommendation": "Store the cancel function and defer cancel() in the same scope.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "context-leak",
+      "status": "finding"
+    },
+    {
+      "severity": "high",
+      "category": "resource",
+      "file": "service.go",
+      "line": 16,
+      "title": "Opened resource has no close path",
+      "evidence": "file, err := os.Open(\"payload.json\")",
+      "recommendation": "Defer Close() immediately after the resource is opened.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "resource-leak",
+      "status": "finding"
+    },
+    {
+      "severity": "high",
+      "category": "error_handling",
+      "file": "service.go",
+      "line": 18,
+      "title": "New function panics directly",
+      "evidence": "panic(err)",
+      "recommendation": "Return an error or handle the failure path explicitly.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "panic-direct",
+      "status": "finding"
+    },
+    {
+      "severity": "high",
+      "category": "database",
+      "file": "service.go",
+      "line": 21,
+      "title": "Database handle or transaction has no cleanup path",
+      "evidence": "db, err := sql.Open(\"sqlite\", \"file:risky.db\")",
+      "recommendation": "Defer Close() for handles and Rollback() for transactions in the same scope.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "db-lifecycle",
+      "status": "finding"
+    },
+    {
+      "severity": "high",
+      "category": "error_handling",
+      "file": "service.go",
+      "line": 23,
+      "title": "New function panics directly",
+      "evidence": "panic(err)",
+      "recommendation": "Return an error or handle the failure path explicitly.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "panic-direct",
+      "status": "finding"
+    },
+    {
+      "severity": "high",
+      "category": "concurrency",
+      "file": "service.go",
+      "line": 26,
+      "title": "New goroutine has no visible lifecycle guard",
+      "evidence": "go func() {",
+      "recommendation": "Bind the goroutine to a context, wait group, or explicit completion signal.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "goroutine-leak",
+      "status": "finding"
+    },
+    {
+      "severity": "medium",
+      "category": "maintainability",
+      "file": "service.go",
+      "line": 35,
+      "title": "New code contains a TODO or FIXME marker",
+      "evidence": "// TODO(ops): add focused tests before shipping this import path.",
+      "recommendation": "Remove the marker or turn it into a tracked issue before merging.",
+      "confidence": "high",
+      "source": "skill_run",
+      "rule_id": "todo-marker",
+      "status": "finding"
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "low",
+      "category": "testing",
+      "file": "service.go",
+      "line": 13,
+      "title": "New function may need a focused test",
+      "evidence": "func ImportHandler(w http.ResponseWriter, r *http.Request) {",
+      "recommendation": "Add a unit test that exercises the new path.",
+      "confidence": "medium",
+      "source": "skill_run",
+      "rule_id": "missing-test-hint",
+      "status": "warning"
+    },
+    {
+      "severity": "low",
+      "category": "performance",
+      "file": "service.go",
+      "line": 32,
+      "title": "String concatenation in a loop may allocate repeatedly",
+      "evidence": "summary += item",
+      "recommendation": "Use strings.Builder or bytes.Buffer for repeated string assembly.",
+      "confidence": "low",
+      "source": "skill_run",
+      "rule_id": "string-concat-loop",
+      "status": "needs_human_review"
+    }
+  ],
+  "human_review_items": [
+    {
+      "severity": "low",
+      "category": "performance",
+      "file": "service.go",
+      "line": 32,
+      "title": "String concatenation in a loop may allocate repeatedly",
+      "evidence": "summary += item",
+      "recommendation": "Use strings.Builder or bytes.Buffer for repeated string assembly.",
+      "confidence": "low",
+      "source": "skill_run",
+      "rule_id": "string-concat-loop",
+      "status": "needs_human_review"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 4394,
+    "sandbox_duration_ms": 4389,
+    "tool_call_count": 4,
+    "finding_count": 8,
+    "severity_counts": {
+      "critical": 1,
+      "high": 6,
+      "low": 2,
+      "medium": 1
+    },
+    "exception_counts": {
+      "sandbox_failed": 1
+    },
+    "redaction_count": 1
+  },
+  "input_metadata": {
+    "changed_go_files": [
+      "service.go"
+    ],
+    "package_names": [
+      "service"
+    ],
+    "module_path": "example.com/reviewfailure"
+  },
+  "governance_summary": {
+    "permission_decisions": [
+      {
+        "command": "scripts/check.sh",
+        "action": "allow"
+      },
+      {
+        "command": "go test ./...",
+        "action": "allow"
+      },
+      {
+        "command": "go vet ./...",
+        "action": "allow"
+      }
+    ]
+  },
+  "sandbox_summary": {
+    "runs": [
+      {
+        "command": "scripts/check.sh",
+        "runtime": "container",
+        "status": "ok",
+        "timeout_ms": 30000,
+        "output_limit_bytes": 65536,
+        "env_whitelist": "PATH,HOME,TMPDIR,GOCACHE",
+        "stdout_digest": "1b87a8de242365c2cc57094113cc464b4a2554b7ba7170133d9889bb95db6bbe",
+        "stderr_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "duration_ms": 251
+      },
+      {
+        "command": "go test ./...",
+        "runtime": "container",
+        "status": "failed",
+        "timeout_ms": 30000,
+        "output_limit_bytes": 65536,
+        "env_whitelist": "PATH,HOME,TMPDIR,GOCACHE",
+        "exit_code": 1,
+        "stdout_digest": "24cd0006063271de5ea94b483466c5aac78e78cc3f1b14617ac6e6228ca397be",
+        "duration_ms": 3576
+      },
+      {
+        "command": "go vet ./...",
+        "runtime": "container",
+        "status": "ok",
+        "timeout_ms": 30000,
+        "output_limit_bytes": 65536,
+        "env_whitelist": "PATH,HOME,TMPDIR,GOCACHE",
+        "stdout_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "duration_ms": 562
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "review_report.json",
+      "kind": "report",
+      "path": "review_report.json"
+    },
+    {
+      "name": "review_report.md",
+      "kind": "report",
+      "path": "review_report.md"
+    },
+    {
+      "name": "review_report.zh.md",
+      "kind": "report",
+      "path": "review_report.zh.md"
+    },
+    {
+      "name": "review_diagnostics.json",
+      "kind": "diagnostic",
+      "path": "review_diagnostics.json"
+    }
+  ],
+  "summary": "8 findings, 2 warnings",
+  "conclusion": {
+    "status": "fail",
+    "reason": "blocking_findings",
+    "summary": "Critical or high severity findings require changes before merge."
+  },
+  "created_at": "2026-07-11T22:49:32.752378+08:00"
+}

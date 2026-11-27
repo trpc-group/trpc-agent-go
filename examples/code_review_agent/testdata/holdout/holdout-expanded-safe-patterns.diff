@@ -1,0 +1,31 @@
+diff --git a/review_safe.go b/review_safe.go
+--- a/review_safe.go
++++ b/review_safe.go
+@@ -1,3 +1,24 @@
+ package sample
+ 
++func Safe(ctx context.Context, name string, mu *sync.Mutex, db *sql.DB, items []Item) error {
++	resp, err := http.Get("https://example.com")
++	if err != nil {
++		return fmt.Errorf("fetch: %w", err)
++	}
++	defer resp.Body.Close()
++
++	rows, err := db.QueryContext(ctx, "SELECT * FROM users WHERE name = ?", name)
++	if err != nil {
++		return fmt.Errorf("query users: %w", err)
++	}
++	defer rows.Close()
++
++	cmd := exec.CommandContext(ctx, "git", "status")
++	_ = cmd
++
++	mu.Lock()
++	defer mu.Unlock()
++
++	var b strings.Builder
++	for _, item := range items {
++		b.WriteString(item.Name)
++	}
++	return nil
++}
