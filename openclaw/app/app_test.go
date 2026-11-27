@@ -4889,6 +4889,177 @@ func TestNewModel_OpenAI(t *testing.T) {
 	require.False(t, hasOpenAIRequestJSONCallback(t, mdl))
 }
 
+// captureOpenAIChatRequest sends req through a model built from opts and
+// returns the JSON body that reached a fake Chat Completions endpoint.
+func captureOpenAIChatRequest(
+	t *testing.T,
+	opts runOptions,
+	req *model.Request,
+) map[string]any {
+	t.Helper()
+
+	bodies := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		select {
+		case bodies <- body:
+		default:
+		}
+		if req.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `data: {"id":"chatcmpl-test",`+
+				`"object":"chat.completion.chunk","created":123,`+
+				`"model":"test","choices":[{"index":0,`+
+				`"delta":{"role":"assistant","content":"ok"},`+
+				`"finish_reason":null}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-test",`+
+				`"object":"chat.completion.chunk","created":123,`+
+				`"model":"test","choices":[{"index":0,"delta":{},`+
+				`"finish_reason":"stop"}]}`+"\n\n"+
+				"data: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-test",`+
+			`"object":"chat.completion","created":123,"model":"test",`+
+			`"choices":[{"index":0,"message":`+
+			`{"role":"assistant","content":"ok"},`+
+			`"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(server.Close)
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	opts.ModelMode = modeOpenAI
+	opts.OpenAIBaseURL = server.URL
+	mdl, err := modelFromOptions(opts)
+	require.NoError(t, err)
+
+	ch, err := mdl.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+	for rsp := range ch {
+		require.Nil(t, rsp.Error)
+	}
+
+	select {
+	case body := <-bodies:
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(body, &payload))
+		return payload
+	default:
+		require.FailNow(t, "no chat request reached the server")
+		return nil
+	}
+}
+
+func TestNewModel_OpenAIReasoningEffort(t *testing.T) {
+	str := func(s string) *string { return &s }
+
+	tests := []struct {
+		name    string
+		model   string
+		variant string
+		effort  *string
+		stream  bool
+		tools   bool
+		extra   map[string]any
+		// want is the reasoning_effort sent on the wire; nil means the
+		// field must be absent so the provider default applies.
+		want *string
+	}{
+		{
+			name:    "default model without effort sends none",
+			model:   defaultOpenAIModel,
+			variant: openAIVariantAuto,
+			want:    str("none"),
+		},
+		{
+			name:    "default model without effort sends none when streaming",
+			model:   defaultOpenAIModel,
+			variant: openAIVariantAuto,
+			stream:  true,
+			want:    str("none"),
+		},
+		{
+			name:    "default model with tools sends none",
+			model:   defaultOpenAIModel,
+			variant: openAIVariantAuto,
+			tools:   true,
+			want:    str("none"),
+		},
+		{
+			name:    "explicit high effort is kept",
+			model:   "gpt-5.6-sol",
+			variant: string(openai.VariantOpenAI),
+			effort:  str("high"),
+			want:    str("high"),
+		},
+		{
+			name:    "explicit low effort is kept when streaming",
+			model:   "gpt-5.6-sol",
+			variant: string(openai.VariantOpenAI),
+			effort:  str("low"),
+			stream:  true,
+			want:    str("low"),
+		},
+		{
+			name:    "extra request field overrides the default",
+			model:   "gpt-5.6-sol",
+			variant: string(openai.VariantOpenAI),
+			extra:   map[string]any{"reasoning_effort": "medium"},
+			want:    str("medium"),
+		},
+		{
+			name:    "other models keep the provider default",
+			model:   "gateway-model",
+			variant: string(openai.VariantOpenAI),
+		},
+		{
+			name:    "other variants keep the provider default",
+			model:   "gpt-5.6-sol",
+			variant: string(openai.VariantDeepSeek),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+				GenerationConfig: model.GenerationConfig{
+					Stream:          tc.stream,
+					ReasoningEffort: tc.effort,
+				},
+				ExtraFields: tc.extra,
+			}
+			if tc.tools {
+				req.Tools = map[string]tool.Tool{
+					"lookup": stubTool{name: "lookup"},
+				}
+			}
+
+			payload := captureOpenAIChatRequest(t, runOptions{
+				OpenAIModel:   tc.model,
+				OpenAIVariant: tc.variant,
+			}, req)
+
+			if tc.tools {
+				require.Len(t, payload["tools"], 1)
+			}
+			got, ok := payload["reasoning_effort"]
+			if tc.want == nil {
+				require.False(t, ok, "unexpected reasoning_effort %v", got)
+				return
+			}
+			require.Equal(t, *tc.want, got)
+		})
+	}
+}
+
 func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 	var routingHeader string
 	var agentHeader string

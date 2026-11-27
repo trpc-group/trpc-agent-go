@@ -35,6 +35,7 @@ import (
 	"time"
 	"unicode"
 
+	openaisdk "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
@@ -83,7 +84,7 @@ const (
 	modeMock   = "mock"
 	modeOpenAI = "openai"
 
-	defaultOpenAIModel = "gpt-5"
+	defaultOpenAIModel = "gpt-5.6-sol"
 
 	defaultSkillsDir        = "skills"
 	defaultAgentsDir        = ".agents"
@@ -4031,6 +4032,20 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	opts := []openai.Option{
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
+	}
+	if name == "gpt-5.6-sol" && variant == openai.VariantOpenAI {
+		opts = append(opts, openai.WithChatRequestCallback(func(
+			_ context.Context, req *openaisdk.ChatCompletionNewParams,
+		) {
+			// The Chat Completions API does not support tool calling
+			// with a reasoning effort other than "none" on GPT-5.4
+			// and later, while gpt-5.6-sol defaults to "medium".
+			// Disable reasoning unless the caller chose an effort. See
+			// https://developers.openai.com/api/docs/guides/migrate-to-responses.
+			if req.ReasoningEffort == "" {
+				req.ReasoningEffort = "none"
+			}
+		}))
 	}
 	if spec.OpenAITextOnlyMessageContent {
 		opts = append(opts, openai.WithTextOnlyMessageContent(true))

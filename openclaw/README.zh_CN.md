@@ -61,7 +61,7 @@ cd openclaw
 go run ./cmd/openclaw -config ./openclaw.stdin.yaml
 ```
 
-注意：默认情况下，OpenClaw 使用 `-mode openai` 和 `-model gpt-5`。
+注意：默认情况下，OpenClaw 使用 `-mode openai` 和 `-model gpt-5.6-sol`。
 如果没有模型凭据，请继续使用 `-mode mock`。
 
 ## Agent 类型
@@ -247,7 +247,7 @@ agent:
 
 model:
   mode: "openai"
-  name: "gpt-5"
+  name: "gpt-5.6-sol"
   openai_variant: "auto"
 
 # 可选：knowledge 后端，用于 knowledge search tools。
@@ -677,7 +677,22 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
-默认情况下，`-model` 使用 `$OPENAI_MODEL`（如已设置），否则回退到 `gpt-5`。
+默认情况下，`-model` 使用 `$OPENAI_MODEL`（如已设置），否则回退到 `gpt-5.6-sol`。
+该默认值取代了 OpenAI 将于 2026 年 12 月 11 日下线的 `gpt-5`。
+
+对于使用 OpenAI variant 的 `gpt-5.6-sol`，当请求未设置推理强度时，OpenClaw 会发送
+`reasoning_effort: none`。这对所有请求生效，包括不带工具的请求。OpenAI 的 Chat
+Completions API 在 GPT-5.4 及更新的模型上，不支持在推理强度不为 `none` 时进行工具调用，
+而 `gpt-5.6-sol` 在省略该字段时默认使用 `medium`。因此默认情况下推理处于关闭状态，
+这与 `gpt-5` 不同。
+
+如需调整，请设置 `model.generation_config.reasoning_effort`。显式设置的值会原样发送。
+在 Chat Completions 中，只要请求声明了函数工具，推理强度不为 `none` 就会失败，即使模型
+并未调用工具。OpenClaw 默认会声明其宿主工具，因此仅在不发送任何工具声明的运行中使用
+其他推理强度。其他模型名称不会应用此默认值。
+
+此默认值仅适用于由 OpenClaw 自行构建的模型。已预先构建并传入的模型（例如通过
+`WithModelCatalog` 传入）不会经过这一设置，请自行为这些模型设置推理强度。
 
 ### 请求级模型选择
 
@@ -699,7 +714,7 @@ model:
       base_url: "${DEEPSEEK_BASE_URL}"
     strong:
       mode: openai
-      name: gpt-5
+      name: gpt-5.6-sol
       openai_variant: openai
       base_url: "${OPENAI_BASE_URL}"
 ```
@@ -1299,7 +1314,7 @@ OpenClaw 会将加载的技能正文/文档中的 `{baseDir}` 替换为本地技
 cd openclaw
 go run ./cmd/openclaw \
   -mode openai \
-  -model gpt-5 \
+  -model gpt-5.6-sol \
   -skills-extra-dirs "/path/to/openclaw/skills"
 ```
 
@@ -1497,7 +1512,7 @@ OpenClaw 为默认 LLM agent 暴露了一个面向代码 agent 的宿主机 tool
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -model gpt-5 \
+  -model gpt-5.6-sol \
   -config ./openclaw.yaml \
   -enable-openclaw-tools=false
 ```

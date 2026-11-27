@@ -202,7 +202,7 @@ agent:
 
 model:
   mode: "openai"
-  name: "gpt-5"
+  name: "gpt-5.6-sol"
   openai_variant: "auto"
 
 tools:
