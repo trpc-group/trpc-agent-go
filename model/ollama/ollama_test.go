@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1472,4 +1473,107 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 				"callback must not be called more than once")
 		})
 	}
+}
+
+func TestModel_BuildChatRequest_DoesNotMutateModelOptions(t *testing.T) {
+	callerOpts := map[string]any{"seed": 42}
+	m := New("test-model", WithContextWindow(4096), WithOptions(callerOpts))
+
+	// Mutating callerOpts after New must not affect m.options.
+	callerOpts["seed"] = 99
+	assert.Equal(t, map[string]any{"seed": 42}, m.options)
+
+	temp := 0.2
+	topP := 0.9
+	maxTokens := 64
+	req1, err := m.buildChatRequest(&model.Request{
+		Messages: []model.Message{model.NewUserMessage("first")},
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temp,
+			TopP:        &topP,
+			Stop:        []string{"END"},
+			MaxTokens:   &maxTokens,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 42, req1.Options["seed"])
+	assert.Equal(t, temp, req1.Options["temperature"])
+	assert.Equal(t, topP, req1.Options["top_p"])
+	assert.Equal(t, []string{"END"}, req1.Options["stop"])
+	assert.Equal(t, maxTokens, req1.Options["num_predict"])
+
+	// A subsequent request without overrides must not inherit req1's parameters.
+	req2, err := m.buildChatRequest(&model.Request{
+		Messages: []model.Message{model.NewUserMessage("second")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"seed": 42}, req2.Options)
+	assert.Equal(t, map[string]any{"seed": 42}, m.options)
+
+	// Passing nil to WithOptions keeps m.options nil while buildChatRequest initializes Options.
+	mNil := New("test-model", WithContextWindow(4096), WithOptions(nil))
+	assert.Nil(t, mNil.options)
+	reqNil, err := mNil.buildChatRequest(&model.Request{
+		Messages: []model.Message{model.NewUserMessage("third")},
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, reqNil.Options)
+	assert.Empty(t, reqNil.Options)
+}
+
+func TestModel_GenerateContent_ConcurrentWithOptions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model":      "test-model",
+			"created_at": "2024-01-01T00:00:00Z",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "ok",
+			},
+			"done":              true,
+			"prompt_eval_count": 1,
+			"eval_count":        1,
+		})
+	}))
+	defer srv.Close()
+
+	m := New(
+		"test-model",
+		WithHost(srv.URL),
+		WithContextWindow(4096),
+		WithOptions(map[string]any{"seed": 42}),
+	)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			temp := 0.1 + float64(i)*0.05
+			topP := 0.8
+			maxTokens := 32 + i
+			ch, err := m.GenerateContent(context.Background(), &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+				GenerationConfig: model.GenerationConfig{
+					Temperature: &temp,
+					TopP:        &topP,
+					Stop:        []string{fmt.Sprintf("STOP-%d", i)},
+					MaxTokens:   &maxTokens,
+				},
+			})
+			require.NoError(t, err)
+			var responses []*model.Response
+			for resp := range ch {
+				responses = append(responses, resp)
+			}
+			require.Len(t, responses, 1)
+			assert.Nil(t, responses[0].Error)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, map[string]any{"seed": 42}, m.options)
 }
