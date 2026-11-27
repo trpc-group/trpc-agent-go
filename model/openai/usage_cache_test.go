@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 func completionUsageFromJSON(t *testing.T, payload string) openai.CompletionUsage {
@@ -531,52 +532,84 @@ func TestGenerateContentStreamingCustomAccumulatorCacheWriteTokens(t *testing.T)
 	}))
 	defer server.Close()
 
-	var seenCurrents []model.Usage
-	var seenDeltas []model.Usage
-	accumulate := func(current, delta model.Usage) model.Usage {
-		seenCurrents = append(seenCurrents, current)
-		seenDeltas = append(seenDeltas, delta)
-		if delta == (model.Usage{}) {
-			return current
-		}
-		return model.Usage{
-			PromptTokens:     delta.PromptTokens,
-			CompletionTokens: delta.CompletionTokens,
-			TotalTokens:      delta.TotalTokens,
-			PromptTokensDetails: model.PromptTokensDetails{
-				CacheCreationTokens: delta.PromptTokensDetails.CacheCreationTokens,
-			},
+	for _, useIter := range []bool{false, true} {
+		for _, accounting := range []model.PromptCacheAccounting{
+			model.PromptCacheAccountingInclusive,
+			model.PromptCacheAccountingExclusive,
+			model.PromptCacheAccountingUnspecified,
+			"future-mode",
+		} {
+			t.Run(fmt.Sprintf("iter=%v/accounting=%q", useIter, accounting), func(t *testing.T) {
+				promptTokens := 20
+				if accounting == model.PromptCacheAccountingInclusive {
+					promptTokens = 100
+				}
+				var seenCurrents []model.Usage
+				var seenDeltas []model.Usage
+				accumulate := func(current, delta model.Usage) model.Usage {
+					seenCurrents = append(seenCurrents, current)
+					seenDeltas = append(seenDeltas, delta)
+					if delta == (model.Usage{}) {
+						return current
+					}
+					return model.Usage{
+						PromptTokens:     promptTokens,
+						CompletionTokens: delta.CompletionTokens,
+						TotalTokens:      delta.TotalTokens,
+						PromptTokensDetails: model.PromptTokensDetails{
+							CacheCreationTokens: delta.PromptTokensDetails.CacheCreationTokens,
+						},
+						PromptCacheAccounting: accounting,
+					}
+				}
+				m := New("gpt-5", WithBaseURL(server.URL), WithAPIKey("test-key"), WithAccumulateChunkTokenUsage(accumulate))
+				req := &model.Request{
+					Messages:         []model.Message{model.NewUserMessage("hi")},
+					GenerationConfig: model.GenerationConfig{Stream: true},
+				}
+				var final *model.Response
+				collect := func(rsp *model.Response) bool {
+					if rsp.Done {
+						final = rsp
+					} else if rsp.Usage != nil {
+						// Partial usage still describes the provider's original counts.
+						assert.Equal(t, 100, rsp.Usage.PromptTokens)
+						assert.Equal(t, model.PromptCacheAccountingInclusive, rsp.Usage.PromptCacheAccounting)
+					}
+					return true
+				}
+				if useIter {
+					seq, err := m.GenerateContentIter(context.Background(), req)
+					require.NoError(t, err)
+					seq(collect)
+				} else {
+					ch, err := m.GenerateContent(context.Background(), req)
+					require.NoError(t, err)
+					for rsp := range ch {
+						collect(rsp)
+					}
+				}
+				require.NotNil(t, final)
+				require.NotNil(t, final.Usage)
+				assert.Equal(t, promptTokens, final.Usage.PromptTokens)
+				assert.Equal(t, 10, final.Usage.CompletionTokens)
+				assert.Equal(t, 110, final.Usage.TotalTokens)
+				assert.Equal(t, 80, final.Usage.PromptTokensDetails.CacheCreationTokens)
+				assert.Equal(t, accounting, final.Usage.PromptCacheAccounting)
+
+				// Empty chunks arrive as zero model.Usage{}; a tail chunk receives
+				// the previous callback result, including its accounting declaration.
+				require.Len(t, seenDeltas, 3)
+				assert.Equal(t, model.Usage{}, seenCurrents[0])
+				assert.Equal(t, model.Usage{}, seenDeltas[0])
+				assert.Equal(t, model.Usage{}, seenCurrents[1])
+				assert.Equal(t, 80, seenDeltas[1].PromptTokensDetails.CacheCreationTokens)
+				assert.Equal(t, model.Usage{}, seenDeltas[2])
+				assert.Equal(t, promptTokens, seenCurrents[2].PromptTokens)
+				assert.Equal(t, accounting, seenCurrents[2].PromptCacheAccounting)
+			})
 		}
 	}
-
-	m := New("gpt-5", WithBaseURL(server.URL), WithAPIKey("test-key"), WithAccumulateChunkTokenUsage(accumulate))
-	ch, err := m.GenerateContent(context.Background(), &model.Request{
-		Messages:         []model.Message{model.NewUserMessage("hi")},
-		GenerationConfig: model.GenerationConfig{Stream: true},
-	})
-	require.NoError(t, err)
-
-	var final *model.Response
-	for rsp := range ch {
-		if rsp.Done {
-			final = rsp
-		}
-	}
-	require.NotNil(t, final)
-	require.NotNil(t, final.Usage)
-	assert.Equal(t, 100, final.Usage.PromptTokens)
-	assert.Equal(t, 10, final.Usage.CompletionTokens)
-	assert.Equal(t, 110, final.Usage.TotalTokens)
-	assert.Equal(t, 80, final.Usage.PromptTokensDetails.CacheCreationTokens)
-
-	// Empty chunks arrive as zero model.Usage{}.
-	require.Len(t, seenDeltas, 3)
-	assert.Equal(t, model.Usage{}, seenCurrents[0])
-	assert.Equal(t, model.Usage{}, seenDeltas[0])
-	assert.Equal(t, model.Usage{}, seenCurrents[1])
-	assert.Equal(t, 80, seenDeltas[1].PromptTokensDetails.CacheCreationTokens)
-	assert.Equal(t, model.Usage{}, seenDeltas[2])
-	assert.Equal(t, 100, seenCurrents[2].PromptTokens)
 }
 
 func TestShouldSkipEmptyChunkDetailOnlyUsage(t *testing.T) {
@@ -761,6 +794,226 @@ func TestGenerateContentDetailOnlyCacheUsageEndToEnd(t *testing.T) {
 	}
 }
 
+func TestGenerateContentMarksInclusivePromptCacheAccounting(t *testing.T) {
+	const writeOnlyUsageJSON = `{"prompt_tokens":1774,"completion_tokens":5,"total_tokens":1779,` +
+		`"prompt_tokens_details":{"cache_write_tokens":1771}}`
+	const plainUsageJSON = `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}`
+
+	for _, stream := range []bool{false, true} {
+		for _, useIter := range []bool{false, true} {
+			for _, usageJSON := range []string{writeOnlyUsageJSON, plainUsageJSON} {
+				withCache := usageJSON == writeOnlyUsageJSON
+				name := fmt.Sprintf("stream=%v/iter=%v/cache=%v", stream, useIter, withCache)
+				t.Run(name, func(t *testing.T) {
+					recorder := useOpenAIChatTelemetrySpanRecorder(t)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+							http.Error(w, "not found", http.StatusNotFound)
+							return
+						}
+						if !stream {
+							w.Header().Set("Content-Type", "application/json")
+							fmt.Fprintf(w, `{"id":"acct","object":"chat.completion","created":1699200000,"model":"gpt-5",`+
+								`"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":%s}`, usageJSON)
+							return
+						}
+						w.Header().Set("Content-Type", "text/event-stream")
+						for _, chunk := range []string{
+							`data: {"id":"acct","object":"chat.completion.chunk","created":1699200000,"model":"gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}`,
+							`data: {"id":"acct","object":"chat.completion.chunk","created":1699200000,"model":"gpt-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+							`data: {"id":"acct","object":"chat.completion.chunk","created":1699200000,"model":"gpt-5","choices":[],"usage":` + usageJSON + `}`,
+							`data: [DONE]`,
+						} {
+							fmt.Fprintf(w, "%s\n\n", chunk)
+							if f, ok := w.(http.Flusher); ok {
+								f.Flush()
+							}
+						}
+					}))
+					defer server.Close()
+
+					m := New("gpt-5", WithBaseURL(server.URL), WithAPIKey("test-key"), WithChatTelemetry(true))
+					req := &model.Request{
+						Messages:         []model.Message{model.NewUserMessage("hi")},
+						GenerationConfig: model.GenerationConfig{Stream: stream},
+					}
+					var final *model.Response
+					collect := func(rsp *model.Response) bool {
+						if rsp != nil && rsp.Done {
+							final = rsp
+						}
+						return true
+					}
+					if useIter {
+						seq, err := m.GenerateContentIter(context.Background(), req)
+						require.NoError(t, err)
+						seq(collect)
+					} else {
+						ch, err := m.GenerateContent(context.Background(), req)
+						require.NoError(t, err)
+						for rsp := range ch {
+							collect(rsp)
+						}
+					}
+					require.NotNil(t, final)
+					require.NotNil(t, final.Usage)
+
+					spans := recorder.Ended()
+					require.Len(t, spans, 1)
+					attrs := spanAttributes(spans[0].Attributes())
+					accountingAttr, hasAccountingAttr := attrs[semconvtrace.KeyGenAIUsageInputTokensCacheAccounting]
+					if withCache {
+						assert.Equal(t, model.PromptCacheAccountingInclusive, final.Usage.PromptCacheAccounting)
+						assert.Equal(t, int64(1771), attrs[semconvtrace.KeyGenAIUsageInputTokensCacheCreation].AsInt64())
+						require.True(t, hasAccountingAttr)
+						assert.Equal(t, semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive, accountingAttr.AsString())
+						return
+					}
+					assert.Equal(t, model.PromptCacheAccountingUnspecified, final.Usage.PromptCacheAccounting)
+					assert.Equal(t, model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}, model.Usage{
+						PromptTokens:     final.Usage.PromptTokens,
+						CompletionTokens: final.Usage.CompletionTokens,
+						TotalTokens:      final.Usage.TotalTokens,
+					})
+					assert.False(t, hasAccountingAttr)
+				})
+			}
+		}
+	}
+}
+
+func TestGenerateContentResponseCallbackCacheAccounting(t *testing.T) {
+	const usageJSON = `{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110,` +
+		`"prompt_tokens_details":{"cache_write_tokens":80}}`
+	tests := []struct {
+		name       string
+		usageJSON  string
+		mutate     func(*openai.ChatCompletion)
+		accounting model.PromptCacheAccounting
+		nilUsage   bool
+	}{
+		{name: "no callback", accounting: model.PromptCacheAccountingInclusive},
+		{
+			name:       "read-only callback",
+			mutate:     func(*openai.ChatCompletion) {},
+			accounting: model.PromptCacheAccountingInclusive,
+		},
+		{
+			name: "output and metadata changes preserve accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage.CompletionTokens = 11
+				resp.Usage.TotalTokens = 111
+				resp.Usage.CompletionTokensDetails.ReasoningTokens = 2
+				resp.Choices[0].Message.Content = "edited"
+			},
+			accounting: model.PromptCacheAccountingInclusive,
+		},
+		{
+			name: "equivalent cache-write alias preserves accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				fields := resp.Usage.PromptTokensDetails.JSON.ExtraFields
+				delete(fields, extraFieldCacheWriteTokens)
+				fields[extraFieldCacheCreationTokens] = respjson.NewField("80")
+			},
+			accounting: model.PromptCacheAccountingInclusive,
+		},
+		{
+			name: "prompt normalization clears accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage.PromptTokens = 20
+			},
+		},
+		{
+			name: "cached count change clears accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage.PromptTokensDetails.CachedTokens = 10
+			},
+		},
+		{
+			name: "cache read change clears accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage.PromptTokensDetails.JSON.ExtraFields[extraFieldCacheReadTokens] = respjson.NewField("10")
+			},
+		},
+		{
+			name: "in-place cache write change clears accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage.PromptTokensDetails.JSON.ExtraFields[extraFieldCacheWriteTokens] = respjson.NewField("40")
+			},
+		},
+		{
+			name:      "in-place top-level cache write change clears accounting",
+			usageJSON: `{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110,"cache_creation_input_tokens":80}`,
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage.JSON.ExtraFields[extraFieldCacheCreationInputTokens] = respjson.NewField("40")
+			},
+		},
+		{
+			name: "cache removal clears accounting",
+			mutate: func(resp *openai.ChatCompletion) {
+				delete(resp.Usage.PromptTokensDetails.JSON.ExtraFields, extraFieldCacheWriteTokens)
+			},
+		},
+		{
+			name: "cleared usage remains nil",
+			mutate: func(resp *openai.ChatCompletion) {
+				resp.Usage = openai.CompletionUsage{}
+			},
+			nilUsage: true,
+		},
+	}
+	for _, useIter := range []bool{false, true} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("iter=%v/%s", useIter, tt.name), func(t *testing.T) {
+				recorder := useOpenAIChatTelemetrySpanRecorder(t)
+				rawUsage := tt.usageJSON
+				if rawUsage == "" {
+					rawUsage = usageJSON
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{"id":"callback-accounting","object":"chat.completion","model":"gpt-5",`+
+						`"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":%s}`, rawUsage)
+				}))
+				defer server.Close()
+				var callback ChatResponseCallbackFunc
+				if tt.mutate != nil {
+					callback = func(_ context.Context, _ *openai.ChatCompletionNewParams, resp *openai.ChatCompletion) {
+						tt.mutate(resp)
+					}
+				}
+				m := New("gpt-5", WithBaseURL(server.URL), WithAPIKey("test-key"),
+					WithChatResponseCallback(callback), WithChatTelemetry(true))
+				req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
+				var final *model.Response
+				if useIter {
+					seq, err := m.GenerateContentIter(context.Background(), req)
+					require.NoError(t, err)
+					seq(func(resp *model.Response) bool { final = resp; return true })
+				} else {
+					ch, err := m.GenerateContent(context.Background(), req)
+					require.NoError(t, err)
+					for resp := range ch {
+						final = resp
+					}
+				}
+				require.NotNil(t, final)
+				require.Nil(t, final.Error)
+				if tt.nilUsage {
+					require.Nil(t, final.Usage)
+				} else {
+					require.NotNil(t, final.Usage)
+					assert.Equal(t, tt.accounting, final.Usage.PromptCacheAccounting)
+				}
+				spans := recorder.Ended()
+				require.Len(t, spans, 1)
+				attrs := spanAttributes(spans[0].Attributes())
+				assert.Equal(t, string(tt.accounting), attrs[semconvtrace.KeyGenAIUsageInputTokensCacheAccounting].AsString())
+			})
+		}
+	}
+}
+
 func TestGenerateContentStreamingUsageAfterFinishReason(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -831,7 +1084,11 @@ func TestGenerateContentStreamingUsageAfterFinishReason(t *testing.T) {
 					require.NotNil(t, final.Choices[0].FinishReason)
 					assert.Equal(t, reason, *final.Choices[0].FinishReason)
 					require.NotNil(t, final.Usage)
-					assert.Equal(t, tt.want, *final.Usage)
+					want := tt.want
+					if want.PromptTokensDetails != (model.PromptTokensDetails{}) {
+						want.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+					}
+					assert.Equal(t, want, *final.Usage)
 					require.NoError(t, callbackErr)
 					require.NotNil(t, callbackAcc)
 					require.Len(t, callbackAcc.Choices, 1)

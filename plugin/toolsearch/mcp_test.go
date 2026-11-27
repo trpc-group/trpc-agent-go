@@ -612,20 +612,6 @@ func TestMaterializeAllMCP_MixedBoxes(t *testing.T) {
 	assert.Greater(t, atomic.LoadInt32(&ts2.calls), int32(0))
 }
 
-func TestParseToolName_MCPAndCamelCase(t *testing.T) {
-	cases := map[string][]string{
-		"":                       {},
-		"simple":                 {"simple"},
-		"CamelCase":              {"camel", "case"},
-		"snake_case":             {"snake", "case"},
-		"mcp__server__action":    {"mcp", "server", "action"},
-		"mcp__my_server__do_sth": {"mcp", "my", "server", "do", "sth"},
-	}
-	for name, want := range cases {
-		assert.Equal(t, want, parseToolName(name).Parts, name)
-	}
-}
-
 // TestMCPToolbox_LoadedToolPrunedMidTurnIsBlocked verifies stale MCP names
 // are blocked even if a stale wrapper was injected earlier in the turn.
 func TestMCPToolbox_LoadedToolPrunedMidTurnIsBlocked(t *testing.T) {

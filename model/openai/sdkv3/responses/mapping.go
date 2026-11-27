@@ -997,7 +997,7 @@ func mapUsage(resp *responses.Response) *model.Usage {
 		u.OutputTokensDetails.ReasoningTokens == 0 {
 		return nil
 	}
-	return &model.Usage{
+	usage := &model.Usage{
 		PromptTokens:     int(u.InputTokens),
 		CompletionTokens: int(u.OutputTokens),
 		TotalTokens:      int(u.TotalTokens),
@@ -1010,6 +1010,11 @@ func mapUsage(resp *responses.Response) *model.Usage {
 			ReasoningTokens: int(u.OutputTokensDetails.ReasoningTokens),
 		},
 	}
+	// Responses API input_tokens include cached and cache-write tokens.
+	if usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+		usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+	}
+	return usage
 }
 
 func responseUsageCacheTokens(u responses.ResponseUsage) (cacheRead, cacheCreation int) {

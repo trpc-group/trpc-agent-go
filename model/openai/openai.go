@@ -729,6 +729,17 @@ func (m *Model) GenerateContent(
 	return responseChan, nil
 }
 
+// markInclusivePromptCacheAccounting declares that Chat Completions
+// prompt_tokens include cached and cache-write tokens on a provider response.
+func markInclusivePromptCacheAccounting(resp *model.Response) {
+	if resp != nil && resp.Usage != nil {
+		resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingUnspecified
+		if resp.Usage.PromptTokensDetails != (model.PromptTokensDetails{}) {
+			resp.Usage.PromptCacheAccounting = model.PromptCacheAccountingInclusive
+		}
+	}
+}
+
 // GenerateContentIter implements the model.IterModel interface.
 func (m *Model) GenerateContentIter(
 	ctx context.Context,
@@ -1861,7 +1872,9 @@ func (m *Model) handleStreamingResponseWithEmitter(
 
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 
-		if !emit(m.createPartialResponse(chunk)) {
+		response := m.createPartialResponse(chunk)
+		markInclusivePromptCacheAccounting(response)
+		if !emit(response) {
 			if err := ctx.Err(); err != nil {
 				m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, err)
 			}
@@ -1872,7 +1885,17 @@ func (m *Model) handleStreamingResponseWithEmitter(
 	// Call the stream complete callback before the final response is emitted.
 	m.handleStreamCompleteCallback(ctx, chatRequest, acc.acc, stream.Err())
 
-	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
+	finalEmit := func(resp *model.Response) bool {
+		if resp != nil && resp.Usage != nil && m.accumulateChunkUsage != nil {
+			// A custom accumulator owns the final counts and their accounting,
+			// including an empty or unrecognized declaration.
+			resp.Usage.PromptCacheAccounting = acc.promptCacheAccounting
+		} else {
+			markInclusivePromptCacheAccounting(resp)
+		}
+		return emit(resp)
+	}
+	m.emitStreamingFinalResponse(ctx, stream, acc.acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), finalEmit)
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -2243,7 +2266,9 @@ func (m *Model) accumulateChunk(
 		if m.accumulateChunkUsage != nil {
 			accUsage, chunkUsage := completionUsageToModelUsage(acc.acc.Usage), completionUsageToModelUsage(chunk.Usage)
 			usage := inverseOpenAISDKAddChunkUsage(accUsage, chunkUsage)
+			usage.PromptCacheAccounting = acc.promptCacheAccounting
 			usage = m.accumulateChunkUsage(usage, chunkUsage)
+			acc.promptCacheAccounting = usage.PromptCacheAccounting
 			acc.acc.Usage = modelUsageToCompletionUsage(usage)
 		}
 	}
@@ -2906,8 +2931,18 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		return
 	}
 	// Call response callback on successful completion.
+	// Snapshot effective counts by value: SDK extra-field maps can be mutated
+	// in place, and a callback that changes prompt/cache counts may also change
+	// their accounting convention.
+	usageBeforeCallback := completionUsageToModelUsage(chatCompletion.Usage)
 	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
-	emit(m.createResponseFromCompletion(chatCompletion))
+	response := m.createResponseFromCompletion(chatCompletion)
+	if response.Usage != nil &&
+		response.Usage.PromptTokens == usageBeforeCallback.PromptTokens &&
+		response.Usage.PromptTokensDetails == usageBeforeCallback.PromptTokensDetails {
+		markInclusivePromptCacheAccounting(response)
+	}
+	emit(response)
 }
 
 // createResponseFromCompletion converts a provider response into a model.Response.

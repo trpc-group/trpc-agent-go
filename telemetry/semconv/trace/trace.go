@@ -98,9 +98,17 @@ const (
 	// KeyGenAIUsageInputTokensCacheRead is the attribute key for tokens read from cache (Anthropic).
 	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
 	KeyGenAIUsageInputTokensCacheRead = "gen_ai.usage.input_tokens.cache_read" // #nosec G101 - this is a metric key name, not a credential.
-	// KeyGenAIUsageInputTokensCacheCreation is the attribute key for tokens used to create cache (Anthropic).
+	// KeyGenAIUsageInputTokensCacheCreation is the attribute key for tokens written to prompt cache.
 	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
 	KeyGenAIUsageInputTokensCacheCreation = "gen_ai.usage.input_tokens.cache_creation" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageInputTokensCacheAccounting describes whether input_tokens includes
+	// ("inclusive") or excludes ("exclusive") prompt cache read/creation counts.
+	// Note: This is an extension field; it is not part of the upstream GenAI semantic conventions yet.
+	KeyGenAIUsageInputTokensCacheAccounting = "gen_ai.usage.input_tokens.cache_accounting" // #nosec G101 - this is a metric key name, not a credential.
+	// ValueGenAIUsageInputTokensCacheAccountingInclusive indicates input_tokens includes prompt cache read/creation counts.
+	ValueGenAIUsageInputTokensCacheAccountingInclusive = "inclusive" // #nosec G101 - this is an attribute value, not a credential.
+	// ValueGenAIUsageInputTokensCacheAccountingExclusive indicates input_tokens excludes prompt cache read/creation counts.
+	ValueGenAIUsageInputTokensCacheAccountingExclusive = "exclusive" // #nosec G101 - this is an attribute value, not a credential.
 	// KeyGenAIProviderName is the attribute key for provider name.
 	KeyGenAIProviderName = "gen_ai.provider.name"
 	// KeyGenAIAgentDescription is the attribute key for agent description.

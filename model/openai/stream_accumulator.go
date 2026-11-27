@@ -14,12 +14,17 @@ import (
 
 	openaigo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/respjson"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // chatStreamAccumulator keeps the SDK accumulator's structural behavior while
 // avoiding its quadratic string concatenation for streamed text fields.
 type chatStreamAccumulator struct {
 	acc openaigo.ChatCompletionAccumulator
+
+	// The SDK usage type cannot retain a custom accumulator's accounting mode.
+	promptCacheAccounting model.PromptCacheAccounting
 
 	choices []*chatStreamChoiceAccumulator
 

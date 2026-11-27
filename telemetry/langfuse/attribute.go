@@ -9,7 +9,11 @@
 
 package langfuse
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+)
 
 // Langfuse-Trace attributes
 const (
@@ -74,19 +78,41 @@ func (u *usageDetails) empty() bool {
 
 // normalized returns mutually exclusive usage buckets as required by Langfuse.
 //
-// OpenAI-compatible and Gemini providers report cached tokens as a subset of
-// input tokens. Anthropic and Bedrock report cache reads and cache creation as
-// separate buckets, and their adapters also populate InputCached as a cache-read
-// compatibility alias.
-func (u usageDetails) normalized() usageDetails {
+// When cache_accounting is explicitly provided on the span:
+//   - "inclusive" (OpenAI Chat Completions, OpenAI Responses API, Gemini):
+//     Input includes cache read and cache write tokens, so both are deducted from
+//     Input (including write-only turns where InputCached == 0).
+//   - "exclusive" (Anthropic, Bedrock): Input already represents uncached input
+//     tokens and is left untouched. InputCached is dropped only when
+//     InputCacheRead supplies the same bucket; cache creation is independent.
+//
+// When cache_accounting is absent or unknown, it preserves the legacy cache
+// bucket heuristic for backward compatibility.
+func (u usageDetails) normalized(accounting string) usageDetails {
+	switch accounting {
+	case semconvtrace.ValueGenAIUsageInputTokensCacheAccountingInclusive:
+		if u.InputCacheRead != 0 {
+			u.InputCached = 0
+			u.Input = max(u.Input-u.InputCacheRead-u.InputCacheCreation, 0)
+			return u
+		}
+		u.Input = max(u.Input-u.InputCached-u.InputCacheCreation, 0)
+		return u
+
+	case semconvtrace.ValueGenAIUsageInputTokensCacheAccountingExclusive:
+		if u.InputCacheRead != 0 {
+			u.InputCached = 0
+		}
+		return u
+	}
+
+	// Preserve the legacy heuristic when cache_accounting is absent or unknown.
 	if u.InputCacheRead != 0 || u.InputCacheCreation != 0 {
 		// Prefer provider-specific buckets and drop the duplicate compatibility alias.
 		u.InputCached = 0
 		return u
 	}
-
-	// Langfuse flat usage details must not overlap. Keep cached input in its own
-	// bucket and convert the inclusive provider input count to the uncached remainder.
+	// Without provider-specific buckets, cached input is a subset of input.
 	u.Input = max(u.Input-u.InputCached, 0)
 	return u
 }

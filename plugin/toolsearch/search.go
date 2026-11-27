@@ -12,227 +12,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsearch/lexical"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// toolMetadata holds pre-computed, lowercase-normalized search fields for a tool.
+// toolMetadata caches the reusable ranking document and the original description
+// surfaced in search results.
 type toolMetadata struct {
-	Parts       []string // name parts split by CamelCase and underscores
-	Full        string   // parts joined by spaces (fallback matching)
-	Description string   // original tool description (surfaced in search results)
-	descLower   string   // lowercase description
-	nameLower   string   // lowercase name
-}
-
-// parsedName holds the result of parsing a tool name into searchable parts.
-type parsedName struct {
-	Parts []string // lowercase name parts
-	Full  string   // full name joined by spaces (lowercase)
-}
-
-// parseToolName parses a tool name into searchable parts. It handles both MCP
-// tools (mcp__server__action) and regular tools (CamelCase + underscores).
-func parseToolName(name string) parsedName {
-	if name == "" {
-		return parsedName{Parts: []string{}, Full: ""}
-	}
-
-	// Split by CamelCase and underscores: insert a space before an uppercase
-	// letter that follows a lowercase letter, then replace underscores.
-	var sb strings.Builder
-	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			prev := rune(name[i-1])
-			if prev >= 'a' && prev <= 'z' {
-				sb.WriteRune(' ')
-			}
-		}
-		sb.WriteRune(r)
-	}
-	expanded := strings.ToLower(strings.ReplaceAll(sb.String(), "_", " "))
-
-	parts := make([]string, 0)
-	for _, p := range strings.Fields(expanded) {
-		if p != "" {
-			parts = append(parts, p)
-		}
-	}
-	return parsedName{Parts: parts, Full: strings.Join(parts, " ")}
-}
-
-// tokenizeQueryPattern treats every character that is NOT a Unicode letter or
-// digit, underscore, hyphen, or plus as a separator. This naturally handles
-// spaces, commas (English and Chinese), semicolons, pipes, and other
-// punctuation.
-var tokenizeQueryPattern = regexp.MustCompile(`[^\p{L}\p{N}_\-+]+`)
-
-// tokenizeQuery splits a query into lowercase terms.
-func tokenizeQuery(query string) []string {
-	parts := tokenizeQueryPattern.Split(strings.ToLower(query), -1)
-	result := parts[:0]
-	for _, p := range parts {
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// parseQueryTerms splits tokens into required terms (with a "+" prefix) and
-// optional terms.
-func parseQueryTerms(terms []string) (required, optional []string) {
-	for _, term := range terms {
-		if strings.HasPrefix(term, "+") && len(term) > 1 {
-			required = append(required, term[1:])
-		} else {
-			optional = append(optional, term)
-		}
-	}
-	return
-}
-
-// splitRequiredTerm splits a required term into atomic sub-terms on `_`/`-`.
-func splitRequiredTerm(termLower string) []string {
-	if !strings.ContainsAny(termLower, "_-") {
-		return []string{termLower}
-	}
-	parts := strings.FieldsFunc(termLower, func(r rune) bool {
-		return r == '_' || r == '-'
-	})
-	if len(parts) == 0 {
-		return []string{termLower}
-	}
-	return parts
-}
-
-// buildScoringTerms merges required and optional terms into the scoring list.
-// Required terms are split on `_`/`-` so they can match at the parts level.
-func buildScoringTerms(required, optional []string) []string {
-	if len(required) == 0 {
-		return optional
-	}
-	terms := make([]string, 0, len(required)+len(optional))
-	for _, t := range required {
-		terms = append(terms, splitRequiredTerm(strings.ToLower(t))...)
-	}
-	return append(terms, optional...)
-}
-
-// compileTermPatterns pre-compiles `\b` word-boundary regexes for search terms.
-// Non-ASCII terms (e.g. CJK) are mapped to nil → matchTermInText falls back to
-// strings.Contains since Go's `\b` only fires at ASCII word boundaries.
-func compileTermPatterns(terms []string) map[string]*regexp.Regexp {
-	patterns := make(map[string]*regexp.Regexp, len(terms))
-	for _, term := range terms {
-		termLower := strings.ToLower(term)
-		if _, exists := patterns[termLower]; exists {
-			continue
-		}
-		if !isASCII(termLower) {
-			patterns[termLower] = nil
-			continue
-		}
-		pattern, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(termLower) + `\b`)
-		if err != nil {
-			patterns[termLower] = nil
-			continue
-		}
-		patterns[termLower] = pattern
-	}
-	return patterns
-}
-
-// isASCII reports whether s contains only ASCII bytes (used to decide `\b` vs substring matching).
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return false
-		}
-	}
-	return s != ""
-}
-
-// matchTermInText matches a term against text using a word-boundary regex,
-// falling back to a substring check for non-ASCII terms.
-func matchTermInText(termLower, textLower string, patterns map[string]*regexp.Regexp) bool {
-	if pattern, ok := patterns[termLower]; ok && pattern != nil {
-		return pattern.MatchString(textLower)
-	}
-	return strings.Contains(textLower, termLower)
-}
-
-// matchesAllRequired reports whether a tool satisfies every required term.
-// Terms containing `_`/`-` are split into sub-terms; each must match a name
-// part or appear in the description.
-func matchesAllRequired(meta *toolMetadata, requiredTerms []string, patterns map[string]*regexp.Regexp) bool {
-	for _, term := range requiredTerms {
-		for _, sub := range splitRequiredTerm(strings.ToLower(term)) {
-			if !nameOrDescHasTerm(meta, sub, patterns) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// nameOrDescHasTerm checks whether a single atomic term appears in the tool's
-// name parts (exact match) or description (word-boundary / substring).
-func nameOrDescHasTerm(meta *toolMetadata, termLower string, patterns map[string]*regexp.Regexp) bool {
-	for _, part := range meta.Parts {
-		if part == termLower {
-			return true
-		}
-	}
-	return matchTermInText(termLower, meta.descLower, patterns)
-}
-
-// scoreToolForQuery computes a tool's relevance score for a set of query terms.
-//
-// Scoring (accumulated per term):
-//   - compound term (contains `_`/`-`) substring-matches the tool name:  +10
-//   - tool name part exact match:                                        +10
-//   - description word-boundary match:                                    +3
-//   - full-name substring match (fallback, only when total is still 0):   +3
-func scoreToolForQuery(meta *toolMetadata, terms []string, patterns map[string]*regexp.Regexp) int {
-	totalScore := 0
-	toolName := meta.nameLower
-	for _, term := range terms {
-		termLower := strings.ToLower(term)
-		termScore := 0
-
-		if strings.ContainsAny(termLower, "_-") && strings.Contains(toolName, termLower) {
-			termScore += 10
-		}
-
-		for _, part := range meta.Parts {
-			if part == termLower {
-				termScore += 10
-				break
-			}
-		}
-
-		if meta.descLower != "" && matchTermInText(termLower, meta.descLower, patterns) {
-			termScore += 3
-		}
-
-		totalScore += termScore
-	}
-
-	// Full-name fallback fires only when no term scored above.
-	if totalScore == 0 {
-		for _, term := range terms {
-			if matchTermInText(strings.ToLower(term), meta.Full, patterns) {
-				totalScore += 3
-			}
-		}
-	}
-	return totalScore
+	Description string
+	document    lexical.Document
 }
 
 // searchRequest is the normalized, pre-parsed view of toolSearchInput used by
@@ -360,8 +153,7 @@ func (p *Plugin) resolveSelection(
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	// tool_names is name-anchored, so namespace validation is skipped. An empty
-	// namespace falls through to the global keyword path in candidateSetWithBias.
+	// tool_names is name-anchored, so namespace validation is skipped.
 	if !req.isSelect() {
 		if errPayload := p.validateNamespace(req.namespace); errPayload != "" {
 			return nil, nil, errPayload
@@ -442,207 +234,182 @@ func splitByCap(names []string, maxResults int) (selected, overflow []string) {
 	return names, nil
 }
 
-// searchToolsByQueries scores each query independently within the candidate
-// set, merges by best score per tool, sorts by (score desc, parts asc, name
-// asc), then splits at maxResults: top entries load with schemas, the rest are
-// returned as name-only additional_candidates.
-//
-// A non-empty namespace scopes scoring to that toolbox. An empty namespace
-// searches every deferred tool and adds a per-tool namespace bias so a
-// generic-verb tool in the wrong domain does not out-rank the right-domain
-// tool at the same raw score. Denied tools are dropped from the candidate set
-// before scoring so they never consume max_results slots. The caller must hold
-// p.mu (read).
+// searchToolsByQueries ranks scoped, permitted tools by their best query
+// score, optional namespace bonus, name-part count, and name. The caller must
+// hold p.mu (read).
 func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxResults int, allAllowed map[string]bool) (selected, overflow []string) {
-	candidatesSet, namespaceBias := p.candidateSetWithBias(namespace, queries)
-	if candidatesSet == nil {
-		return nil, nil
-	}
-
-	// Drop permission-denied tools so they never consume max_results slots ahead of allowed tools.
-	if allAllowed != nil {
-		filtered := make(map[string]struct{}, len(candidatesSet))
-		for name := range candidatesSet {
-			if allAllowed[name] {
-				filtered[name] = struct{}{}
-			}
+	candidates := p.deferredNames
+	if namespace != "" {
+		box := p.toolboxByName[namespace]
+		if box == nil {
+			return nil, nil
 		}
-		candidatesSet = filtered
+		candidates = box.toolNames
 	}
-	if len(candidatesSet) == 0 {
+	if len(queries) == 0 || len(candidates) == 0 {
 		return nil, nil
 	}
 
-	best := make(map[string]int, len(candidatesSet))
-	for _, q := range queries {
-		p.scoreQueryInto(candidatesSet, q, best)
-	}
-	if len(best) == 0 {
-		return nil, nil
+	exactNames, prepared, exactName := p.prepareKeywordQueries(candidates, queries, allAllowed)
+	if exactName != "" {
+		return []string{exactName}, nil
 	}
 
-	// Apply per-tool namespace bias so ties are broken by owning-toolbox match.
-	if len(namespaceBias) > 0 {
-		for name, raw := range best {
-			if ns, ok := p.namespaceByTool[name]; ok {
-				if bonus := namespaceBias[ns]; bonus > 0 {
-					best[name] = raw + bonus
+	// Tools with the same score and part count share a rank. This keeps
+	// allocation proportional to actual hits and avoids repeating those two
+	// values for every tool in a dense result.
+	type rank struct{ score, parts int }
+	groups := make(map[rank][]string)
+	var ranks []rank
+	total := 0
+	applyBias := namespace == "" && !p.isDefaultOnly()
+	var namespaceTerms []lexical.Term
+	namespaceScores := make(map[string]int)
+	addHit := func(name string, doc *lexical.Document, score int) {
+		if applyBias {
+			ns := p.namespaceByTool[name]
+			if ns != defaultNamespace {
+				bias, scored := namespaceScores[ns]
+				if !scored {
+					bias = p.scoreNamespace(ns, queries, &namespaceTerms)
+					namespaceScores[ns] = bias
 				}
+				score += bias
 			}
 		}
+		key := rank{score: score, parts: doc.NamePartCount()}
+		if len(groups[key]) == 0 {
+			ranks = append(ranks, key)
+		}
+		groups[key] = append(groups[key], name)
+		total++
 	}
 
-	type candidate struct {
-		name     string
-		score    int
-		partsLen int
+	p.visitKeywordHits(candidates, exactNames, prepared, allAllowed, addHit)
+	if len(ranks) == 0 {
+		return nil, nil
 	}
-	candidates := make([]candidate, 0, len(best))
-	for name, score := range best {
-		partsLen := 0
-		if meta := p.metaByName[name]; meta != nil {
-			partsLen = len(meta.Parts)
-		}
-		candidates = append(candidates, candidate{name: name, score: score, partsLen: partsLen})
+	if len(ranks) == 1 {
+		names := groups[ranks[0]]
+		sort.Strings(names)
+		return splitByCap(names, maxResults)
 	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		if a.score != b.score {
-			return a.score > b.score
+	sort.Slice(ranks, func(i, j int) bool {
+		if ranks[i].score != ranks[j].score {
+			return ranks[i].score > ranks[j].score
 		}
-		if a.partsLen != b.partsLen {
-			return a.partsLen < b.partsLen
-		}
-		return a.name < b.name
+		return ranks[i].parts < ranks[j].parts
 	})
-
-	ranked := make([]string, len(candidates))
-	for i := range ranked {
-		ranked[i] = candidates[i].name
+	ranked := make([]string, 0, total)
+	for _, key := range ranks {
+		names := groups[key]
+		sort.Strings(names)
+		ranked = append(ranked, names...)
 	}
 	return splitByCap(ranked, maxResults)
 }
 
-// namespaceBiasFloor is the minimum toolbox description-match score required
-// before it contributes as a per-tool tiebreaker on a namespace-less search.
-const namespaceBiasFloor = 1
-
-// candidateSetWithBias resolves the candidate tool set for a keyword search
-// and, when namespace is empty, also returns a per-namespace bias derived from
-// the queries. With a namespace, only that toolbox's tools are candidates;
-// without one, every deferred tool participates and the bias tiebreaks tools
-// whose owning toolbox description matches the queries. Preset tools are
-// excluded from both branches; load them via exact tool_names.
-func (p *Plugin) candidateSetWithBias(
-	namespace string,
+// prepareKeywordQueries separates exact names from queries that need lexical
+// scoring. A single permitted exact match can bypass the catalog scan.
+func (p *Plugin) prepareKeywordQueries(
+	candidates map[string]struct{},
 	queries []string,
-) (map[string]struct{}, map[string]int) {
-	if namespace != "" {
-		if box, ok := p.toolboxByName[namespace]; ok {
-			return box.toolNames, nil
+	allAllowed map[string]bool,
+) (exactNames map[string]struct{}, prepared []lexical.Query, exactName string) {
+	for _, raw := range queries {
+		query := strings.TrimSpace(raw)
+		if query == "" {
+			continue
 		}
-		return nil, nil
-	}
-	// No namespace: search the entire deferred catalog (the empty-namespace
-	// contract: "look everywhere").
-	return p.deferredNames, p.scoreNamespacesByQueries(queries)
-}
-
-// scoreNamespacesByQueries assigns each non-default toolbox a score equal to
-// the number of distinct query terms matching its description (word-boundary
-// for ASCII, substring for CJK). Toolboxes below namespaceBiasFloor are
-// dropped. The caller must hold p.mu (read).
-func (p *Plugin) scoreNamespacesByQueries(queries []string) map[string]int {
-	if len(queries) == 0 || len(p.toolboxes) == 0 {
-		return nil
-	}
-
-	// Tokenize once and compile word-boundary patterns. "+term" prefixes are
-	// treated like other terms here — they gate per-tool scoring elsewhere,
-	// and counting them again strengthens bias toward the chosen domain.
-	termSet := make(map[string]struct{})
-	for _, q := range queries {
-		for _, tok := range tokenizeQuery(q) {
-			if strings.HasPrefix(tok, "+") && len(tok) > 1 {
-				tok = tok[1:]
-			}
-			if tok == "" {
+		if name, ok := p.nameByLower[strings.ToLower(query)]; ok {
+			if _, inScope := candidates[name]; inScope && (allAllowed == nil || allAllowed[name]) {
+				// One exact name needs neither a catalog walk nor tie-breaking.
+				if len(queries) == 1 {
+					return nil, nil, name
+				}
+				if exactNames == nil {
+					exactNames = make(map[string]struct{})
+				}
+				exactNames[name] = struct{}{}
 				continue
 			}
-			termSet[tok] = struct{}{}
+		}
+		// A canonical name that is denied or outside the namespace does not
+		// shadow ordinary keyword matches.
+		if query, ok := lexical.ParseQuery(query); ok {
+			prepared = append(prepared, query)
 		}
 	}
-	if len(termSet) == 0 {
-		return nil
-	}
-	terms := make([]string, 0, len(termSet))
-	for t := range termSet {
-		terms = append(terms, t)
-	}
-	patterns := compileTermPatterns(terms)
-
-	scores := make(map[string]int, len(p.toolboxes))
-	for _, box := range p.toolboxes {
-		if box.name == defaultNamespace || box.description == "" {
-			continue
-		}
-		descLower := strings.ToLower(box.description)
-		hits := 0
-		for _, term := range terms {
-			if matchTermInText(term, descLower, patterns) {
-				hits++
-			}
-		}
-		if hits >= namespaceBiasFloor {
-			scores[box.name] = hits
-		}
-	}
-	return scores
+	return exactNames, prepared, ""
 }
 
-// scoreQueryInto scores a single query within the candidate set and merges each
-// hit into best by max score: exact-name fast path → tokenize → required-term
-// gating → scoring.
-func (p *Plugin) scoreQueryInto(candidatesSet map[string]struct{}, query string, best map[string]int) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return
-	}
-
-	// Fast path: the whole query exactly matches a tool name (case-insensitive).
-	if canonical, ok := p.nameByLower[strings.ToLower(query)]; ok {
-		if _, inScope := candidatesSet[canonical]; inScope {
-			if cur, ok := best[canonical]; !ok || exactNameScore > cur {
-				best[canonical] = exactNameScore
+// visitKeywordHits emits each permitted match with its highest query score.
+func (p *Plugin) visitKeywordHits(
+	candidates, exactNames map[string]struct{},
+	prepared []lexical.Query,
+	allAllowed map[string]bool,
+	addHit func(string, *lexical.Document, int),
+) {
+	if len(prepared) == 0 {
+		for name := range exactNames {
+			addHit(name, &p.metaByName[name].document, exactNameScore)
+		}
+	} else {
+		for name := range candidates {
+			if allAllowed != nil && !allAllowed[name] {
+				continue
 			}
-			return
-		}
-	}
-
-	tokens := tokenizeQuery(query)
-	if len(tokens) == 0 {
-		return
-	}
-
-	requiredTerms, optionalTerms := parseQueryTerms(tokens)
-	scoringTerms := buildScoringTerms(requiredTerms, optionalTerms)
-	patterns := compileTermPatterns(scoringTerms)
-
-	for name := range candidatesSet {
-		meta := p.metaByName[name]
-		if meta == nil {
-			continue
-		}
-		if len(requiredTerms) > 0 && !matchesAllRequired(meta, requiredTerms, patterns) {
-			continue
-		}
-		if score := scoreToolForQuery(meta, scoringTerms, patterns); score > 0 {
-			if cur, ok := best[name]; !ok || score > cur {
-				best[name] = score
+			meta := p.metaByName[name]
+			if meta == nil {
+				continue
+			}
+			best := 0
+			if _, exact := exactNames[name]; exact {
+				best = exactNameScore
+			}
+			for i := range prepared {
+				if score := prepared[i].Score(&meta.document); score > best {
+					best = score
+				}
+			}
+			if best > 0 {
+				addHit(name, &meta.document, best)
 			}
 		}
 	}
+}
+
+// scoreNamespace counts distinct query terms matching a toolbox description.
+func (p *Plugin) scoreNamespace(namespace string, queries []string, terms *[]lexical.Term) int {
+	box := p.toolboxByName[namespace]
+	if box == nil || box.description == "" {
+		return 0
+	}
+	// Build the namespace terms only when an actual hit has a description
+	// to match. Required compound tokens stay intact for the namespace bonus.
+	if *terms == nil {
+		seen := make(map[string]struct{})
+		*terms = make([]lexical.Term, 0)
+		for _, query := range queries {
+			for _, token := range lexical.Tokenize(query) {
+				if strings.HasPrefix(token, "+") && len(token) > 1 {
+					token = token[1:]
+				}
+				if _, ok := seen[token]; !ok {
+					seen[token] = struct{}{}
+					*terms = append(*terms, lexical.CompileTerm(token))
+				}
+			}
+		}
+	}
+	description := strings.ToLower(box.description)
+	score := 0
+	for _, term := range *terms {
+		if term.Matches(description) {
+			score++
+		}
+	}
+	return score
 }
 
 // catalogEntry is one namespace summary in error payloads.
