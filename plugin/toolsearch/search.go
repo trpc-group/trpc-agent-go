@@ -250,31 +250,9 @@ func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxRes
 		return nil, nil
 	}
 
-	var exactNames map[string]struct{}
-	var prepared []lexical.Query
-	for _, raw := range queries {
-		query := strings.TrimSpace(raw)
-		if query == "" {
-			continue
-		}
-		if name, ok := p.nameByLower[strings.ToLower(query)]; ok {
-			if _, inScope := candidates[name]; inScope && (allAllowed == nil || allAllowed[name]) {
-				// One exact name needs neither a catalog walk nor tie-breaking.
-				if len(queries) == 1 {
-					return []string{name}, nil
-				}
-				if exactNames == nil {
-					exactNames = make(map[string]struct{})
-				}
-				exactNames[name] = struct{}{}
-				continue
-			}
-		}
-		// A canonical name that is denied or outside the namespace does not
-		// shadow ordinary keyword matches.
-		if query, ok := lexical.ParseQuery(query); ok {
-			prepared = append(prepared, query)
-		}
+	exactNames, prepared, exactName := p.prepareKeywordQueries(candidates, queries, allAllowed)
+	if exactName != "" {
+		return []string{exactName}, nil
 	}
 
 	// Tools with the same score and part count share a rank. This keeps
@@ -307,6 +285,71 @@ func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxRes
 		total++
 	}
 
+	p.visitKeywordHits(candidates, exactNames, prepared, allAllowed, addHit)
+	if len(ranks) == 0 {
+		return nil, nil
+	}
+	if len(ranks) == 1 {
+		names := groups[ranks[0]]
+		sort.Strings(names)
+		return splitByCap(names, maxResults)
+	}
+	sort.Slice(ranks, func(i, j int) bool {
+		if ranks[i].score != ranks[j].score {
+			return ranks[i].score > ranks[j].score
+		}
+		return ranks[i].parts < ranks[j].parts
+	})
+	ranked := make([]string, 0, total)
+	for _, key := range ranks {
+		names := groups[key]
+		sort.Strings(names)
+		ranked = append(ranked, names...)
+	}
+	return splitByCap(ranked, maxResults)
+}
+
+// prepareKeywordQueries separates exact names from queries that need lexical
+// scoring. A single permitted exact match can bypass the catalog scan.
+func (p *Plugin) prepareKeywordQueries(
+	candidates map[string]struct{},
+	queries []string,
+	allAllowed map[string]bool,
+) (exactNames map[string]struct{}, prepared []lexical.Query, exactName string) {
+	for _, raw := range queries {
+		query := strings.TrimSpace(raw)
+		if query == "" {
+			continue
+		}
+		if name, ok := p.nameByLower[strings.ToLower(query)]; ok {
+			if _, inScope := candidates[name]; inScope && (allAllowed == nil || allAllowed[name]) {
+				// One exact name needs neither a catalog walk nor tie-breaking.
+				if len(queries) == 1 {
+					return nil, nil, name
+				}
+				if exactNames == nil {
+					exactNames = make(map[string]struct{})
+				}
+				exactNames[name] = struct{}{}
+				continue
+			}
+		}
+		// A canonical name that is denied or outside the namespace does not
+		// shadow ordinary keyword matches.
+		if query, ok := lexical.ParseQuery(query); ok {
+			prepared = append(prepared, query)
+		}
+	}
+	return exactNames, prepared, ""
+}
+
+// visitKeywordHits emits each permitted match with its highest query score.
+func (p *Plugin) visitKeywordHits(
+	candidates, exactNames map[string]struct{},
+	prepared []lexical.Query,
+	allAllowed map[string]bool,
+	addHit func(string, *lexical.Document, int),
+) {
 	if len(prepared) == 0 {
 		for name := range exactNames {
 			addHit(name, &p.metaByName[name].document, exactNameScore)
@@ -334,27 +377,6 @@ func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxRes
 			}
 		}
 	}
-	if len(ranks) == 0 {
-		return nil, nil
-	}
-	if len(ranks) == 1 {
-		names := groups[ranks[0]]
-		sort.Strings(names)
-		return splitByCap(names, maxResults)
-	}
-	sort.Slice(ranks, func(i, j int) bool {
-		if ranks[i].score != ranks[j].score {
-			return ranks[i].score > ranks[j].score
-		}
-		return ranks[i].parts < ranks[j].parts
-	})
-	ranked := make([]string, 0, total)
-	for _, key := range ranks {
-		names := groups[key]
-		sort.Strings(names)
-		ranked = append(ranked, names...)
-	}
-	return splitByCap(ranked, maxResults)
 }
 
 // scoreNamespace counts distinct query terms matching a toolbox description.
