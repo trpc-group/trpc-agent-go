@@ -1,0 +1,42 @@
+{
+  "evalSetId": "prompt-regression-validation-overfit",
+  "name": "Validation-only conflicts used to prove overfit rejection",
+  "evalCases": [
+    {
+      "evalId": "overfit_direct_answer",
+      "critical": true,
+      "category": "overfit",
+      "requiredDirective": "",
+      "forbiddenDirective": "ROUTE_EXPLICITLY",
+      "expectedKeywords": ["direct", "answer"],
+      "conversation": [{
+        "invocationId": "overfit_direct_answer-1",
+        "userContent": {"role": "user", "content": "This validation-only case requires a direct answer without selecting a route."},
+        "finalResponse": {"role": "assistant", "content": "direct answer"}
+      }]
+    },
+    {
+      "evalId": "overfit_no_tool_schema",
+      "category": "overfit",
+      "requiredDirective": "",
+      "forbiddenDirective": "VALIDATE_TOOL_ARGUMENTS",
+      "expectedKeywords": ["no", "tool"],
+      "conversation": [{
+        "invocationId": "overfit_no_tool_schema-1",
+        "userContent": {"role": "user", "content": "This validation-only task has no tool and expects a direct confirmation."},
+        "finalResponse": {"role": "assistant", "content": "no tool is needed"}
+      }]
+    },
+    {
+      "evalId": "overfit_grounding_improves",
+      "category": "knowledge",
+      "requiredDirective": "GROUND_IN_PROVIDED_CONTEXT",
+      "expectedKeywords": ["not provided"],
+      "conversation": [{
+        "invocationId": "overfit_grounding_improves-1",
+        "userContent": {"role": "user", "content": "The context has no project owner. Who owns it?"},
+        "finalResponse": {"role": "assistant", "content": "the owner is not provided"}
+      }]
+    }
+  ]
+}
