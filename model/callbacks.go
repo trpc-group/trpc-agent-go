@@ -245,7 +245,7 @@ func (c *Callbacks) processBeforeModelResult(
 
 // finalizeBeforeModelResult determines the final return value for before model callbacks.
 func (c *Callbacks) finalizeBeforeModelResult(
-	acc *BeforeModelResult,
+	acc BeforeModelResult,
 	hasResult bool,
 	firstErr error,
 ) (*BeforeModelResult, error) {
@@ -253,12 +253,14 @@ func (c *Callbacks) finalizeBeforeModelResult(
 		if !hasResult {
 			return nil, firstErr
 		}
-		return acc, firstErr
+		out := acc
+		return &out, firstErr
 	}
 	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return acc, nil
+	out := acc
+	return &out, nil
 }
 
 func recoverModelCallbackPanic(
@@ -311,14 +313,15 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, args *BeforeModelArgs) (
 		}
 
 		if c.processBeforeModelResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return &acc, firstErr
+				return &out, firstErr
 			}
-			return &acc, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeBeforeModelResult(&acc, hasResult, firstErr)
+	return c.finalizeBeforeModelResult(acc, hasResult, firstErr)
 }
 
 // processAfterModelResult merges an after model callback result into acc and updates ctx.
@@ -348,7 +351,7 @@ func (c *Callbacks) processAfterModelResult(
 
 // finalizeAfterModelResult determines the final return value for after model callbacks.
 func (c *Callbacks) finalizeAfterModelResult(
-	acc *AfterModelResult,
+	acc AfterModelResult,
 	hasResult bool,
 	firstErr error,
 ) (*AfterModelResult, error) {
@@ -356,12 +359,14 @@ func (c *Callbacks) finalizeAfterModelResult(
 		if !hasResult {
 			return nil, firstErr
 		}
-		return acc, firstErr
+		out := acc
+		return &out, firstErr
 	}
 	if !hasResult || (acc.Context == nil && acc.CustomResponse == nil) {
 		return nil, nil
 	}
-	return acc, nil
+	out := acc
+	return &out, nil
 }
 
 func (c *Callbacks) runAfterModelCallback(
@@ -393,12 +398,13 @@ func (c *Callbacks) RunAfterModel(ctx context.Context, args *AfterModelArgs) (*A
 		}
 
 		if c.processAfterModelResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return &acc, firstErr
+				return &out, firstErr
 			}
-			return &acc, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeAfterModelResult(&acc, hasResult, firstErr)
+	return c.finalizeAfterModelResult(acc, hasResult, firstErr)
 }

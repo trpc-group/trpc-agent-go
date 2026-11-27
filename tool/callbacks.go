@@ -396,7 +396,7 @@ func (c *Callbacks) processBeforeToolResult(
 
 // finalizeBeforeToolResult determines the final return value for before tool callbacks.
 func (c *Callbacks) finalizeBeforeToolResult(
-	acc *BeforeToolResult,
+	acc BeforeToolResult,
 	hasResult bool,
 	firstErr error,
 ) (*BeforeToolResult, error) {
@@ -404,12 +404,14 @@ func (c *Callbacks) finalizeBeforeToolResult(
 		if !hasResult {
 			return nil, firstErr
 		}
-		return acc, firstErr
+		out := acc
+		return &out, firstErr
 	}
 	if !hasResult || (acc.Context == nil && acc.CustomResult == nil && acc.ModifiedArguments == nil) {
 		return nil, nil
 	}
-	return acc, nil
+	out := acc
+	return &out, nil
 }
 
 func recoverToolCallbackPanic(
@@ -482,14 +484,15 @@ func (c *Callbacks) RunBeforeTool(
 		}
 
 		if c.processBeforeToolResult(result, &ctx, args, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return &acc, firstErr
+				return &out, firstErr
 			}
-			return &acc, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeBeforeToolResult(&acc, hasResult, firstErr)
+	return c.finalizeBeforeToolResult(acc, hasResult, firstErr)
 }
 
 // processAfterToolResult merges an after tool callback result into acc and updates ctx.
@@ -530,7 +533,7 @@ func (c *Callbacks) processAfterToolResult(
 // but none produced a CustomResult, CustomResult stays nil so plugin
 // dispatchers treat that as pass-through rather than an override.
 func (c *Callbacks) finalizeAfterToolResult(
-	acc *AfterToolResult,
+	acc AfterToolResult,
 	hasResult bool,
 	firstErr error,
 	args *AfterToolArgs,
@@ -539,7 +542,8 @@ func (c *Callbacks) finalizeAfterToolResult(
 		if !hasResult {
 			return nil, firstErr
 		}
-		return acc, firstErr
+		out := acc
+		return &out, firstErr
 	}
 	if !hasResult {
 		if len(c.AfterTool) == 0 && args != nil && args.Result != nil {
@@ -549,7 +553,8 @@ func (c *Callbacks) finalizeAfterToolResult(
 		}
 		return &AfterToolResult{}, nil
 	}
-	return acc, nil
+	out := acc
+	return &out, nil
 }
 
 func (c *Callbacks) runAfterToolCallback(
@@ -622,12 +627,13 @@ func (c *Callbacks) RunAfterTool(
 		}
 
 		if c.processAfterToolResult(result, &ctx, &acc, &hasResult) {
+			out := acc
 			if c.continueOnError && firstErr != nil {
-				return &acc, firstErr
+				return &out, firstErr
 			}
-			return &acc, nil
+			return &out, nil
 		}
 	}
 
-	return c.finalizeAfterToolResult(&acc, hasResult, firstErr, args)
+	return c.finalizeAfterToolResult(acc, hasResult, firstErr, args)
 }
